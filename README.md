@@ -1,58 +1,66 @@
-# Muesli Project Setup
+# Muesli
 
-This folder contains the specification documents for building Muesli, a local-first meeting transcription app for macOS.
+A local-first meeting transcription app for macOS. Captures meeting audio (Zoom/Teams/Meet via browser) + microphone, provides real-time on-device transcription via WhisperKit, and saves audio files + transcript to a local folder.
 
-## Files
+## Documentation
 
-- **CLAUDE.md** - The main context file for Claude Code. This is automatically loaded and provides project structure, build commands, code style, and key decisions.
+- **AGENTS.md** - Working rules and repo contract for AI agents
+- **SPEC.md** - Detailed software design specification with UX flows, technical architecture, and phased implementation plan
+- **CLAUDE.md** - Architecture notes, build commands, conventions, and common pitfalls
 
-- **SPEC.md** - Detailed software design specification with UX flows, technical architecture, and phased implementation plan.
+## Getting Started with Cursor
 
-## Getting Started with Claude Code
-
-### 1. Create the Xcode Project
-
-Open a terminal and navigate to where you want the project:
+### 1. Clone the Repository
 
 ```bash
-cd ~/Projects  # or your preferred location
+git clone https://github.com/dburkhardt/muesli.git
+cd muesli
 ```
 
-### 2. Start Claude Code
+### 2. Open in Cursor
+
+Open the project folder in Cursor. The agent rules in `AGENTS.md` and `.cursorrules` will automatically guide AI assistants.
+
+### 3. Build the Project
 
 ```bash
-claude
+xcodebuild -scheme Muesli -configuration Debug build
 ```
 
-### 3. Copy These Files
+Or use the MCP build tools if configured.
 
-Copy `CLAUDE.md` and `SPEC.md` to your project directory. Claude Code will automatically read `CLAUDE.md` when it starts.
+### 4. Working with AI Agents
 
-### 4. Begin Phase 0
+When working with Cursor's AI agent:
 
-Tell Claude Code:
+1. **Follow the phase plan** - Work through phases defined in `SPEC.md` one at a time
+2. **Verify checkpoints** - Confirm each phase's checkpoint before moving to the next
+3. **Use branches for parallel work** - Create separate branches for different agents/features
 
+Example prompt to start:
 ```
-I'm building Muesli, a meeting transcription app. Please read SPEC.md and start with Phase 0: create the Xcode project with the correct configuration and add the WhisperKit dependency.
-```
-
-### 5. Work Through Phases
-
-After each phase checkpoint is verified, move to the next:
-
-```
-Phase 0 is complete - the project builds. Let's start Phase 1: create the menu bar and main window structure.
+I'm building Muesli, a meeting transcription app. Please read SPEC.md and continue from the current phase.
 ```
 
-## Tips for Working with Claude Code
+### 5. Using Multiple Agents
+
+You can use different branches for different Cursor agents:
+
+```bash
+# Create a branch for specific work
+git checkout -b agent-feature-name
+git push -u origin agent-feature-name
+```
+
+## Tips for AI-Assisted Development
 
 1. **Verify each checkpoint** before moving on. Run the app and confirm the expected behavior.
 
-2. **If something breaks**, give Claude Code the error message. It can often fix issues if it can build and see the output.
+2. **If something breaks**, provide the error message. The AI can often fix issues if it can see the build output.
 
-3. **Keep sessions focused** - if context gets long, start a new session and tell Claude to read CLAUDE.md and continue from the current phase.
+3. **Keep sessions focused** - if context gets long, start a new session and point the agent to read `AGENTS.md` and continue from the current phase.
 
-4. **Take screenshots** if UI doesn't look right - you can paste them into Claude Code.
+4. **Take screenshots** if UI doesn't look right - you can paste them into Cursor.
 
 ## Reference Projects
 
@@ -67,4 +75,4 @@ These open-source projects demonstrate patterns used in Muesli:
 - macOS 14.0+ (Sonoma)
 - Xcode 15.0+
 - Apple Silicon Mac (M1/M2/M3)
-- Claude Code with active subscription
+- Cursor IDE
