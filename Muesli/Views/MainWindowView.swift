@@ -1,0 +1,62 @@
+import SwiftUI
+
+/// Main window view that conditionally shows unified list or split view
+struct MainWindowView: View {
+    @Bindable var viewModel: MuesliViewModel
+    
+    /// Show split view when a meeting is selected OR recording is active
+    /// Show unified list otherwise (idle state)
+    private var shouldShowSplitView: Bool {
+        viewModel.selectedMeeting != nil || viewModel.activeRecordingSession != nil || viewModel.isSplitViewVisible
+    }
+    
+    var body: some View {
+        Group {
+            if shouldShowSplitView {
+                splitView
+                    .frame(minWidth: 750, idealWidth: 900, minHeight: 500, idealHeight: 650)
+            } else {
+                unifiedView
+                    .frame(minWidth: 420, maxWidth: 420, minHeight: 400, idealHeight: 600)
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { viewModel.showStartRecordingSheet },
+            set: { viewModel.showStartRecordingSheet = $0 }
+        )) {
+            StartRecordingSheet(viewModel: viewModel, isPresented: Binding(
+                get: { viewModel.showStartRecordingSheet },
+                set: { viewModel.showStartRecordingSheet = $0 }
+            ))
+        }
+    }
+    
+    // MARK: - Unified View
+    
+    private var unifiedView: some View {
+        UnifiedHistoryView(viewModel: viewModel)
+    }
+    
+    // MARK: - Split View
+    
+    private var splitView: some View {
+        NavigationSplitView {
+            MeetingHistorySidebar(viewModel: viewModel)
+        } detail: {
+            RecordingDetailView(viewModel: viewModel)
+        }
+    }
+}
+
+#Preview("Unified") {
+    let vm = MuesliViewModel()
+    return MainWindowView(viewModel: vm)
+        .frame(width: 420, height: 600)
+}
+
+#Preview("Split") {
+    let vm = MuesliViewModel()
+    vm.isSplitViewVisible = true
+    return MainWindowView(viewModel: vm)
+        .frame(width: 900, height: 650)
+}

@@ -1,0 +1,52 @@
+
+You are an AI coding agent working in this repository.
+
+CRITICAL: Always read and follow these files first:
+1) AGENTS.md (working rules and repo contract)
+2) SPEC.md (phased implementation plan + checkpoints)
+3) CLAUDE.md (architecture notes, build commands, conventions)
+
+PHASE DISCIPLINE
+- Work on exactly ONE phase at a time as defined in SPEC.md.
+- Do not implement features from later phases.
+- At the end of work, ensure the current phase checkpoint is satisfied (or clearly state what is missing and why).
+
+ENGINEERING RULES
+- Keep changes small and incremental; prefer minimal diffs.
+- Keep the project building at all times. If build breaks, fix it immediately before proceeding.
+- **Before building**: Always kill the running Muesli app first (`killall Muesli` or quit from menu bar) to avoid build failures from locked executable.
+- **After making code changes**: Always rebuild and relaunch the app automatically. Never prompt the user to rebuild or relaunch—just do it.
+- Prefer Swift 6 concurrency (async/await) and @Observable for state.
+- Follow the repo's SwiftUI style: minimal, clean, no clutter.
+- Avoid adding new dependencies unless SPEC.md explicitly requires it.
+
+CODE ORGANIZATION
+- One primary type per file.
+- Put reusable UI components under Views/Components.
+- Services are pure-ish and orchestrated by the ViewModel; do not scatter state across views.
+
+SAFETY / DATA
+- Do not introduce telemetry or cloud upload.
+- Do not write secrets/keys into the repo.
+- Avoid committing large binaries (models, audio, build artifacts).
+
+WHEN EDITING
+- If a change impacts architecture, output format, permissions, or phase scope:
+  - update SPEC.md accordingly (briefly)
+  - explain the rationale in your response
+
+DOCUMENTATION UPDATES (after completing work)
+- After debugging, stabbing, or completing a phase, evaluate if core docs need updates:
+  - Review AGENTS.md "Documentation Updates" section for guidance
+  - Update AGENTS.md for technical constraints, build procedures, architecture changes
+  - Update CLAUDE.md for detailed pitfalls, code patterns, testing strategies
+  - Update SPEC.md for phase adjustments, checkpoint refinements, architecture decisions
+  - Update .cursorrules for agent workflow improvements
+- Focus on learnings that help future work: recurring patterns, architectural decisions, constraints, procedures that differ from expectations
+- Be selective and concise; maintain consistency with existing documentation style
+
+OUTPUT REQUIREMENTS (every response after code changes)
+- What changed (brief)
+- Files modified (list, including documentation if updated)
+- How to build/test (commands)
+- Phase checkpoint status (met / not met, and what remains)

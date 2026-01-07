@@ -1,0 +1,610 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A1000001241D1A1D00000001 /* MuesliApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002241D1A1D00000001 /* MuesliApp.swift */; };
+		A1000005241D1A1D00000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000006241D1A1D00000001 /* Assets.xcassets */; };
+		A1000007241D1A1D00000001 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1000008241D1A1D00000001 /* WhisperKit */; };
+		A1000090241D1A1D00000030 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = A1000091241D1A1D00000030 /* MLXLLM */; };
+		A1000093241D1A1D00000031 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = A1000094241D1A1D00000031 /* MLXLMCommon */; };
+		A1000021241D1A1D00000001 /* MeetingApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000022241D1A1D00000001 /* MeetingApp.swift */; };
+		A1000081241D1A1D00000020 /* TranscriptBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000080241D1A1D00000020 /* TranscriptBlock.swift */; };
+		A1000083241D1A1D00000021 /* TranscriptProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000082241D1A1D00000021 /* TranscriptProcessor.swift */; };
+		A1000085241D1A1D00000022 /* LLMStitchingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000084241D1A1D00000022 /* LLMStitchingService.swift */; };
+		A1000087241D1A1D00000023 /* LLMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000086241D1A1D00000023 /* LLMManager.swift */; };
+		A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000088241D1A1D00000024 /* TranscriptBlockView.swift */; };
+		A1000023241D1A1D00000001 /* MuesliViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000024241D1A1D00000001 /* MuesliViewModel.swift */; };
+		A1000025241D1A1D00000001 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000026241D1A1D00000001 /* MenuBarView.swift */; };
+		A1000027241D1A1D00000001 /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000028241D1A1D00000001 /* MainWindow.swift */; };
+		A1000029241D1A1D00000002 /* AudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002A241D1A1D00000002 /* AudioCaptureService.swift */; };
+		A100002B241D1A1D00000002 /* FileOutputService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002C241D1A1D00000002 /* FileOutputService.swift */; };
+		A100002D241D1A1D00000002 /* MeetingAppDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002E241D1A1D00000002 /* MeetingAppDetector.swift */; };
+		A100002F241D1A1D00000002 /* PermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000030241D1A1D00000002 /* PermissionManager.swift */; };
+		A1000032241D1A1D00000003 /* RecordingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000033241D1A1D00000003 /* RecordingSession.swift */; };
+		A1000034241D1A1D00000004 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000035241D1A1D00000004 /* OnboardingView.swift */; };
+		A100003C241D1A1D00000006 /* ModelManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100003D241D1A1D00000006 /* ModelManagementView.swift */; };
+		A1000036241D1A1D00000004 /* ModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000037241D1A1D00000004 /* ModelManager.swift */; };
+		A1000038241D1A1D00000005 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000039241D1A1D00000005 /* TranscriptionService.swift */; };
+		A100003A241D1A1D00000007 /* MicrophoneManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100003B241D1A1D00000007 /* MicrophoneManager.swift */; };
+		A100005C241D1A1D00000008 /* CompletedMeetingWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100005D241D1A1D00000008 /* CompletedMeetingWindow.swift */; };
+		A100005E241D1A1D00000008 /* MainWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100005F241D1A1D00000008 /* MainWindowView.swift */; };
+		A1000060241D1A1D00000008 /* MeetingHistoryItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000061241D1A1D00000008 /* MeetingHistoryItem.swift */; };
+		A1000062241D1A1D00000008 /* StartRecordingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000063241D1A1D00000008 /* StartRecordingSheet.swift */; };
+		A1000064241D1A1D00000008 /* UnifiedHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000065241D1A1D00000008 /* UnifiedHistoryView.swift */; };
+		A1000066241D1A1D00000008 /* MeetingHistorySidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000067241D1A1D00000008 /* MeetingHistorySidebar.swift */; };
+		A1000068241D1A1D00000008 /* RecordingDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000069241D1A1D00000008 /* RecordingDetailView.swift */; };
+		A100006A241D1A1D00000008 /* MeetingHistoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100006B241D1A1D00000008 /* MeetingHistoryService.swift */; };
+		A1000070241D1A1D00000010 /* MeetingTitlePromptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */; };
+		A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000073241D1A1D00000011 /* PreferencesView.swift */; };
+		A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000075241D1A1D00000012 /* RecordingIndicator.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A1000009241D1A1D00000001 /* Muesli.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Muesli.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1000002241D1A1D00000001 /* MuesliApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliApp.swift; sourceTree = "<group>"; };
+		A1000006241D1A1D00000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A100000A241D1A1D00000001 /* Muesli.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Muesli.entitlements; sourceTree = "<group>"; };
+		A1000022241D1A1D00000001 /* MeetingApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingApp.swift; sourceTree = "<group>"; };
+		A1000024241D1A1D00000001 /* MuesliViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliViewModel.swift; sourceTree = "<group>"; };
+		A1000026241D1A1D00000001 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		A1000028241D1A1D00000001 /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindow.swift; sourceTree = "<group>"; };
+		A100002A241D1A1D00000002 /* AudioCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCaptureService.swift; sourceTree = "<group>"; };
+		A100002C241D1A1D00000002 /* FileOutputService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileOutputService.swift; sourceTree = "<group>"; };
+		A100002E241D1A1D00000002 /* MeetingAppDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAppDetector.swift; sourceTree = "<group>"; };
+		A1000030241D1A1D00000002 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
+		A1000033241D1A1D00000003 /* RecordingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSession.swift; sourceTree = "<group>"; };
+		A1000035241D1A1D00000004 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		A100003D241D1A1D00000006 /* ModelManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManagementView.swift; sourceTree = "<group>"; };
+		A1000037241D1A1D00000004 /* ModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManager.swift; sourceTree = "<group>"; };
+		A1000039241D1A1D00000005 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
+		A100003B241D1A1D00000007 /* MicrophoneManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophoneManager.swift; sourceTree = "<group>"; };
+		A100005D241D1A1D00000008 /* CompletedMeetingWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletedMeetingWindow.swift; sourceTree = "<group>"; };
+		A100005F241D1A1D00000008 /* MainWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowView.swift; sourceTree = "<group>"; };
+		A1000061241D1A1D00000008 /* MeetingHistoryItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryItem.swift; sourceTree = "<group>"; };
+		A1000063241D1A1D00000008 /* StartRecordingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartRecordingSheet.swift; sourceTree = "<group>"; };
+		A1000065241D1A1D00000008 /* UnifiedHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedHistoryView.swift; sourceTree = "<group>"; };
+		A1000067241D1A1D00000008 /* MeetingHistorySidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistorySidebar.swift; sourceTree = "<group>"; };
+		A1000069241D1A1D00000008 /* RecordingDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingDetailView.swift; sourceTree = "<group>"; };
+		A100006B241D1A1D00000008 /* MeetingHistoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryService.swift; sourceTree = "<group>"; };
+		A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTitlePromptSheet.swift; sourceTree = "<group>"; };
+		A1000073241D1A1D00000011 /* PreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesView.swift; sourceTree = "<group>"; };
+		A1000075241D1A1D00000012 /* RecordingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIndicator.swift; sourceTree = "<group>"; };
+		A1000080241D1A1D00000020 /* TranscriptBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlock.swift; sourceTree = "<group>"; };
+		A1000082241D1A1D00000021 /* TranscriptProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptProcessor.swift; sourceTree = "<group>"; };
+		A1000084241D1A1D00000022 /* LLMStitchingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMStitchingService.swift; sourceTree = "<group>"; };
+		A1000086241D1A1D00000023 /* LLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMManager.swift; sourceTree = "<group>"; };
+		A1000088241D1A1D00000024 /* TranscriptBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlockView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A100000B241D1A1D00000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000007241D1A1D00000001 /* WhisperKit in Frameworks */,
+				A1000090241D1A1D00000030 /* MLXLLM in Frameworks */,
+				A1000093241D1A1D00000031 /* MLXLMCommon in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A100000C241D1A1D00000001 = {
+			isa = PBXGroup;
+			children = (
+				A100000D241D1A1D00000001 /* Muesli */,
+				A100000E241D1A1D00000001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A100000E241D1A1D00000001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A1000009241D1A1D00000001 /* Muesli.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A100000D241D1A1D00000001 /* Muesli */ = {
+			isa = PBXGroup;
+			children = (
+				A1000002241D1A1D00000001 /* MuesliApp.swift */,
+				A1000006241D1A1D00000001 /* Assets.xcassets */,
+				A100000A241D1A1D00000001 /* Muesli.entitlements */,
+				A100000F241D1A1D00000001 /* Models */,
+				A1000010241D1A1D00000001 /* ViewModels */,
+				A1000011241D1A1D00000001 /* Views */,
+				A1000012241D1A1D00000001 /* Services */,
+				A1000013241D1A1D00000001 /* Utilities */,
+				A1000014241D1A1D00000001 /* Resources */,
+			);
+			path = Muesli;
+			sourceTree = "<group>";
+		};
+		A100000F241D1A1D00000001 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A1000022241D1A1D00000001 /* MeetingApp.swift */,
+				A1000033241D1A1D00000003 /* RecordingSession.swift */,
+				A1000061241D1A1D00000008 /* MeetingHistoryItem.swift */,
+				A1000080241D1A1D00000020 /* TranscriptBlock.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A1000010241D1A1D00000001 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				A1000024241D1A1D00000001 /* MuesliViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		A1000011241D1A1D00000001 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				A1000026241D1A1D00000001 /* MenuBarView.swift */,
+				A1000028241D1A1D00000001 /* MainWindow.swift */,
+				A100005F241D1A1D00000008 /* MainWindowView.swift */,
+				A100005D241D1A1D00000008 /* CompletedMeetingWindow.swift */,
+				A1000063241D1A1D00000008 /* StartRecordingSheet.swift */,
+				A1000065241D1A1D00000008 /* UnifiedHistoryView.swift */,
+				A1000067241D1A1D00000008 /* MeetingHistorySidebar.swift */,
+				A1000069241D1A1D00000008 /* RecordingDetailView.swift */,
+				A1000035241D1A1D00000004 /* OnboardingView.swift */,
+				A100003D241D1A1D00000006 /* ModelManagementView.swift */,
+				A1000073241D1A1D00000011 /* PreferencesView.swift */,
+				A1000015241D1A1D00000001 /* Components */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A1000015241D1A1D00000001 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */,
+				A1000075241D1A1D00000012 /* RecordingIndicator.swift */,
+				A1000088241D1A1D00000024 /* TranscriptBlockView.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		A1000012241D1A1D00000001 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				A100002A241D1A1D00000002 /* AudioCaptureService.swift */,
+				A100002C241D1A1D00000002 /* FileOutputService.swift */,
+				A100002E241D1A1D00000002 /* MeetingAppDetector.swift */,
+				A1000039241D1A1D00000005 /* TranscriptionService.swift */,
+				A100006B241D1A1D00000008 /* MeetingHistoryService.swift */,
+				A1000082241D1A1D00000021 /* TranscriptProcessor.swift */,
+				A1000084241D1A1D00000022 /* LLMStitchingService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A1000013241D1A1D00000001 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				A1000030241D1A1D00000002 /* PermissionManager.swift */,
+				A1000037241D1A1D00000004 /* ModelManager.swift */,
+				A100003B241D1A1D00000007 /* MicrophoneManager.swift */,
+				A1000086241D1A1D00000023 /* LLMManager.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+		A1000014241D1A1D00000001 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A1000031241D1A1D00000003 /* Reset TCC Permissions */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Reset TCC Permissions";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Reset TCC permissions and app state for Muesli to ensure fresh state after rebuild\n# This clears stale permissions that may be associated with old code signatures\ntccutil reset ScreenCapture com.muesli.app 2>/dev/null || true\ntccutil reset Microphone com.muesli.app 2>/dev/null || true\n# Reset UserDefaults (onboarding state, model paths, etc.)\ndefaults delete com.muesli.app 2>/dev/null || true\necho \"TCC permissions and app state reset for com.muesli.app\"\n";
+		};
+		A100006C241D1A1D00000009 /* Update App Icon */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${SRCROOT}/assets/AppIcon.png",
+			);
+			name = "Update App Icon";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"${SRCROOT}/Muesli/Assets.xcassets/AppIcon.appiconset/Contents.json",
+				"${SRCROOT}/Muesli/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Update app icons from assets/AppIcon.png\n# This script generates all required icon sizes and updates the asset catalog\n\"${SRCROOT}/scripts/update_app_icon.sh\" || true\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		A1000016241D1A1D00000001 /* Muesli */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1000017241D1A1D00000001 /* Build configuration list for PBXNativeTarget "Muesli" */;
+			buildPhases = (
+				A1000031241D1A1D00000003 /* Reset TCC Permissions */,
+				A100006C241D1A1D00000009 /* Update App Icon */,
+				A1000018241D1A1D00000001 /* Sources */,
+				A100000B241D1A1D00000001 /* Frameworks */,
+				A1000019241D1A1D00000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Muesli;
+			packageProductDependencies = (
+				A1000008241D1A1D00000001 /* WhisperKit */,
+				A1000091241D1A1D00000030 /* MLXLLM */,
+				A1000094241D1A1D00000031 /* MLXLMCommon */,
+			);
+			productName = Muesli;
+			productReference = A1000009241D1A1D00000001 /* Muesli.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A100001A241D1A1D00000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					A1000016241D1A1D00000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = A100001B241D1A1D00000001 /* Build configuration list for PBXProject "Muesli" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A100000C241D1A1D00000001;
+			packageReferences = (
+				A100001C241D1A1D00000001 /* XCRemoteSwiftPackageReference "WhisperKit" */,
+				A1000092241D1A1D00000030 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+			);
+			productRefGroup = A100000E241D1A1D00000001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A1000016241D1A1D00000001 /* Muesli */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1000019241D1A1D00000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000005241D1A1D00000001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A1000018241D1A1D00000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000001241D1A1D00000001 /* MuesliApp.swift in Sources */,
+				A1000021241D1A1D00000001 /* MeetingApp.swift in Sources */,
+				A1000032241D1A1D00000003 /* RecordingSession.swift in Sources */,
+				A1000023241D1A1D00000001 /* MuesliViewModel.swift in Sources */,
+				A1000025241D1A1D00000001 /* MenuBarView.swift in Sources */,
+				A1000027241D1A1D00000001 /* MainWindow.swift in Sources */,
+				A1000034241D1A1D00000004 /* OnboardingView.swift in Sources */,
+				A100003C241D1A1D00000006 /* ModelManagementView.swift in Sources */,
+				A1000029241D1A1D00000002 /* AudioCaptureService.swift in Sources */,
+				A100002B241D1A1D00000002 /* FileOutputService.swift in Sources */,
+				A100002D241D1A1D00000002 /* MeetingAppDetector.swift in Sources */,
+				A100002F241D1A1D00000002 /* PermissionManager.swift in Sources */,
+				A1000036241D1A1D00000004 /* ModelManager.swift in Sources */,
+				A1000038241D1A1D00000005 /* TranscriptionService.swift in Sources */,
+				A100003A241D1A1D00000007 /* MicrophoneManager.swift in Sources */,
+				A100005C241D1A1D00000008 /* CompletedMeetingWindow.swift in Sources */,
+				A100005E241D1A1D00000008 /* MainWindowView.swift in Sources */,
+				A1000060241D1A1D00000008 /* MeetingHistoryItem.swift in Sources */,
+				A1000062241D1A1D00000008 /* StartRecordingSheet.swift in Sources */,
+				A1000064241D1A1D00000008 /* UnifiedHistoryView.swift in Sources */,
+				A1000066241D1A1D00000008 /* MeetingHistorySidebar.swift in Sources */,
+				A1000068241D1A1D00000008 /* RecordingDetailView.swift in Sources */,
+				A100006A241D1A1D00000008 /* MeetingHistoryService.swift in Sources */,
+				A1000070241D1A1D00000010 /* MeetingTitlePromptSheet.swift in Sources */,
+				A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */,
+				A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */,
+				A1000081241D1A1D00000020 /* TranscriptBlock.swift in Sources */,
+				A1000083241D1A1D00000021 /* TranscriptProcessor.swift in Sources */,
+				A1000085241D1A1D00000022 /* LLMStitchingService.swift in Sources */,
+				A1000087241D1A1D00000023 /* LLMManager.swift in Sources */,
+				A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A100001D241D1A1D00000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A100001E241D1A1D00000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		A100001F241D1A1D00000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Muesli/Muesli.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
+				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A1000020241D1A1D00000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Muesli/Muesli.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
+				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A100001B241D1A1D00000001 /* Build configuration list for PBXProject "Muesli" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A100001D241D1A1D00000001 /* Debug */,
+				A100001E241D1A1D00000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1000017241D1A1D00000001 /* Build configuration list for PBXNativeTarget "Muesli" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A100001F241D1A1D00000001 /* Debug */,
+				A1000020241D1A1D00000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A100001C241D1A1D00000001 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
+		A1000092241D1A1D00000030 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples.git";
+			requirement = {
+				kind = revision;
+				revision = b071763;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A1000008241D1A1D00000001 /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A100001C241D1A1D00000001 /* XCRemoteSwiftPackageReference "WhisperKit" */;
+			productName = WhisperKit;
+		};
+		A1000091241D1A1D00000030 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1000092241D1A1D00000030 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = MLXLLM;
+		};
+		A1000094241D1A1D00000031 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1000092241D1A1D00000030 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = MLXLMCommon;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A100001A241D1A1D00000001 /* Project object */;
+}

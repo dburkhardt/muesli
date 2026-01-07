@@ -1,0 +1,318 @@
+import Foundation
+import WhisperKit
+import AppKit
+
+/// Manages WhisperKit model downloading and storage
+@Observable
+final class ModelManager: @unchecked Sendable {
+    
+    // MARK: - Model Options
+    
+    enum ModelSize: String, CaseIterable, Identifiable, Hashable {
+        case tiny = "tiny"
+        case base = "base"
+        case small = "small"
+        case medium = "medium"
+        case large = "large-v3"
+        
+        var id: String { rawValue }
+        
+        var displayName: String {
+            switch self {
+            case .tiny: return "Tiny"
+            case .base: return "Base"
+            case .small: return "Small"
+            case .medium: return "Medium"
+            case .large: return "Large v3"
+            }
+        }
+        
+        var sizeDescription: String {
+            switch self {
+            case .tiny: return "~75MB"
+            case .base: return "~145MB"
+            case .small: return "~465MB"
+            case .medium: return "~1.5GB"
+            case .large: return "~3GB"
+            }
+        }
+        
+        /// WhisperKit model name format
+        var whisperKitName: String {
+            switch self {
+            case .large:
+                return "openai_whisper-large-v3"
+            default:
+                return "openai_whisper-\(rawValue)"
+            }
+        }
+    }
+    
+    // MARK: - Download State (per model)
+    
+    enum DownloadState: Equatable {
+        case idle
+        case checking
+        case downloading(progress: Double)
+        case completed
+        case failed(String)
+    }
+    
+    // MARK: - State
+    
+    /// Download state for each model
+    var downloadStates: [ModelSize: DownloadState] = [:]
+    
+    /// Set of downloaded models
+    var downloadedModels: Set<ModelSize> = []
+    
+    /// Currently active model for transcription
+    var activeModel: ModelSize?
+    
+    /// Legacy single model path (for backwards compatibility)
+    var modelPath: URL? {
+        guard let active = activeModel else { return nil }
+        return pathForModel(active)
+    }
+    
+    /// Check if at least one model is downloaded and active
+    var hasModel: Bool {
+        activeModel != nil && downloadedModels.contains(activeModel!)
+    }
+    
+    // MARK: - Storage Keys
+    
+    private static let activeModelKey = "activeWhisperModel"
+    private static let downloadedModelsKey = "downloadedWhisperModels"
+    
+    // MARK: - Initialization
+    
+    init() {
+        // Initialize all models as idle
+        for model in ModelSize.allCases {
+            downloadStates[model] = .idle
+        }
+        
+        // Scan for existing downloaded models
+        scanForDownloadedModels()
+        
+        // Load saved active model preference
+        if let savedModel = UserDefaults.standard.string(forKey: Self.activeModelKey),
+           let model = ModelSize(rawValue: savedModel),
+           downloadedModels.contains(model) {
+            activeModel = model
+        } else if let firstDownloaded = downloadedModels.first {
+            // Default to first downloaded model
+            activeModel = firstDownloaded
+        }
+    }
+    
+    // MARK: - Model Directory
+    
+    /// Returns the Application Support directory for storing models
+    var modelDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let muesliDir = appSupport.appendingPathComponent("Muesli/Models", isDirectory: true)
+        
+        // Create directory if it doesn't exist
+        try? FileManager.default.createDirectory(at: muesliDir, withIntermediateDirectories: true)
+        
+        return muesliDir
+    }
+    
+    /// Get the path for a specific model
+    func pathForModel(_ model: ModelSize) -> URL? {
+        // WhisperKit downloads to: modelDirectory/models/argmaxinc/whisperkit-coreml/openai_whisper-{size}/
+        let modelDir = modelDirectory
+            .appendingPathComponent("models/argmaxinc/whisperkit-coreml")
+            .appendingPathComponent(model.whisperKitName)
+        
+        if FileManager.default.fileExists(atPath: modelDir.path) {
+            return modelDir
+        }
+        return nil
+    }
+    
+    // MARK: - Model Status
+    
+    /// Check if a specific model is downloaded
+    func isModelDownloaded(_ model: ModelSize) -> Bool {
+        downloadedModels.contains(model)
+    }
+    
+    /// Get download state for a specific model
+    func downloadState(for model: ModelSize) -> DownloadState {
+        downloadStates[model] ?? .idle
+    }
+    
+    /// Scan the models directory to detect previously downloaded models
+    func scanForDownloadedModels() {
+        downloadedModels.removeAll()
+        
+        let whisperKitDir = modelDirectory
+            .appendingPathComponent("models/argmaxinc/whisperkit-coreml")
+        
+        for model in ModelSize.allCases {
+            let modelDir = whisperKitDir.appendingPathComponent(model.whisperKitName)
+            let configPath = modelDir.appendingPathComponent("config.json")
+            
+            if FileManager.default.fileExists(atPath: configPath.path) {
+                downloadedModels.insert(model)
+                downloadStates[model] = .completed
+            }
+        }
+    }
+    
+    // MARK: - Download
+    
+    /// Download a specific model
+    @MainActor
+    func downloadModel(_ model: ModelSize) async {
+        downloadStates[model] = .checking
+        
+        let targetDir = modelDirectory
+        
+        do {
+            downloadStates[model] = .downloading(progress: 0)
+            
+            // Use WhisperKit's built-in download functionality with progress tracking
+            let folder = try await WhisperKit.download(
+                variant: model.whisperKitName,
+                downloadBase: targetDir,
+                useBackgroundSession: false,
+                progressCallback: { @Sendable progress in
+                    // Update progress on main thread
+                    Task { @MainActor [weak self] in
+                        self?.downloadStates[model] = .downloading(progress: progress.fractionCompleted)
+                    }
+                }
+            )
+            
+            // Mark as downloaded
+            downloadedModels.insert(model)
+            downloadStates[model] = .completed
+            
+            // If no active model, set this as active
+            if activeModel == nil {
+                setActiveModel(model)
+            }
+            
+            // Persist
+            saveDownloadedModels()
+            
+        } catch {
+            downloadStates[model] = .failed(error.localizedDescription)
+        }
+    }
+    
+    /// Set the active model for transcription
+    func setActiveModel(_ model: ModelSize) {
+        guard downloadedModels.contains(model) else { return }
+        activeModel = model
+        UserDefaults.standard.set(model.rawValue, forKey: Self.activeModelKey)
+    }
+    
+    // MARK: - Persistence
+    
+    private func saveDownloadedModels() {
+        let modelStrings = downloadedModels.map { $0.rawValue }
+        UserDefaults.standard.set(modelStrings, forKey: Self.downloadedModelsKey)
+    }
+    
+    /// Use an existing model from a user-selected folder
+    func useExistingModel(at url: URL) -> Bool {
+        // Validate that it looks like a WhisperKit model folder
+        let configPath = url.appendingPathComponent("config.json")
+        
+        guard FileManager.default.fileExists(atPath: configPath.path) else {
+            return false
+        }
+        
+        // Try to determine which model size this is based on the folder name
+        for model in ModelSize.allCases {
+            if url.lastPathComponent.contains(model.whisperKitName) || 
+               url.lastPathComponent.contains(model.rawValue) {
+                downloadedModels.insert(model)
+                downloadStates[model] = .completed
+                setActiveModel(model)
+                saveDownloadedModels()
+                return true
+            }
+        }
+        
+        // If we can't determine the model size, still accept it as "base" 
+        downloadedModels.insert(.base)
+        downloadStates[.base] = .completed
+        setActiveModel(.base)
+        saveDownloadedModels()
+        return true
+    }
+    
+    // MARK: - Delete Model
+    
+    /// Delete a model from disk and update state
+    /// - Parameter model: The model to delete
+    /// - Returns: True if deletion was successful, false otherwise
+    @MainActor
+    func deleteModel(_ model: ModelSize) -> Bool {
+        guard downloadedModels.contains(model) else { return false }
+        
+        // Get the model directory path
+        guard let modelPath = pathForModel(model) else {
+            // Model path doesn't exist, but it's in our set - clean up state
+            downloadedModels.remove(model)
+            downloadStates[model] = .idle
+            saveDownloadedModels()
+            return true
+        }
+        
+        // Delete the directory
+        let fileManager = FileManager.default
+        do {
+            try fileManager.removeItem(at: modelPath)
+        } catch {
+            return false
+        }
+        
+        // Update state
+        downloadedModels.remove(model)
+        downloadStates[model] = .idle
+        
+        // If this was the active model, switch to another one
+        if activeModel == model {
+            // Prefer keeping the largest model available
+            let sortedModels = ModelSize.allCases.reversed()
+            if let replacement = sortedModels.first(where: { downloadedModels.contains($0) }) {
+                setActiveModel(replacement)
+            } else {
+                // No other models available
+                activeModel = nil
+                UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+            }
+        }
+        
+        // Persist changes
+        saveDownloadedModels()
+        
+        return true
+    }
+    
+    // MARK: - Show in Finder
+    
+    /// Open the models directory in Finder
+    func showModelsInFinder() {
+        NSWorkspace.shared.open(modelDirectory)
+    }
+    
+    // MARK: - Reset
+    
+    func reset() {
+        for model in ModelSize.allCases {
+            downloadStates[model] = .idle
+        }
+        downloadedModels.removeAll()
+        activeModel = nil
+        UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+        UserDefaults.standard.removeObject(forKey: Self.downloadedModelsKey)
+    }
+}

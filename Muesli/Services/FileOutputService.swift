@@ -1,0 +1,427 @@
+import Foundation
+import AVFoundation
+import CoreMedia
+
+/// Service responsible for saving audio recordings and transcripts to disk
+/// Uses a combination of actor isolation (for setup/teardown) and manual locking (for real-time buffer writing)
+final class FileOutputService: @unchecked Sendable {
+    
+    // MARK: - Types
+    
+    enum OutputError: Error, LocalizedError {
+        case directoryCreationFailed
+        case assetWriterCreationFailed(underlying: Error)
+        case assetWriterNotReady
+        case alreadyWriting
+        case notWriting
+        case finalizationFailed
+        
+        var errorDescription: String? {
+            switch self {
+            case .directoryCreationFailed:
+                return "Failed to create output directory"
+            case .assetWriterCreationFailed(let error):
+                return "Failed to create audio writer: \(error.localizedDescription)"
+            case .assetWriterNotReady:
+                return "Audio writer not ready"
+            case .alreadyWriting:
+                return "Already writing to file"
+            case .notWriting:
+                return "Not currently writing"
+            case .finalizationFailed:
+                return "Failed to finalize recording"
+            }
+        }
+    }
+    
+    // MARK: - Properties
+    
+    // Separate writers for system audio and microphone (CAF doesn't support multiple tracks)
+    private var systemWriter: AVAssetWriter?
+    private var systemAudioInput: AVAssetWriterInput?
+    private var systemSessionStarted = false
+    
+    private var micWriter: AVAssetWriter?
+    private var microphoneInput: AVAssetWriterInput?
+    private var micSessionStarted = false
+    
+    private var outputDirectory: URL?
+    
+    private var _isWriting = false
+    var isWriting: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isWriting
+    }
+    
+    // Thread safety lock for buffer writing
+    private let lock = NSLock()
+    
+    // Configurable base output path
+    private var customOutputPath: URL?
+    
+    // Default output path
+    private static let defaultOutputPath: URL = {
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return documentsPath.appendingPathComponent("Meeting Transcripts", isDirectory: true)
+    }()
+    
+    // Current base output path (custom or default)
+    private var baseOutputPath: URL {
+        customOutputPath ?? Self.defaultOutputPath
+    }
+    
+    // MARK: - Initialization
+    
+    init() {
+        // Load saved output directory from UserDefaults
+        if let savedPath = UserDefaults.standard.string(forKey: "outputDirectory") {
+            customOutputPath = URL(fileURLWithPath: savedPath)
+        }
+    }
+    
+    // MARK: - Output Directory Configuration
+    
+    /// Set a custom output directory
+    func setOutputDirectory(_ url: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        customOutputPath = url
+    }
+    
+    /// Get the current output directory
+    func getOutputDirectory() -> URL {
+        lock.lock()
+        defer { lock.unlock() }
+        return baseOutputPath
+    }
+    
+    // MARK: - Public API
+    
+    /// Start writing audio to a new file
+    /// - Returns: The URL of the output directory
+    func startWriting() throws -> URL {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        guard !_isWriting else {
+            throw OutputError.alreadyWriting
+        }
+        
+        // Create output directory
+        let directory = try createOutputDirectory()
+        self.outputDirectory = directory
+        
+        do {
+            // Create TWO separate writers - CAF doesn't support multiple audio tracks
+            
+            // Writer 1: System audio (48kHz, stereo, Float32)
+            let systemURL = directory.appendingPathComponent("audio.caf")
+            // Delete existing file if present (AVAssetWriter fails if file exists)
+            try? FileManager.default.removeItem(at: systemURL)
+            let sysWriter = try AVAssetWriter(outputURL: systemURL, fileType: .caf)
+            
+            let systemSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 48000.0,
+                AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ]
+            let sysInput = AVAssetWriterInput(mediaType: .audio, outputSettings: systemSettings)
+            sysInput.expectsMediaDataInRealTime = true
+            sysWriter.add(sysInput)
+            sysWriter.startWriting()
+            
+            // Check system writer started successfully
+            guard sysWriter.status == .writing else {
+                throw OutputError.assetWriterNotReady
+            }
+            
+            // Writer 2: Microphone audio (16kHz, stereo, Int16 - as provided by ScreenCaptureKit)
+            let micURL = directory.appendingPathComponent("microphone.caf")
+            // Delete existing file if present
+            try? FileManager.default.removeItem(at: micURL)
+            let micWr = try AVAssetWriter(outputURL: micURL, fileType: .caf)
+            
+            let micSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 16000.0,
+                AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ]
+            let micIn = AVAssetWriterInput(mediaType: .audio, outputSettings: micSettings)
+            micIn.expectsMediaDataInRealTime = true
+            micWr.add(micIn)
+            micWr.startWriting()
+            
+            // Check mic writer started successfully
+            guard micWr.status == .writing else {
+                throw OutputError.assetWriterNotReady
+            }
+            
+            self.systemWriter = sysWriter
+            self.systemAudioInput = sysInput
+            self.systemSessionStarted = false
+            
+            self.micWriter = micWr
+            self.microphoneInput = micIn
+            self.micSessionStarted = false
+            
+            self._isWriting = true
+            
+            return directory
+            
+        } catch {
+            throw OutputError.assetWriterCreationFailed(underlying: error)
+        }
+    }
+    
+    /// Append an audio sample buffer to the file
+    /// - Parameters:
+    ///   - buffer: The audio sample buffer to write
+    ///   - type: Whether this is system audio or microphone audio
+    /// This method is thread-safe and can be called from any thread
+    func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioCaptureService.AudioType) {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        guard _isWriting else { return }
+        
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(buffer)
+        
+        switch type {
+        case .system:
+            guard let writer = systemWriter, let input = systemAudioInput else { return }
+            guard writer.status == .writing else { return }
+            
+            if !systemSessionStarted {
+                writer.startSession(atSourceTime: presentationTime)
+                systemSessionStarted = true
+            }
+            
+            guard input.isReadyForMoreMediaData else { return }
+            input.append(buffer)
+            
+        case .microphone:
+            guard let writer = micWriter, let input = microphoneInput else { return }
+            guard writer.status == .writing else { return }
+            
+            if !micSessionStarted {
+                writer.startSession(atSourceTime: presentationTime)
+                micSessionStarted = true
+            }
+            
+            guard input.isReadyForMoreMediaData else { return }
+            input.append(buffer)
+        }
+    }
+    
+    /// Stop writing and finalize both audio files
+    /// - Parameter completion: Called with the output directory URL on success, or error on failure
+    func stopWriting(completion: @escaping @Sendable (Result<URL, Error>) -> Void) {
+        lock.lock()
+        
+        guard _isWriting else {
+            lock.unlock()
+            completion(.failure(OutputError.notWriting))
+            return
+        }
+        
+        guard let directory = outputDirectory else {
+            lock.unlock()
+            completion(.failure(OutputError.notWriting))
+            return
+        }
+        
+        // Mark inputs as finished
+        if systemSessionStarted {
+            systemAudioInput?.markAsFinished()
+        }
+        if micSessionStarted {
+            microphoneInput?.markAsFinished()
+        }
+        
+        // Capture writers for finalization
+        let sysWr = systemWriter
+        let micWr = micWriter
+        
+        // Clear state before unlocking
+        self.systemWriter = nil
+        self.systemAudioInput = nil
+        self.systemSessionStarted = false
+        self.micWriter = nil
+        self.microphoneInput = nil
+        self.micSessionStarted = false
+        self._isWriting = false
+        
+        lock.unlock()
+        
+        // Finalize both writers
+        let group = DispatchGroup()
+        var finalSuccess = true
+        
+        if let sysWr = sysWr {
+            group.enter()
+            sysWr.finishWriting {
+                if sysWr.status != .completed { finalSuccess = false }
+                group.leave()
+            }
+        }
+        
+        if let micWr = micWr {
+            group.enter()
+            micWr.finishWriting {
+                if micWr.status != .completed { finalSuccess = false }
+                group.leave()
+            }
+        }
+        
+        group.notify(queue: .main) {
+            if finalSuccess {
+                completion(.success(directory))
+            } else {
+                completion(.failure(OutputError.finalizationFailed))
+            }
+        }
+    }
+    
+    /// Async wrapper for stopWriting
+    func stopWriting() async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            stopWriting { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+    
+    /// Save transcript to markdown file (legacy plain text format)
+    /// - Parameters:
+    ///   - transcript: The transcript text
+    ///   - title: Meeting title
+    ///   - date: Recording date
+    ///   - directory: Output directory
+    func saveTranscript(_ transcript: String, title: String, date: Date, to directory: URL) throws {
+        let transcriptURL = directory.appendingPathComponent("transcript.md")
+        
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
+        
+        let markdown = """
+        # \(title.isEmpty ? "Meeting" : title)
+        \(dateFormatter.string(from: date))
+        
+        ## Transcript
+        
+        \(transcript.isEmpty ? "_No transcript recorded_" : transcript)
+        """
+        
+        try markdown.write(to: transcriptURL, atomically: true, encoding: .utf8)
+    }
+    
+    /// Save transcript blocks to markdown file (chat-style block format)
+    /// - Parameters:
+    ///   - blocks: Array of transcript blocks to save
+    ///   - title: Meeting title
+    ///   - date: Recording date
+    ///   - directory: Output directory
+    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL) throws {
+        let transcriptURL = directory.appendingPathComponent("transcript.md")
+        
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
+        
+        var markdown = """
+        # \(title.isEmpty ? "Meeting" : title)
+        \(dateFormatter.string(from: date))
+        
+        ## Transcript
+        
+        """
+        
+        if blocks.isEmpty {
+            markdown += "_No transcript recorded_"
+        } else {
+            for block in blocks {
+                let speakerLabel = block.speaker == .me ? "**Me**" : "**Them**"
+                let timestamp = formatTimestamp(block.startTimestamp)
+                
+                markdown += """
+                
+                \(speakerLabel) _[\(timestamp)]_
+                
+                \(block.text)
+                
+                """
+            }
+        }
+        
+        try markdown.write(to: transcriptURL, atomically: true, encoding: .utf8)
+    }
+    
+    /// Format a timestamp for display (e.g., "2:34" or "1:02:15")
+    private func formatTimestamp(_ seconds: TimeInterval) -> String {
+        let totalSeconds = Int(seconds)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        } else {
+            return String(format: "%d:%02d", minutes, secs)
+        }
+    }
+    
+    // MARK: - Private Helpers
+    
+    private func createOutputDirectory() throws -> URL {
+        let fileManager = FileManager.default
+        let basePath = baseOutputPath
+        
+        // Ensure base directory exists
+        if !fileManager.fileExists(atPath: basePath.path) {
+            try fileManager.createDirectory(at: basePath, withIntermediateDirectories: true)
+        }
+        
+        // Create folder name with timestamp and UUID for uniqueness
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm"
+        let timestamp = dateFormatter.string(from: Date())
+        let uuid = UUID().uuidString
+        let folderName = "\(timestamp)_\(uuid)"
+        
+        let directory = basePath.appendingPathComponent(folderName, isDirectory: true)
+        
+        // Create the directory
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        
+        return directory
+    }
+    
+    private func sanitizeFileName(_ name: String) -> String {
+        // Remove or replace characters that aren't safe for filenames
+        let invalidChars = CharacterSet(charactersIn: ":/\\?%*|\"<>")
+        var sanitized = name.components(separatedBy: invalidChars).joined(separator: "-")
+        
+        // Replace spaces with hyphens
+        sanitized = sanitized.replacingOccurrences(of: " ", with: "-")
+        
+        // Limit length
+        if sanitized.count > 50 {
+            sanitized = String(sanitized.prefix(50))
+        }
+        
+        // Default if empty
+        if sanitized.isEmpty {
+            sanitized = "Meeting"
+        }
+        
+        return sanitized
+    }
+}
