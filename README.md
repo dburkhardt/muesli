@@ -4,9 +4,8 @@ A local-first meeting transcription app for macOS. Captures meeting audio (Zoom/
 
 ## Documentation
 
-- **AGENTS.md** - Working rules and repo contract for AI agents
+- **AGENTS.md** - Working rules, architecture, build commands, conventions, and common pitfalls
 - **SPEC.md** - Detailed software design specification with UX flows, technical architecture, and phased implementation plan
-- **CLAUDE.md** - Architecture notes, build commands, conventions, and common pitfalls
 
 ## Getting Started with Cursor
 
@@ -24,10 +23,9 @@ Open the project folder in Cursor. The agent rules in `AGENTS.md` and `.cursorru
 ### 3. Build the Project
 
 ```bash
-xcodebuild -scheme Muesli -configuration Debug build
+# Fast build (with -quiet flag - critical for speed)
+killall Muesli 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
 ```
-
-Or use the MCP build tools if configured.
 
 ### 4. Working with AI Agents
 
