@@ -38,6 +38,9 @@ final class MuesliViewModel {
     /// LLM Manager for transcript stitching (optional enhancement)
     let llmManager = LLMManager()
     
+    /// Transcript refinement service for post-meeting cleanup
+    private(set) lazy var refinementService = TranscriptRefinementService(llmManager: llmManager)
+    
     /// Convenience accessor for the active model path
     var modelPath: URL? {
         modelManager.modelPath
@@ -113,6 +116,20 @@ final class MuesliViewModel {
     
     /// Session pending stop (waiting for title input)
     var pendingStopSession: RecordingSession?
+    
+    // MARK: - Refinement State
+    
+    /// Whether to show the refinement progress sheet
+    var showRefineSheet: Bool = false
+    
+    /// Whether to show the post-meeting refinement prompt
+    var showRefinementPrompt: Bool = false
+    
+    /// Meeting being refined (for UI state)
+    var meetingBeingRefined: MeetingHistoryItem?
+    
+    /// Cancellation flag for refinement
+    private var refinementCancelled: Bool = false
     
     // MARK: - Preferences
     
@@ -598,6 +615,15 @@ final class MuesliViewModel {
             selectedMeeting = meetingHistory.first { $0.directory == directory }
             // Clear activeSession after selecting the meeting
             activeSession = nil
+            
+            // Show post-meeting refinement prompt if LLM is available
+            if canRefineTranscripts && selectedMeeting != nil {
+                // Small delay to let the UI settle before showing prompt
+                Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                    showPostMeetingRefinementPrompt()
+                }
+            }
         } else {
             activeSession = nil
         }
@@ -990,6 +1016,148 @@ final class MuesliViewModel {
             try fileManager.removeItem(at: meeting.directory)
         } catch {
             print("[MuesliViewModel] Failed to delete meeting: \(error.localizedDescription)")
+        }
+    }
+    
+    // MARK: - Transcript Refinement
+    
+    /// Check if refinement is available (LLM model downloaded)
+    var canRefineTranscripts: Bool {
+        llmManager.hasModel && llmManager.isLLMStitchingEnabled
+    }
+    
+    /// Start refining a meeting's transcript
+    func refineTranscript(for meeting: MeetingHistoryItem) {
+        guard canRefineTranscripts else { return }
+        guard !refinementService.isRefining else { return }
+        
+        meetingBeingRefined = meeting
+        showRefineSheet = true
+        refinementCancelled = false
+        
+        Task {
+            await refineTranscriptAsync(for: meeting)
+        }
+    }
+    
+    /// Async refinement implementation
+    private func refineTranscriptAsync(for meeting: MeetingHistoryItem) async {
+        // Ensure model is loaded
+        if llmManager.modelContainer == nil, let activeModel = llmManager.activeModel {
+            do {
+                try await llmManager.loadModel(activeModel)
+            } catch {
+                refinementService.errorMessage = "Failed to load LLM model: \(error.localizedDescription)"
+                return
+            }
+        }
+        
+        do {
+            // Refine based on available transcript format
+            if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
+                // Refine block-based transcript
+                let refinedBlocks = try await refinementService.refineTranscript(blocks)
+                
+                guard !refinementCancelled else { return }
+                
+                // Update meeting with refined blocks
+                meeting.transcriptBlocks = refinedBlocks
+                
+                // Also update plain text version
+                meeting.transcript = refinedBlocks.map { block in
+                    "[\(block.speaker.rawValue)] \(block.text)"
+                }.joined(separator: "\n\n")
+                
+                // Save to disk
+                saveRefinedTranscript(meeting, blocks: refinedBlocks)
+                
+            } else if let text = meeting.transcript, !text.isEmpty {
+                // Refine plain text transcript
+                let refinedText = try await refinementService.refineTranscript(text)
+                
+                guard !refinementCancelled else { return }
+                
+                // Update meeting
+                meeting.transcript = refinedText
+                
+                // Save to disk
+                saveRefinedTranscript(meeting, text: refinedText)
+            }
+            
+        } catch {
+            // Error is already set in refinementService
+            print("[MuesliViewModel] Refinement failed: \(error)")
+        }
+    }
+    
+    /// Save refined block-based transcript to disk
+    private func saveRefinedTranscript(_ meeting: MeetingHistoryItem, blocks: [TranscriptBlock]) {
+        do {
+            try fileOutputService.saveTranscriptBlocks(
+                blocks,
+                title: meeting.title,
+                date: meeting.date,
+                to: meeting.directory
+            )
+        } catch {
+            print("[MuesliViewModel] Failed to save refined transcript: \(error)")
+        }
+    }
+    
+    /// Save refined plain text transcript to disk
+    private func saveRefinedTranscript(_ meeting: MeetingHistoryItem, text: String) {
+        let transcriptURL = meeting.directory.appendingPathComponent("transcript.md")
+        do {
+            // Build markdown content
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateStyle = .full
+            dateFormatter.timeStyle = .short
+            
+            let content = """
+            # \(meeting.title)
+            
+            **Date:** \(dateFormatter.string(from: meeting.date))
+            
+            ---
+            
+            \(text)
+            """
+            
+            try content.write(to: transcriptURL, atomically: true, encoding: .utf8)
+        } catch {
+            print("[MuesliViewModel] Failed to save refined transcript: \(error)")
+        }
+    }
+    
+    /// Cancel ongoing refinement
+    func cancelRefinement() {
+        refinementCancelled = true
+        showRefineSheet = false
+        meetingBeingRefined = nil
+    }
+    
+    /// Dismiss refinement sheet (after completion or error)
+    func dismissRefinementSheet() {
+        showRefineSheet = false
+        meetingBeingRefined = nil
+    }
+    
+    /// Show post-meeting refinement prompt
+    func showPostMeetingRefinementPrompt() {
+        guard canRefineTranscripts else { return }
+        showRefinementPrompt = true
+    }
+    
+    /// Skip refinement from post-meeting prompt
+    func skipRefinement() {
+        showRefinementPrompt = false
+    }
+    
+    /// Accept refinement from post-meeting prompt
+    func acceptRefinement() {
+        showRefinementPrompt = false
+        if let meeting = selectedMeeting {
+            refineTranscript(for: meeting)
         }
     }
 }

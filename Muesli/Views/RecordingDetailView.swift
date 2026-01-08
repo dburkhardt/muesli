@@ -50,6 +50,29 @@ struct RecordingDetailView: View {
                 )
             }
         }
+        .sheet(isPresented: $viewModel.showRefineSheet) {
+            RefineTranscriptSheet(
+                isPresented: $viewModel.showRefineSheet,
+                progress: viewModel.refinementService.progress,
+                isRefining: viewModel.refinementService.isRefining,
+                errorMessage: viewModel.refinementService.errorMessage,
+                onCancel: {
+                    viewModel.cancelRefinement()
+                }
+            )
+        }
+        .sheet(isPresented: $viewModel.showRefinementPrompt) {
+            PostMeetingRefinementPrompt(
+                isPresented: $viewModel.showRefinementPrompt,
+                hasLLMModel: viewModel.llmManager.hasModel,
+                onRefine: {
+                    viewModel.acceptRefinement()
+                },
+                onSkip: {
+                    viewModel.skipRefinement()
+                }
+            )
+        }
     }
     
     // MARK: - Active Recording View
@@ -489,6 +512,27 @@ struct RecordingDetailView: View {
                                 .underline()
                         }
                         .buttonStyle(.plain)
+                        
+                        // Refine Transcript button (if LLM available)
+                        if viewModel.canRefineTranscripts {
+                            Text("·")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.tertiary)
+                            
+                            Button(action: {
+                                viewModel.refineTranscript(for: meeting)
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "wand.and.stars")
+                                        .font(.system(size: 10))
+                                    Text("Refine Transcript")
+                                        .font(.system(size: 12))
+                                }
+                                .foregroundStyle(.purple)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(viewModel.refinementService.isRefining)
+                        }
                     }
                     .padding(.bottom, 8)
                     
