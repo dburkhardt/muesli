@@ -39,7 +39,7 @@ final class MuesliViewModel {
     let llmManager = LLMManager()
     
     /// Transcript refinement service for post-meeting cleanup
-    private(set) lazy var refinementService = TranscriptRefinementService(llmManager: llmManager)
+    private(set) var refinementService: TranscriptRefinementService!
     
     /// Convenience accessor for the active model path
     var modelPath: URL? {
@@ -212,6 +212,9 @@ final class MuesliViewModel {
     // MARK: - Initialization
     
     init() {
+        // Initialize refinement service
+        refinementService = TranscriptRefinementService(llmManager: llmManager)
+        
         // Load onboarding state
         hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingCompletedKey)
         

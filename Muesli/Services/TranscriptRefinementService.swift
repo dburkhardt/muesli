@@ -128,10 +128,12 @@ final class TranscriptRefinementService {
         }
         
         let prompt = buildRefinementPrompt(text)
+        let sysPrompt = systemPrompt  // Capture on main actor before entering closure
+        let maxTokens = maxGenerationTokens
         
         let result = try await container.perform { context in
             let messages: [Chat.Message] = [
-                .system(self.systemPrompt),
+                .system(sysPrompt),
                 .user(prompt)
             ]
             
@@ -139,7 +141,7 @@ final class TranscriptRefinementService {
             let input = try await context.processor.prepare(input: userInput)
             
             let generateParams = GenerateParameters(
-                maxTokens: self.maxGenerationTokens,
+                maxTokens: maxTokens,
                 temperature: 0.1  // Low temperature for consistent output
             )
             
