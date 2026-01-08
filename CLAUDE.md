@@ -388,6 +388,7 @@ This section documents technical gotchas, constraints, and solutions discovered 
 - **Closing the correct window**: When `openWindow(id:)` is called, the new window becomes the key window immediately. If you then call `NSApplication.shared.keyWindow?.close()`, you'll close the window you just opened instead of the original window. **Solution**: Capture a reference to the window you want to close BEFORE calling `openWindow`.
 - **UserDefaults reset**: Build script clears UserDefaults (`defaults delete com.muesli.app`) to ensure fresh onboarding state on each rebuild
 - **Layout strategy**: Use fixed-size content area with fixed-height bottom bar for progress indicator; avoid `Spacer()` in variable-size content areas
+- **Welcome screen auto-advance**: Do NOT auto-advance from the welcome screen to permission screens. Users should always see "Welcome to Muesli" first and click "Get Started" to proceed. Only auto-advance if ALL permissions are already granted (to skip directly to model setup). The `advanceBasedOnPermissions()` function should guard against skipping welcome when permissions still need to be requested.
 
 ### Meeting History & Selection
 - **Apple Notes-style navigation**: Single-click shows meeting in detail pane, double-click opens dedicated window

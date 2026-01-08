@@ -128,6 +128,7 @@ Keep imports minimal and sorted. Put reusable UI in `Views/Components`.
 - **History grouping**: By day for last week, by month for older meetings
 - **Meeting metadata**: Duration and word count displayed on list rows (e.g., "47 min · 1,240 words")
 - **Contextual window sizing**: Narrower (420px) for unified list, wider (750-900px) for split view with detail pane
+- **Onboarding flow**: Always show welcome screen first; do NOT auto-advance to permission screens. Auto-advance only when ALL permissions are already granted (to skip directly to model setup or complete onboarding).
 
 ## Permissions (must be handled)
 The app requires:

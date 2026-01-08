@@ -153,9 +153,9 @@ struct OnboardingView: View {
             } else if screenRecordingRequested {
                 // Permission was requested but not granted - show recovery options
                 VStack(spacing: 12) {
-                    Text("Permission not yet granted")
+                    Text("Waiting for permission...")
                         .font(.subheadline)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                     
                     Text("If you accidentally denied permission, you can grant it in System Settings.")
                         .font(.caption)
@@ -633,19 +633,23 @@ struct OnboardingView: View {
     }
     
     /// Advance to appropriate step based on current permissions
-    /// Only auto-advances from the welcome screen - permission screens require manual Continue
+    /// Only auto-advances from the welcome screen IF all permissions are already granted
+    /// (to skip directly to model setup or complete onboarding)
+    /// Does NOT skip welcome screen to show permission requests - let user see welcome first
     private func advanceBasedOnPermissions() {
         viewModel.refreshPermissions()
         
         // Only auto-advance from the welcome screen
-        // This skips directly to the first ungranted permission, or model setup if all granted
         guard currentStep == .welcome else { return }
         
-        if !viewModel.hasScreenRecordingPermission {
-            setStep(.screenRecording)
-        } else if !viewModel.hasMicrophonePermission {
-            setStep(.microphone)
-        } else if !modelManager.hasModel {
+        // Don't auto-advance to permission screens - let user see welcome and click "Get Started"
+        // Only auto-advance if ALL permissions are already granted (skip to model setup or complete)
+        guard viewModel.hasScreenRecordingPermission && viewModel.hasMicrophonePermission else {
+            return
+        }
+        
+        // All permissions granted - skip to model setup or complete
+        if !modelManager.hasModel {
             setStep(.modelSetup)
         } else if !llmManager.hasModel {
             setStep(.llmSetup)
