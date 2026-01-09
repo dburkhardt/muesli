@@ -31,18 +31,34 @@ struct MenuBarView: View {
     private var idleMenuContent: some View {
         Group {
             // Quick start recording (captures all system audio)
-            Button("Start Recording") {
-                viewModel.quickStartRecording()
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
+            // Only show if onboarding is complete
+            if viewModel.hasCompletedOnboarding {
+                Button("Start Recording") {
+                    viewModel.quickStartRecording()
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .keyboardShortcut("r", modifiers: .command)
             }
-            .keyboardShortcut("r", modifiers: .command)
             
             Divider()
             
             Button("Open Muesli") {
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
+                // If onboarding not complete, show onboarding window instead
+                if !viewModel.hasCompletedOnboarding {
+                    // Find and bring onboarding window to front
+                    if let onboardingWindow = NSApplication.shared.windows.first(where: { $0.title == "Welcome to Muesli" }) {
+                        onboardingWindow.makeKeyAndOrderFront(nil)
+                        NSApp.activate(ignoringOtherApps: true)
+                    } else {
+                        // Window doesn't exist, trigger AppDelegate to create it
+                        // Post notification that AppDelegate can listen to
+                        NotificationCenter.default.post(name: NSNotification.Name("ShowOnboardingWindow"), object: nil)
+                    }
+                } else {
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
             }
             .keyboardShortcut("o", modifiers: .command)
             

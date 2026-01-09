@@ -18,6 +18,7 @@
 		A1000085241D1A1D00000022 /* LLMStitchingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000084241D1A1D00000022 /* LLMStitchingService.swift */; };
 		A1000087241D1A1D00000023 /* LLMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000086241D1A1D00000023 /* LLMManager.swift */; };
 		A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000088241D1A1D00000024 /* TranscriptBlockView.swift */; };
+		A1000090241D1A1D00000032 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000091241D1A1D00000032 /* AboutView.swift */; };
 		A1000023241D1A1D00000001 /* MuesliViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000024241D1A1D00000001 /* MuesliViewModel.swift */; };
 		A1000025241D1A1D00000001 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000026241D1A1D00000001 /* MenuBarView.swift */; };
 		A1000027241D1A1D00000001 /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000028241D1A1D00000001 /* MainWindow.swift */; };
@@ -53,6 +54,7 @@
 		A100000A241D1A1D00000001 /* Muesli.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Muesli.entitlements; sourceTree = "<group>"; };
 		A1000022241D1A1D00000001 /* MeetingApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingApp.swift; sourceTree = "<group>"; };
 		A1000024241D1A1D00000001 /* MuesliViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliViewModel.swift; sourceTree = "<group>"; };
+		A1000091241D1A1D00000032 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		A1000026241D1A1D00000001 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		A1000028241D1A1D00000001 /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindow.swift; sourceTree = "<group>"; };
 		A100002A241D1A1D00000002 /* AudioCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCaptureService.swift; sourceTree = "<group>"; };
@@ -150,9 +152,10 @@
 			path = ViewModels;
 			sourceTree = "<group>";
 		};
-		A1000011241D1A1D00000001 /* Views */ = {
+			A1000011241D1A1D00000001 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				A1000091241D1A1D00000032 /* AboutView.swift */,
 				A1000026241D1A1D00000001 /* MenuBarView.swift */,
 				A1000028241D1A1D00000001 /* MainWindow.swift */,
 				A100005F241D1A1D00000008 /* MainWindowView.swift */,
@@ -233,7 +236,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Reset TCC permissions and app state for Muesli to ensure fresh state after rebuild\n# This clears stale permissions that may be associated with old code signatures\ntccutil reset ScreenCapture com.muesli.app 2>/dev/null || true\ntccutil reset Microphone com.muesli.app 2>/dev/null || true\n# Reset UserDefaults (onboarding state, model paths, etc.)\ndefaults delete com.muesli.app 2>/dev/null || true\necho \"TCC permissions and app state reset for com.muesli.app\"\n";
+			shellScript = "# Reset TCC permissions and app state for Muesli to ensure fresh state after rebuild\n# This clears stale permissions that may be associated with old code signatures\ntccutil reset ScreenCapture com.muesli.app.lir 2>/dev/null || true\ntccutil reset Microphone com.muesli.app.lir 2>/dev/null || true\n# Reset UserDefaults (onboarding state, model paths, etc.)\ndefaults delete com.muesli.app.lir 2>/dev/null || true\necho \"TCC permissions and app state reset for com.muesli.app.lir\"\n";
 		};
 		A100006C241D1A1D00000009 /* Update App Icon */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -341,6 +344,7 @@
 				A1000021241D1A1D00000001 /* MeetingApp.swift in Sources */,
 				A1000032241D1A1D00000003 /* RecordingSession.swift in Sources */,
 				A1000023241D1A1D00000001 /* MuesliViewModel.swift in Sources */,
+				A1000090241D1A1D00000032 /* AboutView.swift in Sources */,
 				A1000025241D1A1D00000001 /* MenuBarView.swift in Sources */,
 				A1000027241D1A1D00000001 /* MainWindow.swift in Sources */,
 				A1000034241D1A1D00000004 /* OnboardingView.swift in Sources */,
@@ -509,7 +513,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
 				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -518,8 +522,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.lir;
+				PRODUCT_NAME = "Muesli-lir";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
 			};
@@ -538,7 +542,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
 				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -547,8 +551,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.lir;
+				PRODUCT_NAME = "Muesli-lir";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
 			};
