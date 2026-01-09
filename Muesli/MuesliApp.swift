@@ -1,4 +1,4 @@
-import SwiftUI
+@preconcurrency import SwiftUI
 import Foundation
 import AppKit
 
@@ -175,7 +175,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                self?.showOnboardingWindow()
+                Task { @MainActor in
+                    self?.showOnboardingWindow()
+                }
             }
         }
         

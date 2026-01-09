@@ -82,6 +82,9 @@ final class MuesliViewModel {
         activeSession
     }
     
+    /// Microphone mute state (for synchronous access from audio callback)
+    nonisolated(unsafe) private var isMicrophoneMuted: Bool = false
+    
     // MARK: - Meeting History
     
     /// All discovered meeting recordings
@@ -228,7 +231,9 @@ final class MuesliViewModel {
         let fileService = fileOutputService
         let transcriptService = transcriptionService
         Task {
-            await audioCaptureService.setBufferHandler { buffer, type in
+            await audioCaptureService.setBufferHandler { [weak self] buffer, type in
+                let isMicMuted = self?.isMicrophoneMuted ?? false // Synchronous check
+                
                 // Save to file (always)
                 fileService.appendAudioBuffer(buffer, type: type)
                 
@@ -247,7 +252,7 @@ final class MuesliViewModel {
                         }
                     case .microphone:
                         // Skip transcription if microphone is muted
-                        if let session = self?.activeSession, session.isMicrophoneMuted {
+                        if isMicMuted {
                             return
                         }
                         // Microphone audio: 16kHz stereo Int16 -> 16kHz mono Float32
@@ -430,6 +435,7 @@ final class MuesliViewModel {
         // Set activeSession immediately so UI shows recording view right away
         // (will be cleared if async setup fails)
         activeSession = session
+        isMicrophoneMuted = session.isMicrophoneMuted // Sync mute state
         
         Task {
             await startRecordingAsync(for: session)
@@ -1229,5 +1235,6 @@ final class MuesliViewModel {
     func toggleMicrophoneMute() {
         guard let session = activeRecordingSession else { return }
         session.isMicrophoneMuted.toggle()
+        isMicrophoneMuted = session.isMicrophoneMuted // Keep ViewModel's sync property updated
     }
 }
