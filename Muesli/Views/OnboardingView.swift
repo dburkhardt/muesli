@@ -62,9 +62,23 @@ struct OnboardingView: View {
         .frame(width: 520, height: 580) // Larger window to fit all content
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
-            startPermissionPolling()
-            // Auto-advance based on current permissions
+            // Use sync check on appear (doesn't trigger permission dialog)
+            // Only auto-advance if permissions are already granted
+            viewModel.refreshPermissions()
             advanceBasedOnPermissions()
+            
+            // Start polling if we're already on a permission step (e.g., restored from UserDefaults)
+            if currentStep == .screenRecording || currentStep == .microphone {
+                startPermissionPolling()
+            }
+        }
+        .onChange(of: currentStep) { oldValue, newValue in
+            // Start/stop polling based on which step we're on
+            if newValue == .screenRecording || newValue == .microphone {
+                startPermissionPolling()
+            } else {
+                stopPermissionPolling()
+            }
         }
         .onDisappear {
             stopPermissionPolling()
@@ -600,9 +614,22 @@ struct OnboardingView: View {
     // MARK: - Permission Polling
     
     private func startPermissionPolling() {
-        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+        // Stop any existing timer first
+        stopPermissionPolling()
+        
+        // Capture whether we need async check based on current step
+        let useAsyncCheck = (currentStep == .screenRecording)
+        
+        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [viewModel] _ in
             Task { @MainActor in
-                viewModel.refreshPermissions()
+                if useAsyncCheck {
+                    // Use async refresh for reliable screen recording detection
+                    // This uses SCShareableContent which correctly detects TCC state
+                    await viewModel.refreshPermissionsAsync()
+                } else {
+                    // Use sync refresh for other steps (microphone uses AVCaptureDevice which is reliable)
+                    viewModel.refreshPermissions()
+                }
             }
         }
     }
@@ -632,11 +659,10 @@ struct OnboardingView: View {
         UserDefaults.standard.set(step.rawValue, forKey: Self.currentStepKey)
     }
     
-    /// Advance to appropriate step based on current permissions
-    /// Only auto-advances from the welcome screen - permission screens require manual Continue
+    /// Advance to appropriate step based on current permissions (sync version)
+    /// Uses sync permission check which doesn't trigger system dialogs
+    /// Only auto-advances from the welcome screen IF all permissions are already granted
     private func advanceBasedOnPermissions() {
-        viewModel.refreshPermissions()
-        
         // Only auto-advance from the welcome screen
         // This skips directly to the first ungranted permission, or model setup if all granted
         guard currentStep == .welcome else { return }
