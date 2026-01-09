@@ -96,6 +96,9 @@ struct CompletedMeetingWindow: View {
         }
         .frame(minWidth: 600, minHeight: 500)
         .background(.background)
+        .overlay(alignment: .topTrailing) {
+            WorkTreeBadge()
+        }
         .onAppear {
             loadTranscript()
         }

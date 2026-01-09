@@ -22,19 +22,324 @@ struct PreferencesView: View {
                     Label("General", systemImage: "gearshape")
                 }
         }
-        .frame(width: 500, height: 400)
+        .frame(width: 520, height: 580)
+        .overlay(alignment: .topTrailing) {
+            WorkTreeBadge()
+        }
     }
 }
 
 // MARK: - Models Tab
 
-/// Models preferences tab - embeds existing ModelManagementView
+/// Models preferences tab - transcription models and LLM refinement models
 struct ModelsPreferencesTab: View {
     @Bindable var viewModel: MuesliViewModel
     
+    private var modelManager: ModelManager {
+        viewModel.modelManager
+    }
+    
+    private var llmManager: LLMManager {
+        viewModel.llmManager
+    }
+    
+    @State private var modelToDelete: ModelManager.ModelSize?
+    @State private var showDeleteConfirmation = false
+    @State private var llmModelToDelete: LLMManager.LLMModel?
+    @State private var showLLMDeleteConfirmation = false
+    
     var body: some View {
-        ModelManagementView(viewModel: viewModel)
-            .padding()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                // Transcription Models Section
+                transcriptionModelsSection
+                
+                Divider()
+                
+                // LLM Refinement Models Section
+                llmModelsSection
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 20)
+        }
+        .alert("Delete Model", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { modelToDelete = nil }
+            Button("Delete", role: .destructive) {
+                if let model = modelToDelete {
+                    _ = modelManager.deleteModel(model)
+                    modelToDelete = nil
+                }
+            }
+        } message: {
+            if let model = modelToDelete {
+                if modelManager.activeModel == model {
+                    Text("This is your active model. Another model will be selected automatically.")
+                } else {
+                    Text("Delete this model?")
+                }
+            }
+        }
+        .alert("Delete LLM Model", isPresented: $showLLMDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { llmModelToDelete = nil }
+            Button("Delete", role: .destructive) {
+                if let model = llmModelToDelete {
+                    _ = llmManager.deleteModel(model)
+                    llmModelToDelete = nil
+                }
+            }
+        } message: {
+            Text("Delete this text processing model?")
+        }
+    }
+    
+    // MARK: - Transcription Models Section
+    
+    private var transcriptionModelsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Transcription Models")
+                .font(.headline)
+            
+            Text("Models for converting speech to text.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            
+            // Model list
+            VStack(spacing: 0) {
+                ForEach(ModelManager.ModelSize.allCases) { model in
+                    transcriptionModelRow(for: model)
+                    if model != ModelManager.ModelSize.allCases.last {
+                        Divider().padding(.horizontal, 8)
+                    }
+                }
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            
+            // Active model picker
+            if !modelManager.downloadedModels.isEmpty {
+                HStack {
+                    Text("Active Model:")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: Binding(
+                        get: { modelManager.activeModel ?? .base },
+                        set: { modelManager.setActiveModel($0) }
+                    )) {
+                        ForEach(Array(modelManager.downloadedModels).sorted(by: { $0.rawValue < $1.rawValue })) { model in
+                            Text(model.displayName).tag(model)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 140)
+                    
+                    Spacer()
+                    
+                    Button("Show in Finder") {
+                        modelManager.showModelsInFinder()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+    
+    private func transcriptionModelRow(for model: ModelManager.ModelSize) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(model.displayName)
+                        .font(.system(size: 13, weight: .medium))
+                    if modelManager.activeModel == model {
+                        Text("(Active)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(model.sizeDescription)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            transcriptionModelStatus(for: model)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+    
+    @ViewBuilder
+    private func transcriptionModelStatus(for model: ModelManager.ModelSize) -> some View {
+        let state = modelManager.downloadState(for: model)
+        switch state {
+        case .idle, .checking:
+            Button("Download") {
+                Task { await modelManager.downloadModel(model) }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        case .downloading(let progress):
+            HStack(spacing: 6) {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 60)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 35, alignment: .trailing)
+            }
+        case .completed:
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Button {
+                    modelToDelete = model
+                    showDeleteConfirmation = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .controlSize(.small)
+            }
+        case .failed(let error):
+            Button("Retry") {
+                Task { await modelManager.downloadModel(model) }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(error)
+        }
+    }
+    
+    // MARK: - LLM Models Section
+    
+    private var llmModelsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Text Processing Models (Optional)")
+                .font(.headline)
+            
+            Text("AI models to improve transcript quality by intelligently merging audio chunks.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            
+            // LLM model list
+            VStack(spacing: 0) {
+                ForEach(LLMManager.LLMModel.allCases) { model in
+                    llmModelRow(for: model)
+                    if model != LLMManager.LLMModel.allCases.last {
+                        Divider().padding(.horizontal, 8)
+                    }
+                }
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            
+            // Active LLM picker and show in finder
+            if !llmManager.downloadedModels.isEmpty {
+                HStack {
+                    Text("Active Model:")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: Binding(
+                        get: { llmManager.activeModel ?? .llama3_2_3b },
+                        set: { llmManager.setActiveModel($0) }
+                    )) {
+                        ForEach(Array(llmManager.downloadedModels).sorted(by: { $0.rawValue < $1.rawValue })) { model in
+                            Text(model.displayName).tag(model)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 200)
+                    
+                    Spacer()
+                    
+                    Button("Show in Finder") {
+                        llmManager.showModelsInFinder()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+    
+    private func llmModelRow(for model: LLMManager.LLMModel) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.displayName)
+                    .font(.system(size: 13, weight: .medium))
+                HStack(spacing: 8) {
+                    Text(model.sizeDescription)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Text("•")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    Text(model.description)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer()
+            llmModelStatus(for: model)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+    
+    @ViewBuilder
+    private func llmModelStatus(for model: LLMManager.LLMModel) -> some View {
+        let state = llmManager.downloadState(for: model)
+        switch state {
+        case .idle, .checking:
+            Button("Download") {
+                Task { await llmManager.downloadModel(model) }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        case .downloading(let progress):
+            HStack(spacing: 6) {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 60)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 35, alignment: .trailing)
+            }
+        case .loading:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Loading...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .completed:
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Button {
+                    llmModelToDelete = model
+                    showLLMDeleteConfirmation = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .controlSize(.small)
+            }
+        case .failed(let error):
+            Button("Retry") {
+                Task { await llmManager.downloadModel(model) }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(error)
+        }
     }
 }
 
@@ -47,11 +352,8 @@ struct OutputPreferencesTab: View {
     
     var body: some View {
         Form {
-            Section {
+            Section("Recording Output Location") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Recording Output Location")
-                        .font(.headline)
-                    
                     Text("Choose where meeting recordings and transcripts are saved.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -80,8 +382,8 @@ struct OutputPreferencesTab: View {
                     .font(.caption)
                 }
             }
-            .padding()
         }
+        .formStyle(.grouped)
         .fileImporter(
             isPresented: $showDirectoryPicker,
             allowedContentTypes: [.folder],
@@ -107,34 +409,23 @@ struct GeneralPreferencesTab: View {
     
     var body: some View {
         Form {
-            Section {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Startup")
-                        .font(.headline)
-                    
-                    Toggle(isOn: Binding(
-                        get: { viewModel.launchAtLogin },
-                        set: { viewModel.setLaunchAtLogin($0) }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Launch Muesli at Login")
-                            Text("Muesli will start automatically when you log in.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+            Section("Startup") {
+                Toggle(isOn: Binding(
+                    get: { viewModel.launchAtLogin },
+                    set: { viewModel.setLaunchAtLogin($0) }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Launch Muesli at Login")
+                        Text("Muesli will start automatically when you log in.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .toggleStyle(.switch)
                 }
+                .toggleStyle(.switch)
             }
-            .padding()
             
-            Divider()
-            
-            Section {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Transcription")
-                        .font(.headline)
-                    
+            Section("Transcription") {
+                VStack(alignment: .leading, spacing: 12) {
                     Picker("Default Mode:", selection: Binding(
                         get: { viewModel.transcriptionMode },
                         set: { viewModel.transcriptionMode = $0 }
@@ -150,8 +441,8 @@ struct GeneralPreferencesTab: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding()
         }
+        .formStyle(.grouped)
     }
 }
 

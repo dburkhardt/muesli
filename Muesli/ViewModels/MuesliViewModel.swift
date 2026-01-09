@@ -117,6 +117,7 @@ final class MuesliViewModel {
     /// Session pending stop (waiting for title input)
     var pendingStopSession: RecordingSession?
     
+<<<<<<< HEAD
     // MARK: - Refinement State
     
     /// Whether to show the refinement progress sheet
@@ -130,6 +131,9 @@ final class MuesliViewModel {
     
     /// Cancellation flag for refinement
     private var refinementCancelled: Bool = false
+    
+    /// Whether to show the About window
+    var showAboutWindow: Bool = false
     
     // MARK: - Preferences
     
@@ -327,6 +331,39 @@ final class MuesliViewModel {
     
     func openMicrophoneSettings() {
         permissionManager.openMicrophoneSettings()
+    }
+    
+    // MARK: - Menu Actions
+    
+    /// Show the About window
+    func showAbout() {
+        showAboutWindow = true
+    }
+    
+    /// Open the main window
+    func openMainWindow() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        // Find existing main window or create it
+        if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            // Window doesn't exist yet - trigger window creation via notification
+            // The Window scene will handle creation
+            NotificationCenter.default.post(name: NSNotification.Name("OpenMainWindow"), object: nil)
+            // Also try direct approach after a small delay
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
+        }
+    }
+    
+    /// Start a new recording
+    func startNewRecording() {
+        quickStartRecording()
+        openMainWindow()
     }
     
     // MARK: - Onboarding

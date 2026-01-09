@@ -1,8 +1,12 @@
 import SwiftUI
 
-/// Window for managing transcription models
-struct ModelManagementView: View {
+/// Flexible content view for managing transcription models
+/// Used both in standalone window and embedded in preferences
+struct ModelManagementContent: View {
     @Bindable var viewModel: MuesliViewModel
+    
+    /// Whether to show the header (icon + title). Set to false when embedded in preferences.
+    var showHeader: Bool = true
     
     /// Use the viewModel's modelManager so state is shared
     private var modelManager: ModelManager {
@@ -35,8 +39,6 @@ struct ModelManagementView: View {
             .padding(.top, 32)
             .padding(.bottom, 24)
         }
-        .frame(width: 520, height: 580)
-        .background(Color(NSColor.windowBackgroundColor))
         .alert("Delete Model", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {
                 modelToDelete = nil
@@ -428,5 +430,25 @@ struct ModelManagementView: View {
             .frame(width: 200)
         }
         .padding(.top, 4)
+    }
+}
+
+// MARK: - Standalone Window Wrapper
+
+/// Standalone window for managing transcription models
+/// Wraps ModelManagementContent with fixed sizing for dedicated window use
+struct ModelManagementView: View {
+    @Bindable var viewModel: MuesliViewModel
+    
+    var body: some View {
+        ModelManagementContent(viewModel: viewModel, showHeader: true)
+            .padding(.horizontal, 40)
+            .padding(.top, 40)
+            .padding(.bottom, 24)
+            .frame(width: 520, height: 580)
+            .background(Color(NSColor.windowBackgroundColor))
+            .overlay(alignment: .topTrailing) {
+                WorkTreeBadge()
+            }
     }
 }

@@ -55,6 +55,19 @@ tccutil reset Microphone com.muesli.app
 
 ## Working in Worktrees (parallel agents)
 
+**CRITICAL: WorkTree Initialization Checklist**
+
+When starting work in a **new worktree**, you MUST complete these steps **immediately** before building:
+
+- [ ] Determine your worktree suffix (use the worktree directory name)
+- [ ] Update `PRODUCT_BUNDLE_IDENTIFIER` in `Muesli.xcodeproj/project.pbxproj` (both Debug and Release)
+- [ ] Update `PRODUCT_NAME` in `Muesli.xcodeproj/project.pbxproj` (both Debug and Release)
+- [ ] Update bundle IDs in the TCC reset script in `Muesli.xcodeproj/project.pbxproj`
+- [ ] Verify build produces `Muesli-<suffix>.app` (not `Muesli.app`)
+- [ ] Verify menu bar shows "Muesli-<suffix>" when hovering over icon
+
+**Failure to complete these steps will cause build conflicts, app overwrites, and debugging nightmares.**
+
 When using Cursor worktrees with parallel agents, each worktree MUST have a unique app identity. This prevents critical issues where macOS system dialogs (like "Quit & Reopen") launch the wrong app version.
 
 ### Why This Is Required
