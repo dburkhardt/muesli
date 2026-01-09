@@ -385,11 +385,7 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 3. Add Swift Package dependencies:
    - WhisperKit: `https://github.com/argmaxinc/WhisperKit.git` (from: "0.9.0")
    
-4. Set up XcodeBuildMCP (if not already configured):
-   - Install: `npm install -g xcodebuild-mcp`
-   - Add to Claude Code MCP config
-   
-5. Create folder structure as defined in CLAUDE.md
+4. Create folder structure as defined in AGENTS.md
 
 6. Verify project builds successfully
 
