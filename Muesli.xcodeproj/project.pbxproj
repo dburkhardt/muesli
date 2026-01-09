@@ -19,6 +19,7 @@
 		A1000087241D1A1D00000023 /* LLMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000086241D1A1D00000023 /* LLMManager.swift */; };
 		A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000088241D1A1D00000024 /* TranscriptBlockView.swift */; };
 		A1000090241D1A1D00000025 /* TranscriptRefinementService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */; };
+		A1000096241D1A1D00000028 /* EchoCancellationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000097241D1A1D00000028 /* EchoCancellationService.swift */; };
 		A1000092241D1A1D00000026 /* RefineTranscriptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */; };
 		A1000094241D1A1D00000027 /* ResumeControlPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000095241D1A1D00000027 /* ResumeControlPane.swift */; };
 		A1000023241D1A1D00000001 /* MuesliViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000024241D1A1D00000001 /* MuesliViewModel.swift */; };
@@ -83,6 +84,7 @@
 		A1000086241D1A1D00000023 /* LLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMManager.swift; sourceTree = "<group>"; };
 		A1000088241D1A1D00000024 /* TranscriptBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlockView.swift; sourceTree = "<group>"; };
 		A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRefinementService.swift; sourceTree = "<group>"; };
+		A1000097241D1A1D00000028 /* EchoCancellationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoCancellationService.swift; sourceTree = "<group>"; };
 		A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefineTranscriptSheet.swift; sourceTree = "<group>"; };
 		A1000095241D1A1D00000027 /* ResumeControlPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResumeControlPane.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -194,6 +196,7 @@
 				A1000082241D1A1D00000021 /* TranscriptProcessor.swift */,
 				A1000084241D1A1D00000022 /* LLMStitchingService.swift */,
 				A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */,
+				A1000097241D1A1D00000028 /* EchoCancellationService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -372,6 +375,7 @@
 				A1000087241D1A1D00000023 /* LLMManager.swift in Sources */,
 				A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */,
 				A1000090241D1A1D00000025 /* TranscriptRefinementService.swift in Sources */,
+				A1000096241D1A1D00000028 /* EchoCancellationService.swift in Sources */,
 				A1000092241D1A1D00000026 /* RefineTranscriptSheet.swift in Sources */,
 				A1000094241D1A1D00000027 /* ResumeControlPane.swift in Sources */,
 			);

@@ -72,6 +72,21 @@ final class MuesliViewModel {
         }
     }
     
+    // MARK: - Echo Cancellation
+    
+    /// Echo cancellation service for removing speaker audio from microphone
+    private let echoCancellationService = EchoCancellationService()
+    
+    /// Whether echo cancellation is enabled (persisted in UserDefaults)
+    var isEchoCancellationEnabled: Bool {
+        get {
+            UserDefaults.standard.bool(forKey: "echoCancellationEnabled")
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "echoCancellationEnabled")
+        }
+    }
+    
     // MARK: - Active Session Tracking
     
     /// The currently recording session (only one can record at a time)
@@ -272,25 +287,30 @@ final class MuesliViewModel {
         // Set up audio buffer handler - fork to both file output and transcription
         let fileService = fileOutputService
         let transcriptService = transcriptionService
+        let aecService = echoCancellationService
         Task {
             await audioCaptureService.setBufferHandler { [weak self] buffer, type in
-                // Check if microphone is muted (synchronous check)
+                // Check if microphone is muted and AEC enabled (synchronous check)
                 let isMicMuted = self?.isMicrophoneMuted ?? false
+                // Read AEC setting directly from UserDefaults (thread-safe)
+                let isAECEnabled = UserDefaults.standard.bool(forKey: "echoCancellationEnabled")
                 
-                // Save to file (always, even when muted - we want silence in the file)
-                fileService.appendAudioBuffer(buffer, type: type)
+                let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
                 
-                // Skip microphone audio for transcription if muted
-                if type == .microphone && isMicMuted {
-                    return
-                }
-                
-                // Only feed to transcription in live mode
-                if transcriptService.transcriptionMode == .live {
-                    // Convert and feed to transcription based on audio type
-                    switch type {
-                    case .system:
-                        // System audio: 48kHz stereo Float32 -> 16kHz mono Float32
+                switch type {
+                case .system:
+                    // Store system audio for AEC reference (if AEC enabled)
+                    if isAECEnabled {
+                        if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
+                            aecService.storeSystemAudio(samples: systemSamples, timestamp: timestamp)
+                        }
+                    }
+                    
+                    // Save to file (always)
+                    fileService.appendAudioBuffer(buffer, type: type)
+                    
+                    // Feed to transcription in live mode
+                    if transcriptService.transcriptionMode == .live {
                         if let samples = TranscriptionService.resampleToWhisperFormat(
                             buffer,
                             sourceSampleRate: 48000,
@@ -298,16 +318,54 @@ final class MuesliViewModel {
                         ) {
                             transcriptService.appendSystemAudio(samples)
                         }
-                    case .microphone:
-                        // Microphone audio: 48kHz mono Float32 -> 16kHz mono Float32
-                        // Needs resampling just like system audio
-                        if let samples = TranscriptionService.resampleToWhisperFormat(
-                            buffer,
-                            sourceSampleRate: 48000,
-                            sourceChannels: 1
+                    }
+                    
+                case .microphone:
+                    // Extract microphone samples at 48kHz
+                    guard let micSamples48kHz = EchoCancellationService.extractSamples(from: buffer) else {
+                        // Fallback: save original buffer
+                        fileService.appendAudioBuffer(buffer, type: type)
+                        return
+                    }
+                    
+                    // Apply AEC if enabled
+                    let processedSamples48kHz: [Float]
+                    if isAECEnabled {
+                        processedSamples48kHz = aecService.processMicrophoneAudio(
+                            microphoneSamples: micSamples48kHz,
+                            micTimestamp: timestamp
+                        )
+                        
+                        // Create CMSampleBuffer from processed samples for file output
+                        if let processedBuffer = EchoCancellationService.createSampleBuffer(
+                            from: processedSamples48kHz,
+                            timestamp: timestamp
                         ) {
-                            transcriptService.appendMicrophoneAudio(samples)
+                            fileService.appendAudioBuffer(processedBuffer, type: type)
+                        } else {
+                            // Fallback: save original if conversion fails
+                            fileService.appendAudioBuffer(buffer, type: type)
                         }
+                    } else {
+                        processedSamples48kHz = micSamples48kHz
+                        // Save original buffer when AEC disabled
+                        fileService.appendAudioBuffer(buffer, type: type)
+                    }
+                    
+                    // Skip microphone audio for transcription if muted
+                    if isMicMuted {
+                        return
+                    }
+                    
+                    // Feed to transcription in live mode
+                    if transcriptService.transcriptionMode == .live {
+                        // Resample processed samples to 16kHz for transcription
+                        let resampled = EchoCancellationService.resampleFloat32Public(
+                            samples: processedSamples48kHz,
+                            sourceSampleRate: 48000,
+                            targetSampleRate: 16000
+                        )
+                        transcriptService.appendMicrophoneAudio(resampled)
                     }
                 }
             }
