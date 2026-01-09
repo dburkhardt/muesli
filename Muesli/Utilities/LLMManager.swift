@@ -104,10 +104,20 @@ final class LLMManager {
     private static let downloadedModelsKey = "downloadedLLMModels"
     private static let llmEnabledKey = "llmStitchingEnabled"
     
-    /// User preference: enable LLM stitching (can be disabled even if model exists)
+    /// User preference: enable LLM stitching
+    /// Automatically enabled when a model is downloaded
     var isLLMStitchingEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: Self.llmEnabledKey) }
-        set { UserDefaults.standard.set(newValue, forKey: Self.llmEnabledKey) }
+        get { 
+            // Always enabled if a model is downloaded
+            if hasModel {
+                return true
+            }
+            // Otherwise use stored preference (for when models are deleted)
+            return UserDefaults.standard.bool(forKey: Self.llmEnabledKey)
+        }
+        set { 
+            UserDefaults.standard.set(newValue, forKey: Self.llmEnabledKey)
+        }
     }
     
     /// Hub API for downloading models
@@ -175,6 +185,11 @@ final class LLMManager {
                 downloadStates[model] = .completed
             }
         }
+        
+        // Automatically enable LLM stitching if models are found
+        if hasModel {
+            isLLMStitchingEnabled = true
+        }
     }
     
     // MARK: - Download
@@ -199,6 +214,9 @@ final class LLMManager {
             
             downloadedModels.insert(model)
             downloadStates[model] = .completed
+            
+            // Automatically enable LLM stitching when a model is downloaded
+            isLLMStitchingEnabled = true
             
             if activeModel == nil {
                 setActiveModel(model)
@@ -320,6 +338,9 @@ final class LLMManager {
         activeModel = nil
         UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
         UserDefaults.standard.removeObject(forKey: Self.downloadedModelsKey)
+        
+        // Disable LLM stitching when all models are deleted
+        isLLMStitchingEnabled = false
     }
     
     // MARK: - Errors

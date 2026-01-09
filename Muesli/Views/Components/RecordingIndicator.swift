@@ -155,28 +155,40 @@ struct MicrophoneLevelIndicator: View {
 
 // MARK: - Microphone Control with Level
 
-/// Microphone picker button with integrated level indicator
+/// Microphone picker button with integrated level indicator and mute toggle
 struct MicrophoneControlWithLevel: View {
     let level: Float
     let isRecording: Bool
     let isMuted: Bool
     let availableDevices: [MicrophoneManager.MicrophoneDevice]
     let selectedDeviceID: String?
-    let onSelectDevice: (String) -> Void
     let onToggleMute: () -> Void
+    let onSelectDevice: (String) -> Void
+    
+    private let iconSize: CGFloat = 18
     
     var body: some View {
-        HStack(spacing: 8) {
-            // Mute toggle button
-            Button(action: onToggleMute) {
-                Image(systemName: isMuted ? "mic.slash.fill" : "mic.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(isMuted ? .red : .primary)
+        HStack(spacing: 6) {
+            // Mute toggle button (clickable microphone icon)
+            Button(action: {
+                onToggleMute()
+            }) {
+                Group {
+                    if isMuted {
+                        // Show muted icon (no level indicator)
+                        Image(systemName: "mic.slash.fill")
+                            .font(.system(size: iconSize))
+                            .foregroundStyle(.red)
+                    } else {
+                        // Show level indicator when not muted
+                        MicrophoneLevelIndicator(level: level, isActive: isRecording)
+                    }
+                }
             }
             .buttonStyle(.plain)
             .help(isMuted ? "Unmute microphone" : "Mute microphone")
             
-            // Microphone picker menu
+            // Device picker menu (chevron only)
             Menu {
                 ForEach(availableDevices) { device in
                     Button(action: {
@@ -196,13 +208,9 @@ struct MicrophoneControlWithLevel: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
-                    MicrophoneLevelIndicator(level: isMuted ? 0.0 : level, isActive: isRecording && !isMuted)
-                    
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8))
-                        .foregroundStyle(.secondary)
-                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
         }
@@ -240,4 +248,101 @@ struct MicrophoneControlWithLevel: View {
     MicrophoneLevelIndicator(level: 0.9, isActive: true)
         .padding()
         .background(.gray.opacity(0.2))
+}
+
+// MARK: - Refinement Loading Indicator
+
+/// Loading indicator shown while transcript refinement is in progress
+struct RefinementLoadingIndicator: View {
+    @State private var opacity: Double = 0.5
+    @State private var rotation: Double = 0
+    
+    var body: some View {
+        Image(systemName: "wand.and.stars")
+            .font(.system(size: 17))
+            .foregroundStyle(.purple)
+            .opacity(opacity)
+            .rotationEffect(.degrees(rotation))
+            .onAppear {
+                // Pulsating opacity animation
+                withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                    opacity = 1.0
+                }
+                
+                // Light rotation animation (15-20 degrees)
+                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                    rotation = 18.0 // ~18 degrees
+                }
+            }
+    }
+}
+
+// MARK: - Refinement Toggle Control
+
+/// iOS-style toggle switch for switching between refined and original transcripts
+struct RefinementToggleControl: View {
+    @Binding var isOn: Bool
+    
+    private let trackWidth: CGFloat = 50
+    private let trackHeight: CGFloat = 30
+    private let thumbSize: CGFloat = 26
+    private let thumbPadding: CGFloat = 2
+    
+    var body: some View {
+        ZStack {
+            // Track background
+            RoundedRectangle(cornerRadius: trackHeight / 2)
+                .fill(isOn ? Color.purple.opacity(0.2) : Color.gray.opacity(0.2))
+                .frame(width: trackWidth, height: trackHeight)
+            
+            // Thumb with icon
+            HStack {
+                if isOn {
+                    Spacer()
+                }
+                
+                Circle()
+                    .fill(.white)
+                    .frame(width: thumbSize, height: thumbSize)
+                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
+                    .overlay {
+                        // Icon inside thumb
+                        Image(systemName: isOn ? "wand.and.stars" : "doc.text")
+                            .font(.system(size: 11))
+                            .foregroundStyle(isOn ? .purple : .gray)
+                    }
+                    .padding(thumbPadding)
+                
+                if !isOn {
+                    Spacer()
+                }
+            }
+            .frame(width: trackWidth, height: trackHeight)
+        }
+        .frame(width: trackWidth, height: trackHeight)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                isOn.toggle()
+            }
+        }
+    }
+}
+
+#Preview("Refinement Loading") {
+    RefinementLoadingIndicator()
+        .padding()
+        .background(.regularMaterial)
+}
+
+#Preview("Refinement Toggle ON") {
+    RefinementToggleControl(isOn: .constant(true))
+        .padding()
+        .background(.regularMaterial)
+}
+
+#Preview("Refinement Toggle OFF") {
+    RefinementToggleControl(isOn: .constant(false))
+        .padding()
+        .background(.regularMaterial)
 }

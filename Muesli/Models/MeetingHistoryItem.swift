@@ -10,6 +10,12 @@ final class MeetingHistoryItem: Identifiable, Hashable {
     let directory: URL
     var transcript: String?
     var transcriptBlocks: [TranscriptBlock]?  // Block-based transcript (if available)
+    
+    // Original transcript before refinement (if refinement was applied)
+    var originalTranscript: String?
+    var originalTranscriptBlocks: [TranscriptBlock]?
+    var isRefined: Bool = false  // Whether this transcript has been refined
+    
     let hasAudio: Bool
     let hasMicrophone: Bool
     let duration: TimeInterval?  // Duration in seconds
@@ -22,6 +28,9 @@ final class MeetingHistoryItem: Identifiable, Hashable {
         directory: URL,
         transcript: String? = nil,
         transcriptBlocks: [TranscriptBlock]? = nil,
+        originalTranscript: String? = nil,
+        originalTranscriptBlocks: [TranscriptBlock]? = nil,
+        isRefined: Bool = false,
         hasAudio: Bool,
         hasMicrophone: Bool,
         duration: TimeInterval? = nil,
@@ -33,6 +42,9 @@ final class MeetingHistoryItem: Identifiable, Hashable {
         self.directory = directory
         self.transcript = transcript
         self.transcriptBlocks = transcriptBlocks
+        self.originalTranscript = originalTranscript
+        self.originalTranscriptBlocks = originalTranscriptBlocks
+        self.isRefined = isRefined
         self.hasAudio = hasAudio
         self.hasMicrophone = hasMicrophone
         self.duration = duration

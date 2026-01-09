@@ -38,6 +38,7 @@ struct RecordingDetailView: View {
                         get: { session.meetingTitle },
                         set: { session.meetingTitle = $0 }
                     ),
+                    recordingStartTime: session.recordingStartTime,
                     onSave: {
                         viewModel.confirmStopRecording()
                     },
@@ -58,18 +59,6 @@ struct RecordingDetailView: View {
                 errorMessage: viewModel.refinementService.errorMessage,
                 onCancel: {
                     viewModel.cancelRefinement()
-                }
-            )
-        }
-        .sheet(isPresented: $viewModel.showRefinementPrompt) {
-            PostMeetingRefinementPrompt(
-                isPresented: $viewModel.showRefinementPrompt,
-                hasLLMModel: viewModel.llmManager.hasModel,
-                onRefine: {
-                    viewModel.acceptRefinement()
-                },
-                onSkip: {
-                    viewModel.skipRefinement()
                 }
             )
         }
@@ -133,7 +122,7 @@ struct RecordingDetailView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background {
-            RoundedRectangle(cornerRadius: 8)
+            Capsule()
                 .fill(.regularMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
         }
@@ -148,11 +137,11 @@ struct RecordingDetailView: View {
             isMuted: session.isMicrophoneMuted,
             availableDevices: viewModel.microphoneManager.availableDevices,
             selectedDeviceID: viewModel.microphoneManager.selectedDeviceID,
-            onSelectDevice: { deviceID in
-                viewModel.microphoneManager.setSelectedDeviceID(deviceID)
-            },
             onToggleMute: {
                 viewModel.toggleMicrophoneMute()
+            },
+            onSelectDevice: { deviceID in
+                viewModel.microphoneManager.setSelectedDeviceID(deviceID)
             }
         )
     }
@@ -460,112 +449,137 @@ struct RecordingDetailView: View {
     // MARK: - Historical Meeting View
     
     private func historicalMeetingView(meeting: MeetingHistoryItem) -> some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack(spacing: 12) {
-                TextField("Meeting Title", text: Binding(
-                    get: { meeting.title },
-                    set: { meeting.title = $0 }
-                ))
-                .textFieldStyle(.plain)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.primary)
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                // Header
+                HStack(spacing: 12) {
+                    TextField("Meeting Title", text: Binding(
+                        get: { meeting.title },
+                        set: { meeting.title = $0 }
+                    ))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    
+                    Spacer()
+                    
+                    CompletedIndicator()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
                 
-                Spacer()
+                Divider()
                 
-                CompletedIndicator()
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            
-            Divider()
-            
-            // Content
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Metadata row with date, Open in Finder, and Delete
-                    HStack(spacing: 8) {
-                        Label(formatDate(meeting.date), systemImage: "calendar")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                        
-                        Text("·")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                        
-                        Button(action: {
-                            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
-                        }) {
-                            Text("Open in Finder")
+                // Content
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Metadata row with date, Open in Finder, and Delete
+                        HStack(spacing: 8) {
+                            Label(formatDate(meeting.date), systemImage: "calendar")
                                 .font(.system(size: 12))
-                                .foregroundStyle(.blue)
-                                .underline()
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Text("·")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                        
-                        Button(action: {
-                            viewModel.requestDeleteMeeting(meeting)
-                        }) {
-                            Text("Delete Recording")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.red)
-                                .underline()
-                        }
-                        .buttonStyle(.plain)
-                        
-                        // Refine Transcript button (if LLM available)
-                        if viewModel.canRefineTranscripts {
+                                .foregroundStyle(.secondary)
+                            
                             Text("·")
                                 .font(.system(size: 12))
                                 .foregroundStyle(.tertiary)
                             
                             Button(action: {
-                                viewModel.refineTranscript(for: meeting)
+                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
                             }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "wand.and.stars")
-                                        .font(.system(size: 10))
-                                    Text("Refine Transcript")
-                                        .font(.system(size: 12))
-                                }
-                                .foregroundStyle(.purple)
+                                Text("Open in Finder")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.blue)
+                                    .underline()
                             }
                             .buttonStyle(.plain)
-                            .disabled(viewModel.refinementService.isRefining)
+                            
+                            Text("·")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.tertiary)
+                            
+                            Button(action: {
+                                viewModel.requestDeleteMeeting(meeting)
+                            }) {
+                                Text("Delete Recording")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.red)
+                                    .underline()
+                            }
+                            .buttonStyle(.plain)
+                            
+                        }
+                        .padding(.bottom, 8)
+                        
+                        // Transcript - prefer blocks, fall back to plain text
+                        let hasOriginal = (meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil)
+                        let showingOriginal = viewModel.showOriginalTranscript(for: meeting) && hasOriginal
+                        
+                        if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
+                            // Block-based display (new format)
+                            LazyVStack(spacing: 8) {
+                                ForEach(showingOriginal ? (meeting.originalTranscriptBlocks ?? blocks) : blocks) { block in
+                                    TranscriptBlockView(block: block)
+                                }
+                            }
+                        } else if let transcript = meeting.transcript {
+                            // Plain text display (legacy format)
+                            Text(showingOriginal ? (meeting.originalTranscript ?? transcript) : transcript)
+                                .font(.system(size: 14))
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Text("Loading transcript...")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .onAppear {
+                                    viewModel.loadTranscript(for: meeting)
+                                }
                         }
                     }
-                    .padding(.bottom, 8)
-                    
-                    // Transcript - prefer blocks, fall back to plain text
-                    if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
-                        // Block-based display (new format)
-                        LazyVStack(spacing: 8) {
-                            ForEach(blocks) { block in
-                                TranscriptBlockView(block: block)
-                            }
+                    .padding(20)
+                    .padding(.bottom, 80) // Space for floating control pane
+                }
+            }
+            
+            // Floating control pane for refinement toggle/loading
+            // Show when LLM models are downloaded (regardless of stitching enabled state)
+            if viewModel.canRefineTranscripts {
+                let isRefined = meeting.isRefined || meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil
+                let isRefining = viewModel.meetingBeingRefined?.id == meeting.id && viewModel.refinementService.isRefining
+                // Check if refinement will happen (meeting has transcript but hasn't been refined yet)
+                let willRefine = !isRefined && ((meeting.transcriptBlocks != nil && !meeting.transcriptBlocks!.isEmpty) || (meeting.transcript != nil && !meeting.transcript!.isEmpty))
+                
+                Group {
+                    if isRefining || willRefine {
+                        // Show loading indicator while refining OR if refinement will happen
+                        HStack(spacing: 16) {
+                            RefinementLoadingIndicator()
                         }
-                    } else if let transcript = meeting.transcript {
-                        // Plain text display (legacy format)
-                        Text(transcript)
-                            .font(.system(size: 14))
-                            .foregroundStyle(.primary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Text("Loading transcript...")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .onAppear {
-                                viewModel.loadTranscript(for: meeting)
-                            }
+                    } else if isRefined {
+                        // Only show toggle control when refinement is complete
+                        HStack(spacing: 16) {
+                            RefinementToggleControl(
+                                isOn: Binding(
+                                    get: { 
+                                        // Show refined (toggle ON) unless user explicitly wants original
+                                        return !viewModel.showOriginalTranscript(for: meeting)
+                                    },
+                                    set: { _ in viewModel.toggleOriginalTranscript(for: meeting) }
+                                )
+                            )
+                        }
                     }
                 }
-                .padding(20)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background {
+                    Capsule()
+                        .fill(.regularMaterial)
+                        .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
+                }
+                .padding(.bottom, 16)
             }
         }
     }

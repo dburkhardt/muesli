@@ -8,16 +8,6 @@ struct MenuBarView: View {
     
     var body: some View {
         Group {
-            // WorkTree identifier header (if applicable)
-            if let suffix = WorkTreeIdentifier.workTreeSuffix {
-                Text("WorkTree: \(suffix)")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .disabled(true)
-                
-                Divider()
-            }
-            
             if let activeSession = viewModel.activeSession, activeSession.isRecording {
                 recordingMenuContent(session: activeSession)
             } else {
@@ -31,34 +21,18 @@ struct MenuBarView: View {
     private var idleMenuContent: some View {
         Group {
             // Quick start recording (captures all system audio)
-            // Only show if onboarding is complete
-            if viewModel.hasCompletedOnboarding {
-                Button("Start Recording") {
-                    viewModel.quickStartRecording()
-                    openWindow(id: "main")
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-                .keyboardShortcut("r", modifiers: .command)
+            Button("Start Recording") {
+                viewModel.quickStartRecording()
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
             }
+            .keyboardShortcut("r", modifiers: .command)
             
             Divider()
             
             Button("Open Muesli") {
-                // If onboarding not complete, show onboarding window instead
-                if !viewModel.hasCompletedOnboarding {
-                    // Find and bring onboarding window to front
-                    if let onboardingWindow = NSApplication.shared.windows.first(where: { $0.title == "Welcome to Muesli" }) {
-                        onboardingWindow.makeKeyAndOrderFront(nil)
-                        NSApp.activate(ignoringOtherApps: true)
-                    } else {
-                        // Window doesn't exist, trigger AppDelegate to create it
-                        // Post notification that AppDelegate can listen to
-                        NotificationCenter.default.post(name: NSNotification.Name("ShowOnboardingWindow"), object: nil)
-                    }
-                } else {
-                    openWindow(id: "main")
-                    NSApp.activate(ignoringOtherApps: true)
-                }
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
             }
             .keyboardShortcut("o", modifiers: .command)
             

@@ -55,19 +55,6 @@ tccutil reset Microphone com.muesli.app
 
 ## Working in Worktrees (parallel agents)
 
-**CRITICAL: WorkTree Initialization Checklist**
-
-When starting work in a **new worktree**, you MUST complete these steps **immediately** before building:
-
-- [ ] Determine your worktree suffix (use the worktree directory name)
-- [ ] Update `PRODUCT_BUNDLE_IDENTIFIER` in `Muesli.xcodeproj/project.pbxproj` (both Debug and Release)
-- [ ] Update `PRODUCT_NAME` in `Muesli.xcodeproj/project.pbxproj` (both Debug and Release)
-- [ ] Update bundle IDs in the TCC reset script in `Muesli.xcodeproj/project.pbxproj`
-- [ ] Verify build produces `Muesli-<suffix>.app` (not `Muesli.app`)
-- [ ] Verify menu bar shows "Muesli-<suffix>" when hovering over icon
-
-**Failure to complete these steps will cause build conflicts, app overwrites, and debugging nightmares.**
-
 When using Cursor worktrees with parallel agents, each worktree MUST have a unique app identity. This prevents critical issues where macOS system dialogs (like "Quit & Reopen") launch the wrong app version.
 
 ### Why This Is Required
@@ -127,30 +114,62 @@ killall Muesli-<suffix> 2>/dev/null; xcodebuild -project Muesli.xcodeproj -schem
 killall Muesli-kxn 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-kxn.app
 ```
 
-### Cleaning Up After Merging
+### Cleaning Up After Merging (MANDATORY)
 
-**IMPORTANT**: When you finish work in a worktree and merge back to main, clean up to prevent stale builds:
+**⚠️ CRITICAL**: When you finish work in a worktree and merge back to main, you MUST clean up the worktree-specific app builds and permissions. Failure to do this causes:
+- Multiple menu bar icons (one per worktree app)
+- "Quit & Reopen" dialogs launching wrong/outdated versions
+- TCC permission confusion between worktree apps
+- Cluttered DerivedData folders
 
-**Step 1: Remove the worktree's DerivedData**
+**Complete cleanup checklist** (run these commands before deleting the worktree):
+
+**Step 1: Kill any running instances**
 ```bash
-# Find and remove the specific DerivedData folder
+killall Muesli-<suffix> 2>/dev/null
+killall Muesli 2>/dev/null
+```
+
+**Step 2: Remove the worktree's DerivedData**
+```bash
+# Remove the specific worktree app build
 rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app
 
-# Or remove the entire DerivedData for this project (if you want a clean slate)
-rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*
+# Optional: Remove entire DerivedData for a clean slate (if no other worktrees active)
+# rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*
 ```
 
-**Step 2: Reset TCC permissions for the worktree bundle ID**
+**Step 3: Reset TCC permissions for the worktree bundle ID**
 ```bash
-tccutil reset ScreenCapture com.muesli.app.<suffix>
-tccutil reset Microphone com.muesli.app.<suffix>
-defaults delete com.muesli.app.<suffix>
+# Reset screen recording permission
+tccutil reset ScreenCapture com.muesli.app.<suffix> 2>/dev/null || true
+
+# Reset microphone permission
+tccutil reset Microphone com.muesli.app.<suffix> 2>/dev/null || true
+
+# Clear UserDefaults (onboarding state, preferences, etc.)
+defaults delete com.muesli.app.<suffix> 2>/dev/null || true
 ```
 
-**Step 3: Unregister from LaunchServices** (prevents stale app from appearing in Spotlight/Finder)
+**Step 4: Unregister from LaunchServices** (prevents stale app from appearing in Spotlight/Finder)
 ```bash
-# Re-register only the main app after cleanup
+# Unregister the worktree app
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app 2>/dev/null || true
+```
+
+**Step 5: Verify cleanup**
+```bash
+# Check no instances are running
+ps aux | grep -i muesli | grep -v grep
+
+# Check no worktree apps remain in DerivedData
+ls ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/ | grep Muesli-<suffix>
+```
+
+**After cleanup is complete**, you can safely delete the worktree:
+```bash
+cd /path/to/repo
+git worktree remove <worktree-path>
 ```
 
 ### Verifying Your Setup
@@ -246,7 +265,8 @@ Keep imports minimal and sorted. Put reusable UI in `Views/Components`.
   - Cmd+click: Toggle multi-select for bulk operations
   - Shift+click: Range selection
 - **Floating recording indicator**: When viewing a past meeting during active recording, a pill-shaped indicator (red dot + waveform + elapsed time) appears in bottom-right. Clicking it returns to live recording.
-- **Floating control bar**: During recording, shows mic picker, transcription mode, stop button
+- **Floating control bar**: During recording, shows mic picker, transcription mode, stop button. Uses pill shape (Capsule) with `.regularMaterial` background.
+- **Refinement control pane**: Post-meeting floating control pane shows loading indicator (animated magic wand) while refining, then toggle switch (magic wand icon for refined, document icon for original) after completion. Uses same pill shape styling as recording control bar.
 - **Deletion**: Hover X icon, right-click menu, or Delete key with confirmation
 - **History grouping**: By day for last week, by month for older meetings
 - **Meeting metadata**: Duration and word count displayed on list rows (e.g., "47 min · 1,240 words")
@@ -423,7 +443,7 @@ This section documents technical gotchas, constraints, and solutions discovered 
 
 ### WhisperKit
 - **Audio format**: WhisperKit expects 16kHz mono Float32 audio
-- **Resampling required**: System audio (48kHz stereo) and mic audio (24kHz mono) must be converted
+- **Resampling required**: System audio (48kHz stereo Float32) and mic audio (48kHz mono Float32) must be resampled to 16kHz
 - **High-quality resampling**: Use `AVAudioConverter` instead of linear interpolation for better audio fidelity
 - **Interleaved audio**: CMSampleBuffer from ScreenCaptureKit provides interleaved stereo audio; deinterleave before conversion
 - **Model download**: First run downloads the model (~150MB for base). Handle during onboarding.
@@ -432,6 +452,37 @@ This section documents technical gotchas, constraints, and solutions discovered 
 - **Progress callback**: `WhisperKit.download(progressCallback:)` requires `@Sendable`; use `Task { @MainActor }` for UI updates
 - **Progress granularity**: WhisperKit reports progress in ~5% increments; use a visual progress bar for smoother UX
 - **Neural Engine**: WhisperKit automatically uses Neural Engine on Apple Silicon (M-series chips) for optimal performance
+
+### LLM Stitching & Refinement
+- **Auto-enable behavior**: LLM stitching is automatically enabled when a model is downloaded (`LLMManager.isLLMStitchingEnabled` returns `true` if `hasModel` is `true`)
+- **Refinement state management**: Always ensure transcript is loaded before attempting refinement (`loadTranscript(for:)` if `transcriptBlocks` and `transcript` are both `nil`)
+- **Refinement UI pattern**: Show loading indicator immediately when refinement will happen (even before it starts), toggle only appears after refinement completes
+- **Loading indicator timing**: Check `willRefine` condition (has transcript but not refined) to show loading immediately when meeting stops
+- **Original transcript storage**: Store `originalTranscriptBlocks` and `originalTranscript` before refining so users can toggle between original and refined views
+- **Refinement completion**: Set `meeting.isRefined = true` and clear `meetingBeingRefined` after successful refinement
+
+### Audio Sample Rate Debugging (CRITICAL - Common Pitfall)
+**⚠️ If transcription outputs nonsense/gibberish, CHECK SAMPLE RATES FIRST!**
+
+This is a recurring debugging issue. WhisperKit requires exactly 16kHz audio. If you feed it audio at a different sample rate (e.g., 48kHz), it will produce garbage output like "*Sounds of a dog*" or "(imitates a..." because the audio plays back at the wrong speed internally.
+
+**ScreenCaptureKit audio formats (macOS 15+):**
+- System audio: 48kHz stereo Float32
+- Microphone audio: 48kHz mono Float32 (NOT 16kHz as you might assume!)
+
+**Both must be resampled to 16kHz using `TranscriptionService.resampleToWhisperFormat()`:**
+```swift
+// System audio: 48kHz stereo -> 16kHz mono
+TranscriptionService.resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
+
+// Microphone audio: 48kHz mono -> 16kHz mono  
+TranscriptionService.resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
+```
+
+**Debugging steps when transcription is garbage:**
+1. Add logging to check actual audio format: `asbd.pointee.mSampleRate`, `asbd.pointee.mChannelsPerFrame`
+2. Verify resampling is being applied to ALL audio streams
+3. Confirm the output is 16kHz before feeding to WhisperKit
 
 ### ModelManager Architecture
 - **Single source of truth**: `ModelManager` owns all model state (downloaded models, active model, download progress)
@@ -453,6 +504,11 @@ This section documents technical gotchas, constraints, and solutions discovered 
 - **Apple Notes-style navigation**: Single-click shows meeting in detail pane, double-click opens dedicated window
 - **Multi-select pattern**: Use a `Set<UUID>` for selected meeting IDs alongside single `selectedMeeting` for detail view
 - **Single click vs double-click**: In SwiftUI, use `.onTapGesture(count: 2)` BEFORE `.onTapGesture(count: 1)` - order matters for gesture recognition
+
+### UI Patterns
+- **Pill-shaped control panes**: Use `Capsule()` shape for floating control panes (recording control bar, refinement toggle). Provides circular sides with flat top/bottom edges.
+- **Material backgrounds**: Use `.regularMaterial` for floating control panes to match system appearance and provide proper blur/transparency.
+- **Consistent styling**: All floating control panes should use the same padding (`.horizontal: 12`, `.vertical: 10`), shadow (`radius: 6, x: 0, y: 2`), and shape (`Capsule()`).
 
 ### Other
 - **CMSampleBuffer timing**: Use presentation timestamps for accurate transcript timing.

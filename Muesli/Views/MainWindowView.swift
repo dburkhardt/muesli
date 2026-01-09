@@ -20,9 +20,9 @@ struct MainWindowView: View {
                     .frame(minWidth: 420, maxWidth: 420, minHeight: 400, idealHeight: 600)
             }
         }
-        .overlay(alignment: .topTrailing) {
-            WorkTreeBadge()
-        }
+        // .overlay(alignment: .topTrailing) {
+        //     WorkTreeBadge()
+        // }
         .sheet(isPresented: Binding(
             get: { viewModel.showStartRecordingSheet },
             set: { viewModel.showStartRecordingSheet = $0 }

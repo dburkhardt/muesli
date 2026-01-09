@@ -76,6 +76,10 @@ final class RecordingSession: Identifiable {
     
     var isRetranscribing: Bool = false
     
+    // MARK: - Microphone Mute State
+    
+    var isMicrophoneMuted: Bool = false
+    
     // MARK: - Interruption State
     
     /// True if the recording was interrupted unexpectedly (e.g., captured app quit)
@@ -91,9 +95,6 @@ final class RecordingSession: Identifiable {
     
     /// Current system audio level (0.0 to 1.0)
     var systemAudioLevel: Float = 0.0
-    
-    /// Whether microphone input is muted (for transcription)
-    var isMicrophoneMuted: Bool = false
     
     /// Check if re-transcription is available (audio files exist)
     var canRetranscribe: Bool {

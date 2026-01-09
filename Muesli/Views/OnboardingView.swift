@@ -61,9 +61,6 @@ struct OnboardingView: View {
         }
         .frame(width: 520, height: 580) // Larger window to fit all content
         .background(Color(NSColor.windowBackgroundColor))
-        .overlay(alignment: .topTrailing) {
-            WorkTreeBadge()
-        }
         .onAppear {
             // Use sync check on appear (doesn't trigger permission dialog)
             // Only auto-advance if permissions are already granted

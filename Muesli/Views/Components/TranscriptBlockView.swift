@@ -71,7 +71,7 @@ struct TranscriptBlockView: View {
         case .them:
             return Color.secondary.opacity(0.08)  // Light gray
         case .me:
-            return Color.clear  // White/clear (uses parent background)
+            return Color.blue.opacity(0.08)  // Light blue tint for "Me" blocks
         }
     }
     

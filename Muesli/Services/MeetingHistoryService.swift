@@ -110,12 +110,19 @@ final class MeetingHistoryService {
         // Generate ID from folder name (use UUID part if present, otherwise hash)
         let id = extractUUID(from: folderName) ?? UUID()
         
+        // Check if this meeting has been refined (original transcript exists)
+        let originalTranscriptURL = directory.appendingPathComponent("transcript.original.md")
+        let isRefined = fileManager.fileExists(atPath: originalTranscriptURL.path)
+        
         return MeetingHistoryItem(
             id: id,
             title: title,
             date: transcriptDate,
             directory: directory,
             transcript: nil, // Lazy-loaded
+            originalTranscript: nil, // Will be lazy-loaded if isRefined
+            originalTranscriptBlocks: nil, // Will be lazy-loaded if isRefined
+            isRefined: isRefined,
             hasAudio: hasAudio,
             hasMicrophone: hasMicrophone,
             duration: duration,
@@ -249,17 +256,10 @@ final class MeetingHistoryService {
         return transcript.isEmpty ? nil : transcript
     }
     
-    /// Load transcript blocks for a meeting (block format)
-    /// Parses the markdown format back into TranscriptBlock objects
-    /// - Parameter meeting: The meeting to load transcript blocks for
-    /// - Returns: Array of transcript blocks, or nil if not found or legacy format
-    func loadTranscriptBlocks(for meeting: MeetingHistoryItem) -> [TranscriptBlock]? {
-        let transcriptURL = meeting.directory.appendingPathComponent("transcript.md")
-        
-        guard let content = try? String(contentsOf: transcriptURL, encoding: .utf8) else {
-            return nil
-        }
-        
+    /// Parse transcript blocks from markdown content
+    /// - Parameter content: Full markdown content
+    /// - Returns: Array of transcript blocks
+    private func parseTranscriptBlocks(from content: String) -> [TranscriptBlock]? {
         // Extract just the transcript section (skip header)
         let lines = content.components(separatedBy: .newlines)
         var transcriptLines: [String] = []
@@ -343,7 +343,7 @@ final class MeetingHistoryService {
             }
         }
         
-        // Save final block if any
+        // Save final block
         if let speaker = currentSpeaker, !currentTextLines.isEmpty {
             let text = currentTextLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
@@ -358,12 +358,67 @@ final class MeetingHistoryService {
             }
         }
         
+        return blocks.isEmpty ? nil : blocks
+    }
+    
+    /// Load original transcript blocks (if refinement was applied)
+    /// - Parameter meeting: The meeting to load original transcript blocks for
+    /// - Returns: Array of original transcript blocks, or nil if not found
+    func loadOriginalTranscriptBlocks(for meeting: MeetingHistoryItem) -> [TranscriptBlock]? {
+        let originalURL = meeting.directory.appendingPathComponent("transcript.original.md")
+        guard let content = try? String(contentsOf: originalURL, encoding: .utf8) else {
+            return nil
+        }
+        return parseTranscriptBlocks(from: content)
+    }
+    
+    /// Load original transcript text (if refinement was applied)
+    /// - Parameter meeting: The meeting to load original transcript for
+    /// - Returns: Original transcript text, or nil if not found
+    func loadOriginalTranscript(for meeting: MeetingHistoryItem) -> String? {
+        let originalURL = meeting.directory.appendingPathComponent("transcript.original.md")
+        guard let content = try? String(contentsOf: originalURL, encoding: .utf8) else {
+            return nil
+        }
+        // Extract just the transcript section (skip header)
+        let lines = content.components(separatedBy: .newlines)
+        var transcriptLines: [String] = []
+        var inTranscriptSection = false
+        
+        for line in lines {
+            if line.hasPrefix("## Transcript") {
+                inTranscriptSection = true
+                continue
+            }
+            if inTranscriptSection {
+                transcriptLines.append(line)
+            }
+        }
+        
+        return transcriptLines.isEmpty ? nil : transcriptLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    /// Load transcript blocks for a meeting (block format)
+    /// Parses the markdown format back into TranscriptBlock objects
+    /// - Parameter meeting: The meeting to load transcript blocks for
+    /// - Returns: Array of transcript blocks, or nil if not found or legacy format
+    func loadTranscriptBlocks(for meeting: MeetingHistoryItem) -> [TranscriptBlock]? {
+        let transcriptURL = meeting.directory.appendingPathComponent("transcript.md")
+        
+        guard let content = try? String(contentsOf: transcriptURL, encoding: .utf8) else {
+            return nil
+        }
+        
+        guard var blocks = parseTranscriptBlocks(from: content) else {
+            return nil
+        }
+        
         // Update endTimestamps based on next block's start
         // Use indices.dropLast() for safe iteration (handles empty arrays correctly)
         for i in blocks.indices.dropLast() {
             blocks[i].endTimestamp = blocks[i + 1].startTimestamp
         }
         
-        return blocks.isEmpty ? nil : blocks
+        return blocks
     }
 }

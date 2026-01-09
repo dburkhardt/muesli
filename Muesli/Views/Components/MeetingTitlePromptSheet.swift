@@ -5,6 +5,7 @@ import SwiftUI
 struct MeetingTitlePromptSheet: View {
     @Binding var isPresented: Bool
     @Binding var meetingTitle: String
+    let recordingStartTime: Date?
     let onSave: () -> Void
     let onSkip: () -> Void
     let onDiscard: (() -> Void)?
@@ -16,15 +17,32 @@ struct MeetingTitlePromptSheet: View {
     init(
         isPresented: Binding<Bool>,
         meetingTitle: Binding<String>,
+        recordingStartTime: Date? = nil,
         onSave: @escaping () -> Void,
         onSkip: @escaping () -> Void,
         onDiscard: (() -> Void)? = nil
     ) {
         self._isPresented = isPresented
         self._meetingTitle = meetingTitle
+        self.recordingStartTime = recordingStartTime
         self.onSave = onSave
         self.onSkip = onSkip
         self.onDiscard = onDiscard
+    }
+    
+    /// Generate suggested title based on recording start time
+    private var suggestedTitle: String {
+        let date = recordingStartTime ?? Date()
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE MMM d"
+        let dateString = formatter.string(from: date)
+        
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "h:mma"
+        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        let timeString = timeFormatter.string(from: date).lowercased()
+        
+        return "Meeting - \(dateString) at \(timeString)"
     }
     
     var body: some View {
@@ -94,7 +112,12 @@ struct MeetingTitlePromptSheet: View {
         }
         .frame(width: 400, height: 320)
         .onAppear {
-            editingTitle = meetingTitle
+            // Pre-populate with suggested title if meeting title is empty
+            if meetingTitle.isEmpty {
+                editingTitle = suggestedTitle
+            } else {
+                editingTitle = meetingTitle
+            }
             isTitleFocused = true
         }
         .confirmationDialog(
@@ -115,13 +138,19 @@ struct MeetingTitlePromptSheet: View {
     
     private func saveTitle() {
         let titleToSave = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        meetingTitle = titleToSave.isEmpty ? "Meeting" : titleToSave
+        // Use suggested title if field is empty or unchanged from suggestion
+        if titleToSave.isEmpty {
+            meetingTitle = suggestedTitle
+        } else {
+            meetingTitle = titleToSave
+        }
         isPresented = false
         onSave()
     }
     
     private func skipTitle() {
-        meetingTitle = "Meeting"
+        // Use suggested title instead of generic "Meeting"
+        meetingTitle = suggestedTitle
         isPresented = false
         onSkip()
     }
@@ -136,6 +165,7 @@ struct MeetingTitlePromptSheet: View {
     MeetingTitlePromptSheet(
         isPresented: .constant(true),
         meetingTitle: .constant(""),
+        recordingStartTime: Date(),
         onSave: {},
         onSkip: {},
         onDiscard: {}
