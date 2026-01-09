@@ -55,10 +55,16 @@ struct MuesliApp: App {
 /// App delegate that opens onboarding window on first launch
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Static reference for accessing AppDelegate from other views (e.g., MenuBarView)
+    static var shared: AppDelegate?
+    
     private var onboardingWindow: NSWindow?
     private var onboardingViewModel: MuesliViewModel?
     
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { @MainActor in
+            AppDelegate.shared = self
+        }
         // Check if onboarding is needed
         if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
             Task { @MainActor in
@@ -95,6 +101,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.onboardingWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    /// Brings the onboarding window to front, creating it if necessary
+    /// Called from MenuBarView when user tries to access app during onboarding
+    func bringOnboardingWindowToFront() {
+        if let window = onboardingWindow, window.isVisible {
+            // Window exists and is visible, just bring to front
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            // Window doesn't exist or was closed, recreate it
+            showOnboardingWindow()
+        }
     }
 }
 
