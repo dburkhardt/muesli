@@ -145,10 +145,14 @@ struct RecordingDetailView: View {
         MicrophoneControlWithLevel(
             level: session.microphoneLevel,
             isRecording: session.isRecording,
+            isMuted: session.isMicrophoneMuted,
             availableDevices: viewModel.microphoneManager.availableDevices,
             selectedDeviceID: viewModel.microphoneManager.selectedDeviceID,
             onSelectDevice: { deviceID in
                 viewModel.microphoneManager.setSelectedDeviceID(deviceID)
+            },
+            onToggleMute: {
+                viewModel.toggleMicrophoneMute()
             }
         )
     }

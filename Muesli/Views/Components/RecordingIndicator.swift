@@ -159,39 +159,53 @@ struct MicrophoneLevelIndicator: View {
 struct MicrophoneControlWithLevel: View {
     let level: Float
     let isRecording: Bool
+    let isMuted: Bool
     let availableDevices: [MicrophoneManager.MicrophoneDevice]
     let selectedDeviceID: String?
     let onSelectDevice: (String) -> Void
+    let onToggleMute: () -> Void
     
     var body: some View {
-        Menu {
-            ForEach(availableDevices) { device in
-                Button(action: {
-                    onSelectDevice(device.id)
-                }) {
-                    HStack {
-                        Text(device.name)
-                        if device.isDefault {
-                            Text("(Default)")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                        }
-                        if selectedDeviceID == device.id {
-                            Image(systemName: "checkmark")
+        HStack(spacing: 8) {
+            // Mute toggle button
+            Button(action: onToggleMute) {
+                Image(systemName: isMuted ? "mic.slash.fill" : "mic.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(isMuted ? .red : .primary)
+            }
+            .buttonStyle(.plain)
+            .help(isMuted ? "Unmute microphone" : "Mute microphone")
+            
+            // Microphone picker menu
+            Menu {
+                ForEach(availableDevices) { device in
+                    Button(action: {
+                        onSelectDevice(device.id)
+                    }) {
+                        HStack {
+                            Text(device.name)
+                            if device.isDefault {
+                                Text("(Default)")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                            if selectedDeviceID == device.id {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
                 }
+            } label: {
+                HStack(spacing: 4) {
+                    MicrophoneLevelIndicator(level: isMuted ? 0.0 : level, isActive: isRecording && !isMuted)
+                    
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                }
             }
-        } label: {
-            HStack(spacing: 4) {
-                MicrophoneLevelIndicator(level: level, isActive: isRecording)
-                
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.secondary)
-            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
     }
 }
 

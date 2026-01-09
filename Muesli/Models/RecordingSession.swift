@@ -92,6 +92,9 @@ final class RecordingSession: Identifiable {
     /// Current system audio level (0.0 to 1.0)
     var systemAudioLevel: Float = 0.0
     
+    /// Whether microphone input is muted (for transcription)
+    var isMicrophoneMuted: Bool = false
+    
     /// Check if re-transcription is available (audio files exist)
     var canRetranscribe: Bool {
         guard let directory = outputDirectory else { return false }

@@ -246,6 +246,10 @@ final class MuesliViewModel {
                             transcriptService.appendSystemAudio(samples)
                         }
                     case .microphone:
+                        // Skip transcription if microphone is muted
+                        if let session = self?.activeSession, session.isMicrophoneMuted {
+                            return
+                        }
                         // Microphone audio: 16kHz stereo Int16 -> 16kHz mono Float32
                         // No resampling needed, just format conversion
                         if let samples = TranscriptionService.convertInt16ToWhisperFormat(buffer) {
@@ -1217,5 +1221,13 @@ final class MuesliViewModel {
         if let meeting = selectedMeeting {
             refineTranscript(for: meeting)
         }
+    }
+    
+    // MARK: - Microphone Mute
+    
+    /// Toggle microphone mute state for active recording
+    func toggleMicrophoneMute() {
+        guard let session = activeRecordingSession else { return }
+        session.isMicrophoneMuted.toggle()
     }
 }
