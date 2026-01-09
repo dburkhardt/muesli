@@ -56,6 +56,25 @@ final class MuesliViewModel {
     let microphoneManager = MicrophoneManager()
     private let meetingHistoryService = MeetingHistoryService()
     
+    // Echo cancellation service (optional - can be enabled/disabled)
+    private let echoCancellationService = EchoCancellationService(
+        filterLength: 256,
+        learningRate: 0.3,
+        sampleRate: 48000,
+        maxDelayMs: 100
+    )
+    
+    /// Whether echo cancellation is enabled
+    var isEchoCancellationEnabled: Bool {
+        get {
+            _isEchoCancellationEnabled
+        }
+        set {
+            _isEchoCancellationEnabled = newValue
+            UserDefaults.standard.set(newValue, forKey: "echoCancellationEnabled")
+        }
+    }
+    
     // MARK: - Transcription State
     
     var isTranscriptionInitialized: Bool = false
@@ -245,6 +264,10 @@ final class MuesliViewModel {
     /// Uses nonisolated(unsafe) for thread-safe access from audio callback
     nonisolated(unsafe) private var isMicrophoneMuted: Bool = false
     
+    /// Echo cancellation enabled state (for synchronous access from audio callback)
+    /// Uses nonisolated(unsafe) for thread-safe access from audio callback
+    nonisolated(unsafe) private var _isEchoCancellationEnabled: Bool = false
+    
     /// Toggle microphone mute state for active recording
     func toggleMicrophoneMute() {
         guard let session = activeRecordingSession else { return }
@@ -266,30 +289,41 @@ final class MuesliViewModel {
         // Load onboarding state
         hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingCompletedKey)
         
+        // Load echo cancellation state
+        _isEchoCancellationEnabled = UserDefaults.standard.bool(forKey: "echoCancellationEnabled")
+        
         // Check initial permission status
         refreshPermissions()
         
         // Set up audio buffer handler - fork to both file output and transcription
         let fileService = fileOutputService
         let transcriptService = transcriptionService
+        let aecService = echoCancellationService
         Task {
             await audioCaptureService.setBufferHandler { [weak self] buffer, type in
+                guard let self = self else { return }
+                
                 // Check if microphone is muted (synchronous check)
-                let isMicMuted = self?.isMicrophoneMuted ?? false
+                let isMicMuted = self.isMicrophoneMuted
+                let isAECEnabled = self._isEchoCancellationEnabled
                 
-                // Save to file (always, even when muted - we want silence in the file)
-                fileService.appendAudioBuffer(buffer, type: type)
+                let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
                 
-                // Skip microphone audio for transcription if muted
-                if type == .microphone && isMicMuted {
-                    return
-                }
-                
-                // Only feed to transcription in live mode
-                if transcriptService.transcriptionMode == .live {
-                    // Convert and feed to transcription based on audio type
-                    switch type {
-                    case .system:
+                switch type {
+                case .system:
+                    // Store system audio for AEC reference (if AEC enabled)
+                    // Do this regardless of transcription mode
+                    if isAECEnabled {
+                        if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
+                            aecService.storeSystemAudio(samples: systemSamples, timestamp: timestamp)
+                        }
+                    }
+                    
+                    // Save to file (always)
+                    fileService.appendAudioBuffer(buffer, type: type)
+                    
+                    // Only feed to transcription in live mode
+                    if transcriptService.transcriptionMode == .live {
                         // System audio: 48kHz stereo Float32 -> 16kHz mono Float32
                         if let samples = TranscriptionService.resampleToWhisperFormat(
                             buffer,
@@ -298,15 +332,82 @@ final class MuesliViewModel {
                         ) {
                             transcriptService.appendSystemAudio(samples)
                         }
-                    case .microphone:
-                        // Microphone audio: 48kHz mono Float32 -> 16kHz mono Float32
-                        // Needs resampling just like system audio
-                        if let samples = TranscriptionService.resampleToWhisperFormat(
-                            buffer,
-                            sourceSampleRate: 48000,
-                            sourceChannels: 1
+                    }
+                    
+                case .microphone:
+                    // Extract microphone samples at 48kHz
+                    guard let micSamples48kHz = EchoCancellationService.extractSamples(from: buffer) else {
+                        // Fallback: save original buffer and use original resampling for transcription
+                        fileService.appendAudioBuffer(buffer, type: type)
+                        
+                        // Skip microphone audio for transcription if muted
+                        if isMicMuted {
+                            return
+                        }
+                        
+                        // Only feed to transcription in live mode
+                        if transcriptService.transcriptionMode == .live {
+                            if let samples = TranscriptionService.resampleToWhisperFormat(
+                                buffer,
+                                sourceSampleRate: 48000,
+                                sourceChannels: 1
+                            ) {
+                                transcriptService.appendMicrophoneAudio(samples)
+                            }
+                        }
+                        return
+                    }
+                    
+                    // Apply AEC if enabled (always, not just for transcription)
+                    let processedSamples48kHz: [Float]
+                    if isAECEnabled {
+                        processedSamples48kHz = aecService.processMicrophoneAudio(
+                            microphoneSamples: micSamples48kHz,
+                            micTimestamp: timestamp
+                        )
+                        
+                        // Create CMSampleBuffer from processed samples for file output
+                        if let processedBuffer = EchoCancellationService.createSampleBuffer(
+                            from: processedSamples48kHz,
+                            timestamp: timestamp
                         ) {
-                            transcriptService.appendMicrophoneAudio(samples)
+                            fileService.appendAudioBuffer(processedBuffer, type: type)
+                        } else {
+                            // Fallback: save original if conversion fails
+                            fileService.appendAudioBuffer(buffer, type: type)
+                        }
+                    } else {
+                        processedSamples48kHz = micSamples48kHz
+                        // Save original buffer when AEC disabled
+                        fileService.appendAudioBuffer(buffer, type: type)
+                    }
+                    
+                    // Skip microphone audio for transcription if muted
+                    if isMicMuted {
+                        return
+                    }
+                    
+                    // Only feed to transcription in live mode
+                    if transcriptService.transcriptionMode == .live {
+                        // Resample from 48kHz mono to 16kHz mono for transcription
+                        // Use the existing resampling utility
+                        if let samples16kHz = TranscriptionService.resampleSamples(
+                            samples: processedSamples48kHz,
+                            sourceSampleRate: 48000,
+                            sourceChannels: 1,
+                            targetSampleRate: 16000,
+                            targetChannels: 1
+                        ) {
+                            transcriptService.appendMicrophoneAudio(samples16kHz)
+                        } else {
+                            // Fallback: use original resampling method
+                            if let samples = TranscriptionService.resampleToWhisperFormat(
+                                buffer,
+                                sourceSampleRate: 48000,
+                                sourceChannels: 1
+                            ) {
+                                transcriptService.appendMicrophoneAudio(samples)
+                            }
                         }
                     }
                 }
@@ -516,6 +617,9 @@ final class MuesliViewModel {
             session.transcriptText = ""
             session.startDisplayTimer()
             
+            // Reset echo cancellation filter for new recording
+            echoCancellationService.reset()
+            
             // Start transcription
             transcriptionService.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
             
@@ -600,6 +704,9 @@ final class MuesliViewModel {
             // Stop audio capture
             try await audioCaptureService.stopCapture()
             
+            // Reset echo cancellation filter
+            echoCancellationService.reset()
+            
             // Stop transcription without processing remaining audio
             await transcriptionService.stopTranscription()
             
@@ -635,6 +742,9 @@ final class MuesliViewModel {
         do {
             // Stop audio capture
             try await audioCaptureService.stopCapture()
+            
+            // Reset echo cancellation filter
+            echoCancellationService.reset()
             
             // Stop transcription and process remaining audio (for live mode)
             await transcriptionService.stopTranscription()
@@ -734,6 +844,9 @@ final class MuesliViewModel {
         
         do {
             // Note: We don't call audioCaptureService.stopCapture() here because the stream already stopped
+            
+            // Reset echo cancellation filter
+            echoCancellationService.reset()
             
             // Stop transcription and process remaining audio (for live mode)
             await transcriptionService.stopTranscription()

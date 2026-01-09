@@ -518,6 +518,33 @@ extension TranscriptionService {
         )
     }
     
+    /// Resample audio samples using AVAudioConverter
+    /// - Parameters:
+    ///   - samples: Input samples (mono or stereo, interleaved or not)
+    ///   - sourceSampleRate: Source sample rate
+    ///   - sourceChannels: Number of source channels
+    ///   - targetSampleRate: Target sample rate
+    ///   - targetChannels: Number of target channels
+    ///   - isInterleaved: Whether input samples are interleaved
+    /// - Returns: Resampled samples, or nil if conversion fails
+    static func resampleSamples(
+        samples: [Float],
+        sourceSampleRate: Double,
+        sourceChannels: Int,
+        targetSampleRate: Double,
+        targetChannels: Int,
+        isInterleaved: Bool = false
+    ) -> [Float]? {
+        return resampleWithAVAudioConverter(
+            samples: samples,
+            sourceSampleRate: sourceSampleRate,
+            sourceChannels: sourceChannels,
+            targetSampleRate: targetSampleRate,
+            targetChannels: targetChannels,
+            isInterleaved: isInterleaved
+        )
+    }
+    
     /// High-quality resampling using AVAudioConverter
     private static func resampleWithAVAudioConverter(
         samples: [Float],

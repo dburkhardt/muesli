@@ -150,6 +150,29 @@ struct GeneralPreferencesTab: View {
                 }
             }
             .padding()
+            
+            Divider()
+            
+            Section {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Audio")
+                        .font(.headline)
+                    
+                    Toggle(isOn: Binding(
+                        get: { viewModel.isEchoCancellationEnabled },
+                        set: { viewModel.isEchoCancellationEnabled = $0 }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Echo Cancellation")
+                            Text("Remove echo from microphone audio caused by speakers. Improves transcription quality and saved audio files.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
+            }
+            .padding()
         }
     }
 }
