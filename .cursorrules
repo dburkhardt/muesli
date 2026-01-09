@@ -2,9 +2,8 @@
 You are an AI coding agent working in this repository.
 
 CRITICAL: Always read and follow these files first:
-1) AGENTS.md (working rules and repo contract)
+1) AGENTS.md (working rules, architecture, pitfalls, build commands)
 2) SPEC.md (phased implementation plan + checkpoints)
-3) CLAUDE.md (architecture notes, build commands, conventions)
 
 PHASE DISCIPLINE
 - Work on exactly ONE phase at a time as defined in SPEC.md.
@@ -14,7 +13,12 @@ PHASE DISCIPLINE
 ENGINEERING RULES
 - Keep changes small and incremental; prefer minimal diffs.
 - Keep the project building at all times. If build breaks, fix it immediately before proceeding.
-- **Before building**: Always kill the running Muesli app first (`killall Muesli` or quit from menu bar) to avoid build failures from locked executable.
+- **Build and launch sequence** (copy-paste ready):
+  ```bash
+  killall Muesli 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
+  ```
+- The `-quiet` flag is critical - without it, builds take 5+ minutes instead of ~15 seconds
+- Always kill the app before building to avoid locked executable errors
 - **After making code changes**: Always rebuild and relaunch the app automatically. Never prompt the user to rebuild or relaunch—just do it.
 - Prefer Swift 6 concurrency (async/await) and @Observable for state.
 - Follow the repo's SwiftUI style: minimal, clean, no clutter.
@@ -38,8 +42,7 @@ WHEN EDITING
 DOCUMENTATION UPDATES (after completing work)
 - After debugging, stabbing, or completing a phase, evaluate if core docs need updates:
   - Review AGENTS.md "Documentation Updates" section for guidance
-  - Update AGENTS.md for technical constraints, build procedures, architecture changes
-  - Update CLAUDE.md for detailed pitfalls, code patterns, testing strategies
+  - Update AGENTS.md for technical constraints, pitfalls, build procedures, architecture changes
   - Update SPEC.md for phase adjustments, checkpoint refinements, architecture decisions
   - Update .cursorrules for agent workflow improvements
 - Focus on learnings that help future work: recurring patterns, architectural decisions, constraints, procedures that differ from expectations
