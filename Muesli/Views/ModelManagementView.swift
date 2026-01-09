@@ -1,8 +1,12 @@
 import SwiftUI
 
-/// Window for managing transcription models
-struct ModelManagementView: View {
+/// Flexible content view for managing transcription models
+/// Used both in standalone window and embedded in preferences
+struct ModelManagementContent: View {
     @Bindable var viewModel: MuesliViewModel
+    
+    /// Whether to show the header (icon + title). Set to false when embedded in preferences.
+    var showHeader: Bool = true
     
     /// Use the viewModel's modelManager so state is shared
     private var modelManager: ModelManager {
@@ -14,22 +18,24 @@ struct ModelManagementView: View {
     
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 50))
-                .foregroundStyle(Color.accentColor)
-            
-            Text("Transcription Models")
-                .font(.system(size: 24, weight: .bold))
-            
-            Text("Download one or more models for transcription.\nLarger models are more accurate but slower.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(2)
+            if showHeader {
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 50))
+                    .foregroundStyle(Color.accentColor)
+                
+                Text("Transcription Models")
+                    .font(.system(size: 24, weight: .bold))
+                
+                Text("Download one or more models for transcription.\nLarger models are more accurate but slower.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(2)
+            }
             
             // Model list
             modelListView
-                .padding(.top, 8)
+                .padding(.top, showHeader ? 8 : 0)
             
             // Active model picker (only if models are downloaded)
             if !modelManager.downloadedModels.isEmpty {
@@ -45,14 +51,6 @@ struct ModelManagementView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-        }
-        .padding(.horizontal, 40)
-        .padding(.top, 40)
-        .padding(.bottom, 24)
-        .frame(width: 520, height: 580)
-        .background(Color(NSColor.windowBackgroundColor))
-        .overlay(alignment: .topTrailing) {
-            WorkTreeBadge()
         }
         .alert("Delete Model", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {
@@ -203,5 +201,25 @@ struct ModelManagementView: View {
             .frame(width: 140)
         }
         .padding(.top, 4)
+    }
+}
+
+// MARK: - Standalone Window Wrapper
+
+/// Standalone window for managing transcription models
+/// Wraps ModelManagementContent with fixed sizing for dedicated window use
+struct ModelManagementView: View {
+    @Bindable var viewModel: MuesliViewModel
+    
+    var body: some View {
+        ModelManagementContent(viewModel: viewModel, showHeader: true)
+            .padding(.horizontal, 40)
+            .padding(.top, 40)
+            .padding(.bottom, 24)
+            .frame(width: 520, height: 580)
+            .background(Color(NSColor.windowBackgroundColor))
+            .overlay(alignment: .topTrailing) {
+                WorkTreeBadge()
+            }
     }
 }
