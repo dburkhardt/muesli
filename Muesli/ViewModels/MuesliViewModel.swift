@@ -117,7 +117,6 @@ final class MuesliViewModel {
     /// Session pending stop (waiting for title input)
     var pendingStopSession: RecordingSession?
     
-<<<<<<< HEAD
     // MARK: - Refinement State
     
     /// Whether to show the refinement progress sheet
