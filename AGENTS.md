@@ -53,6 +53,115 @@ tccutil reset ScreenCapture com.muesli.app
 tccutil reset Microphone com.muesli.app
 ```
 
+## Working in Worktrees (parallel agents)
+
+When using Cursor worktrees with parallel agents, each worktree MUST have a unique app identity. This prevents critical issues where macOS system dialogs (like "Quit & Reopen") launch the wrong app version.
+
+### Why This Is Required
+
+macOS caches app locations by bundle identifier. Without unique identifiers per worktree:
+- "Quit & Reopen" dialogs launch whichever version macOS found first
+- Multiple agents' builds conflict and overwrite each other
+- TCC permissions get confused between versions
+- Debugging becomes nearly impossible due to version mismatches
+
+### Setting Up a New Worktree
+
+When you start working in a new worktree, **immediately** configure a unique app identity:
+
+**Step 1: Determine your worktree suffix**
+Use the worktree directory name (e.g., `kxn`, `feature-xyz`, `bugfix-123`).
+
+**Step 2: Update `Muesli.xcodeproj/project.pbxproj`**
+
+Search for and update these values in BOTH Debug and Release configurations:
+
+```
+# Find these lines (appear twice - once for Debug, once for Release):
+PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
+PRODUCT_NAME = "$(TARGET_NAME)";
+
+# Change to (using your worktree suffix):
+PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.<suffix>;
+PRODUCT_NAME = "Muesli-<suffix>";
+```
+
+**Step 3: Update the TCC reset script**
+
+In the same file, find the "Reset TCC Permissions" shell script and update the bundle IDs:
+
+```bash
+# Find:
+tccutil reset ScreenCapture com.muesli.app
+tccutil reset Microphone com.muesli.app
+defaults delete com.muesli.app
+
+# Change to:
+tccutil reset ScreenCapture com.muesli.app.<suffix>
+tccutil reset Microphone com.muesli.app.<suffix>
+defaults delete com.muesli.app.<suffix>
+```
+
+### Build Commands for Worktrees
+
+Replace `<suffix>` with your worktree name:
+
+```bash
+# Kill, Build, and Launch (worktree version)
+killall Muesli-<suffix> 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app
+
+# Example for 'kxn' worktree:
+killall Muesli-kxn 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-kxn.app
+```
+
+### Cleaning Up After Merging
+
+**IMPORTANT**: When you finish work in a worktree and merge back to main, clean up to prevent stale builds:
+
+**Step 1: Remove the worktree's DerivedData**
+```bash
+# Find and remove the specific DerivedData folder
+rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app
+
+# Or remove the entire DerivedData for this project (if you want a clean slate)
+rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*
+```
+
+**Step 2: Reset TCC permissions for the worktree bundle ID**
+```bash
+tccutil reset ScreenCapture com.muesli.app.<suffix>
+tccutil reset Microphone com.muesli.app.<suffix>
+defaults delete com.muesli.app.<suffix>
+```
+
+**Step 3: Unregister from LaunchServices** (prevents stale app from appearing in Spotlight/Finder)
+```bash
+# Re-register only the main app after cleanup
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app 2>/dev/null || true
+```
+
+### Verifying Your Setup
+
+After configuring a worktree, verify:
+1. Build produces `Muesli-<suffix>.app` (not `Muesli.app`)
+2. Menu bar shows "Muesli-<suffix>" (hover over icon)
+3. System Settings → Privacy → Screen Recording shows "Muesli-<suffix>"
+4. Only ONE Muesli icon appears in menu bar
+
+### Troubleshooting
+
+**Multiple menu bar icons?**
+```bash
+# Kill all Muesli variants and check for stale processes
+killall Muesli 2>/dev/null; killall Muesli-<suffix> 2>/dev/null
+ps aux | grep -i muesli
+```
+
+**"Quit & Reopen" launches wrong version?**
+1. Check for multiple DerivedData folders: `ls ~/Library/Developer/Xcode/DerivedData/ | grep Muesli`
+2. Remove all but your current worktree's build
+3. Re-register the correct app: `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f <path-to-correct-app>`
+
 ## Project structure (expected)
 
 Muesli/
@@ -281,9 +390,14 @@ This section documents technical gotchas, constraints, and solutions discovered 
 - **macOS 15+**: `captureMicrophone` API added. Use `#available(macOS 15.0, *)` checks
 
 ### TCC Permissions (Debug Builds)
-- `CGPreflightScreenCaptureAccess()` is unreliable with ad-hoc code signing
+- `CGPreflightScreenCaptureAccess()` is unreliable with ad-hoc code signing - often returns `false` even when permission is granted
 - TCC database ties permissions to code signature hash, which changes per rebuild
-- Solution: Reset TCC permissions on each build via build script
+- **Solution for permission reset**: Reset TCC permissions on each build via build script
+- **Solution for reliable detection**: Use `SCShareableContent.excludingDesktopWindows()` to check permission status:
+  - This actually queries the TCC database correctly
+  - `PermissionManager.checkScreenRecordingPermissionAsync()` provides this reliable check
+  - `MuesliViewModel.refreshPermissionsAsync()` uses this for onboarding permission polling
+  - Only use for permission *checking* (on permission screens), not for app detection (triggers prompt)
 
 ### Audio Format
 - CAF format doesn't support multiple audio tracks in a single file
@@ -316,9 +430,11 @@ This section documents technical gotchas, constraints, and solutions discovered 
 
 ### Onboarding Window (SwiftUI)
 - **Manual window creation**: SwiftUI `Window` scenes can be unreliable for programmatic opening; use `NSWindow` + `NSHostingController` in `AppDelegate` for guaranteed behavior
+- **Single ViewModel instance**: Do NOT use a SwiftUI `WindowGroup` for onboarding - it creates a separate ViewModel instance. Use `AppDelegate.showOnboardingWindow()` which creates the window manually with a shared ViewModel.
 - **Closing the correct window**: When `openWindow(id:)` is called, the new window becomes the key window immediately. If you then call `NSApplication.shared.keyWindow?.close()`, you'll close the window you just opened instead of the original window. **Solution**: Capture a reference to the window you want to close BEFORE calling `openWindow`.
 - **UserDefaults reset**: Build script clears UserDefaults (`defaults delete com.muesli.app`) to ensure fresh onboarding state on each rebuild
 - **Welcome screen auto-advance**: Do NOT auto-advance from the welcome screen to permission screens. Users should always see "Welcome to Muesli" first and click "Get Started" to proceed.
+- **Permission polling**: Only start polling on permission-specific screens (`.screenRecording`, `.microphone`), not on welcome screen. Use `onChange(of: currentStep)` to start/stop polling. For screen recording, use async check (`refreshPermissionsAsync()`); for microphone, sync check is reliable.
 
 ### Meeting History & Selection
 - **Apple Notes-style navigation**: Single-click shows meeting in detail pane, double-click opens dedicated window
