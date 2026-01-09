@@ -8,6 +8,16 @@ struct MenuBarView: View {
     
     var body: some View {
         Group {
+            // WorkTree identifier header (if applicable)
+            if let suffix = WorkTreeIdentifier.workTreeSuffix {
+                Text("WorkTree: \(suffix)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .disabled(true)
+                
+                Divider()
+            }
+            
             if let activeSession = viewModel.activeSession, activeSession.isRecording {
                 recordingMenuContent(session: activeSession)
             } else {

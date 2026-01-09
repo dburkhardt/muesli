@@ -42,6 +42,8 @@
 		A1000070241D1A1D00000010 /* MeetingTitlePromptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */; };
 		A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000073241D1A1D00000011 /* PreferencesView.swift */; };
 		A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000075241D1A1D00000012 /* RecordingIndicator.swift */; };
+		A1000096241D1A1D00000025 /* WorkTreeIdentifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000097241D1A1D00000025 /* WorkTreeIdentifier.swift */; };
+		A1000098241D1A1D00000026 /* WorkTreeBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000099241D1A1D00000026 /* WorkTreeBadge.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -79,6 +81,8 @@
 		A1000084241D1A1D00000022 /* LLMStitchingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMStitchingService.swift; sourceTree = "<group>"; };
 		A1000086241D1A1D00000023 /* LLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMManager.swift; sourceTree = "<group>"; };
 		A1000088241D1A1D00000024 /* TranscriptBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlockView.swift; sourceTree = "<group>"; };
+		A1000097241D1A1D00000025 /* WorkTreeIdentifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkTreeIdentifier.swift; sourceTree = "<group>"; };
+		A1000099241D1A1D00000026 /* WorkTreeBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkTreeBadge.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -171,6 +175,7 @@
 				A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */,
 				A1000075241D1A1D00000012 /* RecordingIndicator.swift */,
 				A1000088241D1A1D00000024 /* TranscriptBlockView.swift */,
+				A1000099241D1A1D00000026 /* WorkTreeBadge.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -196,6 +201,7 @@
 				A1000037241D1A1D00000004 /* ModelManager.swift */,
 				A100003B241D1A1D00000007 /* MicrophoneManager.swift */,
 				A1000086241D1A1D00000023 /* LLMManager.swift */,
+				A1000097241D1A1D00000025 /* WorkTreeIdentifier.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -362,6 +368,8 @@
 				A1000085241D1A1D00000022 /* LLMStitchingService.swift in Sources */,
 				A1000087241D1A1D00000023 /* LLMManager.swift in Sources */,
 				A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */,
+				A1000096241D1A1D00000025 /* WorkTreeIdentifier.swift in Sources */,
+				A1000098241D1A1D00000026 /* WorkTreeBadge.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

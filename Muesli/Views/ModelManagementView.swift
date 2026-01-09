@@ -51,6 +51,9 @@ struct ModelManagementView: View {
         .padding(.bottom, 24)
         .frame(width: 520, height: 580)
         .background(Color(NSColor.windowBackgroundColor))
+        .overlay(alignment: .topTrailing) {
+            WorkTreeBadge()
+        }
         .alert("Delete Model", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {
                 modelToDelete = nil

@@ -23,6 +23,9 @@ struct PreferencesView: View {
                 }
         }
         .frame(width: 500, height: 400)
+        .overlay(alignment: .topTrailing) {
+            WorkTreeBadge()
+        }
     }
 }
 

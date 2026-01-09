@@ -5,6 +5,11 @@ CRITICAL: Always read and follow these files first:
 1) AGENTS.md (working rules, architecture, pitfalls, build commands)
 2) SPEC.md (phased implementation plan + checkpoints)
 
+WORKTREE SETUP (when starting work in a new worktree):
+- **BEFORE building**: Check if this is a new worktree by verifying `PRODUCT_BUNDLE_IDENTIFIER` and `PRODUCT_NAME` in `Muesli.xcodeproj/project.pbxproj`
+- If bundle ID is still `com.muesli.app` (not `com.muesli.app.<suffix>`), you MUST configure the worktree first (see AGENTS.md "Working in Worktrees" section)
+- Never build a worktree without unique app identity - it will conflict with other worktrees
+
 PHASE DISCIPLINE
 - Work on exactly ONE phase at a time as defined in SPEC.md.
 - Do not implement features from later phases.
