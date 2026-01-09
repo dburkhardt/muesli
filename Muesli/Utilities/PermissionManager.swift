@@ -8,9 +8,21 @@ final class PermissionManager {
     
     // MARK: - Screen Recording Permission
     
-    /// Check if screen recording permission is granted
+    /// Check if screen recording permission is granted (sync, unreliable with ad-hoc signing)
     var hasScreenRecordingPermission: Bool {
         CGPreflightScreenCaptureAccess()
+    }
+    
+    /// Check screen recording permission using SCShareableContent (async, reliable)
+    /// This actually queries the TCC database correctly, unlike CGPreflightScreenCaptureAccess
+    func checkScreenRecordingPermissionAsync() async -> Bool {
+        do {
+            // This call will fail with a specific TCC error if permission is not granted
+            _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            return true
+        } catch {
+            return false
+        }
     }
     
     /// Request screen recording permission

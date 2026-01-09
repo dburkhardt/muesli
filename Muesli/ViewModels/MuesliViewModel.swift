@@ -305,6 +305,14 @@ final class MuesliViewModel {
         hasMicrophonePermission = permissionManager.hasMicrophonePermission
     }
     
+    /// Async permission refresh that uses SCShareableContent for reliable screen recording detection
+    func refreshPermissionsAsync() async {
+        // Use async check for screen recording (reliable with ad-hoc signing)
+        let screenResult = await permissionManager.checkScreenRecordingPermissionAsync()
+        hasScreenRecordingPermission = screenResult
+        hasMicrophonePermission = permissionManager.hasMicrophonePermission
+    }
+    
     func requestScreenRecordingPermission() {
         permissionManager.requestScreenRecordingPermission()
     }

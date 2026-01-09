@@ -15,13 +15,8 @@ struct MuesliApp: App {
             MenuBarIconView()
         }
         
-        // Onboarding window - shown on first launch
-        WindowGroup("Welcome to Muesli", id: "onboarding") {
-            OnboardingView(viewModel: viewModel)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .defaultPosition(.center)
+        // NOTE: Onboarding is handled by AppDelegate.showOnboardingWindow()
+        // Removed duplicate WindowGroup that was creating separate ViewModel
         
         // Model management window
         WindowGroup("Manage Transcription Models", id: "modelManagement") {
