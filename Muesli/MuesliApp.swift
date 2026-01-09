@@ -55,10 +55,15 @@ struct MuesliApp: App {
 /// App delegate that opens onboarding window on first launch
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static var shared: AppDelegate?
     private var onboardingWindow: NSWindow?
     private var onboardingViewModel: MuesliViewModel?
     
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { @MainActor in
+            AppDelegate.shared = self
+        }
+        
         // Check if onboarding is needed
         if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
             Task { @MainActor in
@@ -95,6 +100,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.onboardingWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    /// Brings onboarding window to front, or creates one if it doesn't exist
+    func bringOnboardingWindowToFront() {
+        if let window = onboardingWindow, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            showOnboardingWindow()
+        }
     }
 }
 

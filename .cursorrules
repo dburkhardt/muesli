@@ -7,8 +7,12 @@ CRITICAL: Always read and follow these files first:
 
 WORKTREE SETUP (when starting work in a new worktree):
 - **BEFORE building**: Check if this is a new worktree by verifying `PRODUCT_BUNDLE_IDENTIFIER` and `PRODUCT_NAME` in `Muesli.xcodeproj/project.pbxproj`
-- If bundle ID is still `com.muesli.app` (not `com.muesli.app.<suffix>`), you MUST configure the worktree first (see AGENTS.md "Working in Worktrees" section)
+- If bundle ID is still `com.muesli.app` (not `com.muesli.app.<suffix>`), you MUST:
+  1. Create worktree with branch: `git worktree add -b <branch-name> <path>`
+  2. Configure the worktree app identity (see AGENTS.md "Working in Worktrees" section)
+  3. Commit and push branch to remote: `git add . && git commit -m "Configure worktree app identity" && git push -u origin <branch-name>` (see AGENTS.md "Setting Up a New Worktree" for details)
 - Never build a worktree without unique app identity - it will conflict with other worktrees
+- Never skip pushing the branch to remote after configuration - other agents need to discover the branch
 
 PHASE DISCIPLINE
 - Work on exactly ONE phase at a time as defined in SPEC.md.

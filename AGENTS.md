@@ -69,6 +69,21 @@ macOS caches app locations by bundle identifier. Without unique identifiers per 
 
 When you start working in a new worktree, **immediately** configure a unique app identity:
 
+**Step 0: Create worktree with branch**
+
+Create the worktree with a new branch:
+
+```bash
+# Create worktree with new branch (replace <branch-name> and <path>)
+git worktree add -b <branch-name> <path-to-worktree>
+
+# Navigate to the new worktree
+cd <path-to-worktree>
+
+# Verify worktree was created successfully
+git worktree list
+```
+
 **Step 1: Determine your worktree suffix**
 Use the worktree directory name (e.g., `kxn`, `feature-xyz`, `bugfix-123`).
 
@@ -102,6 +117,23 @@ tccutil reset Microphone com.muesli.app.<suffix>
 defaults delete com.muesli.app.<suffix>
 ```
 
+**Step 4: Commit configuration and push branch to remote**
+
+After configuring the app identity, commit the changes and push the branch to remote:
+
+```bash
+# Stage the configuration changes
+git add Muesli.xcodeproj/project.pbxproj
+
+# Commit the configuration
+git commit -m "Configure worktree app identity: <suffix>"
+
+# Push branch to remote (enables parallel agent collaboration)
+git push -u origin <branch-name>
+```
+
+**Important**: The branch MUST be pushed to remote after configuration so other agents can discover and work on it. Do not skip this step.
+
 ### Build Commands for Worktrees
 
 Replace `<suffix>` with your worktree name:
@@ -114,62 +146,36 @@ killall Muesli-<suffix> 2>/dev/null; xcodebuild -project Muesli.xcodeproj -schem
 killall Muesli-kxn 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-kxn.app
 ```
 
+### Best Practices for Parallel Agent Collaboration
+
+- **Branch naming**: Use descriptive branch names that indicate the worktree purpose (e.g., `feature-transcription`, `bugfix-audio-capture`, `agent-kxn`)
+- **Push after configuration**: Always push the branch to remote after configuring the app identity (bundle ID changes), before making other code changes
+- **Regular synchronization**: Push commits frequently to keep remote branch up-to-date for other agents
+- **Worktree monitoring**: Use `git worktree list` to see all active worktrees and avoid conflicts
+- **Remote branch tracking**: Use `git push -u origin <branch>` to set upstream tracking on first push
+
 ### Cleaning Up After Merging (MANDATORY)
 
-**⚠️ CRITICAL**: When you finish work in a worktree and merge back to main, you MUST clean up the worktree-specific app builds and permissions. Failure to do this causes:
-- Multiple menu bar icons (one per worktree app)
-- "Quit & Reopen" dialogs launching wrong/outdated versions
-- TCC permission confusion between worktree apps
-- Cluttered DerivedData folders
+**⚠️ CRITICAL**: Before deleting a worktree, clean up app builds and permissions to prevent multiple menu bar icons, wrong app launches, and TCC confusion.
 
-**Complete cleanup checklist** (run these commands before deleting the worktree):
-
-**Step 1: Kill any running instances**
 ```bash
-killall Muesli-<suffix> 2>/dev/null
-killall Muesli 2>/dev/null
-```
+# 1. Kill running instances
+killall Muesli-<suffix> 2>/dev/null; killall Muesli 2>/dev/null
 
-**Step 2: Remove the worktree's DerivedData**
-```bash
-# Remove the specific worktree app build
+# 2. Remove DerivedData
 rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app
 
-# Optional: Remove entire DerivedData for a clean slate (if no other worktrees active)
-# rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*
-```
-
-**Step 3: Reset TCC permissions for the worktree bundle ID**
-```bash
-# Reset screen recording permission
+# 3. Reset TCC permissions and UserDefaults
 tccutil reset ScreenCapture com.muesli.app.<suffix> 2>/dev/null || true
-
-# Reset microphone permission
 tccutil reset Microphone com.muesli.app.<suffix> 2>/dev/null || true
-
-# Clear UserDefaults (onboarding state, preferences, etc.)
 defaults delete com.muesli.app.<suffix> 2>/dev/null || true
-```
 
-**Step 4: Unregister from LaunchServices** (prevents stale app from appearing in Spotlight/Finder)
-```bash
-# Unregister the worktree app
+# 4. Unregister from LaunchServices
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app 2>/dev/null || true
-```
 
-**Step 5: Verify cleanup**
-```bash
-# Check no instances are running
-ps aux | grep -i muesli | grep -v grep
-
-# Check no worktree apps remain in DerivedData
-ls ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/ | grep Muesli-<suffix>
-```
-
-**After cleanup is complete**, you can safely delete the worktree:
-```bash
-cd /path/to/repo
-git worktree remove <worktree-path>
+# 5. Verify and remove worktree
+ps aux | grep -i muesli | grep -v grep  # Should be empty
+cd /path/to/repo && git worktree remove <worktree-path>
 ```
 
 ### Verifying Your Setup
@@ -291,24 +297,12 @@ containing:
 Do not change this contract without updating `SPEC.md` and explaining why.
 
 ## Known technical constraints
-- **CAF format**: Used because it matches SCStream's native output and supports real-time writes
-- **Separate audio files**: CAF doesn't support multiple tracks; system + mic have different sample rates
-- **Display-based SCContentFilter**: Required for audio capture; window-based filters don't work
-- **CMSampleBuffer**: Not Sendable; use synchronous callbacks with `OSAllocatedUnfairLock`, not actor isolation
-- **Microphone capture**: `SCStreamConfiguration.captureMicrophone` requires macOS 15+
-- **WhisperKit audio**: Requires 16kHz mono Float32; system (48kHz stereo) and mic (24kHz mono) must be resampled
-- **High-quality resampling**: Use `AVAudioConverter` for resampling instead of linear interpolation to maintain audio fidelity
-- **Interleaved audio handling**: CMSampleBuffer provides interleaved stereo; must deinterleave before AVAudioConverter processing
-- **Speaker labeling**: System audio → "Them", mic audio → "Me" (separate transcription streams)
-- **Transcription modes**: Live (real-time) and post-processing (after recording) modes available; post-processing allows larger models for better accuracy
-- **Chunk overlap**: 1.5-second overlap between chunks improves word boundary detection
-- **Voice Activity Detection**: RMS energy threshold (-40dB equivalent) skips silent chunks to reduce false transcriptions
-- **Neural Engine optimization**: WhisperKit automatically uses Neural Engine on Apple Silicon; no explicit configuration needed
-- **Model management**: `ModelManager` is the single source of truth for model paths; ViewModel retrieves path via computed property
-- **Model validation**: Always check `config.json` exists before initializing WhisperKit; fail fast with clear error messages
-- **WhisperKit download progress**: Progress callback requires `@Sendable` and `Task { @MainActor }` dispatch for UI updates
-- **Window opening order**: `openWindow(id:)` makes the new window the key window immediately; capture window references BEFORE opening new windows if you need to close the original
-- **Multi-select with gestures**: Place `.onTapGesture(count: 2)` before `.onTapGesture(count: 1)` in SwiftUI; order matters for recognition
+- **CAF format**: Matches SCStream's native output, supports real-time writes. Separate files for system/mic (different sample rates).
+- **ScreenCaptureKit**: Display-based `SCContentFilter` required for audio; window-based doesn't work. `captureMicrophone` requires macOS 15+.
+- **CMSampleBuffer**: Not Sendable; use synchronous callbacks with `OSAllocatedUnfairLock`, not actor isolation.
+- **Audio resampling**: WhisperKit requires 16kHz mono Float32. System (48kHz stereo) and mic (48kHz mono) must be resampled using `AVAudioConverter`. Deinterleave stereo before conversion.
+- **Model management**: `ModelManager` is single source of truth; ViewModel accesses via computed property. Always check `config.json` exists before initializing WhisperKit.
+- **UI patterns**: `openWindow(id:)` makes new window key immediately—capture references BEFORE opening. SwiftUI gesture order: `.onTapGesture(count: 2)` before `.onTapGesture(count: 1)`.
 
 ## Checkpoint discipline (important)
 At the end of each phase:
@@ -320,85 +314,12 @@ If you are missing information (bundle ID list, Info.plist details, UI sizing, e
 
 ## Documentation Updates
 
-After completing debugging, stabbing, or finishing a phase, evaluate whether core documentation needs updates based on lessons learned.
+After completing work, evaluate if core docs need updates. Update:
+- **AGENTS.md**: Technical constraints → "Known technical constraints"; pitfalls → "Common Pitfalls"; build/test changes → "Commands"
+- **SPEC.md**: Phase requirements/checkpoints, architecture decisions, UI specs, output format
+- **`.cursorrules`**: Agent workflow patterns, common mistakes
 
-### When to Update Documentation
-
-Consider updates after:
-- **Completing a phase checkpoint** - Capture what was actually implemented vs. planned
-- **Resolving a bug** - Document root cause and solution if it's a recurring pattern
-- **Debugging a complex issue** - Add pitfalls, constraints, or workarounds discovered
-- **Adding a new component** - Update architecture diagrams, project structure, or patterns
-- **Discovering a technical constraint** - Document limitations that affect future work
-
-### What to Update Where
-
-**AGENTS.md** - Update when:
-- Technical constraints discovered → "Known technical constraints" section
-- Build/test commands change → "Commands" section
-- Project structure evolves → "Project structure (expected)" section
-- Architecture patterns change → "Core architecture (high-level)" section
-- New pitfalls found → "Common Pitfalls" section with detailed explanation
-- Architecture details change → Relevant architecture diagrams/notes
-- Dependencies change → "Key Dependencies" section
-- Code patterns established → "Code Style" section
-- Testing strategies refined → "Testing Notes" section
-- Response format needs adjustment → "When you respond to the user" section
-
-**SPEC.md** - Update when:
-- Phase requirements change → Update task lists in phase sections
-- Checkpoints need adjustment → Modify checkpoint criteria based on what's testable
-- Architecture decisions impact spec → "Technical Architecture" section
-- UI specs need refinement → "UI Specifications" based on implementation reality
-- Output format changes → File output specifications
-
-**`.cursorrules`** - Update when:
-- New agent workflow patterns → Add rules that prevent future mistakes
-- Common mistakes discovered → Add explicit rules to prevent them
-- Response format needs standardization → "OUTPUT REQUIREMENTS"
-- Phase discipline needs reinforcement → "PHASE DISCIPLINE" section
-
-### Update Process
-
-1. **Reflect**: What did I learn? What was different from expectations? What would help future work?
-2. **Categorize**: Technical constraint, architecture decision, build/test procedure, code pattern, phase adjustment, or agent workflow
-3. **Update**: Locate appropriate section, add concise actionable content, maintain consistency, cross-reference when helpful
-4. **Verify**: All significant learnings captured, consistency maintained, formatting matches style
-
-### Guidelines
-
-- **Be selective**: Focus on recurring patterns, architectural decisions, constraints affecting future work, procedures differing from expectations
-- **Be concise**: Use bullet points, code examples, clear headings
-- **Be actionable**: Focus on what future work needs to know
-- **Maintain consistency**: Follow existing documentation style and structure
-- **Cross-reference**: Ensure consistency when information appears in multiple files
-
-### Examples
-
-**Example 1: New Pitfall Discovered**
-- **Situation**: Discovered that `SCContentFilter` must use display-based filter for audio capture
-- **Updates**:
-  - AGENTS.md: Add to "Common Pitfalls" → "ScreenCaptureKit" section with explanation
-  - AGENTS.md: Add to "Known technical constraints" → "Display-based SCContentFilter" bullet
-
-**Example 2: Architecture Decision Made**
-- **Situation**: Decided to use separate CAF files for system/mic audio instead of mixing
-- **Updates**:
-  - SPEC.md: Update "Audio Pipeline" section with rationale
-  - AGENTS.md: Update "Core architecture" → "Audio pipeline" description
-  - AGENTS.md: Update architecture diagrams if needed
-
-**Example 3: Build Procedure Refined**
-- **Situation**: Discovered TCC permission reset needed on each build with ad-hoc signing
-- **Updates**:
-  - AGENTS.md: Add detailed explanation in "TCC Permissions (Debug Builds)" section
-  - AGENTS.md: Update "Note on Permissions" section with build script approach
-
-**Example 4: Phase Checkpoint Adjusted**
-- **Situation**: Phase 2 checkpoint needs to verify both audio files play correctly
-- **Updates**:
-  - SPEC.md: Update Phase 2 checkpoint with specific verification steps
-  - AGENTS.md: Add testing note about verifying CAF playback
+**Process**: Reflect → Categorize → Update appropriate section → Verify consistency. Be selective and concise.
 
 ## When you respond to the user
 When you make changes:
@@ -409,143 +330,48 @@ When you make changes:
 
 ## Common Pitfalls
 
-This section documents technical gotchas, constraints, and solutions discovered during development.
-
-### Swift Concurrency
-- `CMSampleBuffer` is **not Sendable** and cannot cross actor isolation boundaries
-- Solution: Use synchronous callbacks with `NSLock` for buffer handling, not actor isolation
-- Mark delegate callbacks as `nonisolated` if needed
-
-### ScreenCaptureKit
-- **SCContentFilter**: Must use `SCContentFilter(display:including:exceptingWindows:)` for audio capture
-- `SCContentFilter(desktopIndependentWindow:)` does NOT capture audio properly
-- Display-based filters require minimal video config (we use 2x2px at 1fps)
-- **macOS 15+**: `captureMicrophone` API added. Use `#available(macOS 15.0, *)` checks
-
 ### TCC Permissions (Debug Builds)
-- `CGPreflightScreenCaptureAccess()` is unreliable with ad-hoc code signing - often returns `false` even when permission is granted
-- TCC database ties permissions to code signature hash, which changes per rebuild
-- **Solution for permission reset**: Reset TCC permissions on each build via build script
-- **Solution for reliable detection**: Use `SCShareableContent.excludingDesktopWindows()` to check permission status:
-  - This actually queries the TCC database correctly
-  - `PermissionManager.checkScreenRecordingPermissionAsync()` provides this reliable check
-  - `MuesliViewModel.refreshPermissionsAsync()` uses this for onboarding permission polling
-  - Only use for permission *checking* (on permission screens), not for app detection (triggers prompt)
+- `CGPreflightScreenCaptureAccess()` unreliable with ad-hoc signing. Use `SCShareableContent.excludingDesktopWindows()` for permission checking (via `PermissionManager.checkScreenRecordingPermissionAsync()`). Only use for permission *checking*, not app detection (triggers prompt).
 
-### Audio Format
-- CAF format doesn't support multiple audio tracks in a single file
-- System audio (48kHz stereo) and mic audio (24kHz mono) must be separate files
-- Use Linear PCM (Float32) to match SCStream's native output
-
-### Meeting App Detection
-- Do NOT use `SCShareableContent.excludingDesktopWindows()` for app detection—it triggers permission prompts
-- Use `NSWorkspace.shared.runningApplications` instead (no permissions required)
-
-### WhisperKit
-- **Audio format**: WhisperKit expects 16kHz mono Float32 audio
-- **Resampling required**: System audio (48kHz stereo Float32) and mic audio (48kHz mono Float32) must be resampled to 16kHz
-- **High-quality resampling**: Use `AVAudioConverter` instead of linear interpolation for better audio fidelity
-- **Interleaved audio**: CMSampleBuffer from ScreenCaptureKit provides interleaved stereo audio; deinterleave before conversion
-- **Model download**: First run downloads the model (~150MB for base). Handle during onboarding.
-- **Speaker labeling**: Transcribe system and mic audio separately, label as "Them" and "Me" respectively
-- **Model validation**: Always check `config.json` exists in model directory before initializing WhisperKit
-- **Progress callback**: `WhisperKit.download(progressCallback:)` requires `@Sendable`; use `Task { @MainActor }` for UI updates
-- **Progress granularity**: WhisperKit reports progress in ~5% increments; use a visual progress bar for smoother UX
-- **Neural Engine**: WhisperKit automatically uses Neural Engine on Apple Silicon (M-series chips) for optimal performance
-
-### LLM Stitching & Refinement
-- **Auto-enable behavior**: LLM stitching is automatically enabled when a model is downloaded (`LLMManager.isLLMStitchingEnabled` returns `true` if `hasModel` is `true`)
-- **Refinement state management**: Always ensure transcript is loaded before attempting refinement (`loadTranscript(for:)` if `transcriptBlocks` and `transcript` are both `nil`)
-- **Refinement UI pattern**: Show loading indicator immediately when refinement will happen (even before it starts), toggle only appears after refinement completes
-- **Loading indicator timing**: Check `willRefine` condition (has transcript but not refined) to show loading immediately when meeting stops
-- **Original transcript storage**: Store `originalTranscriptBlocks` and `originalTranscript` before refining so users can toggle between original and refined views
-- **Refinement completion**: Set `meeting.isRefined = true` and clear `meetingBeingRefined` after successful refinement
-
-### Audio Sample Rate Debugging (CRITICAL - Common Pitfall)
+### Audio Sample Rate Debugging (CRITICAL)
 **⚠️ If transcription outputs nonsense/gibberish, CHECK SAMPLE RATES FIRST!**
 
-This is a recurring debugging issue. WhisperKit requires exactly 16kHz audio. If you feed it audio at a different sample rate (e.g., 48kHz), it will produce garbage output like "*Sounds of a dog*" or "(imitates a..." because the audio plays back at the wrong speed internally.
-
-**ScreenCaptureKit audio formats (macOS 15+):**
-- System audio: 48kHz stereo Float32
-- Microphone audio: 48kHz mono Float32 (NOT 16kHz as you might assume!)
-
-**Both must be resampled to 16kHz using `TranscriptionService.resampleToWhisperFormat()`:**
+WhisperKit requires exactly 16kHz audio. ScreenCaptureKit provides 48kHz (system stereo, mic mono). Both must be resampled using `TranscriptionService.resampleToWhisperFormat()`:
 ```swift
-// System audio: 48kHz stereo -> 16kHz mono
+// System: 48kHz stereo -> 16kHz mono
 TranscriptionService.resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
-
-// Microphone audio: 48kHz mono -> 16kHz mono  
+// Mic: 48kHz mono -> 16kHz mono
 TranscriptionService.resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
 ```
 
-**Debugging steps when transcription is garbage:**
-1. Add logging to check actual audio format: `asbd.pointee.mSampleRate`, `asbd.pointee.mChannelsPerFrame`
-2. Verify resampling is being applied to ALL audio streams
-3. Confirm the output is 16kHz before feeding to WhisperKit
-
-### ModelManager Architecture
-- **Single source of truth**: `ModelManager` owns all model state (downloaded models, active model, download progress)
-- **ViewModel access**: `MuesliViewModel.modelPath` is a computed property that reads from `modelManager.activeModelPath`
-- **DO NOT duplicate state**: Never store model path in both ModelManager and ViewModel
-- **Shared instance**: OnboardingView must use `viewModel.modelManager`, not create its own instance
-- **Model storage**: Models stored in `~/Library/Application Support/Muesli/Models/`
-- **Persistence**: Uses UserDefaults for `downloadedModels` set and `activeModel` selection
-
-### Onboarding Window (SwiftUI)
-- **Manual window creation**: SwiftUI `Window` scenes can be unreliable for programmatic opening; use `NSWindow` + `NSHostingController` in `AppDelegate` for guaranteed behavior
-- **Single ViewModel instance**: Do NOT use a SwiftUI `WindowGroup` for onboarding - it creates a separate ViewModel instance. Use `AppDelegate.showOnboardingWindow()` which creates the window manually with a shared ViewModel.
-- **Closing the correct window**: When `openWindow(id:)` is called, the new window becomes the key window immediately. If you then call `NSApplication.shared.keyWindow?.close()`, you'll close the window you just opened instead of the original window. **Solution**: Capture a reference to the window you want to close BEFORE calling `openWindow`.
-- **UserDefaults reset**: Build script clears UserDefaults (`defaults delete com.muesli.app`) to ensure fresh onboarding state on each rebuild
-- **Welcome screen auto-advance**: Do NOT auto-advance from the welcome screen to permission screens. Users should always see "Welcome to Muesli" first and click "Get Started" to proceed.
-- **Permission polling**: Only start polling on permission-specific screens (`.screenRecording`, `.microphone`), not on welcome screen. Use `onChange(of: currentStep)` to start/stop polling. For screen recording, use async check (`refreshPermissionsAsync()`); for microphone, sync check is reliable.
-
-### Meeting History & Selection
-- **Apple Notes-style navigation**: Single-click shows meeting in detail pane, double-click opens dedicated window
-- **Multi-select pattern**: Use a `Set<UUID>` for selected meeting IDs alongside single `selectedMeeting` for detail view
-- **Single click vs double-click**: In SwiftUI, use `.onTapGesture(count: 2)` BEFORE `.onTapGesture(count: 1)` - order matters for gesture recognition
-
-### UI Patterns
-- **Pill-shaped control panes**: Use `Capsule()` shape for floating control panes (recording control bar, refinement toggle). Provides circular sides with flat top/bottom edges.
-- **Material backgrounds**: Use `.regularMaterial` for floating control panes to match system appearance and provide proper blur/transparency.
-- **Consistent styling**: All floating control panes should use the same padding (`.horizontal: 12`, `.vertical: 10`), shadow (`radius: 6, x: 0, y: 2`), and shape (`Capsule()`).
-
-### Other
-- **CMSampleBuffer timing**: Use presentation timestamps for accurate transcript timing.
-- **Menu bar app lifecycle**: LSUIElement apps don't appear in Dock. Ensure there's always a way to quit.
-
-## Key Dependencies
+### Meeting App Detection
+- Do NOT use `SCShareableContent.excludingDesktopWindows()` for app detection—triggers permission prompts. Use `NSWorkspace.shared.runningApplications` instead.
 
 ### WhisperKit
-- Repository: https://github.com/argmaxinc/WhisperKit
-- Usage: On-device speech-to-text
-- Models: `base` for real-time, `large-v3` for post-recording (future)
+- Progress callback requires `@Sendable`; use `Task { @MainActor }` for UI updates. Progress reports in ~5% increments. Neural Engine auto-enabled on Apple Silicon.
 
-### ScreenCaptureKit (System Framework)
-- Usage: Capture system audio from meeting apps + microphone
-- Requires: Screen Recording permission, Microphone permission
+### LLM Stitching & Refinement
+- Auto-enabled when model downloaded. Ensure transcript loaded before refining (`loadTranscript(for:)` if needed). Show loading indicator immediately when `willRefine` is true. Store `originalTranscriptBlocks`/`originalTranscript` before refining for toggle.
 
-## Testing Notes
+### ModelManager Architecture
+- Single source of truth for model state. ViewModel accesses via computed property (`modelPath`). OnboardingView must use `viewModel.modelManager`, not create own instance.
 
-- Test with actual Zoom/Meet/Teams calls when possible
-- Use QuickTime Player playing audio as a simpler test case
-- Verify permissions flow on a fresh user account
-- Test recording start/stop cycle multiple times
-- Verify transcript accuracy with clear speech
+### Onboarding Window (SwiftUI)
+- Use `NSWindow` + `NSHostingController` in `AppDelegate` (not SwiftUI `WindowGroup`). Capture window reference BEFORE calling `openWindow(id:)` if you need to close original. Don't auto-advance welcome screen. Poll permissions only on permission screens using `onChange(of: currentStep)`.
 
-## Reference Projects
+### UI Patterns
+- Floating control panes: `Capsule()` shape, `.regularMaterial` background, padding `.horizontal: 12, .vertical: 10`, shadow `radius: 6, x: 0, y: 2`.
 
-Study these for implementation patterns:
+## Reference
 
-1. **Azayaka** (https://github.com/Mnpn/Azayaka)
-   - Menu bar app structure
-   - ScreenCaptureKit audio capture
-   - macOS app lifecycle
+### Key Dependencies
+- **WhisperKit**: https://github.com/argmaxinc/WhisperKit (on-device speech-to-text, models: `base` for real-time)
+- **ScreenCaptureKit**: System framework for audio capture (requires Screen Recording + Microphone permissions)
 
-2. **WhisperKit Sample** (https://github.com/rudrankriyam/WhisperKit-Sample)
-   - WhisperKit integration
-   - Audio recording + transcription flow
+### Testing Notes
+Test with Zoom/Meet/Teams calls or QuickTime Player. Verify permissions flow, recording cycles, and transcript accuracy.
 
-3. **Apple's ScreenCaptureKit Sample**
-   - Official patterns for SCStream, SCContentFilter
-   - CMSampleBuffer handling
+### Reference Projects
+- **Azayaka**: Menu bar app, ScreenCaptureKit patterns
+- **WhisperKit Sample**: WhisperKit integration examples
+- **Apple's ScreenCaptureKit Sample**: Official SCStream/SCContentFilter patterns

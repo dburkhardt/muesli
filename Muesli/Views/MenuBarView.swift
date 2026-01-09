@@ -6,13 +6,37 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     
+    private var hasCompletedOnboarding: Bool {
+        UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+    }
+    
     var body: some View {
         Group {
-            if let activeSession = viewModel.activeSession, activeSession.isRecording {
+            // Show simplified menu during onboarding to prevent bypass
+            if !hasCompletedOnboarding {
+                onboardingMenuContent
+            } else if let activeSession = viewModel.activeSession, activeSession.isRecording {
                 recordingMenuContent(session: activeSession)
             } else {
                 idleMenuContent
             }
+        }
+    }
+    
+    // MARK: - Onboarding State Menu
+    
+    private var onboardingMenuContent: some View {
+        Group {
+            Button("Resume Set Up") {
+                AppDelegate.shared?.bringOnboardingWindowToFront()
+            }
+            
+            Divider()
+            
+            Button("Quit Muesli") {
+                NSApplication.shared.terminate(nil)
+            }
+            .keyboardShortcut("q", modifiers: .command)
         }
     }
     
