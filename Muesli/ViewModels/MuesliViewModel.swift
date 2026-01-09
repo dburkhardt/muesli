@@ -1118,6 +1118,11 @@ final class MuesliViewModel {
                 // Save to disk
                 saveRefinedTranscript(meeting, blocks: refinedBlocks)
                 
+                // Dismiss sheet after successful completion
+                await MainActor.run {
+                    dismissRefinementSheet()
+                }
+                
             } else if let text = meeting.transcript, !text.isEmpty {
                 // Refine plain text transcript
                 let refinedText = try await refinementService.refineTranscript(text)
@@ -1129,11 +1134,17 @@ final class MuesliViewModel {
                 
                 // Save to disk
                 saveRefinedTranscript(meeting, text: refinedText)
+                
+                // Dismiss sheet after successful completion
+                await MainActor.run {
+                    dismissRefinementSheet()
+                }
             }
             
         } catch {
             // Error is already set in refinementService
             print("[MuesliViewModel] Refinement failed: \(error)")
+            // Keep sheet open to show error
         }
     }
     
