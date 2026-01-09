@@ -671,43 +671,110 @@ final class MuesliViewModel {
                 }
             }
             
-            // Finalize transcript processing and save with speaker labels (block format)
+            // Finalize transcript processing
             session.finalizeTranscript()
-            try? fileOutputService.saveTranscriptBlocks(
-                session.transcriptBlocks,
-                title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
-                date: session.recordingStartTime ?? Date(),
-                to: directory
-            )
+            
+            // Determine if this is a resumed recording or new recording
+            let isResumed = session.resumeCount > 0
+            let meeting: MeetingHistoryItem
+            
+            if isResumed, let parentMeeting = session.parentMeeting {
+                // This is a resumed recording - update existing meeting
+                meeting = parentMeeting
+                
+                // Create transcript segment for this recording segment
+                let segment = TranscriptSegment(
+                    segmentNumber: session.segmentNumber,
+                    originalBlocks: session.transcriptBlocks,
+                    refinedBlocks: nil,
+                    isRefined: false,
+                    startTime: session.recordingStartTime ?? Date()
+                )
+                
+                // Add segment to meeting
+                meeting.transcriptSegments.append(segment)
+                meeting.segmentCount = meeting.transcriptSegments.count
+                
+                // Refine this segment if LLM is available
+                if canRefineTranscripts {
+                    Task {
+                        await refineSegment(segment, in: meeting)
+                    }
+                }
+                
+                // Update transcript display (combine all segments)
+                updateMeetingTranscriptDisplay(meeting)
+                
+            } else {
+                // This is a new recording - save transcript first, then create segment
+                // Save transcript blocks to file (legacy format for compatibility)
+                try? fileOutputService.saveTranscriptBlocks(
+                    session.transcriptBlocks,
+                    title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
+                    date: session.recordingStartTime ?? Date(),
+                    to: directory
+                )
+                
+                // Refresh meeting history to include the new recording
+                refreshMeetingHistory()
+                
+                // Find the newly created meeting
+                if let newMeeting = meetingHistory.first(where: { $0.directory == directory }) {
+                    // Create transcript segment for first segment
+                    let segment = TranscriptSegment(
+                        segmentNumber: 1,
+                        originalBlocks: session.transcriptBlocks,
+                        refinedBlocks: nil,
+                        isRefined: false,
+                        startTime: session.recordingStartTime ?? Date()
+                    )
+                    
+                    newMeeting.transcriptSegments = [segment]
+                    newMeeting.segmentCount = 1
+                    newMeeting.canResume = true  // Mark as resumable
+                    meeting = newMeeting
+                    
+                    // Refine this segment if LLM is available
+                    if canRefineTranscripts {
+                        Task {
+                            await refineSegment(segment, in: meeting)
+                        }
+                    }
+                    
+                    // Save updated transcript with segments
+                    try? saveTranscriptWithSegments(meeting, to: directory)
+                } else {
+                    // Fallback: meeting not found (shouldn't happen)
+                    session.state = .completed
+                    activeSession = nil
+                    resetMuteState()
+                    return
+                }
+            }
+            
+            // Save transcript to file (combined format with segment markers)
+            try? saveTranscriptWithSegments(meeting, to: directory)
             
         } catch {
             session.showErrorMessage("Error stopping recording: \(error.localizedDescription)")
         }
         
-        // Mark session as completed
+        // Mark session as completed and resumable
         session.state = .completed
+        session.canResume = true
         
-        // Refresh meeting history to include the new recording
+        // Refresh meeting history
         refreshMeetingHistory()
         
-        // Select the newly completed meeting
+        // Select the meeting
         if let directory = session.outputDirectory {
             selectedMeeting = meetingHistory.first { $0.directory == directory }
             // Clear activeSession after selecting the meeting
             activeSession = nil
-        resetMuteState()
-            
-            // Automatically refine transcript if LLM is available (no prompt)
-            if canRefineTranscripts, let meeting = selectedMeeting, !meeting.isRefined {
-                // Small delay to let the UI settle before starting refinement
-                Task {
-                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                    refineTranscript(for: meeting)
-                }
-            }
+            resetMuteState()
         } else {
             activeSession = nil
-        resetMuteState()
+            resetMuteState()
         }
     }
     
@@ -1291,6 +1358,251 @@ final class MuesliViewModel {
     func cancelRefinement() {
         refinementCancelled = true
         meetingBeingRefined = nil
+    }
+    
+    // MARK: - Resume Recording
+    
+    /// Resume recording for a completed meeting
+    /// - Parameter meeting: The meeting to resume recording for
+    func resumeRecording(for meeting: MeetingHistoryItem) {
+        guard meeting.canResume else { return }
+        guard activeSession == nil else {
+            return  // Already recording
+        }
+        
+        Task {
+            await resumeRecordingAsync(for: meeting)
+        }
+    }
+    
+    /// Async implementation of resume recording
+    private func resumeRecordingAsync(for meeting: MeetingHistoryItem) async {
+        do {
+            // Validate model path
+            guard let validModelPath = modelPath else {
+                return
+            }
+            
+            // Check that the model directory and config.json exist
+            let configPath = validModelPath.appendingPathComponent("config.json")
+            guard FileManager.default.fileExists(atPath: configPath.path) else {
+                return
+            }
+            
+            // Initialize transcription service if needed
+            if !isTranscriptionInitialized {
+                try await transcriptionService.initialize(modelPath: validModelPath)
+                isTranscriptionInitialized = true
+            }
+            
+            // Create new session linked to existing meeting
+            let session = createSession()
+            session.parentMeeting = meeting
+            session.resumeCount = meeting.segmentCount
+            session.segmentNumber = meeting.segmentCount + 1
+            session.meetingTitle = meeting.title
+            session.selectedApp = nil  // Use same audio source settings (could be enhanced to remember)
+            
+            // Set activeSession immediately
+            activeSession = session
+            isMicrophoneMuted = session.isMicrophoneMuted
+            
+            // Set up transcript handler
+            transcriptionService.setTranscriptHandler { [weak session] segment in
+                Task { @MainActor in
+                    guard let session = session else { return }
+                    session.appendTranscriptSegment(segment)
+                }
+            }
+            
+            // Resume file output with incremented segment number
+            session.outputDirectory = try fileOutputService.resumeWriting(
+                to: meeting.directory,
+                segmentNumber: session.segmentNumber
+            )
+            
+            // Configure microphone preference before starting capture
+            if let selectedMicID = microphoneManager.selectedDeviceID {
+                microphoneManager.setSelectedDeviceID(selectedMicID)
+            }
+            
+            // Start audio capture (use same settings as original - all system audio for now)
+            try await audioCaptureService.startCapture()
+            
+            // Update session state on success
+            session.state = .recording
+            session.recordingStartTime = Date()
+            session.transcriptText = ""
+            session.transcriptBlocks = []
+            session.resetTranscript()
+            session.startDisplayTimer()
+            
+            // Start transcription
+            transcriptionService.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
+            
+            // Transition to split view if not already visible
+            isSplitViewVisible = true
+            
+        } catch let error as AudioCaptureService.CaptureError {
+            if let session = activeSession {
+                switch error {
+                case .noContentToCapture:
+                    session.showErrorMessage("No audio content available to capture.")
+                case .permissionDenied, .streamStartFailed:
+                    session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                default:
+                    session.showErrorMessage("Failed to resume recording: \(error.localizedDescription)")
+                }
+                session.state = .idle
+                activeSession = nil
+                resetMuteState()
+                
+                if fileOutputService.isWriting {
+                    _ = try? await fileOutputService.stopWriting()
+                }
+            }
+        } catch {
+            if let session = activeSession {
+                let errorMsg = error.localizedDescription
+                if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
+                    session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                } else {
+                    session.showErrorMessage("Failed to resume recording: \(errorMsg)")
+                }
+                session.state = .idle
+                activeSession = nil
+                resetMuteState()
+                
+                if fileOutputService.isWriting {
+                    _ = try? await fileOutputService.stopWriting()
+                }
+            }
+        }
+    }
+    
+    // MARK: - Segment Refinement Helpers
+    
+    /// Refine a single transcript segment
+    private func refineSegment(_ segment: TranscriptSegment, in meeting: MeetingHistoryItem) async {
+        guard canRefineTranscripts else { return }
+        guard !segment.isRefined else { return }
+        
+        // Ensure model is loaded
+        if llmManager.modelContainer == nil, let activeModel = llmManager.activeModel {
+            do {
+                try await llmManager.loadModel(activeModel)
+            } catch {
+                print("[MuesliViewModel] Failed to load LLM model for segment refinement: \(error)")
+                return
+            }
+        }
+        
+        do {
+            // Refine the segment's blocks
+            let refinedBlocks = try await refinementService.refineTranscript(segment.originalBlocks)
+            
+            // Update segment
+            if let segmentIndex = meeting.transcriptSegments.firstIndex(where: { $0.id == segment.id }) {
+                meeting.transcriptSegments[segmentIndex].refinedBlocks = refinedBlocks
+                meeting.transcriptSegments[segmentIndex].isRefined = true
+            }
+            
+            // Update meeting transcript display
+            updateMeetingTranscriptDisplay(meeting)
+            
+            // Save updated transcript to disk
+            try? saveTranscriptWithSegments(meeting, to: meeting.directory)
+            
+        } catch {
+            print("[MuesliViewModel] Failed to refine segment: \(error)")
+        }
+    }
+    
+    /// Update meeting's transcript display from segments
+    func updateMeetingTranscriptDisplay(_ meeting: MeetingHistoryItem) {
+        // Combine all segments based on toggle state
+        var allBlocks: [TranscriptBlock] = []
+        
+        for segment in meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber }) {
+            // Use refined blocks if available and showing refined, otherwise use original
+            let blocksToUse = (meeting.isShowingRefined && segment.isRefined) ?
+                (segment.refinedBlocks ?? segment.originalBlocks) :
+                segment.originalBlocks
+            
+            allBlocks.append(contentsOf: blocksToUse)
+        }
+        
+        meeting.transcriptBlocks = allBlocks
+        
+        // Also update plain text version
+        meeting.transcript = allBlocks.map { block in
+            "[\(block.speaker.rawValue)] \(block.text)"
+        }.joined(separator: "\n\n")
+    }
+    
+    /// Save transcript with segment markers to disk
+    private func saveTranscriptWithSegments(_ meeting: MeetingHistoryItem, to directory: URL) throws {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
+        
+        var markdown = """
+        # \(meeting.title.isEmpty ? "Meeting" : meeting.title)
+        \(dateFormatter.string(from: meeting.date))
+        
+        ## Transcript
+        
+        """
+        
+        if meeting.transcriptSegments.isEmpty {
+            markdown += "_No transcript recorded_"
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .none
+            formatter.timeStyle = .short
+            
+            for segment in meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber }) {
+                // Add segment marker (except for first segment)
+                if segment.segmentNumber > 1 {
+                    let resumeTime = formatter.string(from: segment.startTime)
+                    markdown += "\n\n---\n\n**Recording resumed at \(resumeTime)**\n\n"
+                }
+                
+                // Use refined blocks if available and showing refined, otherwise use original
+                let blocksToUse = (meeting.isShowingRefined && segment.isRefined) ?
+                    (segment.refinedBlocks ?? segment.originalBlocks) :
+                    segment.originalBlocks
+                
+                for block in blocksToUse {
+                    let speakerLabel = block.speaker == .me ? "**Me**" : "**Them**"
+                    let timestamp = formatTimestamp(block.startTimestamp)
+                    
+                    markdown += """
+                    
+                    \(speakerLabel) _[\(timestamp)]_
+                    
+                    \(block.text)
+                    
+                    """
+                }
+            }
+        }
+        
+        let transcriptURL = directory.appendingPathComponent("transcript.md")
+        try markdown.write(to: transcriptURL, atomically: true, encoding: .utf8)
+    }
+    
+    /// Format a timestamp for display (e.g., "2:34" or "1:02:15")
+    private func formatTimestamp(_ seconds: TimeInterval) -> String {
+        let totalSeconds = Int(seconds)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        } else {
+            return String(format: "%d:%02d", minutes, secs)
+        }
     }
     
 }

@@ -510,32 +510,81 @@ struct RecordingDetailView: View {
                         }
                         .padding(.bottom, 8)
                         
-                        // Transcript - prefer blocks, fall back to plain text
-                        let hasOriginal = (meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil)
-                        let showingOriginal = viewModel.showOriginalTranscript(for: meeting) && hasOriginal
+                        // Show recording start time for resumable meetings
+                        if meeting.canResume, let firstSegment = meeting.transcriptSegments.first {
+                            Group {
+                                let formatter: DateFormatter = {
+                                    let f = DateFormatter()
+                                    f.dateStyle = .medium
+                                    f.timeStyle = .short
+                                    return f
+                                }()
+                                Text("Recording started: \(formatter.string(from: firstSegment.startTime))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.bottom, 8)
+                            }
+                        }
                         
-                        if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
-                            // Block-based display (new format)
+                        // Transcript - prefer segments, then blocks, then plain text
+                        if !meeting.transcriptSegments.isEmpty {
+                            // Segment-based display with markers
                             LazyVStack(spacing: 8) {
-                                ForEach(showingOriginal ? (meeting.originalTranscriptBlocks ?? blocks) : blocks) { block in
-                                    TranscriptBlockView(block: block)
+                                ForEach(meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber })) { segment in
+                                    Group {
+                                        // Segment marker (except for first segment)
+                                        if segment.segmentNumber > 1 {
+                                            let formatter: DateFormatter = {
+                                                let f = DateFormatter()
+                                                f.dateStyle = .none
+                                                f.timeStyle = .short
+                                                return f
+                                            }()
+                                            Text("Recording resumed at \(formatter.string(from: segment.startTime))")
+                                                .font(.system(size: 12))
+                                                .foregroundStyle(.tertiary)
+                                                .padding(.vertical, 8)
+                                        }
+                                        
+                                        // Blocks for this segment
+                                        let blocksToShow = (meeting.isShowingRefined && segment.isRefined) ?
+                                            (segment.refinedBlocks ?? segment.originalBlocks) :
+                                            segment.originalBlocks
+                                        
+                                        ForEach(blocksToShow) { block in
+                                            TranscriptBlockView(block: block)
+                                        }
+                                    }
                                 }
                             }
-                        } else if let transcript = meeting.transcript {
-                            // Plain text display (legacy format)
-                            Text(showingOriginal ? (meeting.originalTranscript ?? transcript) : transcript)
-                                .font(.system(size: 14))
-                                .foregroundStyle(.primary)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
-                            Text("Loading transcript...")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .onAppear {
-                                    viewModel.loadTranscript(for: meeting)
+                            // Fallback to block-based or plain text display
+                            let hasOriginal = (meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil)
+                            let showingOriginal = viewModel.showOriginalTranscript(for: meeting) && hasOriginal
+                            
+                            if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
+                                // Block-based display (new format)
+                                LazyVStack(spacing: 8) {
+                                    ForEach(showingOriginal ? (meeting.originalTranscriptBlocks ?? blocks) : blocks) { block in
+                                        TranscriptBlockView(block: block)
+                                    }
                                 }
+                            } else if let transcript = meeting.transcript {
+                                // Plain text display (legacy format)
+                                Text(showingOriginal ? (meeting.originalTranscript ?? transcript) : transcript)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.primary)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                Text("Loading transcript...")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .onAppear {
+                                        viewModel.loadTranscript(for: meeting)
+                                    }
+                            }
                         }
                     }
                     .padding(20)
@@ -543,9 +592,13 @@ struct RecordingDetailView: View {
                 }
             }
             
-            // Floating control pane for refinement toggle/loading
-            // Show when LLM models are downloaded (regardless of stitching enabled state)
-            if viewModel.canRefineTranscripts {
+            // Floating control pane: Resume controls for resumable meetings, refinement controls otherwise
+            if meeting.canResume {
+                // Show resume control pane for resumable meetings
+                ResumeControlPane(viewModel: viewModel, meeting: meeting)
+                    .padding(.bottom, 16)
+            } else if viewModel.canRefineTranscripts {
+                // Show refinement control pane for non-resumable meetings
                 let isRefined = meeting.isRefined || meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil
                 let isRefining = viewModel.meetingBeingRefined?.id == meeting.id && viewModel.refinementService.isRefining
                 // Check if refinement will happen (meeting has transcript but hasn't been refined yet)

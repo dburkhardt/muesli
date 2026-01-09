@@ -1,5 +1,31 @@
 import Foundation
 
+/// Represents a single recording segment within a resumable meeting
+struct TranscriptSegment: Identifiable, Codable, Equatable {
+    let id: UUID
+    let segmentNumber: Int  // 1, 2, 3, etc.
+    var originalBlocks: [TranscriptBlock]  // Raw transcript for this segment
+    var refinedBlocks: [TranscriptBlock]?  // Refined transcript for this segment, nil if not yet refined
+    var isRefined: Bool  // Whether this segment has been refined
+    let startTime: Date  // When this segment started recording
+    
+    init(
+        id: UUID = UUID(),
+        segmentNumber: Int,
+        originalBlocks: [TranscriptBlock],
+        refinedBlocks: [TranscriptBlock]? = nil,
+        isRefined: Bool = false,
+        startTime: Date
+    ) {
+        self.id = id
+        self.segmentNumber = segmentNumber
+        self.originalBlocks = originalBlocks
+        self.refinedBlocks = refinedBlocks
+        self.isRefined = isRefined
+        self.startTime = startTime
+    }
+}
+
 /// Represents a historical meeting recording discovered from disk
 @Observable
 @MainActor
@@ -16,6 +42,20 @@ final class MeetingHistoryItem: Identifiable, Hashable {
     var originalTranscriptBlocks: [TranscriptBlock]?
     var isRefined: Bool = false  // Whether this transcript has been refined
     
+    // MARK: - Resume State
+    
+    /// Whether this meeting can be resumed (completed recordings that haven't been finalized)
+    var canResume: Bool = false
+    
+    /// Number of recording segments (1 = single recording, 2+ = resumed)
+    var segmentCount: Int = 1
+    
+    /// Transcript segments with per-segment original/refined blocks
+    var transcriptSegments: [TranscriptSegment] = []
+    
+    /// Whether to show refined transcript (applies globally to all segments)
+    var isShowingRefined: Bool = false
+    
     let hasAudio: Bool
     let hasMicrophone: Bool
     let duration: TimeInterval?  // Duration in seconds
@@ -31,6 +71,9 @@ final class MeetingHistoryItem: Identifiable, Hashable {
         originalTranscript: String? = nil,
         originalTranscriptBlocks: [TranscriptBlock]? = nil,
         isRefined: Bool = false,
+        canResume: Bool = false,
+        segmentCount: Int = 1,
+        transcriptSegments: [TranscriptSegment] = [],
         hasAudio: Bool,
         hasMicrophone: Bool,
         duration: TimeInterval? = nil,
@@ -45,6 +88,9 @@ final class MeetingHistoryItem: Identifiable, Hashable {
         self.originalTranscript = originalTranscript
         self.originalTranscriptBlocks = originalTranscriptBlocks
         self.isRefined = isRefined
+        self.canResume = canResume
+        self.segmentCount = segmentCount
+        self.transcriptSegments = transcriptSegments
         self.hasAudio = hasAudio
         self.hasMicrophone = hasMicrophone
         self.duration = duration
