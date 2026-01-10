@@ -239,7 +239,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Reset TCC permissions and app state for Muesli to ensure fresh state after rebuild\n# This clears stale permissions that may be associated with old code signatures\ntccutil reset ScreenCapture com.muesli.app 2>/dev/null || true\ntccutil reset Microphone com.muesli.app 2>/dev/null || true\n# Reset UserDefaults (onboarding state, model paths, etc.)\ndefaults delete com.muesli.app 2>/dev/null || true\necho \"TCC permissions and app state reset for com.muesli.app\"\n";
+			shellScript = "# Reset TCC permissions and app state for Muesli to ensure fresh state after rebuild\n# This clears stale permissions that may be associated with old code signatures\ntccutil reset ScreenCapture com.muesli.app.vmr 2>/dev/null || true\ntccutil reset Microphone com.muesli.app.vmr 2>/dev/null || true\n# Reset UserDefaults (onboarding state, model paths, etc.)\ndefaults delete com.muesli.app.vmr 2>/dev/null || true\necho \"TCC permissions and app state reset for com.muesli.app.vmr\"\n";
 		};
 		A100006C241D1A1D00000009 /* Update App Icon */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -526,8 +526,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.vmr;
+				PRODUCT_NAME = "Muesli-vmr";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
 			};
@@ -555,8 +555,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.vmr;
+				PRODUCT_NAME = "Muesli-vmr";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
 			};
