@@ -5,6 +5,9 @@ import AppKit
 @main
 struct MuesliApp: App {
     @State private var viewModel = MuesliViewModel()
+    @State private var preferencesManager = PreferencesManager()
+    @State private var meetingHistoryManager = MeetingHistoryManager()
+    @State private var permissionManager = PermissionManager()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     
     var body: some Scene {
@@ -28,8 +31,9 @@ struct MuesliApp: App {
         
         // Completed meeting window (for viewing while recording)
         WindowGroup("Meeting Transcript", id: "completedMeeting") {
-            if let meeting = viewModel.completedMeetingWindowItem {
+            if let meeting = meetingHistoryManager.completedMeetingWindowItem {
                 CompletedMeetingWindow(meeting: meeting, viewModel: viewModel)
+                    .environment(meetingHistoryManager)
             } else {
                 Text("No meeting selected")
                     .frame(width: 600, height: 500)
@@ -41,6 +45,8 @@ struct MuesliApp: App {
         // Main window - SINGLE window for recordings (not WindowGroup)
         Window("Muesli", id: "main") {
             MainWindowView(viewModel: viewModel)
+                .environment(meetingHistoryManager)
+                .environment(permissionManager)
         }
         .defaultSize(width: 420, height: 600)
         .windowResizability(.contentSize)
@@ -48,6 +54,7 @@ struct MuesliApp: App {
         // Preferences window - accessible via Cmd+,
         Settings {
             PreferencesView(viewModel: viewModel)
+                .environment(preferencesManager)
         }
     }
 }

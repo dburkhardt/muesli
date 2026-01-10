@@ -60,10 +60,10 @@ final class FileOutputService: @unchecked Sendable {
     // Configurable base output path
     private var customOutputPath: URL?
     
-    // Default output path
+    // Default output path (Application Support - no special permissions required)
     private static let defaultOutputPath: URL = {
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return documentsPath.appendingPathComponent("Meeting Transcripts", isDirectory: true)
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Muesli/Recordings", isDirectory: true)
     }()
     
     // Current base output path (custom or default)

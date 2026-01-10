@@ -686,6 +686,11 @@ struct OnboardingView: View {
     // MARK: - Complete Onboarding
     
     private func completeOnboarding() {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let logEntry = "{\"location\":\"OnboardingView.swift:completeOnboarding\",\"message\":\"OnboardingView completeOnboarding called\",\"data\":{},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"E\"}\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry.data(using: .utf8)!); handle.closeFile() } else { FileManager.default.createFile(atPath: logPath, contents: logEntry.data(using: .utf8), attributes: nil) }
+        // #endregion
         stopPermissionPolling()
         viewModel.completeOnboarding()
         

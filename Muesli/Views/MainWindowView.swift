@@ -3,11 +3,18 @@ import SwiftUI
 /// Main window view that conditionally shows unified list or split view
 struct MainWindowView: View {
     @Bindable var viewModel: MuesliViewModel
+    @Environment(MeetingHistoryManager.self) private var historyManager
     
     /// Show split view when a meeting is selected OR recording is active
     /// Show unified list otherwise (idle state)
     private var shouldShowSplitView: Bool {
-        viewModel.selectedMeeting != nil || viewModel.activeRecordingSession != nil || viewModel.isSplitViewVisible
+        let result = historyManager.selectedMeeting != nil || viewModel.activeRecordingSession != nil || viewModel.isSplitViewVisible
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let logEntry = "{\"location\":\"MainWindowView.swift:shouldShowSplitView\",\"message\":\"Checking split view state\",\"data\":{\"historyMgrSelectedMeeting\":\"\(historyManager.selectedMeeting?.title ?? "nil")\",\"vmSelectedMeeting\":\"\(viewModel.selectedMeeting?.title ?? "nil")\",\"activeSession\":\(viewModel.activeRecordingSession != nil),\"isSplitViewVisible\":\(viewModel.isSplitViewVisible),\"result\":\(result)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"A\"}\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry.data(using: .utf8)!); handle.closeFile() } else { FileManager.default.createFile(atPath: logPath, contents: logEntry.data(using: .utf8), attributes: nil) }
+        // #endregion
+        return result
     }
     
     var body: some View {
@@ -63,13 +70,17 @@ struct MainWindowView: View {
 
 #Preview("Unified") {
     let vm = MuesliViewModel()
+    let historyManager = MeetingHistoryManager()
     return MainWindowView(viewModel: vm)
+        .environment(historyManager)
         .frame(width: 420, height: 600)
 }
 
 #Preview("Split") {
     let vm = MuesliViewModel()
+    let historyManager = MeetingHistoryManager()
     vm.isSplitViewVisible = true
     return MainWindowView(viewModel: vm)
+        .environment(historyManager)
         .frame(width: 900, height: 650)
 }

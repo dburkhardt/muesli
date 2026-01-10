@@ -4,6 +4,7 @@ import ServiceManagement
 /// Main Preferences view with tabbed sections for Models, Output, and General settings
 struct PreferencesView: View {
     @Bindable var viewModel: MuesliViewModel
+    @Environment(PreferencesManager.self) private var preferencesManager
     
     var body: some View {
         TabView {
@@ -12,12 +13,12 @@ struct PreferencesView: View {
                     Label("Models", systemImage: "brain.head.profile")
                 }
             
-            OutputPreferencesTab(viewModel: viewModel)
+            OutputPreferencesTab()
                 .tabItem {
                     Label("Output", systemImage: "folder")
                 }
             
-            GeneralPreferencesTab(viewModel: viewModel)
+            GeneralPreferencesTab()
                 .tabItem {
                     Label("General", systemImage: "gearshape")
                 }
@@ -29,6 +30,7 @@ struct PreferencesView: View {
 // MARK: - Models Tab
 
 /// Models preferences tab - embeds existing ModelManagementView
+/// Note: Still uses viewModel for model management (will be migrated in later phase)
 struct ModelsPreferencesTab: View {
     @Bindable var viewModel: MuesliViewModel
     
@@ -40,11 +42,14 @@ struct ModelsPreferencesTab: View {
 // MARK: - Output Tab
 
 /// Output preferences tab - configure where recordings are saved
+/// Now uses PreferencesManager via environment
 struct OutputPreferencesTab: View {
-    @Bindable var viewModel: MuesliViewModel
+    @Environment(PreferencesManager.self) private var preferencesManager
     @State private var showDirectoryPicker = false
     
     var body: some View {
+        @Bindable var prefs = preferencesManager
+        
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 12) {
@@ -57,7 +62,7 @@ struct OutputPreferencesTab: View {
                     
                     HStack {
                         // Show current directory path
-                        Text(viewModel.outputDirectory.path)
+                        Text(preferencesManager.outputDirectory.path)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -73,7 +78,7 @@ struct OutputPreferencesTab: View {
                     }
                     
                     Button("Reset to Default") {
-                        viewModel.resetOutputDirectory()
+                        preferencesManager.resetOutputDirectory()
                     }
                     .buttonStyle(.link)
                     .font(.caption)
@@ -89,7 +94,7 @@ struct OutputPreferencesTab: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    viewModel.setOutputDirectory(url)
+                    preferencesManager.setOutputDirectory(url)
                 }
             case .failure(let error):
                 print("Failed to select directory: \(error)")
@@ -101,20 +106,20 @@ struct OutputPreferencesTab: View {
 // MARK: - General Tab
 
 /// General preferences tab - launch at login and other settings
+/// Now uses PreferencesManager via environment
 struct GeneralPreferencesTab: View {
-    @Bindable var viewModel: MuesliViewModel
+    @Environment(PreferencesManager.self) private var preferencesManager
     
     var body: some View {
+        @Bindable var prefs = preferencesManager
+        
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Startup")
                         .font(.headline)
                     
-                    Toggle(isOn: Binding(
-                        get: { viewModel.launchAtLogin },
-                        set: { viewModel.setLaunchAtLogin($0) }
-                    )) {
+                    Toggle(isOn: $prefs.launchAtLogin) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Launch Muesli at Login")
                             Text("Muesli will start automatically when you log in.")
@@ -134,12 +139,9 @@ struct GeneralPreferencesTab: View {
                     Text("Transcription")
                         .font(.headline)
                     
-                    Picker("Default Mode:", selection: Binding(
-                        get: { viewModel.transcriptionMode },
-                        set: { viewModel.transcriptionMode = $0 }
-                    )) {
-                        Text("Live").tag(TranscriptionService.TranscriptionMode.live)
-                        Text("Post-processing").tag(TranscriptionService.TranscriptionMode.postProcessing)
+                    Picker("Default Mode:", selection: $prefs.transcriptionMode) {
+                        Text("Live").tag(PreferencesManager.TranscriptionMode.live)
+                        Text("Post-processing").tag(PreferencesManager.TranscriptionMode.postProcessing)
                     }
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 250)
@@ -158,10 +160,7 @@ struct GeneralPreferencesTab: View {
                     Text("Audio")
                         .font(.headline)
                     
-                    Toggle(isOn: Binding(
-                        get: { viewModel.isEchoCancellationEnabled },
-                        set: { viewModel.isEchoCancellationEnabled = $0 }
-                    )) {
+                    Toggle(isOn: $prefs.isEchoCancellationEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Echo Cancellation")
                             Text("Remove echo from microphone audio caused by speakers. Improves transcription quality and saved audio files.")
@@ -179,5 +178,7 @@ struct GeneralPreferencesTab: View {
 
 #Preview("Preferences") {
     let vm = MuesliViewModel()
+    let prefs = PreferencesManager()
     return PreferencesView(viewModel: vm)
+        .environment(prefs)
 }

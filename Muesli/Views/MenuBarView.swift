@@ -7,7 +7,13 @@ struct MenuBarView: View {
     @Environment(\.openSettings) private var openSettings
     
     private var hasCompletedOnboarding: Bool {
-        UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+        let value = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let logEntry = "{\"location\":\"MenuBarView.swift:hasCompletedOnboarding\",\"message\":\"Checking onboarding status\",\"data\":{\"value\":\(value)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"E\"}\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry.data(using: .utf8)!); handle.closeFile() } else { FileManager.default.createFile(atPath: logPath, contents: logEntry.data(using: .utf8), attributes: nil) }
+        // #endregion
+        return value
     }
     
     var body: some View {

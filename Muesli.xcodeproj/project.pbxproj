@@ -46,7 +46,32 @@
 		A1000070241D1A1D00000010 /* MeetingTitlePromptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */; };
 		A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000073241D1A1D00000011 /* PreferencesView.swift */; };
 		A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000075241D1A1D00000012 /* RecordingIndicator.swift */; };
+		C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000002241D1A1D00000050 /* PreferencesManager.swift */; };
+		C1000003241D1A1D00000051 /* MeetingHistoryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */; };
+		C1000005241D1A1D00000052 /* RefinementCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000006241D1A1D00000052 /* RefinementCoordinator.swift */; };
+		B1000001241D1A1D00000040 /* MuesliViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000002241D1A1D00000040 /* MuesliViewModelTests.swift */; };
+		B1000003241D1A1D00000040 /* ServiceProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000004241D1A1D00000040 /* ServiceProtocols.swift */; };
+		B1000005241D1A1D00000040 /* MockAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000006241D1A1D00000040 /* MockAudioCaptureService.swift */; };
+		B1000007241D1A1D00000040 /* MockTranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000008241D1A1D00000040 /* MockTranscriptionService.swift */; };
+		B1000009241D1A1D00000040 /* MockFileOutputService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000A241D1A1D00000040 /* MockFileOutputService.swift */; };
+		B100000B241D1A1D00000040 /* MockMeetingHistoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000C241D1A1D00000040 /* MockMeetingHistoryService.swift */; };
+		B100000D241D1A1D00000040 /* MockMeetingAppDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000E241D1A1D00000040 /* MockMeetingAppDetector.swift */; };
+		B100000F241D1A1D00000040 /* MockPermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000010241D1A1D00000040 /* MockPermissionManager.swift */; };
+		B1000011241D1A1D00000040 /* MockMicrophoneManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000012241D1A1D00000040 /* MockMicrophoneManager.swift */; };
+		B1000013241D1A1D00000040 /* MockModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000014241D1A1D00000040 /* MockModelManager.swift */; };
+		B1000015241D1A1D00000040 /* MockLLMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000016241D1A1D00000040 /* MockLLMManager.swift */; };
+		B1000017241D1A1D00000040 /* MockEchoCancellationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B1000019241D1A1D00000040 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A100001A241D1A1D00000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1000016241D1A1D00000001;
+			remoteInfo = Muesli;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A1000009241D1A1D00000001 /* Muesli.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Muesli.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -87,6 +112,22 @@
 		A1000097241D1A1D00000028 /* EchoCancellationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoCancellationService.swift; sourceTree = "<group>"; };
 		A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefineTranscriptSheet.swift; sourceTree = "<group>"; };
 		A1000095241D1A1D00000027 /* ResumeControlPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResumeControlPane.swift; sourceTree = "<group>"; };
+		B100001A241D1A1D00000040 /* MuesliTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MuesliTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1000002241D1A1D00000040 /* MuesliViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliViewModelTests.swift; sourceTree = "<group>"; };
+		B1000004241D1A1D00000040 /* ServiceProtocols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceProtocols.swift; sourceTree = "<group>"; };
+		B1000006241D1A1D00000040 /* MockAudioCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockAudioCaptureService.swift; sourceTree = "<group>"; };
+		B1000008241D1A1D00000040 /* MockTranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTranscriptionService.swift; sourceTree = "<group>"; };
+		B100000A241D1A1D00000040 /* MockFileOutputService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockFileOutputService.swift; sourceTree = "<group>"; };
+		B100000C241D1A1D00000040 /* MockMeetingHistoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockMeetingHistoryService.swift; sourceTree = "<group>"; };
+		B100000E241D1A1D00000040 /* MockMeetingAppDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockMeetingAppDetector.swift; sourceTree = "<group>"; };
+		B1000010241D1A1D00000040 /* MockPermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockPermissionManager.swift; sourceTree = "<group>"; };
+		B1000012241D1A1D00000040 /* MockMicrophoneManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockMicrophoneManager.swift; sourceTree = "<group>"; };
+		B1000014241D1A1D00000040 /* MockModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockModelManager.swift; sourceTree = "<group>"; };
+		B1000016241D1A1D00000040 /* MockLLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockLLMManager.swift; sourceTree = "<group>"; };
+		B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockEchoCancellationService.swift; sourceTree = "<group>"; };
+		C1000002241D1A1D00000050 /* PreferencesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManager.swift; sourceTree = "<group>"; };
+		C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryManager.swift; sourceTree = "<group>"; };
+		C1000006241D1A1D00000052 /* RefinementCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementCoordinator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +141,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B100001B241D1A1D00000040 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -107,6 +155,7 @@
 			isa = PBXGroup;
 			children = (
 				A100000D241D1A1D00000001 /* Muesli */,
+				B100001C241D1A1D00000040 /* MuesliTests */,
 				A100000E241D1A1D00000001 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -115,6 +164,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000009241D1A1D00000001 /* Muesli.app */,
+				B100001A241D1A1D00000040 /* MuesliTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -130,9 +180,20 @@
 				A1000011241D1A1D00000001 /* Views */,
 				A1000012241D1A1D00000001 /* Services */,
 				A1000013241D1A1D00000001 /* Utilities */,
+				C1000003241D1A1D00000050 /* Managers */,
 				A1000014241D1A1D00000001 /* Resources */,
 			);
 			path = Muesli;
+			sourceTree = "<group>";
+		};
+		C1000003241D1A1D00000050 /* Managers */ = {
+			isa = PBXGroup;
+			children = (
+				C1000002241D1A1D00000050 /* PreferencesManager.swift */,
+				C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */,
+				C1000006241D1A1D00000052 /* RefinementCoordinator.swift */,
+			);
+			path = Managers;
 			sourceTree = "<group>";
 		};
 		A100000F241D1A1D00000001 /* Models */ = {
@@ -219,6 +280,41 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
+		B100001C241D1A1D00000040 /* MuesliTests */ = {
+			isa = PBXGroup;
+			children = (
+				B1000002241D1A1D00000040 /* MuesliViewModelTests.swift */,
+				B100001D241D1A1D00000040 /* Protocols */,
+				B100001E241D1A1D00000040 /* Mocks */,
+			);
+			path = MuesliTests;
+			sourceTree = "<group>";
+		};
+		B100001D241D1A1D00000040 /* Protocols */ = {
+			isa = PBXGroup;
+			children = (
+				B1000004241D1A1D00000040 /* ServiceProtocols.swift */,
+			);
+			path = Protocols;
+			sourceTree = "<group>";
+		};
+		B100001E241D1A1D00000040 /* Mocks */ = {
+			isa = PBXGroup;
+			children = (
+				B1000006241D1A1D00000040 /* MockAudioCaptureService.swift */,
+				B1000008241D1A1D00000040 /* MockTranscriptionService.swift */,
+				B100000A241D1A1D00000040 /* MockFileOutputService.swift */,
+				B100000C241D1A1D00000040 /* MockMeetingHistoryService.swift */,
+				B100000E241D1A1D00000040 /* MockMeetingAppDetector.swift */,
+				B1000010241D1A1D00000040 /* MockPermissionManager.swift */,
+				B1000012241D1A1D00000040 /* MockMicrophoneManager.swift */,
+				B1000014241D1A1D00000040 /* MockModelManager.swift */,
+				B1000016241D1A1D00000040 /* MockLLMManager.swift */,
+				B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */,
+			);
+			path = Mocks;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -290,6 +386,24 @@
 			productReference = A1000009241D1A1D00000001 /* Muesli.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B100001F241D1A1D00000040 /* MuesliTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B1000020241D1A1D00000040 /* Build configuration list for PBXNativeTarget "MuesliTests" */;
+			buildPhases = (
+				B1000021241D1A1D00000040 /* Sources */,
+				B100001B241D1A1D00000040 /* Frameworks */,
+				B1000022241D1A1D00000040 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B1000023241D1A1D00000040 /* PBXTargetDependency */,
+			);
+			name = MuesliTests;
+			productName = MuesliTests;
+			productReference = B100001A241D1A1D00000040 /* MuesliTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -302,6 +416,10 @@
 				TargetAttributes = {
 					A1000016241D1A1D00000001 = {
 						CreatedOnToolsVersion = 15.0;
+					};
+					B100001F241D1A1D00000040 = {
+						CreatedOnToolsVersion = 15.0;
+						TestTargetID = A1000016241D1A1D00000001;
 					};
 				};
 			};
@@ -323,6 +441,7 @@
 			projectRoot = "";
 			targets = (
 				A1000016241D1A1D00000001 /* Muesli */,
+				B100001F241D1A1D00000040 /* MuesliTests */,
 			);
 		};
 /* End PBXProject section */
@@ -333,6 +452,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000005241D1A1D00000001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B1000022241D1A1D00000040 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -378,10 +504,40 @@
 				A1000096241D1A1D00000028 /* EchoCancellationService.swift in Sources */,
 				A1000092241D1A1D00000026 /* RefineTranscriptSheet.swift in Sources */,
 				A1000094241D1A1D00000027 /* ResumeControlPane.swift in Sources */,
+				C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */,
+				C1000003241D1A1D00000051 /* MeetingHistoryManager.swift in Sources */,
+				C1000005241D1A1D00000052 /* RefinementCoordinator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B1000021241D1A1D00000040 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B1000001241D1A1D00000040 /* MuesliViewModelTests.swift in Sources */,
+				B1000003241D1A1D00000040 /* ServiceProtocols.swift in Sources */,
+				B1000005241D1A1D00000040 /* MockAudioCaptureService.swift in Sources */,
+				B1000007241D1A1D00000040 /* MockTranscriptionService.swift in Sources */,
+				B1000009241D1A1D00000040 /* MockFileOutputService.swift in Sources */,
+				B100000B241D1A1D00000040 /* MockMeetingHistoryService.swift in Sources */,
+				B100000D241D1A1D00000040 /* MockMeetingAppDetector.swift in Sources */,
+				B100000F241D1A1D00000040 /* MockPermissionManager.swift in Sources */,
+				B1000011241D1A1D00000040 /* MockMicrophoneManager.swift in Sources */,
+				B1000013241D1A1D00000040 /* MockModelManager.swift in Sources */,
+				B1000015241D1A1D00000040 /* MockLLMManager.swift in Sources */,
+				B1000017241D1A1D00000040 /* MockEchoCancellationService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B1000023241D1A1D00000040 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1000016241D1A1D00000001 /* Muesli */;
+			targetProxy = B1000019241D1A1D00000040 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A100001D241D1A1D00000001 /* Debug */ = {
@@ -562,6 +718,40 @@
 			};
 			name = Release;
 		};
+		B1000024241D1A1D00000040 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.muesli.app.vmr.MuesliTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Muesli-vmr.app/Contents/MacOS/Muesli-vmr";
+			};
+			name = Debug;
+		};
+		B1000025241D1A1D00000040 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.muesli.app.vmr.MuesliTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Muesli-vmr.app/Contents/MacOS/Muesli-vmr";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -579,6 +769,15 @@
 			buildConfigurations = (
 				A100001F241D1A1D00000001 /* Debug */,
 				A1000020241D1A1D00000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B1000020241D1A1D00000040 /* Build configuration list for PBXNativeTarget "MuesliTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1000024241D1A1D00000040 /* Debug */,
+				B1000025241D1A1D00000040 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

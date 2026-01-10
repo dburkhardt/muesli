@@ -3,8 +3,26 @@ import AVFoundation
 import ScreenCaptureKit
 
 /// Manages app permissions for screen recording and microphone access
+/// Can be injected into views via @Environment for permission state observation
+@Observable
 @MainActor
 final class PermissionManager {
+    
+    // MARK: - Observable State
+    
+    /// Cached screen recording permission state (updated via refresh)
+    var screenRecordingGranted: Bool = false
+    
+    /// Cached microphone permission state (updated via refresh)
+    var microphoneGranted: Bool = false
+    
+    // MARK: - Initialization
+    
+    init() {
+        // Check initial permissions
+        screenRecordingGranted = CGPreflightScreenCaptureAccess()
+        microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
     
     // MARK: - Screen Recording Permission
     
@@ -81,7 +99,17 @@ final class PermissionManager {
     }
     
     /// Refresh permission states (call after user returns from settings)
+    /// Updates the observable cached state
     func refreshPermissions() -> (screenRecording: Bool, microphone: Bool) {
-        (hasScreenRecordingPermission, hasMicrophonePermission)
+        screenRecordingGranted = hasScreenRecordingPermission
+        microphoneGranted = hasMicrophonePermission
+        return (screenRecordingGranted, microphoneGranted)
+    }
+    
+    /// Async refresh that uses reliable SCShareableContent check
+    func refreshPermissionsAsync() async -> (screenRecording: Bool, microphone: Bool) {
+        screenRecordingGranted = await checkScreenRecordingPermissionAsync()
+        microphoneGranted = hasMicrophonePermission
+        return (screenRecordingGranted, microphoneGranted)
     }
 }

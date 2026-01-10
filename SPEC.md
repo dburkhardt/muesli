@@ -56,10 +56,11 @@ Think of it as a local, privacy-focused alternative to Granola—without cloud d
 ### Stopping a Recording
 
 1. User clicks "Stop Recording" in menu bar or session window
-2. Recording is saved to `~/Documents/Meeting Transcripts/YYYY-MM-DD_HH-MM_[UUID]/`
+2. Recording is saved to `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD_HH-MM_[UUID]/`
    - Folder name uses timestamp + UUID for uniqueness (e.g., `2026-01-15_14-30_A1B2C3D4-E5F6-7890-ABCD-EF1234567890`)
    - Meeting title is stored in `transcript.md` header, not in folder name
    - This ensures stable folder names even when titles change, supporting future history features
+   - Using Application Support instead of Documents avoids permission prompts and follows macOS best practices
 3. Folder contains `audio.caf`, `microphone.caf`, and `transcript.md`
 4. Session window shows "Recording Saved!" completion state with:
    - "Open in Finder" button to view saved files
@@ -361,6 +362,52 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 
 ---
 
+## Storage Architecture
+
+All Muesli data is stored in `~/Library/Application Support/Muesli/` to avoid permission prompts and follow macOS best practices for app data storage.
+
+### Directory Structure
+
+```
+~/Library/Application Support/Muesli/
+├── Recordings/                    # Meeting recordings and transcripts
+│   ├── 2026-01-15_14-30_[UUID]/
+│   │   ├── audio.caf              # System audio (meeting participants)
+│   │   ├── microphone.caf         # Microphone audio (user's voice)
+│   │   ├── transcript.md          # Markdown transcript with speaker labels
+│   │   └── transcript.original.md # Original transcript (if refined)
+│   └── ...
+└── Models/                        # WhisperKit transcription models
+    └── models/argmaxinc/whisperkit-coreml/
+        ├── openai_whisper-base/
+        ├── openai_whisper-small/
+        └── ...
+```
+
+### LLM Models
+
+LLM models (for transcript refinement) use the standard Hugging Face Hub cache:
+- Location: `~/.cache/huggingface/hub/`
+- This follows the convention used by other ML applications
+
+### User Preferences
+
+User preferences are stored in standard UserDefaults:
+- Output directory (customizable)
+- Active transcription model
+- Launch at login setting
+- Transcription mode (live vs post-processing)
+- Echo cancellation setting
+
+### Why Application Support?
+
+1. **No permission prompts** - Application Support doesn't require user authorization
+2. **Appropriate for app data** - Documents is for user-created files, not app-generated data
+3. **Standard macOS convention** - Follows Apple's Human Interface Guidelines
+4. **Clean separation** - App data stays organized and doesn't clutter user folders
+
+---
+
 ## Implementation Phases
 
 ### Phase 0: Project Setup
@@ -509,7 +556,7 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 - Click "Start Recording" begins capture
 - Menu bar shows recording indicator
 - Click "Stop Recording" ends capture
-- Two audio files saved to `~/Documents/Meeting Transcripts/`:
+- Two audio files saved to `~/Library/Application Support/Muesli/Recordings/`:
   - `audio.caf` (system audio) plays back correctly
   - `microphone.caf` (mic audio) plays back correctly
 - Both files preview with QuickLook (spacebar)

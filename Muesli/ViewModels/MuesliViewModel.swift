@@ -209,10 +209,10 @@ final class MuesliViewModel {
         }
     }
     
-    /// Default output directory: ~/Documents/Meeting Transcripts
+    /// Default output directory: ~/Library/Application Support/Muesli/Recordings
     static var defaultOutputDirectory: URL {
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return documentsPath.appendingPathComponent("Meeting Transcripts")
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Muesli/Recordings")
     }
     
     /// Set the output directory
@@ -290,7 +290,9 @@ final class MuesliViewModel {
     
     // MARK: - Initialization
     
-    init() {
+    /// Initialize the ViewModel
+    /// - Parameter skipInitialLoad: If true, skips loading meeting history from disk (for testing)
+    init(skipInitialLoad: Bool = false) {
         // Initialize refinement service
         refinementService = TranscriptRefinementService(llmManager: llmManager)
         
@@ -413,8 +415,10 @@ final class MuesliViewModel {
             await refreshMeetingApps()
         }
         
-        // Load meeting history
-        loadMeetingHistory()
+        // Load meeting history (skip for tests to avoid file system access)
+        if !skipInitialLoad {
+            loadMeetingHistory()
+        }
     }
     
     // MARK: - Session Management
@@ -470,9 +474,19 @@ final class MuesliViewModel {
     // MARK: - Onboarding
     
     func completeOnboarding() {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let logEntry = "{\"location\":\"MuesliViewModel.swift:completeOnboarding\",\"message\":\"completeOnboarding called\",\"data\":{\"before\":\(hasCompletedOnboarding)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"D\"}\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry.data(using: .utf8)!); handle.closeFile() } else { FileManager.default.createFile(atPath: logPath, contents: logEntry.data(using: .utf8), attributes: nil) }
+        // #endregion
         // Model path is now managed by ModelManager, we just mark onboarding as done
         hasCompletedOnboarding = true
         UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
+        // #region agent log
+        let afterValue = UserDefaults.standard.bool(forKey: Self.onboardingCompletedKey)
+        let logEntry2 = "{\"location\":\"MuesliViewModel.swift:completeOnboarding:after\",\"message\":\"UserDefaults set\",\"data\":{\"after\":\(afterValue),\"key\":\"\(Self.onboardingCompletedKey)\"},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"D\"}\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry2.data(using: .utf8)!); handle.closeFile() }
+        // #endregion
     }
     
     func resetOnboarding() {
@@ -921,6 +935,12 @@ final class MuesliViewModel {
         session.state = .completed
         session.canResume = true
         
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let logEntry = "{\"location\":\"MuesliViewModel.swift:stopRecordingAsync\",\"message\":\"Recording completed, checking selectedMeeting\",\"data\":{\"selectedMeetingBefore\":\"\(selectedMeeting?.title ?? "nil")\",\"outputDir\":\"\(session.outputDirectory?.lastPathComponent ?? "nil")\"},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"A\"}\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry.data(using: .utf8)!); handle.closeFile() } else { FileManager.default.createFile(atPath: logPath, contents: logEntry.data(using: .utf8), attributes: nil) }
+        // #endregion
+        
         // Only refresh and select if we haven't already selected the meeting
         // (new recordings set selectedMeeting earlier to preserve segment data)
         if selectedMeeting == nil {
@@ -929,6 +949,11 @@ final class MuesliViewModel {
                 selectedMeeting = meetingHistory.first { $0.directory == directory }
             }
         }
+        
+        // #region agent log
+        let logEntry2 = "{\"location\":\"MuesliViewModel.swift:stopRecordingAsync:after\",\"message\":\"After setting selectedMeeting\",\"data\":{\"selectedMeetingAfter\":\"\(selectedMeeting?.title ?? "nil")\",\"historyCount\":\(meetingHistory.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"A\"}\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry2.data(using: .utf8)!); handle.closeFile() }
+        // #endregion
         
         // Clear activeSession
         activeSession = nil

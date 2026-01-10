@@ -10,8 +10,8 @@ final class MeetingHistoryService {
     
     private static var baseOutputPath: URL {
         let fileManager = FileManager.default
-        let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return documentsPath.appendingPathComponent("Meeting Transcripts", isDirectory: true)
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Muesli/Recordings", isDirectory: true)
     }
     
     // MARK: - Discovery

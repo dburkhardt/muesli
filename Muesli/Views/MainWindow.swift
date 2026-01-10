@@ -426,7 +426,7 @@ struct MainWindow: View {
     let session = RecordingSession()
     session.state = .completed
     session.meetingTitle = "Team Standup"
-    session.outputDirectory = URL(fileURLWithPath: "/Users/test/Documents/Meeting Transcripts/2026-01-05_14-00_Team-Standup")
+    session.outputDirectory = URL(fileURLWithPath: "/Users/test/Library/Application Support/Muesli/Recordings/2026-01-05_14-00_Team-Standup")
     return MainWindow(viewModel: vm, session: session)
         .frame(width: 500, height: 600)
 }
