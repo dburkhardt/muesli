@@ -38,6 +38,9 @@ final class RecordingSession: Identifiable {
     var outputDirectory: URL?
     var selectedApp: MeetingAppDetector.DetectedApp?
     
+    /// Whether the recording is currently initializing (loading model, etc.)
+    var isInitializing: Bool = false
+    
     /// Description of the audio source for UI display
     var audioSourceDescription: String {
         selectedApp?.name ?? "All System Audio"
@@ -87,6 +90,20 @@ final class RecordingSession: Identifiable {
     
     /// Reason for interruption (for user display)
     var interruptionReason: String?
+    
+    // MARK: - Resume State
+    
+    /// Whether this session can be resumed after stopping
+    var canResume: Bool = false
+    
+    /// Number of times recording has been resumed (0 = original recording, 1+ = resumed)
+    var resumeCount: Int = 0
+    
+    /// Current segment number (1 = first segment, 2+ = resumed segments)
+    var segmentNumber: Int = 1
+    
+    /// Reference to the MeetingHistoryItem this session belongs to (for resumed recordings)
+    var parentMeeting: MeetingHistoryItem?
     
     // MARK: - Audio Level State
     

@@ -5,33 +5,45 @@ import SwiftUI
 /// Animated indicator showing that a recording is in progress
 struct RecordingIndicator: View {
     let elapsedTime: String
+    var isInitializing: Bool = false
     @State private var isPulsing = false
     
     var body: some View {
         HStack(spacing: 6) {
-            // Pulsing red dot
-            Circle()
-                .fill(.red)
-                .frame(width: 8, height: 8)
-                .opacity(isPulsing ? 0.5 : 1.0)
-                .scaleEffect(isPulsing ? 0.9 : 1.0)
-                .animation(
-                    .easeInOut(duration: 0.8)
-                    .repeatForever(autoreverses: true),
-                    value: isPulsing
-                )
-            
-            Text("REC")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.red)
-            
-            Text(elapsedTime)
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .foregroundStyle(.secondary)
+            if isInitializing {
+                // Loading spinner when initializing
+                ProgressView()
+                    .scaleEffect(0.6)
+                    .frame(width: 12, height: 12)
+                
+                Text("Loading model...")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                // Pulsing red dot
+                Circle()
+                    .fill(.red)
+                    .frame(width: 8, height: 8)
+                    .opacity(isPulsing ? 0.5 : 1.0)
+                    .scaleEffect(isPulsing ? 0.9 : 1.0)
+                    .animation(
+                        .easeInOut(duration: 0.8)
+                        .repeatForever(autoreverses: true),
+                        value: isPulsing
+                    )
+                
+                Text("REC")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.red)
+                
+                Text(elapsedTime)
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.red.opacity(0.1))
+        .background(isInitializing ? Color.blue.opacity(0.1) : Color.red.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .onAppear {
             isPulsing = true

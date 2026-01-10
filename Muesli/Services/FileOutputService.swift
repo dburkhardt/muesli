@@ -99,8 +99,9 @@ final class FileOutputService: @unchecked Sendable {
     // MARK: - Public API
     
     /// Start writing audio to a new file
+    /// - Parameter segmentNumber: Optional segment number (1 = first segment, 2+ = resumed segments). Defaults to 1.
     /// - Returns: The URL of the output directory
-    func startWriting() throws -> URL {
+    func startWriting(segmentNumber: Int = 1) throws -> URL {
         lock.lock()
         defer { lock.unlock() }
         
@@ -115,8 +116,12 @@ final class FileOutputService: @unchecked Sendable {
         do {
             // Create TWO separate writers - CAF doesn't support multiple audio tracks
             
+            // Determine filenames based on segment number
+            let systemFilename = segmentNumber == 1 ? "audio.caf" : "audio_\(segmentNumber).caf"
+            let micFilename = segmentNumber == 1 ? "microphone.caf" : "microphone_\(segmentNumber).caf"
+            
             // Writer 1: System audio (48kHz, stereo, Float32)
-            let systemURL = directory.appendingPathComponent("audio.caf")
+            let systemURL = directory.appendingPathComponent(systemFilename)
             // Delete existing file if present (AVAssetWriter fails if file exists)
             try? FileManager.default.removeItem(at: systemURL)
             let sysWriter = try AVAssetWriter(outputURL: systemURL, fileType: .caf)
@@ -141,7 +146,7 @@ final class FileOutputService: @unchecked Sendable {
             }
             
             // Writer 2: Microphone audio (16kHz, stereo, Int16 - as provided by ScreenCaptureKit)
-            let micURL = directory.appendingPathComponent("microphone.caf")
+            let micURL = directory.appendingPathComponent(micFilename)
             // Delete existing file if present
             try? FileManager.default.removeItem(at: micURL)
             let micWr = try AVAssetWriter(outputURL: micURL, fileType: .caf)
@@ -297,6 +302,102 @@ final class FileOutputService: @unchecked Sendable {
             stopWriting { result in
                 continuation.resume(with: result)
             }
+        }
+    }
+    
+    /// Resume writing to an existing directory with a new segment
+    /// - Parameters:
+    ///   - directory: The existing output directory
+    ///   - segmentNumber: The segment number (2, 3, 4, etc.)
+    /// - Returns: The URL of the output directory
+    func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL {
+        guard segmentNumber > 1 else {
+            throw OutputError.notWriting
+        }
+        
+        // Verify directory exists
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            throw OutputError.directoryCreationFailed
+        }
+        
+        lock.lock()
+        defer { lock.unlock() }
+        
+        guard !_isWriting else {
+            throw OutputError.alreadyWriting
+        }
+        
+        self.outputDirectory = directory
+        
+        do {
+            // Determine filenames based on segment number
+            let systemFilename = "audio_\(segmentNumber).caf"
+            let micFilename = "microphone_\(segmentNumber).caf"
+            
+            // Writer 1: System audio (48kHz, stereo, Float32)
+            let systemURL = directory.appendingPathComponent(systemFilename)
+            // Delete existing file if present (AVAssetWriter fails if file exists)
+            try? FileManager.default.removeItem(at: systemURL)
+            let sysWriter = try AVAssetWriter(outputURL: systemURL, fileType: .caf)
+            
+            let systemSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 48000.0,
+                AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ]
+            let sysInput = AVAssetWriterInput(mediaType: .audio, outputSettings: systemSettings)
+            sysInput.expectsMediaDataInRealTime = true
+            sysWriter.add(sysInput)
+            sysWriter.startWriting()
+            
+            // Check system writer started successfully
+            guard sysWriter.status == .writing else {
+                throw OutputError.assetWriterNotReady
+            }
+            
+            // Writer 2: Microphone audio (16kHz, stereo, Int16 - as provided by ScreenCaptureKit)
+            let micURL = directory.appendingPathComponent(micFilename)
+            // Delete existing file if present
+            try? FileManager.default.removeItem(at: micURL)
+            let micWr = try AVAssetWriter(outputURL: micURL, fileType: .caf)
+            
+            let micSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 16000.0,
+                AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ]
+            let micIn = AVAssetWriterInput(mediaType: .audio, outputSettings: micSettings)
+            micIn.expectsMediaDataInRealTime = true
+            micWr.add(micIn)
+            micWr.startWriting()
+            
+            // Check mic writer started successfully
+            guard micWr.status == .writing else {
+                throw OutputError.assetWriterNotReady
+            }
+            
+            self.systemWriter = sysWriter
+            self.systemAudioInput = sysInput
+            self.systemSessionStarted = false
+            
+            self.micWriter = micWr
+            self.microphoneInput = micIn
+            self.micSessionStarted = false
+            
+            self._isWriting = true
+            
+            return directory
+            
+        } catch {
+            throw OutputError.assetWriterCreationFailed(underlying: error)
         }
     }
     

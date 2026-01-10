@@ -32,6 +32,16 @@ struct MainWindowView: View {
                 set: { viewModel.showStartRecordingSheet = $0 }
             ))
         }
+        .alert("Unable to Load Transcription Model", isPresented: $viewModel.showModelErrorAlert) {
+            Button("Recording Only") {
+                viewModel.startRecordingWithoutTranscription()
+            }
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelRecordingDueToModelError()
+            }
+        } message: {
+            Text("The transcription model is corrupted or incomplete. You can continue recording audio only (no transcription), or cancel and download a working model in Preferences.")
+        }
     }
     
     // MARK: - Unified View

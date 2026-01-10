@@ -1,6 +1,6 @@
 import Foundation
 import CoreMedia
-import CoreAudio
+import AVFoundation
 
 // MARK: - Helper Extensions
 
@@ -63,34 +63,35 @@ extension EchoCancellationService {
     }
     
     /// Create CMSampleBuffer from Float32 samples
-    /// Converts from 48kHz Float32 mono to 16kHz Int16 stereo
+    /// Converts from 48kHz Float32 mono to 16kHz Int16 stereo for file output
     /// - Parameters:
-    ///   - samples: Float32 mono samples at sourceSampleRate
-    ///   - timestamp: Presentation timestamp for the audio
+    ///   - samples: Float32 mono samples at source sample rate
+    ///   - timestamp: Presentation timestamp for the buffer
     ///   - sourceSampleRate: Source sample rate (default: 48000)
     ///   - targetSampleRate: Target sample rate (default: 16000)
-    /// - Returns: CMSampleBuffer with 16kHz Int16 stereo audio, or nil if conversion fails
+    /// - Returns: CMSampleBuffer in 16kHz Int16 stereo format, or nil if conversion fails
     static func createSampleBuffer(
         from samples: [Float],
         timestamp: CMTime,
         sourceSampleRate: Int = 48000,
         targetSampleRate: Int = 16000
     ) -> CMSampleBuffer? {
-        // 1. Resample from 48kHz to 16kHz using existing TranscriptionService utility
-        guard let resampled = TranscriptionService.resampleSamples(
-            samples: samples,
-            sourceSampleRate: Double(sourceSampleRate),
-            sourceChannels: 1,
-            targetSampleRate: Double(targetSampleRate),
-            targetChannels: 1,
-            isInterleaved: false
-        ) else {
-            return nil
-        }
+        guard !samples.isEmpty else { return nil }
         
-        // 2. Convert mono to stereo (duplicate channel) and Float32 to Int16
-        let stereo: [Int16] = resampled.flatMap { sample in
-            let int16Value = Int16(max(-32768, min(32767, sample * 32767.0)))
+        // 1. Resample from sourceSampleRate to targetSampleRate
+        let resampled = resampleFloat32(
+            samples: samples,
+            sourceSampleRate: sourceSampleRate,
+            targetSampleRate: targetSampleRate
+        )
+        
+        guard !resampled.isEmpty else { return nil }
+        
+        // 2. Convert mono Float32 to stereo Int16 (duplicate channel)
+        let stereoInt16: [Int16] = resampled.flatMap { sample in
+            // Clamp and convert to Int16
+            let clampedSample = max(-1.0, min(1.0, sample))
+            let int16Value = Int16(clampedSample * 32767.0)
             return [int16Value, int16Value]  // Duplicate for stereo
         }
         
@@ -124,8 +125,8 @@ extension EchoCancellationService {
             return nil
         }
         
-        // 5. Create block buffer
-        let dataSize = stereo.count * MemoryLayout<Int16>.size
+        // 5. Create block buffer with the stereo Int16 data
+        let dataSize = stereoInt16.count * MemoryLayout<Int16>.size
         var blockBuffer: CMBlockBuffer?
         
         status = CMBlockBufferCreateWithMemoryBlock(
@@ -145,23 +146,17 @@ extension EchoCancellationService {
         }
         
         // 6. Copy stereo Int16 data to block buffer
-        var dataPointer: UnsafeMutablePointer<Int8>?
-        var lengthAtOffset: Int = 0
-        status = CMBlockBufferGetDataPointer(
-            blockBuf,
-            atOffset: 0,
-            lengthAtOffsetOut: &lengthAtOffset,
-            totalLengthOut: nil,
-            dataPointerOut: &dataPointer
-        )
-        
-        guard status == noErr, let dataPtr = dataPointer else {
-            return nil
+        status = stereoInt16.withUnsafeBufferPointer { bufferPtr in
+            CMBlockBufferReplaceDataBytes(
+                with: bufferPtr.baseAddress!,
+                blockBuffer: blockBuf,
+                offsetIntoDestination: 0,
+                dataLength: dataSize
+            )
         }
         
-        // Copy stereo Int16 array to block buffer
-        stereo.withUnsafeBytes { bytes in
-            memcpy(dataPtr, bytes.baseAddress!, dataSize)
+        guard status == noErr else {
+            return nil
         }
         
         // 7. Create sample buffer
@@ -173,22 +168,70 @@ extension EchoCancellationService {
             decodeTimeStamp: CMTime.invalid
         )
         
-    status = CMSampleBufferCreate(
-        allocator: nil,
-        dataBuffer: blockBuf,
-        dataReady: true,
-        makeDataReadyCallback: nil,
-        refcon: nil,
-        formatDescription: format,
-        sampleCount: sampleCount,
-        sampleTimingEntryCount: 1,
-        sampleTimingArray: &timing,
-        sampleSizeEntryCount: 0,
-        sampleSizeArray: nil,
-        sampleBufferOut: &sampleBuffer
-    )
+        status = CMSampleBufferCreate(
+            allocator: nil,
+            dataBuffer: blockBuf,
+            dataReady: true,
+            makeDataReadyCallback: nil,
+            refcon: nil,
+            formatDescription: format,
+            sampleCount: sampleCount,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleSizeEntryCount: 0,
+            sampleSizeArray: nil,
+            sampleBufferOut: &sampleBuffer
+        )
         
         return (status == noErr) ? sampleBuffer : nil
+    }
+    
+    /// Simple resampling using linear interpolation (public version)
+    /// - Parameters:
+    ///   - samples: Input samples
+    ///   - sourceSampleRate: Source sample rate
+    ///   - targetSampleRate: Target sample rate
+    /// - Returns: Resampled samples
+    static func resampleFloat32Public(
+        samples: [Float],
+        sourceSampleRate: Int,
+        targetSampleRate: Int
+    ) -> [Float] {
+        resampleFloat32(samples: samples, sourceSampleRate: sourceSampleRate, targetSampleRate: targetSampleRate)
+    }
+    
+    /// Simple resampling using linear interpolation
+    /// - Parameters:
+    ///   - samples: Input samples
+    ///   - sourceSampleRate: Source sample rate
+    ///   - targetSampleRate: Target sample rate
+    /// - Returns: Resampled samples
+    private static func resampleFloat32(
+        samples: [Float],
+        sourceSampleRate: Int,
+        targetSampleRate: Int
+    ) -> [Float] {
+        guard sourceSampleRate != targetSampleRate else { return samples }
+        guard !samples.isEmpty else { return [] }
+        
+        let ratio = Double(sourceSampleRate) / Double(targetSampleRate)
+        let outputCount = Int(Double(samples.count) / ratio)
+        
+        guard outputCount > 0 else { return [] }
+        
+        var output = [Float](repeating: 0, count: outputCount)
+        
+        for i in 0..<outputCount {
+            let sourceIndex = Double(i) * ratio
+            let lowerIndex = Int(sourceIndex)
+            let upperIndex = min(lowerIndex + 1, samples.count - 1)
+            let fraction = Float(sourceIndex - Double(lowerIndex))
+            
+            // Linear interpolation
+            output[i] = samples[lowerIndex] * (1.0 - fraction) + samples[upperIndex] * fraction
+        }
+        
+        return output
     }
 }
 
@@ -383,27 +426,19 @@ final class EchoCancellationService: @unchecked Sendable {
     private func findMatchingSystemAudio(for micTimestamp: CMTime) -> [Float]? {
         // Find system audio buffer closest to microphone timestamp
         // Account for potential delay between system audio and microphone pickup
-        // Echo can only come from past audio, so only consider buffers where buffer.timestamp <= micTimestamp
         
         guard !systemAudioBuffers.isEmpty else { return nil }
-        
-        // Filter to only past/present buffers (echo can't come from future)
-        let validBuffers = systemAudioBuffers.filter { buffer in
-            CMTimeCompare(buffer.timestamp, micTimestamp) <= 0
-        }
-        
-        guard !validBuffers.isEmpty else { return nil }
         
         // Find buffer with timestamp closest to microphone timestamp
         var bestMatch: TimestampedBuffer?
         var minTimeDiff = CMTime.positiveInfinity
         
-        for buffer in validBuffers {
+        for buffer in systemAudioBuffers {
             let timeDiff = CMTimeSubtract(micTimestamp, buffer.timestamp)
-            // timeDiff is now always >= 0, so no need for absolute value
+            let absTimeDiff = CMTimeAbsoluteValue(timeDiff)
             
-            if CMTimeCompare(timeDiff, minTimeDiff) < 0 {
-                minTimeDiff = timeDiff
+            if CMTimeCompare(absTimeDiff, minTimeDiff) < 0 {
+                minTimeDiff = absTimeDiff
                 bestMatch = buffer
             }
         }

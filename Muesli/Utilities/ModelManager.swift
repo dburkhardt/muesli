@@ -140,6 +140,66 @@ final class ModelManager: @unchecked Sendable {
         downloadedModels.contains(model)
     }
     
+    /// Validate that a model has all required files (not just config.json)
+    /// Returns true if the model is complete and usable
+    func validateModel(_ model: ModelSize) -> Bool {
+        guard let modelPath = pathForModel(model) else { return false }
+        
+        let fm = FileManager.default
+        
+        // Check for required CoreML model files
+        let audioEncoderPath = modelPath.appendingPathComponent("AudioEncoder.mlmodelc")
+        let textDecoderPath = modelPath.appendingPathComponent("TextDecoder.mlmodelc")
+        
+        // AudioEncoder must exist with weights
+        guard fm.fileExists(atPath: audioEncoderPath.path) else { return false }
+        let audioWeightsPath = audioEncoderPath.appendingPathComponent("weights/weight.bin")
+        guard fm.fileExists(atPath: audioWeightsPath.path) else { return false }
+        
+        // TextDecoder must exist with weights
+        guard fm.fileExists(atPath: textDecoderPath.path) else { return false }
+        let textWeightsPath = textDecoderPath.appendingPathComponent("weights/weight.bin")
+        guard fm.fileExists(atPath: textWeightsPath.path) else { return false }
+        
+        return true
+    }
+    
+    /// Get the first valid (complete) model from downloaded models
+    /// Prefers the currently active model, then falls back to others
+    func getFirstValidModel() -> ModelSize? {
+        // Try active model first
+        if let active = activeModel, validateModel(active) {
+            return active
+        }
+        
+        // Try other downloaded models (prefer larger models)
+        for model in ModelSize.allCases.reversed() {
+            if downloadedModels.contains(model) && validateModel(model) {
+                return model
+            }
+        }
+        
+        return nil
+    }
+    
+    /// Mark a model as corrupted and remove from downloaded set
+    func markModelCorrupted(_ model: ModelSize) {
+        downloadedModels.remove(model)
+        downloadStates[model] = .failed("Model is corrupted or incomplete")
+        
+        // If this was active, try to switch
+        if activeModel == model {
+            if let valid = getFirstValidModel() {
+                setActiveModel(valid)
+            } else {
+                activeModel = nil
+                UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+            }
+        }
+        
+        saveDownloadedModels()
+    }
+    
     /// Get download state for a specific model
     func downloadState(for model: ModelSize) -> DownloadState {
         downloadStates[model] ?? .idle
