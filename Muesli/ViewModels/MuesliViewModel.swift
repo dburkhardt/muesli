@@ -178,6 +178,14 @@ final class MuesliViewModel {
     /// Cancellation flag for refinement
     private var refinementCancelled: Bool = false
     
+    // MARK: - Model Error Alert
+    
+    /// Whether to show the model error alert
+    var showModelErrorAlert: Bool = false
+    
+    /// Session waiting for user response to model error
+    var sessionPendingModelDecision: RecordingSession?
+    
     // MARK: - Preferences
     
     private static let outputDirectoryKey = "outputDirectory"
@@ -510,6 +518,13 @@ final class MuesliViewModel {
         activeSession = session
         isMicrophoneMuted = session.isMicrophoneMuted
         
+        // Mark as initializing (loading model)
+        session.isInitializing = true
+        
+        // Clear selectedMeeting so UI shows the new recording, not an old meeting
+        selectedMeeting = nil
+        selectedMeetingIDs.removeAll()
+        
         Task {
             await startRecordingAsync(for: session)
         }
@@ -517,24 +532,31 @@ final class MuesliViewModel {
     
     private func startRecordingAsync(for session: RecordingSession) async {
         do {
-            // Validate model path BEFORE attempting initialization (fail fast)
-            guard let validModelPath = modelPath else {
-                session.showErrorMessage("No transcription model configured. Please download a model first.")
-                session.state = .idle
-                activeSession = nil
-        resetMuteState()  // Clear since setup failed
-                resetMuteState()
-                return
+            // Validate model - check if active model is complete and usable
+            var validModelPath: URL?
+            
+            if let activeModel = modelManager.activeModel {
+                if modelManager.validateModel(activeModel) {
+                    validModelPath = modelManager.pathForModel(activeModel)
+                } else {
+                    modelManager.markModelCorrupted(activeModel)
+                    
+                    // Try to find a fallback model
+                    if let fallback = modelManager.getFirstValidModel() {
+                        modelManager.setActiveModel(fallback)
+                        validModelPath = modelManager.pathForModel(fallback)
+                    }
+                }
             }
             
-            // Check that the model directory and config.json exist
-            let configPath = validModelPath.appendingPathComponent("config.json")
-            guard FileManager.default.fileExists(atPath: configPath.path) else {
-                session.showErrorMessage("Transcription model is incomplete or corrupted. Please re-download the model.")
+            // If no valid model, show alert
+            guard let validModelPath = validModelPath else {
+                session.isInitializing = false
                 session.state = .idle
                 activeSession = nil
-        resetMuteState()  // Clear since setup failed
                 resetMuteState()
+                sessionPendingModelDecision = session
+                showModelErrorAlert = true
                 return
             }
             
@@ -569,6 +591,7 @@ final class MuesliViewModel {
             }
             
             // Update session state on success
+            session.isInitializing = false
             session.state = .recording
             session.recordingStartTime = Date()
             session.transcriptText = ""
@@ -590,6 +613,7 @@ final class MuesliViewModel {
             default:
                 session.showErrorMessage("Failed to start recording: \(error.localizedDescription)")
             }
+            session.isInitializing = false
             session.state = .idle
             activeSession = nil
         resetMuteState()  // Clear since setup failed
@@ -600,14 +624,48 @@ final class MuesliViewModel {
         } catch {
             let errorMsg = error.localizedDescription
             
+            // Check if this is a model loading error (CoreML)
+            let isCoreMLError = errorMsg.contains("CoreML") || errorMsg.contains("mlmodelc") || errorMsg.contains("weight.bin") || errorMsg.contains("MIL model")
+            
+            if isCoreMLError {
+                // Mark current model as corrupted
+                if let currentModel = modelManager.activeModel {
+                    modelManager.markModelCorrupted(currentModel)
+                }
+                
+                // Try to find a fallback
+                if let fallback = modelManager.getFirstValidModel() {
+                    modelManager.setActiveModel(fallback)
+                    
+                    // Reset state and retry
+                    isTranscriptionInitialized = false
+                    session.state = .idle
+                    activeSession = nil
+                    resetMuteState()
+                    
+                    // Retry with fallback model
+                    startRecording(for: session)
+                    return
+                } else {
+                    // No fallback available, show alert
+                    session.state = .idle
+                    activeSession = nil
+                    resetMuteState()
+                    sessionPendingModelDecision = session
+                    showModelErrorAlert = true
+                    return
+                }
+            }
+            
             if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
                 session.showErrorMessage("Please grant Screen Recording permission and try again.")
             } else {
                 session.showErrorMessage("Failed to start recording: \(errorMsg)")
             }
+            session.isInitializing = false
             session.state = .idle
             activeSession = nil
-        resetMuteState()  // Clear since setup failed
+            resetMuteState()
             
             if fileOutputService.isWriting {
                 _ = try? await fileOutputService.stopWriting()
@@ -648,6 +706,24 @@ final class MuesliViewModel {
         Task {
             await discardRecordingAsync(for: session)
         }
+    }
+    
+    // MARK: - Model Error Handling
+    
+    /// Start recording without transcription (audio only)
+    func startRecordingWithoutTranscription() {
+        guard let session = sessionPendingModelDecision else { return }
+        sessionPendingModelDecision = nil
+        showModelErrorAlert = false
+        
+        // For now, just show an error - full recording-only mode would need more work
+        session.showErrorMessage("Recording without transcription is not yet supported. Please download a working model in Preferences.")
+    }
+    
+    /// Cancel recording due to model error
+    func cancelRecordingDueToModelError() {
+        sessionPendingModelDecision = nil
+        showModelErrorAlert = false
     }
     
     private func discardRecordingAsync(for session: RecordingSession) async {
@@ -792,15 +868,18 @@ final class MuesliViewModel {
                     newMeeting.canResume = true  // Mark as resumable
                     meeting = newMeeting
                     
+                    // Select this meeting immediately (before any more refreshes)
+                    selectedMeeting = newMeeting
+                    
                     // Refine this segment if LLM is available
                     if canRefineTranscripts {
                         Task {
-                            await refineSegment(segment, in: meeting)
+                            await refineSegment(segment, in: newMeeting)
                         }
                     }
                     
                     // Save updated transcript with segments
-                    try? saveTranscriptWithSegments(meeting, to: directory)
+                    try? saveTranscriptWithSegments(newMeeting, to: directory)
                 } else {
                     // Fallback: meeting not found (shouldn't happen)
                     session.state = .completed
@@ -821,19 +900,18 @@ final class MuesliViewModel {
         session.state = .completed
         session.canResume = true
         
-        // Refresh meeting history
-        refreshMeetingHistory()
-        
-        // Select the meeting
-        if let directory = session.outputDirectory {
-            selectedMeeting = meetingHistory.first { $0.directory == directory }
-            // Clear activeSession after selecting the meeting
-            activeSession = nil
-            resetMuteState()
-        } else {
-            activeSession = nil
-            resetMuteState()
+        // Only refresh and select if we haven't already selected the meeting
+        // (new recordings set selectedMeeting earlier to preserve segment data)
+        if selectedMeeting == nil {
+            refreshMeetingHistory()
+            if let directory = session.outputDirectory {
+                selectedMeeting = meetingHistory.first { $0.directory == directory }
+            }
         }
+        
+        // Clear activeSession
+        activeSession = nil
+        resetMuteState()
     }
     
     // MARK: - Capture Interruption Handling
@@ -1295,6 +1373,9 @@ final class MuesliViewModel {
                 meeting.transcriptBlocks = refinedBlocks
                 meeting.isRefined = true
                 
+                // Default to showing refined view
+                showOriginalTranscriptForMeeting[meeting.id.uuidString] = false
+                
                 // Also update plain text version
                 meeting.transcript = refinedBlocks.map { block in
                     "[\(block.speaker.rawValue)] \(block.text)"
@@ -1488,6 +1569,7 @@ final class MuesliViewModel {
             try await audioCaptureService.startCapture()
             
             // Update session state on success
+            session.isInitializing = false
             session.state = .recording
             session.recordingStartTime = Date()
             session.transcriptText = ""
@@ -1564,6 +1646,9 @@ final class MuesliViewModel {
                 meeting.transcriptSegments[segmentIndex].refinedBlocks = refinedBlocks
                 meeting.transcriptSegments[segmentIndex].isRefined = true
             }
+            
+            // Default to showing refined view after refinement completes
+            meeting.isShowingRefined = true
             
             // Update meeting transcript display
             updateMeetingTranscriptDisplay(meeting)

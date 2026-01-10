@@ -38,6 +38,9 @@ final class RecordingSession: Identifiable {
     var outputDirectory: URL?
     var selectedApp: MeetingAppDetector.DetectedApp?
     
+    /// Whether the recording is currently initializing (loading model, etc.)
+    var isInitializing: Bool = false
+    
     /// Description of the audio source for UI display
     var audioSourceDescription: String {
         selectedApp?.name ?? "All System Audio"

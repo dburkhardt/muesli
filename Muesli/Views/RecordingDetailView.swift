@@ -4,14 +4,32 @@ import SwiftUI
 struct RecordingDetailView: View {
     @Bindable var viewModel: MuesliViewModel
     
+    /// Check if active session is a resumed recording for the selected meeting
+    private var isResumedRecordingForSelectedMeeting: Bool {
+        guard let activeSession = viewModel.activeRecordingSession,
+              let selectedMeeting = viewModel.selectedMeeting,
+              let parentMeeting = activeSession.parentMeeting else {
+            return false
+        }
+        return parentMeeting.id == selectedMeeting.id && !activeSession.isCompleted
+    }
+    
     var body: some View {
         Group {
-            if let selectedMeeting = viewModel.selectedMeeting {
-                // User is viewing a past meeting (possibly while recording)
+            if let activeSession = viewModel.activeRecordingSession, !activeSession.isCompleted {
+                if isResumedRecordingForSelectedMeeting {
+                    // Resumed recording for selected meeting - show as active recording
+                    activeRecordingView(session: activeSession)
+                } else if viewModel.selectedMeeting != nil {
+                    // Recording a different meeting while viewing selected one
+                    historicalMeetingViewWithIndicator(meeting: viewModel.selectedMeeting!)
+                } else {
+                    // New recording (no selected meeting)
+                    activeRecordingView(session: activeSession)
+                }
+            } else if let selectedMeeting = viewModel.selectedMeeting {
+                // Not recording, viewing a saved meeting
                 historicalMeetingViewWithIndicator(meeting: selectedMeeting)
-            } else if let activeSession = viewModel.activeRecordingSession, !activeSession.isCompleted {
-                // No selected meeting, show active recording
-                activeRecordingView(session: activeSession)
             } else {
                 emptyDetailView
             }
@@ -74,8 +92,12 @@ struct RecordingDetailView: View {
                 
                 Divider()
                 
-                // Transcript content
-                recordingContentView(session: session)
+                // Transcript content - different view for resumed vs new recordings
+                if let parentMeeting = session.parentMeeting {
+                    resumedRecordingContentView(session: session, meeting: parentMeeting)
+                } else {
+                    recordingContentView(session: session)
+                }
             }
             
             // Floating control bar at bottom
@@ -84,23 +106,149 @@ struct RecordingDetailView: View {
         }
     }
     
+    // MARK: - Resumed Recording Content View
+    
+    /// Content view for resumed recordings - shows existing segments + "Recording resumed" marker + live transcript
+    private func resumedRecordingContentView(session: RecordingSession, meeting: MeetingHistoryItem) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    // Recording started header
+                    if let firstSegment = meeting.transcriptSegments.first {
+                        HStack {
+                            Spacer()
+                            let formatter: DateFormatter = {
+                                let f = DateFormatter()
+                                f.dateFormat = "MMMM d, yyyy 'at' h:mm a"
+                                return f
+                            }()
+                            Text("Recording started: \(formatter.string(from: firstSegment.startTime))")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.tertiary)
+                            Spacer()
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
+                    // Show existing segments from the meeting
+                    ForEach(Array(meeting.transcriptSegments.enumerated()), id: \.element.id) { index, segment in
+                        // Show "Recording resumed" marker for segments after the first
+                        if index > 0 {
+                            HStack {
+                                Spacer()
+                                let formatter: DateFormatter = {
+                                    let f = DateFormatter()
+                                    f.dateStyle = .none
+                                    f.timeStyle = .short
+                                    return f
+                                }()
+                                Text("Recording resumed at \(formatter.string(from: segment.startTime))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.vertical, 8)
+                                Spacer()
+                            }
+                        }
+                        
+                        // Show blocks for this segment (respect current view mode)
+                        let blocksToShow = (meeting.isShowingRefined && segment.isRefined) ?
+                            (segment.refinedBlocks ?? segment.originalBlocks) :
+                            segment.originalBlocks
+                        
+                        ForEach(blocksToShow) { block in
+                            TranscriptBlockView(block: block)
+                        }
+                    }
+                    
+                    // "Recording resumed" marker for the current live recording
+                    HStack {
+                        Spacer()
+                        let formatter: DateFormatter = {
+                            let f = DateFormatter()
+                            f.dateStyle = .none
+                            f.timeStyle = .short
+                            return f
+                        }()
+                        Text("Recording resumed at \(formatter.string(from: session.recordingStartTime ?? Date()))")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                            .padding(.vertical, 8)
+                        Spacer()
+                    }
+                    .id("resumeMarker")
+                    
+                    // Live transcript blocks from current session
+                    if session.transcriptBlocks.isEmpty {
+                        VStack(spacing: 16) {
+                            Image(systemName: "waveform")
+                                .font(.system(size: 32))
+                                .foregroundStyle(.tertiary)
+                            
+                            Text("Listening...")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                        .id("listeningPlaceholder")
+                    } else {
+                        ForEach(session.transcriptBlocks) { block in
+                            TranscriptBlockView(block: block)
+                                .id(block.id)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 100) // Space for floating control bar
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onChange(of: session.transcriptBlocks.count) { _, _ in
+                // Auto-scroll to latest block
+                if let lastBlock = session.transcriptBlocks.last {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(lastBlock.id, anchor: .bottom)
+                    }
+                }
+            }
+            .onAppear {
+                // Scroll to the resume marker when view appears
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation {
+                        proxy.scrollTo("resumeMarker", anchor: .top)
+                    }
+                }
+            }
+        }
+    }
+    
     // MARK: - Header
     
     private func headerView(session: RecordingSession) -> some View {
         HStack(spacing: 12) {
-            // Title text field
-            TextField("Meeting Title", text: Binding(
-                get: { session.meetingTitle },
-                set: { session.meetingTitle = $0 }
-            ))
-            .textFieldStyle(.plain)
-            .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(.primary)
+            // Title text field - use parent meeting title for resumed recordings
+            if let parentMeeting = session.parentMeeting {
+                TextField("Meeting Title", text: Binding(
+                    get: { parentMeeting.title },
+                    set: { parentMeeting.title = $0 }
+                ))
+                .textFieldStyle(.plain)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.primary)
+            } else {
+                TextField("Meeting Title", text: Binding(
+                    get: { session.meetingTitle },
+                    set: { session.meetingTitle = $0 }
+                ))
+                .textFieldStyle(.plain)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.primary)
+            }
             
             Spacer()
             
-            // Recording indicator
-            RecordingIndicator(elapsedTime: session.elapsedTimeString)
+            // Recording indicator (shows loading state during model init)
+            RecordingIndicator(elapsedTime: session.elapsedTimeString, isInitializing: session.isInitializing)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -437,6 +585,7 @@ struct RecordingDetailView: View {
                let activeSession = viewModel.activeRecordingSession {
                 FloatingRecordingIndicator(
                     elapsedTime: activeSession.elapsedTimeString,
+                    isInitializing: activeSession.isInitializing,
                     onTap: {
                         viewModel.returnToLiveRecording()
                     }
@@ -592,47 +741,16 @@ struct RecordingDetailView: View {
                 }
             }
             
-            // Floating control pane: Resume controls for resumable meetings, refinement controls otherwise
-            if meeting.canResume {
-                // Show resume control pane for resumable meetings
+            // Floating control pane: Active recording controls or resume/refinement controls
+            if let activeSession = viewModel.activeRecordingSession, !activeSession.isCompleted {
+                // Show recording controls when actively recording (including resumed recordings)
+                floatingControlBar(session: activeSession)
+                    .padding(.bottom, 16)
+            } else {
+                // Show resume control pane for all saved meetings
+                // ResumeControlPane handles: refinement loading, toggle, and resume button
                 ResumeControlPane(viewModel: viewModel, meeting: meeting)
                     .padding(.bottom, 16)
-            } else if viewModel.canRefineTranscripts {
-                // Show refinement control pane for non-resumable meetings
-                let isRefined = meeting.isRefined || meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil
-                let isRefining = viewModel.meetingBeingRefined?.id == meeting.id && viewModel.refinementService.isRefining
-                // Check if refinement will happen (meeting has transcript but hasn't been refined yet)
-                let willRefine = !isRefined && ((meeting.transcriptBlocks != nil && !meeting.transcriptBlocks!.isEmpty) || (meeting.transcript != nil && !meeting.transcript!.isEmpty))
-                
-                Group {
-                    if isRefining || willRefine {
-                        // Show loading indicator while refining OR if refinement will happen
-                        HStack(spacing: 16) {
-                            RefinementLoadingIndicator()
-                        }
-                    } else if isRefined {
-                        // Only show toggle control when refinement is complete
-                        HStack(spacing: 16) {
-                            RefinementToggleControl(
-                                isOn: Binding(
-                                    get: { 
-                                        // Show refined (toggle ON) unless user explicitly wants original
-                                        return !viewModel.showOriginalTranscript(for: meeting)
-                                    },
-                                    set: { _ in viewModel.toggleOriginalTranscript(for: meeting) }
-                                )
-                            )
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background {
-                    Capsule()
-                        .fill(.regularMaterial)
-                        .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
-                }
-                .padding(.bottom, 16)
             }
         }
     }
@@ -678,6 +796,7 @@ struct RecordingDetailView: View {
 /// Allows quick return to the live recording view
 struct FloatingRecordingIndicator: View {
     let elapsedTime: String
+    var isInitializing: Bool = false
     let onTap: () -> Void
     
     @State private var isPulsing = false
@@ -685,26 +804,37 @@ struct FloatingRecordingIndicator: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 8) {
-                // Pulsing red dot
-                Circle()
-                    .fill(.red)
-                    .frame(width: 8, height: 8)
-                    .opacity(isPulsing ? 0.5 : 1.0)
-                    .animation(
-                        .easeInOut(duration: 0.8)
-                        .repeatForever(autoreverses: true),
-                        value: isPulsing
-                    )
-                
-                // Waveform icon
-                Image(systemName: "waveform")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.primary)
-                
-                // Elapsed time
-                Text(elapsedTime)
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
+                if isInitializing {
+                    // Loading spinner when initializing
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 12, height: 12)
+                    
+                    Text("Loading...")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                } else {
+                    // Pulsing red dot
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 8, height: 8)
+                        .opacity(isPulsing ? 0.5 : 1.0)
+                        .animation(
+                            .easeInOut(duration: 0.8)
+                            .repeatForever(autoreverses: true),
+                            value: isPulsing
+                        )
+                    
+                    // Waveform icon
+                    Image(systemName: "waveform")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.primary)
+                    
+                    // Elapsed time
+                    Text(elapsedTime)
+                        .font(.system(size: 12, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)

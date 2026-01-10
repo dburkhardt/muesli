@@ -5,6 +5,7 @@ import MLXLMCommon
 
 /// Service for refining transcripts using LLM
 /// Cleans up transcripts, fixes grammar, improves flow
+@Observable
 @MainActor
 final class TranscriptRefinementService {
     
@@ -271,6 +272,18 @@ final class TranscriptRefinementService {
             
             // Combine batch text for single LLM call
             let batchText = batch.map { $0.1.text }.joined(separator: " ")
+            let trimmedBatchText = batchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Skip LLM call if batch has no meaningful content (empty or very short)
+            // Short text (< 10 chars) often produces LLM hallucinations like "no transcript provided"
+            if trimmedBatchText.isEmpty || trimmedBatchText.count < 10 {
+                // Return original blocks unchanged
+                for (originalIndex, originalBlock) in batch {
+                    refinedBlocks.append((originalIndex, originalBlock))
+                }
+                continue
+            }
+            
             let originalBlocks = batch.map { $0.1 }
             
             // Refine the batch
