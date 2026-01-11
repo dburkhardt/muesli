@@ -129,12 +129,14 @@ final class PreferencesManager {
     
     // MARK: - Initialization
 
-    init() {
+    init(skipMigration: Bool = false) {
         // Load persisted echo cancellation state
         _isEchoCancellationEnabled = UserDefaults.standard.bool(forKey: Self.echoCancellationEnabledKey)
 
-        // Perform storage migration if needed
-        migrateStorageLocationIfNeeded()
+        // Perform storage migration if needed (skip in tests)
+        if !skipMigration {
+            migrateStorageLocationIfNeeded()
+        }
     }
 
     // MARK: - Storage Migration

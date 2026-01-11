@@ -51,10 +51,10 @@ final class MuesliViewModel {
     
     // MARK: - Model Management (shared instance)
     
-    let modelManager = ModelManager()
+    let modelManager: ModelManager
     
     /// LLM Manager for transcript stitching (optional enhancement)
-    let llmManager = LLMManager()
+    let llmManager: LLMManager
     
     /// Transcript refinement service for post-meeting cleanup
     private(set) var refinementService: TranscriptRefinementService!
@@ -306,6 +306,10 @@ final class MuesliViewModel {
         refinementCoordinator: RefinementCoordinator? = nil,
         skipInitialLoad: Bool = false
     ) {
+        // Initialize managers (skipScan prevents Documents folder prompt in tests)
+        self.modelManager = ModelManager(skipScan: skipInitialLoad)
+        self.llmManager = LLMManager(skipScan: skipInitialLoad)
+        
         self.preferencesManager = preferencesManager
         self.historyManager = historyManager ?? MeetingHistoryManager(skipInitialLoad: skipInitialLoad)
         
@@ -1354,7 +1358,7 @@ final class MuesliViewModel {
         await refinementCoordinator.refineSegment(segment, in: meeting)
         
         // Save updated transcript to disk after refinement
-        try? saveTranscriptWithSegments(meeting, to: meeting.directory)
+            try? saveTranscriptWithSegments(meeting, to: meeting.directory)
     }
     
     /// Update meeting's transcript display from segments (delegates to refinementCoordinator)

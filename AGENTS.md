@@ -60,7 +60,7 @@ When developing features in parallel using git worktrees, each **branch** must h
 **Key concepts:**
 - **Branches** = persistent feature work with stable bundle IDs
 - **Worktrees** = ephemeral agent workspaces (directories come and go)
-- **Bundle IDs** = follow branch names across agent sessions
+- **Bundle IDs** = follow branch names across agent sessions (shortened to ~25 chars for readability)
 - **Git safety** = same branch can't exist in multiple worktrees (prevents conflicts)
 
 ### Why This Is Required
@@ -119,11 +119,19 @@ git worktree add -b <branch-name> <path>
 cd <path>
 
 # Step 3: Configure bundle ID based on branch name
-# Get sanitized branch name (slashes → dashes)
-BRANCH_SUFFIX=$(git branch --show-current | sed 's/\//-/g')
-echo "Branch: $(git branch --show-current)"
+# Get sanitized branch name (slashes → dashes, shortened to ~25 chars)
+BRANCH_NAME=$(git branch --show-current)
+BRANCH_SUFFIX=$(echo $BRANCH_NAME | sed 's/\//-/g' | cut -d'-' -f1-3 | cut -c1-25)
+echo "Branch: $BRANCH_NAME"
 echo "Bundle ID suffix: $BRANCH_SUFFIX"
 ```
+
+**Note**: Bundle ID suffixes are shortened to 2-3 words or ~25 characters for readability. Examples:
+- `feature/recording-first-architecture` → `feature-recording-first` or `feature-recording`
+- `refactor/viewmodel-god-object` → `refactor-viewmodel`
+- `bugfix/audio-sync-issue` → `bugfix-audio-sync`
+
+The suffix just needs to be identifiable across your active branches.
 
 **Step 4: Update `Muesli.xcodeproj/project.pbxproj`**
 
@@ -181,7 +189,7 @@ When working on the `main` branch:
 
 ### Build Commands for Branches
 
-The build command varies based on your branch name. Replace `<branch-suffix>` with your sanitized branch name (slashes converted to dashes).
+The build command varies based on your branch name. Replace `<branch-suffix>` with your shortened, sanitized branch name.
 
 **Branch-specific build**:
 ```bash
@@ -192,14 +200,14 @@ killall Muesli-<branch-suffix> 2>/dev/null; xcodebuild -project Muesli.xcodeproj
 **Examples**:
 
 ```bash
-# Example: feature-transcription branch
+# Example: feature-transcription branch (shortened from feature/transcription-improvements)
 killall Muesli-feature-transcription 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-feature-transcription.app
 
-# Example: bugfix-audio-sync branch
-killall Muesli-bugfix-audio-sync 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-bugfix-audio-sync.app
+# Example: bugfix-audio branch (shortened from bugfix/audio-sync-issue)
+killall Muesli-bugfix-audio 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-bugfix-audio.app
 
-# Example: feature/llm-refinement branch (slashes become dashes)
-killall Muesli-feature-llm-refinement 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-feature-llm-refinement.app
+# Example: refactor-viewmodel branch (shortened from refactor/viewmodel-god-object)
+killall Muesli-refactor-viewmodel 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-refactor-viewmodel.app
 
 # Example: main branch (no suffix)
 killall Muesli 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
@@ -208,13 +216,13 @@ killall Muesli 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli 
 ### Best Practices for Branch-Based Development
 
 - **Branch naming**: Use descriptive names that indicate purpose (`feature-transcription`, `bugfix-audio-sync`, `refactor-viewmodel`)
-- **Bundle ID follows branch**: Bundle ID configuration is part of the branch, not the worktree directory
+- **Bundle ID follows branch**: Bundle ID configuration is part of the branch, shortened to 2-3 words or ~25 chars for readability
 - **Check out existing branches**: Before creating a new branch, check if someone already started work on it (`git branch -r | grep feature-xyz`)
 - **main stays clean**: Never commit bundle ID changes to main branch (always `com.muesli.app`)
 - **Merge cleanup**: After merging feature branch to main, delete the feature branch. Bundle ID config goes with it.
 - **Push frequently**: Other agents can check out your branch in a new worktree and continue your work
 - **One branch = one worktree**: Git enforces this constraint (safety feature, not limitation)
-- **Branch name sanitization**: Slashes become dashes (`feature/xyz` → `com.muesli.app.feature-xyz`)
+- **Branch name sanitization**: Slashes become dashes, shortened (`feature/xyz-long-name` → `feature-xyz`)
 - **Worktree monitoring**: Use `git worktree list` to see all active worktrees
 - **Remote branch tracking**: Use `git push -u origin <branch>` to set upstream tracking on first push
 

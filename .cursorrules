@@ -9,9 +9,10 @@ BRANCH-BASED DEVELOPMENT (when starting work in a new worktree):
 - **BEFORE building**: Verify branch and bundle ID alignment
   1. Get current branch: `git branch --show-current`
   2. Confirm with user: "Currently on branch '{branch}'. Is this correct?"
-  3. Check bundle ID matches branch (after sanitization):
+  3. Check bundle ID matches branch (shortened, sanitized):
      - main branch → must be `com.muesli.app` (no suffix)
-     - Other branches → must be `com.muesli.app.<branch-suffix>` (slashes → dashes: feature/xyz → feature-xyz)
+     - Other branches → must be `com.muesli.app.<branch-suffix>` (slashes → dashes, shortened to 2-3 words or ~25 chars)
+     - Examples: feature/recording-first-architecture → feature-recording or feature-recording-first
   4. If mismatch detected:
      - Confirm branch is correct with user
      - Reconfigure bundle ID to match branch name (see AGENTS.md "Setting Up a Worktree")
@@ -20,7 +21,7 @@ BRANCH-BASED DEVELOPMENT (when starting work in a new worktree):
   5. If bundle ID is unconfigured (com.muesli.app on non-main branch):
      - This is a NEW branch - configure bundle ID following AGENTS.md guidelines
      - Commit and push configuration before making other changes
-- **Branch name sanitization**: Replace `/` with `-` (feature/xyz → feature-xyz)
+- **Branch name sanitization**: Replace `/` with `-`, shorten to 2-3 words or ~25 chars (e.g., refactor/viewmodel-god-object → refactor-viewmodel)
 - **Never build without verification**: Prevents wrong app versions and conflicts
 - **Git safety**: Same branch can't exist in multiple worktrees (Git prevents this by design)
 - **Bundle ID lifecycle**: Bundle ID changes stay in feature branches only, never merge to main

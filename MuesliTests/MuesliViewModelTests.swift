@@ -1398,7 +1398,8 @@ final class MuesliViewModelTests: XCTestCase {
         // Clear any persisted output directory to test default behavior
         UserDefaults.standard.removeObject(forKey: "outputDirectory")
         
-        let prefs = PreferencesManager()
+        // Skip migration to test default behavior
+        let prefs = PreferencesManager(skipMigration: true)
         
         // Default should be in Application Support/Muesli/Recordings
         XCTAssertTrue(prefs.outputDirectory.path.contains("Muesli"), "Expected path to contain 'Muesli', got: \(prefs.outputDirectory.path)")

@@ -121,26 +121,32 @@ final class LLMManager {
     }
     
     /// Hub API for downloading models
-    private let hubApi = HubApi()
+    /// Lazy to avoid triggering Hugging Face cache access during initialization
+    /// (which prompts for Documents folder access on macOS)
+    private lazy var hubApi = HubApi()
     
     // MARK: - Initialization
     
-    init() {
+    /// Initialize LLM Manager
+    /// - Parameter skipScan: If true, skips scanning for downloaded models (for testing, avoids Hub cache access)
+    init(skipScan: Bool = false) {
         // Initialize all models as idle
         for model in LLMModel.allCases {
             downloadStates[model] = .idle
         }
         
-        // Scan for existing downloaded models
-        scanForDownloadedModels()
-        
-        // Load saved active model preference
-        if let savedModel = UserDefaults.standard.string(forKey: Self.activeModelKey),
-           let model = LLMModel(rawValue: savedModel),
-           downloadedModels.contains(model) {
-            activeModel = model
-        } else if let firstDownloaded = downloadedModels.first {
-            activeModel = firstDownloaded
+        // Scan for existing downloaded models (skip in tests to avoid Documents prompt)
+        if !skipScan {
+            scanForDownloadedModels()
+            
+            // Load saved active model preference
+            if let savedModel = UserDefaults.standard.string(forKey: Self.activeModelKey),
+               let model = LLMModel(rawValue: savedModel),
+               downloadedModels.contains(model) {
+                activeModel = model
+            } else if let firstDownloaded = downloadedModels.first {
+                activeModel = firstDownloaded
+            }
         }
     }
     
