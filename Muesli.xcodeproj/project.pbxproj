@@ -731,7 +731,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Muesli-vmr.app/Contents/MacOS/Muesli-vmr";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Muesli-refactor-viewmodel.app/Contents/MacOS/Muesli-refactor-viewmodel";
 			};
 			name = Debug;
 		};
@@ -748,7 +748,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Muesli-vmr.app/Contents/MacOS/Muesli-vmr";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Muesli-refactor-viewmodel.app/Contents/MacOS/Muesli-refactor-viewmodel";
 			};
 			name = Release;
 		};
