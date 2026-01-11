@@ -1,0 +1,61 @@
+Merge the `feature/transcript-enhancement` branch into `main`. This branch contains a complete transcript refinement system implementation that's ready for production.
+
+**CRITICAL INSTRUCTION: For ALL merge conflicts, accept the feature branch version (`feature/transcript-enhancement`).**
+
+The feature branch is the source of truth and contains:
+- Complete, tested implementation
+- Cleaned-up worktree-specific values (bundle ID reverted to base `com.muesli.app`)
+- Comprehensive documentation updates
+- All new features (refinement toggle, mute, auto-enable LLM stitching)
+
+**Steps:**
+
+1. Checkout main and pull latest:
+   ```bash
+   git checkout main
+   git pull origin main
+   ```
+
+2. Merge the feature branch:
+   ```bash
+   git merge origin/feature/transcript-enhancement
+   ```
+
+3. For each conflict, accept the feature branch version:
+   - Open conflicted files
+   - Find conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`)
+   - Keep the content between `=======` and `>>>>>>>` (feature branch)
+   - Remove all conflict markers
+
+4. **Most Important Conflict - `project.pbxproj`:**
+   - Main has: `com.muesli.app.lir` / `Muesli-lir` (worktree-specific, wrong)
+   - Feature branch has: `com.muesli.app` / `Muesli` (base, correct)
+   - **Accept feature branch version** - it has the correct base bundle ID
+
+5. Stage and commit:
+   ```bash
+   git add .
+   git commit -m "Merge feature/transcript-enhancement: Add transcript refinement system"
+   ```
+
+6. Verify bundle ID is correct:
+   ```bash
+   grep "PRODUCT_BUNDLE_IDENTIFIER" Muesli.xcodeproj/project.pbxproj | head -2
+   ```
+   Should show `com.muesli.app` (not `.lir` or any suffix)
+
+7. Verify build succeeds:
+   ```bash
+   xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet
+   ```
+
+**Reference:** See `MERGE_GUIDANCE.md` and `AGENT_MESSAGE.md` in the feature branch for detailed conflict analysis.
+
+**What this adds:**
+- Floating refinement toggle control pane (pill-shaped)
+- Automatic transcript refinement after recording stops
+- Loading indicator during refinement
+- Toggle between original/refined transcripts
+- LLM stitching auto-enables when models downloaded
+- Microphone mute functionality
+- Updated documentation
