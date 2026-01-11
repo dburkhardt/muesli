@@ -2,7 +2,6 @@ import Foundation
 import SwiftUI
 import ScreenCaptureKit
 import CoreMedia
-import ServiceManagement
 
 /// Main ViewModel for the Muesli app
 /// Owns app-level state (permissions, detected apps) and services
@@ -10,6 +9,17 @@ import ServiceManagement
 @Observable
 @MainActor
 final class MuesliViewModel {
+    
+    // MARK: - Injected Managers
+    
+    /// Preferences manager (injected, source of truth for preferences)
+    private let preferencesManager: PreferencesManager
+    
+    /// Meeting history manager (injected, source of truth for meeting history)
+    let historyManager: MeetingHistoryManager
+    
+    /// Refinement coordinator (injected, source of truth for refinement state)
+    let refinementCoordinator: RefinementCoordinator
     
     // MARK: - App Detection
     
@@ -72,14 +82,15 @@ final class MuesliViewModel {
         maxDelayMs: 100
     )
     
-    /// Whether echo cancellation is enabled
+    /// Whether echo cancellation is enabled (delegates to PreferencesManager)
     var isEchoCancellationEnabled: Bool {
         get {
-            _isEchoCancellationEnabled
+            preferencesManager.isEchoCancellationEnabled
         }
         set {
+            preferencesManager.isEchoCancellationEnabled = newValue
+            // Also update local cache for audio callback
             _isEchoCancellationEnabled = newValue
-            UserDefaults.standard.set(newValue, forKey: "echoCancellationEnabled")
         }
     }
     
@@ -88,13 +99,13 @@ final class MuesliViewModel {
     var isTranscriptionInitialized: Bool = false
     
     /// Transcription mode: live (real-time) or post-processing (after recording)
+    /// Delegates to PreferencesManager for persistence
     var transcriptionMode: TranscriptionService.TranscriptionMode {
         get {
-            let rawValue = UserDefaults.standard.string(forKey: "transcriptionMode") ?? "live"
-            return TranscriptionService.TranscriptionMode(rawValue: rawValue) ?? .live
+            preferencesManager.transcriptionMode.serviceMode
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: "transcriptionMode")
+            preferencesManager.transcriptionMode = PreferencesManager.TranscriptionMode(from: newValue)
             transcriptionService.setTranscriptionMode(newValue)
         }
     }
@@ -109,28 +120,49 @@ final class MuesliViewModel {
         activeSession
     }
     
-    // MARK: - Meeting History
+    // MARK: - Meeting History (delegating to MeetingHistoryManager)
     
-    /// All discovered meeting recordings
-    var meetingHistory: [MeetingHistoryItem] = []
+    /// All discovered meeting recordings (delegates to historyManager)
+    var meetingHistory: [MeetingHistoryItem] {
+        get { historyManager.meetingHistory }
+        set { historyManager.meetingHistory = newValue }
+    }
     
-    /// Meeting history grouped by date
-    var groupedHistory: [MeetingHistoryGroup] = []
+    /// Meeting history grouped by date (delegates to historyManager)
+    var groupedHistory: [MeetingHistoryGroup] {
+        get { historyManager.groupedHistory }
+        set { historyManager.groupedHistory = newValue }
+    }
     
-    /// Currently selected meeting for viewing
-    var selectedMeeting: MeetingHistoryItem?
+    /// Currently selected meeting for viewing (delegates to historyManager)
+    var selectedMeeting: MeetingHistoryItem? {
+        get { historyManager.selectedMeeting }
+        set { historyManager.selectedMeeting = newValue }
+    }
     
-    /// Set of selected meeting IDs (for multi-select)
-    var selectedMeetingIDs: Set<UUID> = []
+    /// Set of selected meeting IDs (for multi-select) (delegates to historyManager)
+    var selectedMeetingIDs: Set<UUID> {
+        get { historyManager.selectedMeetingIDs }
+        set { historyManager.selectedMeetingIDs = newValue }
+    }
     
-    /// Meeting to show in completed meeting window (when recording is active)
-    var completedMeetingWindowItem: MeetingHistoryItem?
+    /// Meeting to show in completed meeting window (delegates to historyManager)
+    var completedMeetingWindowItem: MeetingHistoryItem? {
+        get { historyManager.completedMeetingWindowItem }
+        set { historyManager.completedMeetingWindowItem = newValue }
+    }
     
-    /// Whether to show delete confirmation dialog
-    var showDeleteConfirmation: Bool = false
+    /// Whether to show delete confirmation dialog (delegates to historyManager)
+    var showDeleteConfirmation: Bool {
+        get { historyManager.showDeleteConfirmation }
+        set { historyManager.showDeleteConfirmation = newValue }
+    }
     
-    /// Meetings pending deletion (after confirmation)
-    var meetingsPendingDeletion: [MeetingHistoryItem] = []
+    /// Meetings pending deletion (after confirmation) (delegates to historyManager)
+    var meetingsPendingDeletion: [MeetingHistoryItem] {
+        get { historyManager.meetingsPendingDeletion }
+        set { historyManager.meetingsPendingDeletion = newValue }
+    }
     
     /// Whether the split view (sidebar + detail) should be visible
     var isSplitViewVisible: Bool = false
@@ -144,51 +176,36 @@ final class MuesliViewModel {
     /// Session pending stop (waiting for title input)
     var pendingStopSession: RecordingSession?
     
-    // MARK: - Refinement State
+    // MARK: - Refinement State (delegating to RefinementCoordinator)
     
-    /// Whether to show the refinement progress sheet
-    var showRefineSheet: Bool = false
+    /// Whether to show the refinement progress sheet (delegates to refinementCoordinator)
+    var showRefineSheet: Bool {
+        get { refinementCoordinator.showRefineSheet }
+        set { refinementCoordinator.showRefineSheet = newValue }
+    }
     
-    /// Whether to show the post-meeting refinement prompt
-    var showRefinementPrompt: Bool = false
+    /// Whether to show the post-meeting refinement prompt (delegates to refinementCoordinator)
+    var showRefinementPrompt: Bool {
+        get { refinementCoordinator.showRefinementPrompt }
+        set { refinementCoordinator.showRefinementPrompt = newValue }
+    }
     
-    /// Per-meeting state: whether to show original transcript (vs refined)
-    /// Key is meeting ID UUID string
-    private var showOriginalTranscriptForMeeting: [String: Bool] = [:]
-    
-    /// Get whether to show original transcript for a specific meeting
+    /// Get whether to show original transcript for a meeting (delegates to refinementCoordinator)
     func showOriginalTranscript(for meeting: MeetingHistoryItem) -> Bool {
-        showOriginalTranscriptForMeeting[meeting.id.uuidString] ?? false
+        refinementCoordinator.isShowingOriginal(for: meeting)
     }
     
-    /// Toggle showing original transcript for a specific meeting
+    /// Toggle showing original transcript for a meeting (delegates to refinementCoordinator)
     func toggleOriginalTranscript(for meeting: MeetingHistoryItem) {
-        let current = showOriginalTranscriptForMeeting[meeting.id.uuidString] ?? false
-        let newValue = !current
-        showOriginalTranscriptForMeeting[meeting.id.uuidString] = newValue
-        
-        // Load original transcript if switching to original view and not already loaded
-        if newValue && meeting.isRefined {
-            Task {
-                if meeting.originalTranscriptBlocks == nil, let blocks = meetingHistoryService.loadOriginalTranscriptBlocks(for: meeting) {
-                    await MainActor.run {
-                        meeting.originalTranscriptBlocks = blocks
-                    }
-                }
-                if meeting.originalTranscript == nil, let text = meetingHistoryService.loadOriginalTranscript(for: meeting) {
-                    await MainActor.run {
-                        meeting.originalTranscript = text
-                    }
-                }
-            }
-        }
+        let newValue = !refinementCoordinator.isShowingOriginal(for: meeting)
+        refinementCoordinator.setShowingOriginal(newValue, for: meeting, historyService: meetingHistoryService)
     }
     
-    /// Meeting being refined (for UI state)
-    var meetingBeingRefined: MeetingHistoryItem?
-    
-    /// Cancellation flag for refinement
-    private var refinementCancelled: Bool = false
+    /// Meeting being refined (delegates to refinementCoordinator)
+    var meetingBeingRefined: MeetingHistoryItem? {
+        get { refinementCoordinator.meetingBeingRefined }
+        set { refinementCoordinator.meetingBeingRefined = newValue }
+    }
     
     // MARK: - Model Error Alert
     
@@ -198,29 +215,22 @@ final class MuesliViewModel {
     /// Session waiting for user response to model error
     var sessionPendingModelDecision: RecordingSession?
     
-    // MARK: - Preferences
+    // MARK: - Preferences (delegating to PreferencesManager)
     
-    private static let outputDirectoryKey = "outputDirectory"
-    private static let launchAtLoginKey = "launchAtLogin"
-    
-    /// Output directory for recordings
+    /// Output directory for recordings (delegates to PreferencesManager)
     var outputDirectory: URL {
         get {
-            if let savedPath = UserDefaults.standard.string(forKey: Self.outputDirectoryKey) {
-                return URL(fileURLWithPath: savedPath)
-            }
-            return Self.defaultOutputDirectory
+            preferencesManager.outputDirectory
         }
         set {
-            UserDefaults.standard.set(newValue.path, forKey: Self.outputDirectoryKey)
+            preferencesManager.outputDirectory = newValue
             fileOutputService.setOutputDirectory(newValue)
         }
     }
     
     /// Default output directory: ~/Library/Application Support/Muesli/Recordings
     static var defaultOutputDirectory: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("Muesli/Recordings")
+        PreferencesManager.defaultOutputDirectory
     }
     
     /// Set the output directory
@@ -230,37 +240,23 @@ final class MuesliViewModel {
     
     /// Reset output directory to default
     func resetOutputDirectory() {
-        UserDefaults.standard.removeObject(forKey: Self.outputDirectoryKey)
+        preferencesManager.resetOutputDirectory()
         fileOutputService.setOutputDirectory(Self.defaultOutputDirectory)
     }
     
-    /// Whether to launch at login
+    /// Whether to launch at login (delegates to PreferencesManager)
     var launchAtLogin: Bool {
         get {
-            if #available(macOS 13.0, *) {
-                return SMAppService.mainApp.status == .enabled
-            }
-            return UserDefaults.standard.bool(forKey: Self.launchAtLoginKey)
+            preferencesManager.launchAtLogin
         }
         set {
-            if #available(macOS 13.0, *) {
-                do {
-                    if newValue {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
-                    }
-                } catch {
-                    print("[MuesliViewModel] Failed to set launch at login: \(error)")
-                }
-            }
-            UserDefaults.standard.set(newValue, forKey: Self.launchAtLoginKey)
+            preferencesManager.launchAtLogin = newValue
         }
     }
     
     /// Set launch at login
     func setLaunchAtLogin(_ enabled: Bool) {
-        launchAtLogin = enabled
+        preferencesManager.setLaunchAtLogin(enabled)
     }
     
     // MARK: - Recording Navigation State
@@ -298,14 +294,32 @@ final class MuesliViewModel {
     
     // MARK: - Initialization
     
-    /// Initialize the ViewModel
-    /// - Parameter skipInitialLoad: If true, skips loading meeting history from disk (for testing)
-    init(skipInitialLoad: Bool = false) {
+    /// Initialize the ViewModel with injected managers
+    /// - Parameters:
+    ///   - preferencesManager: Manager for user preferences
+    ///   - historyManager: Manager for meeting history (if nil, creates one with skipInitialLoad)
+    ///   - refinementCoordinator: Coordinator for transcript refinement
+    ///   - skipInitialLoad: If true, skips loading meeting history from disk (for testing)
+    init(
+        preferencesManager: PreferencesManager = PreferencesManager(),
+        historyManager: MeetingHistoryManager? = nil,
+        refinementCoordinator: RefinementCoordinator? = nil,
+        skipInitialLoad: Bool = false
+    ) {
+        self.preferencesManager = preferencesManager
+        self.historyManager = historyManager ?? MeetingHistoryManager(skipInitialLoad: skipInitialLoad)
+        
+        // Create refinement coordinator if not provided
+        self.refinementCoordinator = refinementCoordinator ?? RefinementCoordinator(
+            llmManager: llmManager,
+            fileOutputService: fileOutputService
+        )
+        
         // Initialize refinement service
         refinementService = TranscriptRefinementService(llmManager: llmManager)
         
-        // Load echo cancellation state
-        _isEchoCancellationEnabled = UserDefaults.standard.bool(forKey: "echoCancellationEnabled")
+        // Load echo cancellation state from preferences manager
+        _isEchoCancellationEnabled = preferencesManager.echoCancellationEnabledForAudioCallback
         
         // Check initial permission status
         refreshPermissions()
@@ -420,10 +434,8 @@ final class MuesliViewModel {
             await refreshMeetingApps()
         }
         
-        // Load meeting history (skip for tests to avoid file system access)
-        if !skipInitialLoad {
-            loadMeetingHistory()
-        }
+        // Note: Meeting history is already loaded by MeetingHistoryManager's init
+        // No need to call loadMeetingHistory() here as historyManager handles it
     }
     
     // MARK: - Session Management
@@ -1127,408 +1139,91 @@ final class MuesliViewModel {
         session.isRetranscribing = false
     }
     
-    // MARK: - Meeting History Management
+    // MARK: - Meeting History Management (delegating to MeetingHistoryManager)
     
-    /// Load meeting history from disk
+    /// Load meeting history from disk (delegates to historyManager)
     func loadMeetingHistory() {
-        meetingHistory = meetingHistoryService.discoverMeetings()
-        groupedHistory = groupMeetingsByDate(meetingHistory)
+        historyManager.loadMeetingHistory()
     }
     
-    /// Refresh meeting history (call after recording completes)
+    /// Refresh meeting history (delegates to historyManager)
     func refreshMeetingHistory() {
-        loadMeetingHistory()
+        historyManager.refreshMeetingHistory()
     }
     
-    /// Group meetings by date: by day for last week, by month for older
-    /// - Parameter meetings: Array of meetings to group
-    /// - Returns: Array of groups, sorted newest first
+    /// Group meetings by date (delegates to historyManager)
     func groupMeetingsByDate(_ meetings: [MeetingHistoryItem]) -> [MeetingHistoryGroup] {
-        guard !meetings.isEmpty else { return [] }
-        
-        let calendar = Calendar.current
-        let now = Date()
-        
-        // Separate meetings into last 7 days and older
-        var lastWeekMeetings: [MeetingHistoryItem] = []
-        var olderMeetings: [MeetingHistoryItem] = []
-        
-        for meeting in meetings {
-            let daysSince = calendar.dateComponents([.day], from: meeting.date, to: now).day ?? 0
-            if daysSince < 7 {
-                lastWeekMeetings.append(meeting)
-            } else {
-                olderMeetings.append(meeting)
-            }
-        }
-        
-        var groups: [MeetingHistoryGroup] = []
-        
-        // Group last week by day
-        let lastWeekGroups = Dictionary(grouping: lastWeekMeetings) { meeting -> Date in
-            calendar.startOfDay(for: meeting.date)
-        }
-        
-        for (dayStart, dayMeetings) in lastWeekGroups.sorted(by: { $0.key > $1.key }) {
-            let label = formatDayLabel(dayStart, relativeTo: now)
-            groups.append(MeetingHistoryGroup(
-                date: dayStart,
-                label: label,
-                meetings: dayMeetings.sorted { $0.date > $1.date }
-            ))
-        }
-        
-        // Group older meetings by month
-        let monthGroups = Dictionary(grouping: olderMeetings) { meeting -> Date in
-            let components = calendar.dateComponents([.year, .month], from: meeting.date)
-            return calendar.date(from: components) ?? meeting.date
-        }
-        
-        for (monthStart, monthMeetings) in monthGroups.sorted(by: { $0.key > $1.key }) {
-            let label = formatMonthLabel(monthStart)
-            groups.append(MeetingHistoryGroup(
-                date: monthStart,
-                label: label,
-                meetings: monthMeetings.sorted { $0.date > $1.date }
-            ))
-        }
-        
-        return groups
+        historyManager.groupMeetingsByDate(meetings)
     }
     
-    /// Format a day label (Today, Yesterday, or date)
-    private func formatDayLabel(_ date: Date, relativeTo now: Date) -> String {
-        let calendar = Calendar.current
-        
-        if calendar.isDateInToday(date) {
-            return "Today"
-        } else if calendar.isDateInYesterday(date) {
-            return "Yesterday"
-        } else {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "MMM d, yyyy"
-            return formatter.string(from: date)
-        }
-    }
-    
-    /// Format a month label
-    private func formatMonthLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter.string(from: date)
-    }
-    
-    /// Load transcript for a meeting (lazy-load)
+    /// Load transcript for a meeting (delegates to historyManager)
     func loadTranscript(for meeting: MeetingHistoryItem) {
-        guard meeting.transcript == nil else { return }
-        
-        // Load plain text transcript
-        meeting.transcript = meetingHistoryService.loadTranscript(for: meeting)
-        
-        // Also try to load block-based transcript (new format)
-        if meeting.transcriptBlocks == nil {
-            meeting.transcriptBlocks = meetingHistoryService.loadTranscriptBlocks(for: meeting)
-        }
+        historyManager.loadTranscript(for: meeting)
     }
     
-    // MARK: - Meeting Selection (Multi-select)
+    // MARK: - Meeting Selection (delegating to MeetingHistoryManager)
     
-    /// Toggle selection of a meeting
+    /// Toggle selection of a meeting (delegates to historyManager)
     func toggleMeetingSelection(_ meeting: MeetingHistoryItem, extendSelection: Bool = false) {
-        if extendSelection {
-            // Cmd+click: toggle individual selection
-            if selectedMeetingIDs.contains(meeting.id) {
-                selectedMeetingIDs.remove(meeting.id)
-            } else {
-                selectedMeetingIDs.insert(meeting.id)
-            }
-        } else {
-            // Regular click: single selection
-            selectedMeetingIDs = [meeting.id]
-        }
-        
-        // Update selectedMeeting for detail view
-        if selectedMeetingIDs.count == 1, let id = selectedMeetingIDs.first {
-            selectedMeeting = meetingHistory.first { $0.id == id }
-            if let meeting = selectedMeeting {
-                loadTranscript(for: meeting)
-            }
-        } else {
-            selectedMeeting = nil
-        }
+        historyManager.toggleMeetingSelection(meeting, extendSelection: extendSelection)
     }
     
-    /// Select all meetings in a range (for Shift+click)
+    /// Select all meetings in a range (delegates to historyManager)
     func selectMeetingsInRange(to meeting: MeetingHistoryItem) {
-        guard let lastSelectedID = selectedMeetingIDs.first,
-              let lastIndex = meetingHistory.firstIndex(where: { $0.id == lastSelectedID }),
-              let targetIndex = meetingHistory.firstIndex(where: { $0.id == meeting.id }) else {
-            toggleMeetingSelection(meeting)
-            return
-        }
-        
-        let range = min(lastIndex, targetIndex)...max(lastIndex, targetIndex)
-        for i in range {
-            selectedMeetingIDs.insert(meetingHistory[i].id)
-        }
+        historyManager.selectMeetingsInRange(to: meeting)
     }
     
-    /// Clear all selections
+    /// Clear all selections (delegates to historyManager)
     func clearSelection() {
-        selectedMeetingIDs.removeAll()
-        selectedMeeting = nil
+        historyManager.clearSelection()
     }
     
-    /// Get selected meetings
+    /// Get selected meetings (delegates to historyManager)
     var selectedMeetings: [MeetingHistoryItem] {
-        meetingHistory.filter { selectedMeetingIDs.contains($0.id) }
+        historyManager.selectedMeetings
     }
     
-    // MARK: - Meeting Deletion
+    // MARK: - Meeting Deletion (delegating to MeetingHistoryManager)
     
-    /// Request deletion of selected meetings (shows confirmation)
+    /// Request deletion of selected meetings (delegates to historyManager)
     func requestDeleteSelectedMeetings() {
-        let meetings = selectedMeetings
-        guard !meetings.isEmpty else { return }
-        meetingsPendingDeletion = meetings
-        showDeleteConfirmation = true
+        historyManager.requestDeleteSelectedMeetings()
     }
     
-    /// Request deletion of a specific meeting (shows confirmation)
+    /// Request deletion of a specific meeting (delegates to historyManager)
     func requestDeleteMeeting(_ meeting: MeetingHistoryItem) {
-        meetingsPendingDeletion = [meeting]
-        showDeleteConfirmation = true
+        historyManager.requestDeleteMeeting(meeting)
     }
     
-    /// Confirm and execute deletion
+    /// Confirm and execute deletion (delegates to historyManager)
     func confirmDeleteMeetings() {
-        let meetingsToDelete = meetingsPendingDeletion
-        meetingsPendingDeletion = []
-        showDeleteConfirmation = false
-        
-        // Delete from disk
-        for meeting in meetingsToDelete {
-            deleteMeetingFromDisk(meeting)
-        }
-        
-        // Clear selection if deleted meetings were selected
-        for meeting in meetingsToDelete {
-            selectedMeetingIDs.remove(meeting.id)
-            if selectedMeeting?.id == meeting.id {
-                selectedMeeting = nil
-            }
-        }
-        
-        // Refresh history
-        refreshMeetingHistory()
+        historyManager.confirmDeleteMeetings()
     }
     
-    /// Cancel deletion
+    /// Cancel deletion (delegates to historyManager)
     func cancelDeleteMeetings() {
-        meetingsPendingDeletion = []
-        showDeleteConfirmation = false
+        historyManager.cancelDeleteMeetings()
     }
     
-    /// Delete a meeting's folder from disk
-    private func deleteMeetingFromDisk(_ meeting: MeetingHistoryItem) {
-        let fileManager = FileManager.default
-        do {
-            try fileManager.removeItem(at: meeting.directory)
-        } catch {
-            print("[MuesliViewModel] Failed to delete meeting: \(error.localizedDescription)")
-        }
-    }
+    // MARK: - Transcript Refinement (delegating to RefinementCoordinator)
     
-    // MARK: - Transcript Refinement
-    
-    /// Check if refinement is available (LLM model downloaded)
+    /// Check if refinement is available (delegates to refinementCoordinator)
     var canRefineTranscripts: Bool {
-        llmManager.hasModel && llmManager.isLLMStitchingEnabled
+        refinementCoordinator.canRefineTranscripts
     }
     
-    /// Start refining a meeting's transcript
+    /// Start refining a meeting's transcript (delegates to refinementCoordinator)
     func refineTranscript(for meeting: MeetingHistoryItem) {
-        guard canRefineTranscripts else {
-            print("[MuesliViewModel] Cannot refine: canRefineTranscripts = false")
-            return
-        }
-        guard !refinementService.isRefining else {
-            print("[MuesliViewModel] Already refining")
-            return
-        }
-        
-        meetingBeingRefined = meeting
-        refinementCancelled = false
-        
-        Task {
-            await refineTranscriptAsync(for: meeting)
-        }
-    }
-    
-    /// Async refinement implementation
-    private func refineTranscriptAsync(for meeting: MeetingHistoryItem) async {
         // Ensure transcript is loaded first
         if meeting.transcriptBlocks == nil && meeting.transcript == nil {
             loadTranscript(for: meeting)
         }
-        
-        // Ensure model is loaded
-        if llmManager.modelContainer == nil, let activeModel = llmManager.activeModel {
-            do {
-                try await llmManager.loadModel(activeModel)
-            } catch {
-                refinementService.errorMessage = "Failed to load LLM model: \(error.localizedDescription)"
-                print("[MuesliViewModel] Failed to load LLM model: \(error)")
-                meetingBeingRefined = nil
-                return
-            }
-        }
-        
-        do {
-            // Refine based on available transcript format
-            if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
-                print("[MuesliViewModel] Refining \(blocks.count) transcript blocks")
-                // Store original before refining
-                meeting.originalTranscriptBlocks = blocks
-                if meeting.originalTranscript == nil {
-                    meeting.originalTranscript = blocks.map { block in
-                        "[\(block.speaker.rawValue)] \(block.text)"
-                    }.joined(separator: "\n\n")
-                }
-                
-                // Refine block-based transcript
-                let refinedBlocks = try await refinementService.refineTranscript(blocks)
-                
-                guard !refinementCancelled else { return }
-                
-                // Update meeting with refined blocks
-                meeting.transcriptBlocks = refinedBlocks
-                meeting.isRefined = true
-                
-                // Default to showing refined view
-                showOriginalTranscriptForMeeting[meeting.id.uuidString] = false
-                
-                // Also update plain text version
-                meeting.transcript = refinedBlocks.map { block in
-                    "[\(block.speaker.rawValue)] \(block.text)"
-                }.joined(separator: "\n\n")
-                
-                // Save to disk
-                saveRefinedTranscript(meeting, blocks: refinedBlocks)
-                
-            } else if let text = meeting.transcript, !text.isEmpty {
-                print("[MuesliViewModel] Refining plain text transcript")
-                // Store original before refining
-                meeting.originalTranscript = text
-                
-                // Refine plain text transcript
-                let refinedText = try await refinementService.refineTranscript(text)
-                
-                guard !refinementCancelled else {
-                    print("[MuesliViewModel] Refinement cancelled")
-                    meetingBeingRefined = nil
-                    return
-                }
-                
-                // Update meeting
-                meeting.transcript = refinedText
-                meeting.isRefined = true
-                
-                // Save to disk
-                saveRefinedTranscript(meeting, text: refinedText)
-                print("[MuesliViewModel] Refinement completed successfully")
-            } else {
-                print("[MuesliViewModel] No transcript blocks or text available for refinement")
-                meetingBeingRefined = nil
-                return
-            }
-            
-            // Clear refinement state
-            meetingBeingRefined = nil
-            
-        } catch {
-            // Error is already set in refinementService
-            print("[MuesliViewModel] Refinement failed: \(error)")
-            meetingBeingRefined = nil
-        }
+        refinementCoordinator.refineTranscript(for: meeting)
     }
     
-    /// Save refined block-based transcript to disk
-    private func saveRefinedTranscript(_ meeting: MeetingHistoryItem, blocks: [TranscriptBlock]) {
-        do {
-            // Save original transcript to separate file if it exists
-            if let originalBlocks = meeting.originalTranscriptBlocks {
-                let originalURL = meeting.directory.appendingPathComponent("transcript.original.md")
-                try fileOutputService.saveTranscriptBlocks(
-                    originalBlocks,
-                    title: meeting.title,
-                    date: meeting.date,
-                    to: meeting.directory,
-                    filename: "transcript.original.md"
-                )
-            }
-            
-            // Save refined transcript
-            try fileOutputService.saveTranscriptBlocks(
-                blocks,
-                title: meeting.title,
-                date: meeting.date,
-                to: meeting.directory
-            )
-        } catch {
-            print("[MuesliViewModel] Failed to save refined transcript: \(error)")
-        }
-    }
-    
-    /// Save refined plain text transcript to disk
-    private func saveRefinedTranscript(_ meeting: MeetingHistoryItem, text: String) {
-        do {
-            // Save original transcript to separate file if it exists
-            if let originalText = meeting.originalTranscript {
-                let originalURL = meeting.directory.appendingPathComponent("transcript.original.md")
-                let dateFormatter = DateFormatter()
-                dateFormatter.dateStyle = .full
-                dateFormatter.timeStyle = .short
-                
-                let originalContent = """
-                # \(meeting.title)
-                
-                **Date:** \(dateFormatter.string(from: meeting.date))
-                
-                ---
-                
-                \(originalText)
-                """
-                
-                try originalContent.write(to: originalURL, atomically: true, encoding: .utf8)
-            }
-            
-            // Save refined transcript
-            let transcriptURL = meeting.directory.appendingPathComponent("transcript.md")
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateStyle = .full
-            dateFormatter.timeStyle = .short
-            
-            let content = """
-            # \(meeting.title)
-            
-            **Date:** \(dateFormatter.string(from: meeting.date))
-            
-            ---
-            
-            \(text)
-            """
-            
-            try content.write(to: transcriptURL, atomically: true, encoding: .utf8)
-        } catch {
-            print("[MuesliViewModel] Failed to save refined transcript: \(error)")
-        }
-    }
-    
-    /// Cancel ongoing refinement
+    /// Cancel ongoing refinement (delegates to refinementCoordinator)
     func cancelRefinement() {
-        refinementCancelled = true
-        meetingBeingRefined = nil
+        refinementCoordinator.cancelRefinement()
     }
     
     // MARK: - Resume Recording
@@ -1654,65 +1349,17 @@ final class MuesliViewModel {
     
     // MARK: - Segment Refinement Helpers
     
-    /// Refine a single transcript segment
+    /// Refine a single transcript segment (delegates to refinementCoordinator, then saves)
     private func refineSegment(_ segment: TranscriptSegment, in meeting: MeetingHistoryItem) async {
-        guard canRefineTranscripts else { return }
-        guard !segment.isRefined else { return }
+        await refinementCoordinator.refineSegment(segment, in: meeting)
         
-        // Ensure model is loaded
-        if llmManager.modelContainer == nil, let activeModel = llmManager.activeModel {
-            do {
-                try await llmManager.loadModel(activeModel)
-            } catch {
-                print("[MuesliViewModel] Failed to load LLM model for segment refinement: \(error)")
-                return
-            }
-        }
-        
-        do {
-            // Refine the segment's blocks
-            let refinedBlocks = try await refinementService.refineTranscript(segment.originalBlocks)
-            
-            // Update segment
-            if let segmentIndex = meeting.transcriptSegments.firstIndex(where: { $0.id == segment.id }) {
-                meeting.transcriptSegments[segmentIndex].refinedBlocks = refinedBlocks
-                meeting.transcriptSegments[segmentIndex].isRefined = true
-            }
-            
-            // Default to showing refined view after refinement completes
-            meeting.isShowingRefined = true
-            
-            // Update meeting transcript display
-            updateMeetingTranscriptDisplay(meeting)
-            
-            // Save updated transcript to disk
-            try? saveTranscriptWithSegments(meeting, to: meeting.directory)
-            
-        } catch {
-            print("[MuesliViewModel] Failed to refine segment: \(error)")
-        }
+        // Save updated transcript to disk after refinement
+        try? saveTranscriptWithSegments(meeting, to: meeting.directory)
     }
     
-    /// Update meeting's transcript display from segments
+    /// Update meeting's transcript display from segments (delegates to refinementCoordinator)
     func updateMeetingTranscriptDisplay(_ meeting: MeetingHistoryItem) {
-        // Combine all segments based on toggle state
-        var allBlocks: [TranscriptBlock] = []
-        
-        for segment in meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber }) {
-            // Use refined blocks if available and showing refined, otherwise use original
-            let blocksToUse = (meeting.isShowingRefined && segment.isRefined) ?
-                (segment.refinedBlocks ?? segment.originalBlocks) :
-                segment.originalBlocks
-            
-            allBlocks.append(contentsOf: blocksToUse)
-        }
-        
-        meeting.transcriptBlocks = allBlocks
-        
-        // Also update plain text version
-        meeting.transcript = allBlocks.map { block in
-            "[\(block.speaker.rawValue)] \(block.text)"
-        }.joined(separator: "\n\n")
+        refinementCoordinator.updateMeetingTranscriptDisplay(meeting)
     }
     
     /// Save transcript with segment markers to disk

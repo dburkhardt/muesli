@@ -18,20 +18,26 @@ struct MuesliApp: App {
         let permManager = PermissionManager()
 
         // Create refinement coordinator with dependencies
+        // Note: ViewModel also creates its own LLMManager, so we need to share the same one
         let llmManager = LLMManager()
         let fileOutputService = FileOutputService()
         let coordinator = RefinementCoordinator(llmManager: llmManager, fileOutputService: fileOutputService)
 
-        // Create ViewModel
-        let vm = MuesliViewModel()
+        // Create ViewModel with injected managers
+        // This ensures ViewModel shares the same state with the managers
+        let vm = MuesliViewModel(
+            preferencesManager: prefs,
+            historyManager: historyManager,
+            refinementCoordinator: coordinator
+        )
 
         // Wire up PreferencesManager callbacks to services
         prefs.outputDirectoryDidChange = { newDirectory in
             fileOutputService.setOutputDirectory(newDirectory)
         }
         prefs.transcriptionModeDidChange = { newMode in
-            // TranscriptionService is owned by ViewModel
-            // This will be handled when ViewModel is refactored to accept managers
+            // Now that ViewModel delegates to preferencesManager, this callback
+            // is for external services that need to react to transcription mode changes
             vm.transcriptionMode = newMode.serviceMode
         }
 
