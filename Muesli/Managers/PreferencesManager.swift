@@ -128,10 +128,56 @@ final class PreferencesManager {
     }
     
     // MARK: - Initialization
-    
+
     init() {
         // Load persisted echo cancellation state
         _isEchoCancellationEnabled = UserDefaults.standard.bool(forKey: Self.echoCancellationEnabledKey)
+
+        // Perform storage migration if needed
+        migrateStorageLocationIfNeeded()
+    }
+
+    // MARK: - Storage Migration
+
+    /// Migrate from old default location (~/Documents/Meeting Transcripts) to new location
+    /// (~/Library/Application Support/Muesli/Recordings) while preserving existing recordings
+    private func migrateStorageLocationIfNeeded() {
+        // Only migrate if user hasn't set a custom output directory
+        guard UserDefaults.standard.string(forKey: Self.outputDirectoryKey) == nil else {
+            print("[PreferencesManager] Custom output directory set, skipping migration")
+            return
+        }
+
+        // Check if old location exists and has content
+        let oldDefaultDirectory: URL = {
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            return documentsPath.appendingPathComponent("Meeting Transcripts")
+        }()
+
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: oldDefaultDirectory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            print("[PreferencesManager] Old directory doesn't exist, no migration needed")
+            return
+        }
+
+        // Check if old directory has any meeting folders
+        guard let contents = try? fileManager.contentsOfDirectory(atPath: oldDefaultDirectory.path),
+              !contents.isEmpty else {
+            print("[PreferencesManager] Old directory is empty, no migration needed")
+            return
+        }
+
+        print("[PreferencesManager] Found existing recordings in old location (\(contents.count) items)")
+        print("[PreferencesManager] Setting output directory to old location to preserve access")
+
+        // Set user preference to old location to preserve existing recordings
+        // This is safer than moving files and respects user's existing data
+        UserDefaults.standard.set(oldDefaultDirectory.path, forKey: Self.outputDirectoryKey)
+
+        // Trigger callback so services update
+        outputDirectoryDidChange?(oldDefaultDirectory)
     }
 }
 

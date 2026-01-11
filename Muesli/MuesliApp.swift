@@ -4,23 +4,58 @@ import AppKit
 
 @main
 struct MuesliApp: App {
-    @State private var viewModel = MuesliViewModel()
-    @State private var preferencesManager = PreferencesManager()
-    @State private var meetingHistoryManager = MeetingHistoryManager()
-    @State private var permissionManager = PermissionManager()
+    @State private var viewModel: MuesliViewModel
+    @State private var preferencesManager: PreferencesManager
+    @State private var meetingHistoryManager: MeetingHistoryManager
+    @State private var permissionManager: PermissionManager
+    @State private var refinementCoordinator: RefinementCoordinator
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    init() {
+        // Create managers in dependency order
+        let prefs = PreferencesManager()
+        let historyManager = MeetingHistoryManager()
+        let permManager = PermissionManager()
+
+        // Create refinement coordinator with dependencies
+        let llmManager = LLMManager()
+        let fileOutputService = FileOutputService()
+        let coordinator = RefinementCoordinator(llmManager: llmManager, fileOutputService: fileOutputService)
+
+        // Create ViewModel
+        let vm = MuesliViewModel()
+
+        // Wire up PreferencesManager callbacks to services
+        prefs.outputDirectoryDidChange = { newDirectory in
+            fileOutputService.setOutputDirectory(newDirectory)
+        }
+        prefs.transcriptionModeDidChange = { newMode in
+            // TranscriptionService is owned by ViewModel
+            // This will be handled when ViewModel is refactored to accept managers
+            vm.transcriptionMode = newMode.serviceMode
+        }
+
+        // Initialize @State properties
+        _viewModel = State(initialValue: vm)
+        _preferencesManager = State(initialValue: prefs)
+        _meetingHistoryManager = State(initialValue: historyManager)
+        _permissionManager = State(initialValue: permManager)
+        _refinementCoordinator = State(initialValue: coordinator)
+    }
     
     var body: some Scene {
         // Menu bar dropdown - always available
         MenuBarExtra {
             MenuBarView(viewModel: viewModel)
+                .environment(meetingHistoryManager)
+                .environment(refinementCoordinator)
         } label: {
             MenuBarIconView()
         }
-        
+
         // NOTE: Onboarding is handled by AppDelegate.showOnboardingWindow()
         // Removed duplicate WindowGroup that was creating separate ViewModel
-        
+
         // Model management window
         WindowGroup("Manage Transcription Models", id: "modelManagement") {
             ModelManagementView(viewModel: viewModel)
@@ -28,12 +63,13 @@ struct MuesliApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultPosition(.center)
-        
+
         // Completed meeting window (for viewing while recording)
         WindowGroup("Meeting Transcript", id: "completedMeeting") {
             if let meeting = meetingHistoryManager.completedMeetingWindowItem {
                 CompletedMeetingWindow(meeting: meeting, viewModel: viewModel)
                     .environment(meetingHistoryManager)
+                    .environment(refinementCoordinator)
             } else {
                 Text("No meeting selected")
                     .frame(width: 600, height: 500)
@@ -41,16 +77,17 @@ struct MuesliApp: App {
         }
         .defaultSize(width: 600, height: 500)
         .windowResizability(.contentSize)
-        
+
         // Main window - SINGLE window for recordings (not WindowGroup)
         Window("Muesli", id: "main") {
             MainWindowView(viewModel: viewModel)
                 .environment(meetingHistoryManager)
                 .environment(permissionManager)
+                .environment(refinementCoordinator)
         }
         .defaultSize(width: 420, height: 600)
         .windowResizability(.contentSize)
-        
+
         // Preferences window - accessible via Cmd+,
         Settings {
             PreferencesView(viewModel: viewModel)
