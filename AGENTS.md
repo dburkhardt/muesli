@@ -53,41 +53,79 @@ tccutil reset ScreenCapture com.muesli.app
 tccutil reset Microphone com.muesli.app
 ```
 
-## Working in Worktrees (parallel agents)
+## Branch-Based Parallel Development
 
-When using Cursor worktrees with parallel agents, each worktree MUST have a unique app identity. This prevents critical issues where macOS system dialogs (like "Quit & Reopen") launch the wrong app version.
+When developing features in parallel using git worktrees, each **branch** must have a unique app identity. Bundle IDs are tied to branch names (not worktree directories), enabling persistent feature versions across agent sessions while supporting side-by-side testing.
+
+**Key concepts:**
+- **Branches** = persistent feature work with stable bundle IDs
+- **Worktrees** = ephemeral agent workspaces (directories come and go)
+- **Bundle IDs** = follow branch names across agent sessions
+- **Git safety** = same branch can't exist in multiple worktrees (prevents conflicts)
 
 ### Why This Is Required
 
-macOS caches app locations by bundle identifier. Without unique identifiers per worktree:
-- "Quit & Reopen" dialogs launch whichever version macOS found first
-- Multiple agents' builds conflict and overwrite each other
-- TCC permissions get confused between versions
-- Debugging becomes nearly impossible due to version mismatches
+macOS caches app locations by bundle identifier. Bundle IDs must be unique per branch to enable:
+- Testing multiple feature branches side-by-side
+- Bundle ID persistence across agent sessions (new worktree, same branch = same bundle ID)
+- Correct system dialog behavior ("Quit & Reopen" launches the right version)
+- Clean TCC permission separation between feature branches
+- Predictable app identification in menu bar and System Settings
 
-### Setting Up a New Worktree
+### Setting Up a Worktree
 
-When you start working in a new worktree, **immediately** configure a unique app identity:
+When starting work, you'll either check out an existing branch or create a new one. The bundle ID configuration follows the branch.
 
-**Step 0: Create worktree with branch**
+#### Option A: Check Out Existing Branch (Most Common)
 
-Create the worktree with a new branch:
+When continuing work on an existing feature branch:
 
 ```bash
-# Create worktree with new branch (replace <branch-name> and <path>)
-git worktree add -b <branch-name> <path-to-worktree>
+# Step 1: Fetch latest branches from remote
+git fetch
 
-# Navigate to the new worktree
-cd <path-to-worktree>
+# Step 2: List available branches
+git branch -r | grep feature
 
-# Verify worktree was created successfully
-git worktree list
+# Step 3: Create worktree for existing branch
+# Replace <path> with your worktree directory (e.g., /tmp/cursor-xyz)
+# Replace <branch-name> with the branch (e.g., feature-transcription)
+git worktree add <path> origin/<branch-name>
+
+# Step 4: Navigate to worktree
+cd <path>
+
+# Step 5: Verify bundle ID matches branch
+# (Agent should do this automatically - see workflow in .cursorrules)
+CURRENT_BRANCH=$(git branch --show-current)
+BRANCH_SUFFIX=$(echo $CURRENT_BRANCH | sed 's/\//-/g')
+grep "PRODUCT_BUNDLE_IDENTIFIER" Muesli.xcodeproj/project.pbxproj | head -1
+
+# Should show: com.muesli.app.$BRANCH_SUFFIX (or com.muesli.app for main)
 ```
 
-**Step 1: Determine your worktree suffix**
-Use the worktree directory name (e.g., `kxn`, `feature-xyz`, `bugfix-123`).
+**Bundle ID is already configured** - the branch contains the correct configuration. You can build immediately after verification.
 
-**Step 2: Update `Muesli.xcodeproj/project.pbxproj`**
+#### Option B: Create New Branch
+
+When starting a new feature:
+
+```bash
+# Step 1: Create worktree with new branch
+# Use descriptive branch name (feature-xyz, bugfix-abc)
+git worktree add -b <branch-name> <path>
+
+# Step 2: Navigate to worktree
+cd <path>
+
+# Step 3: Configure bundle ID based on branch name
+# Get sanitized branch name (slashes → dashes)
+BRANCH_SUFFIX=$(git branch --show-current | sed 's/\//-/g')
+echo "Branch: $(git branch --show-current)"
+echo "Bundle ID suffix: $BRANCH_SUFFIX"
+```
+
+**Step 4: Update `Muesli.xcodeproj/project.pbxproj`**
 
 Search for and update these values in BOTH Debug and Release configurations:
 
@@ -96,12 +134,12 @@ Search for and update these values in BOTH Debug and Release configurations:
 PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
 PRODUCT_NAME = "$(TARGET_NAME)";
 
-# Change to (using your worktree suffix):
-PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.<suffix>;
-PRODUCT_NAME = "Muesli-<suffix>";
+# Change to (using your branch suffix):
+PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.<branch-suffix>;
+PRODUCT_NAME = "Muesli-<branch-suffix>";
 ```
 
-**Step 3: Update the TCC reset script**
+**Step 5: Update the TCC reset script**
 
 In the same file, find the "Reset TCC Permissions" shell script and update the bundle IDs:
 
@@ -112,12 +150,12 @@ tccutil reset Microphone com.muesli.app
 defaults delete com.muesli.app
 
 # Change to:
-tccutil reset ScreenCapture com.muesli.app.<suffix>
-tccutil reset Microphone com.muesli.app.<suffix>
-defaults delete com.muesli.app.<suffix>
+tccutil reset ScreenCapture com.muesli.app.<branch-suffix>
+tccutil reset Microphone com.muesli.app.<branch-suffix>
+defaults delete com.muesli.app.<branch-suffix>
 ```
 
-**Step 4: Commit configuration and push branch to remote**
+**Step 6: Commit configuration and push branch to remote**
 
 After configuring the app identity, commit the changes and push the branch to remote:
 
@@ -126,79 +164,183 @@ After configuring the app identity, commit the changes and push the branch to re
 git add Muesli.xcodeproj/project.pbxproj
 
 # Commit the configuration
-git commit -m "Configure worktree app identity: <suffix>"
+git commit -m "Configure bundle ID for branch: <branch-name>"
 
-# Push branch to remote (enables parallel agent collaboration)
+# Push branch to remote (enables other agents to discover and work on it)
 git push -u origin <branch-name>
 ```
 
-**Important**: The branch MUST be pushed to remote after configuration so other agents can discover and work on it. Do not skip this step.
+**Important**: The branch MUST be pushed to remote after configuration so other agents can check it out and inherit the bundle ID.
 
-### Build Commands for Worktrees
+#### Special Case: main Branch
 
-Replace `<suffix>` with your worktree name:
+When working on the `main` branch:
+- Always use default `com.muesli.app` (no suffix)
+- Never commit bundle ID changes to main
+- This is the production configuration
 
+### Build Commands for Branches
+
+The build command varies based on your branch name. Replace `<branch-suffix>` with your sanitized branch name (slashes converted to dashes).
+
+**Branch-specific build**:
 ```bash
-# Kill, Build, and Launch (worktree version)
-killall Muesli-<suffix> 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app
-
-# Example for 'kxn' worktree:
-killall Muesli-kxn 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-kxn.app
+# Kill, Build, and Launch (branch version)
+killall Muesli-<branch-suffix> 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<branch-suffix>.app
 ```
 
-### Best Practices for Parallel Agent Collaboration
+**Examples**:
 
-- **Branch naming**: Use descriptive branch names that indicate the worktree purpose (e.g., `feature-transcription`, `bugfix-audio-capture`, `agent-kxn`)
-- **Push after configuration**: Always push the branch to remote after configuring the app identity (bundle ID changes), before making other code changes
-- **Regular synchronization**: Push commits frequently to keep remote branch up-to-date for other agents
-- **Worktree monitoring**: Use `git worktree list` to see all active worktrees and avoid conflicts
+```bash
+# Example: feature-transcription branch
+killall Muesli-feature-transcription 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-feature-transcription.app
+
+# Example: bugfix-audio-sync branch
+killall Muesli-bugfix-audio-sync 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-bugfix-audio-sync.app
+
+# Example: feature/llm-refinement branch (slashes become dashes)
+killall Muesli-feature-llm-refinement 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-feature-llm-refinement.app
+
+# Example: main branch (no suffix)
+killall Muesli 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
+```
+
+### Best Practices for Branch-Based Development
+
+- **Branch naming**: Use descriptive names that indicate purpose (`feature-transcription`, `bugfix-audio-sync`, `refactor-viewmodel`)
+- **Bundle ID follows branch**: Bundle ID configuration is part of the branch, not the worktree directory
+- **Check out existing branches**: Before creating a new branch, check if someone already started work on it (`git branch -r | grep feature-xyz`)
+- **main stays clean**: Never commit bundle ID changes to main branch (always `com.muesli.app`)
+- **Merge cleanup**: After merging feature branch to main, delete the feature branch. Bundle ID config goes with it.
+- **Push frequently**: Other agents can check out your branch in a new worktree and continue your work
+- **One branch = one worktree**: Git enforces this constraint (safety feature, not limitation)
+- **Branch name sanitization**: Slashes become dashes (`feature/xyz` → `com.muesli.app.feature-xyz`)
+- **Worktree monitoring**: Use `git worktree list` to see all active worktrees
 - **Remote branch tracking**: Use `git push -u origin <branch>` to set upstream tracking on first push
+
+### Git Worktree Constraints (By Design)
+
+Git prevents checking out the same branch in multiple worktrees. This is **intentional** and provides important safety guarantees:
+
+**Benefits:**
+- Each branch has exactly one active worktree at a time
+- No bundle ID conflicts possible (one branch = one bundle ID)
+- No risk of simultaneous conflicting edits to the same branch
+- Agents collaborate via push/pull workflow, not simultaneous editing
+- Clear ownership: one agent working on a branch at a time
+
+**Workflow:**
+- To continue another agent's work: `git fetch` and check out their branch in a new worktree
+- The bundle ID configuration is already in the branch - no reconfiguration needed
+- To work on different features simultaneously: create separate branches with separate worktrees
 
 ### Cleaning Up After Merging (MANDATORY)
 
 **⚠️ CRITICAL**: Before deleting a worktree, clean up app builds and permissions to prevent multiple menu bar icons, wrong app launches, and TCC confusion.
 
 ```bash
-# 1. Kill running instances
-killall Muesli-<suffix> 2>/dev/null; killall Muesli 2>/dev/null
+# 1. Kill running instances (replace <branch-suffix> with your branch name)
+killall Muesli-<branch-suffix> 2>/dev/null; killall Muesli 2>/dev/null
 
 # 2. Remove DerivedData
-rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app
+rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<branch-suffix>.app
 
 # 3. Reset TCC permissions and UserDefaults
-tccutil reset ScreenCapture com.muesli.app.<suffix> 2>/dev/null || true
-tccutil reset Microphone com.muesli.app.<suffix> 2>/dev/null || true
-defaults delete com.muesli.app.<suffix> 2>/dev/null || true
+tccutil reset ScreenCapture com.muesli.app.<branch-suffix> 2>/dev/null || true
+tccutil reset Microphone com.muesli.app.<branch-suffix> 2>/dev/null || true
+defaults delete com.muesli.app.<branch-suffix> 2>/dev/null || true
 
 # 4. Unregister from LaunchServices
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app 2>/dev/null || true
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<branch-suffix>.app 2>/dev/null || true
 
 # 5. Verify and remove worktree
 ps aux | grep -i muesli | grep -v grep  # Should be empty
 cd /path/to/repo && git worktree remove <worktree-path>
 ```
 
+**Example for feature-transcription branch**:
+```bash
+killall Muesli-feature-transcription 2>/dev/null
+rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-feature-transcription.app
+tccutil reset ScreenCapture com.muesli.app.feature-transcription 2>/dev/null || true
+tccutil reset Microphone com.muesli.app.feature-transcription 2>/dev/null || true
+defaults delete com.muesli.app.feature-transcription 2>/dev/null || true
+```
+
 ### Verifying Your Setup
 
-After configuring a worktree, verify:
-1. Build produces `Muesli-<suffix>.app` (not `Muesli.app`)
-2. Menu bar shows "Muesli-<suffix>" (hover over icon)
-3. System Settings → Privacy → Screen Recording shows "Muesli-<suffix>"
-4. Only ONE Muesli icon appears in menu bar
+After configuring a branch, verify:
+1. Build produces `Muesli-<branch-suffix>.app` (or `Muesli.app` for main branch)
+2. Menu bar shows "Muesli-<branch-suffix>" when you hover over the icon
+3. System Settings → Privacy → Screen Recording shows "Muesli-<branch-suffix>"
+4. Bundle ID in project.pbxproj matches sanitized branch name
+5. Only ONE Muesli icon appears in menu bar
+
+**Quick verification commands**:
+```bash
+# Check current branch
+git branch --show-current
+
+# Check bundle ID configuration
+grep "PRODUCT_BUNDLE_IDENTIFIER" Muesli.xcodeproj/project.pbxproj | head -1
+
+# Check running Muesli processes
+ps aux | grep -i muesli | grep -v grep
+```
 
 ### Troubleshooting
 
 **Multiple menu bar icons?**
 ```bash
 # Kill all Muesli variants and check for stale processes
-killall Muesli 2>/dev/null; killall Muesli-<suffix> 2>/dev/null
+killall Muesli 2>/dev/null; killall Muesli-<branch-suffix> 2>/dev/null
 ps aux | grep -i muesli
 ```
 
 **"Quit & Reopen" launches wrong version?**
 1. Check for multiple DerivedData folders: `ls ~/Library/Developer/Xcode/DerivedData/ | grep Muesli`
-2. Remove all but your current worktree's build
+2. Remove all but your current branch's build
 3. Re-register the correct app: `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f <path-to-correct-app>`
+
+**Bundle ID doesn't match current branch?**
+
+This happens when the bundle ID in `project.pbxproj` doesn't match your current branch name.
+
+**Symptoms:**
+- Build produces wrong app name (e.g., `Muesli-feature-a.app` when on branch `feature-b`)
+- Menu bar shows wrong app name
+- TCC permissions prompt for wrong app name
+
+**Diagnosis:**
+```bash
+# Check current branch
+CURRENT_BRANCH=$(git branch --show-current)
+echo "Current branch: $CURRENT_BRANCH"
+
+# Check bundle ID in project
+BUNDLE_ID=$(grep 'PRODUCT_BUNDLE_IDENTIFIER' Muesli.xcodeproj/project.pbxproj | head -1)
+echo "Bundle ID: $BUNDLE_ID"
+
+# Calculate expected bundle ID
+BRANCH_SUFFIX=$(echo $CURRENT_BRANCH | sed 's/\//-/g')
+if [ "$CURRENT_BRANCH" = "main" ]; then
+  echo "Expected: com.muesli.app (no suffix for main)"
+else
+  echo "Expected: com.muesli.app.$BRANCH_SUFFIX"
+fi
+```
+
+**Common causes:**
+- Checked out wrong branch (verify with user: "Is this the correct branch?")
+- Bundle ID configured for different branch (stale configuration from previous work)
+- New branch not yet configured (needs initial setup)
+- Branch was renamed but bundle ID wasn't updated
+
+**Fix:**
+1. Confirm with user that current branch is correct
+2. If correct branch, reconfigure bundle ID to match branch name (see "Setting Up a Worktree" → "Create New Branch")
+3. If wrong branch, check out the correct branch
+4. Commit and push bundle ID changes after reconfiguration
 
 ## Project structure (expected)
 

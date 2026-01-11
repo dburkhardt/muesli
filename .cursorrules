@@ -5,14 +5,25 @@ CRITICAL: Always read and follow these files first:
 1) AGENTS.md (working rules, architecture, pitfalls, build commands)
 2) SPEC.md (phased implementation plan + checkpoints)
 
-WORKTREE SETUP (when starting work in a new worktree):
-- **BEFORE building**: Check if this is a new worktree by verifying `PRODUCT_BUNDLE_IDENTIFIER` and `PRODUCT_NAME` in `Muesli.xcodeproj/project.pbxproj`
-- If bundle ID is still `com.muesli.app` (not `com.muesli.app.<suffix>`), you MUST:
-  1. Create worktree with branch: `git worktree add -b <branch-name> <path>`
-  2. Configure the worktree app identity (see AGENTS.md "Working in Worktrees" section)
-  3. Commit and push branch to remote: `git add . && git commit -m "Configure worktree app identity" && git push -u origin <branch-name>` (see AGENTS.md "Setting Up a New Worktree" for details)
-- Never build a worktree without unique app identity - it will conflict with other worktrees
-- Never skip pushing the branch to remote after configuration - other agents need to discover the branch
+BRANCH-BASED DEVELOPMENT (when starting work in a new worktree):
+- **BEFORE building**: Verify branch and bundle ID alignment
+  1. Get current branch: `git branch --show-current`
+  2. Confirm with user: "Currently on branch '{branch}'. Is this correct?"
+  3. Check bundle ID matches branch (after sanitization):
+     - main branch → must be `com.muesli.app` (no suffix)
+     - Other branches → must be `com.muesli.app.<branch-suffix>` (slashes → dashes: feature/xyz → feature-xyz)
+  4. If mismatch detected:
+     - Confirm branch is correct with user
+     - Reconfigure bundle ID to match branch name (see AGENTS.md "Setting Up a Worktree")
+     - Commit with message: "Configure bundle ID for branch: {branch}"
+     - Push to remote: `git push -u origin {branch}`
+  5. If bundle ID is unconfigured (com.muesli.app on non-main branch):
+     - This is a NEW branch - configure bundle ID following AGENTS.md guidelines
+     - Commit and push configuration before making other changes
+- **Branch name sanitization**: Replace `/` with `-` (feature/xyz → feature-xyz)
+- **Never build without verification**: Prevents wrong app versions and conflicts
+- **Git safety**: Same branch can't exist in multiple worktrees (Git prevents this by design)
+- **Bundle ID lifecycle**: Bundle ID changes stay in feature branches only, never merge to main
 
 PHASE DISCIPLINE
 - Work on exactly ONE phase at a time as defined in SPEC.md.
@@ -22,10 +33,10 @@ PHASE DISCIPLINE
 ENGINEERING RULES
 - Keep changes small and incremental; prefer minimal diffs.
 - Keep the project building at all times. If build breaks, fix it immediately before proceeding.
-- **Build and launch sequence** (copy-paste ready):
-  ```bash
-  killall Muesli 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
-  ```
+- **Build and launch sequence**: Command varies by branch (see AGENTS.md "Build Commands for Branches")
+  - main branch: `killall Muesli 2>/dev/null; xcodebuild ... Muesli.app`
+  - Feature branches: `killall Muesli-<branch-suffix> 2>/dev/null; xcodebuild ... Muesli-<branch-suffix>.app`
+  - Always use branch-specific app name after verifying bundle ID
 - The `-quiet` flag is critical - without it, builds take 5+ minutes instead of ~15 seconds
 - Always kill the app before building to avoid locked executable errors
 - **After making code changes**: Always rebuild and relaunch the app automatically. Never prompt the user to rebuild or relaunch—just do it.
