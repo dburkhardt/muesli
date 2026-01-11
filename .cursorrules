@@ -6,13 +6,29 @@ CRITICAL: Always read and follow these files first:
 2) SPEC.md (phased implementation plan + checkpoints)
 
 WORKTREE SETUP (when starting work in a new worktree):
+- **AUTOMATIC CONFIGURATION**: Read `.cursorworktrees.json` to detect worktree configuration
 - **BEFORE building**: Check if this is a new worktree by verifying `PRODUCT_BUNDLE_IDENTIFIER` and `PRODUCT_NAME` in `Muesli.xcodeproj/project.pbxproj`
-- If bundle ID is still `com.muesli.app` (not `com.muesli.app.<suffix>`), you MUST:
-  1. Create worktree with branch: `git worktree add -b <branch-name> <path>`
-  2. Configure the worktree app identity (see AGENTS.md "Working in Worktrees" section)
-  3. Commit and push branch to remote: `git add . && git commit -m "Configure worktree app identity" && git push -u origin <branch-name>` (see AGENTS.md "Setting Up a New Worktree" for details)
+- If bundle ID is still `com.muesli.app` (not `com.muesli.app.<suffix>`), you MUST automatically configure:
+  1. Detect worktree suffix from current directory path (e.g., `~/.cursor/worktrees/muesli/rvm` → suffix is `rvm`)
+  2. Read `.cursorworktrees.json` and look up configuration for this suffix
+  3. If configuration exists, apply it automatically using the `replacements` section:
+     - Replace bundle ID: `com.muesli.app` → `com.muesli.app.{suffix}`
+     - Replace product name: `$(TARGET_NAME)` → `Muesli-{suffix}`
+     - Update TCC reset script with suffix-specific bundle IDs
+  4. If configuration doesn't exist, create new entry in `.cursorworktrees.json` and apply configuration
+  5. Commit and push: `git add . && git commit -m "Configure worktree app identity: {suffix}" && git push -u origin <branch-name>`
+- **Manual fallback**: If `.cursorworktrees.json` is missing or invalid, follow AGENTS.md "Working in Worktrees" section
 - Never build a worktree without unique app identity - it will conflict with other worktrees
 - Never skip pushing the branch to remote after configuration - other agents need to discover the branch
+
+WORKTREE CONFIGURATION AUTOMATION:
+- When you detect an unconfigured worktree, automatically:
+  1. Extract suffix from path: `pwd | grep -oE '[^/]+$'`
+  2. Read `.cursorworktrees.json` (if it exists)
+  3. Apply replacements from config file using sed or Edit tool
+  4. Verify changes with `git diff Muesli.xcodeproj/project.pbxproj`
+  5. Commit and push configuration changes
+- This eliminates manual configuration steps and ensures consistency
 
 PHASE DISCIPLINE
 - Work on exactly ONE phase at a time as defined in SPEC.md.

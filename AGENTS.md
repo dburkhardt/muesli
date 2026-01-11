@@ -65,11 +65,53 @@ macOS caches app locations by bundle identifier. Without unique identifiers per 
 - TCC permissions get confused between versions
 - Debugging becomes nearly impossible due to version mismatches
 
-### Setting Up a New Worktree
+### Automated Configuration (Recommended)
 
-When you start working in a new worktree, **immediately** configure a unique app identity:
+The repo includes `.cursorworktrees.json` which agents can read to automatically configure worktrees:
 
-**Step 0: Create worktree with branch**
+**For Agents (Automatic)**:
+```bash
+# Agents: Detect unconfigured worktree and auto-apply configuration
+# 1. Check if bundle ID is still com.muesli.app (unconfigured)
+grep "PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;" Muesli.xcodeproj/project.pbxproj
+
+# 2. If unconfigured, extract suffix and apply configuration
+SUFFIX=$(basename $(pwd))
+# Read .cursorworktrees.json and apply replacements automatically
+# OR use the helper script:
+./scripts/configure-worktree.sh
+
+# 3. Verify and commit
+git diff Muesli.xcodeproj/project.pbxproj
+git add Muesli.xcodeproj/project.pbxproj
+git commit -m "Configure worktree app identity: $SUFFIX"
+git push -u origin $(git branch --show-current)
+```
+
+**For Humans (Using Helper Script)**:
+```bash
+# Navigate to your worktree
+cd ~/.cursor/worktrees/muesli/<suffix>
+
+# Run automatic configuration
+./scripts/configure-worktree.sh
+
+# Review and commit the changes
+git diff Muesli.xcodeproj/project.pbxproj
+git add Muesli.xcodeproj/project.pbxproj
+git commit -m "Configure worktree app identity: <suffix>"
+git push -u origin <branch-name>
+```
+
+**Configuration File Location**: `.cursorworktrees.json` at repo root
+
+This file maps worktree suffixes to bundle IDs, product names, and TCC script replacements. Agents should read this file and apply configurations automatically when detecting an unconfigured worktree.
+
+### Manual Configuration (Fallback)
+
+If `.cursorworktrees.json` is missing or the automated script fails, manually configure:
+
+**Step 1: Create worktree with branch**
 
 Create the worktree with a new branch:
 
@@ -84,10 +126,10 @@ cd <path-to-worktree>
 git worktree list
 ```
 
-**Step 1: Determine your worktree suffix**
+**Step 2: Determine your worktree suffix**
 Use the worktree directory name (e.g., `kxn`, `feature-xyz`, `bugfix-123`).
 
-**Step 2: Update `Muesli.xcodeproj/project.pbxproj`**
+**Step 3: Update `Muesli.xcodeproj/project.pbxproj`**
 
 Search for and update these values in BOTH Debug and Release configurations:
 
@@ -101,7 +143,7 @@ PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.<suffix>;
 PRODUCT_NAME = "Muesli-<suffix>";
 ```
 
-**Step 3: Update the TCC reset script**
+**Step 4: Update the TCC reset script**
 
 In the same file, find the "Reset TCC Permissions" shell script and update the bundle IDs:
 
@@ -117,7 +159,7 @@ tccutil reset Microphone com.muesli.app.<suffix>
 defaults delete com.muesli.app.<suffix>
 ```
 
-**Step 4: Commit configuration and push branch to remote**
+**Step 5: Commit configuration and push branch to remote**
 
 After configuring the app identity, commit the changes and push the branch to remote:
 
