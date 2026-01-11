@@ -87,23 +87,30 @@ final class ModelManager: @unchecked Sendable {
     
     // MARK: - Initialization
     
-    init() {
+    /// Whether to skip file system scanning (for testing)
+    private let skipScan: Bool
+    
+    init(skipScan: Bool = false) {
+        self.skipScan = skipScan
+        
         // Initialize all models as idle
         for model in ModelSize.allCases {
             downloadStates[model] = .idle
         }
         
-        // Scan for existing downloaded models
-        scanForDownloadedModels()
-        
-        // Load saved active model preference
-        if let savedModel = UserDefaults.standard.string(forKey: Self.activeModelKey),
-           let model = ModelSize(rawValue: savedModel),
-           downloadedModels.contains(model) {
-            activeModel = model
-        } else if let firstDownloaded = downloadedModels.first {
-            // Default to first downloaded model
-            activeModel = firstDownloaded
+        // Scan for existing downloaded models (skip during tests)
+        if !skipScan {
+            scanForDownloadedModels()
+            
+            // Load saved active model preference
+            if let savedModel = UserDefaults.standard.string(forKey: Self.activeModelKey),
+               let model = ModelSize(rawValue: savedModel),
+               downloadedModels.contains(model) {
+                activeModel = model
+            } else if let firstDownloaded = downloadedModels.first {
+                // Default to first downloaded model
+                activeModel = firstDownloaded
+            }
         }
     }
     
@@ -114,8 +121,10 @@ final class ModelManager: @unchecked Sendable {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let muesliDir = appSupport.appendingPathComponent("Muesli/Models", isDirectory: true)
         
-        // Create directory if it doesn't exist
-        try? FileManager.default.createDirectory(at: muesliDir, withIntermediateDirectories: true)
+        // Create directory if it doesn't exist (skip during tests)
+        if !skipScan {
+            try? FileManager.default.createDirectory(at: muesliDir, withIntermediateDirectories: true)
+        }
         
         return muesliDir
     }

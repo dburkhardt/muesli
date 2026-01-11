@@ -120,23 +120,30 @@ final class LLMManager {
         }
     }
     
-    /// Hub API for downloading models
-    /// Lazy to avoid triggering Hugging Face cache access during initialization
-    /// (which prompts for Documents folder access on macOS)
-    private lazy var hubApi = HubApi()
+    /// Hub API for downloading models (lazy to avoid Documents prompt on init)
+    private var _hubApi: HubApi?
+    private var hubApi: HubApi {
+        if _hubApi == nil {
+            _hubApi = HubApi()
+        }
+        return _hubApi!
+    }
+    
+    /// Whether to skip Hub API access (for testing)
+    private let skipHubAccess: Bool
     
     // MARK: - Initialization
     
-    /// Initialize LLM Manager
-    /// - Parameter skipScan: If true, skips scanning for downloaded models (for testing, avoids Hub cache access)
-    init(skipScan: Bool = false) {
+    init(skipHubAccess: Bool = false) {
+        self.skipHubAccess = skipHubAccess
+        
         // Initialize all models as idle
         for model in LLMModel.allCases {
             downloadStates[model] = .idle
         }
         
-        // Scan for existing downloaded models (skip in tests to avoid Documents prompt)
-        if !skipScan {
+        // Scan for existing downloaded models (skip if avoiding Hub access)
+        if !skipHubAccess {
             scanForDownloadedModels()
             
             // Load saved active model preference
@@ -154,6 +161,10 @@ final class LLMManager {
     
     /// Returns the Hub cache directory for models
     var modelDirectory: URL {
+        guard !skipHubAccess else {
+            // Return a dummy path for tests (won't be accessed)
+            return FileManager.default.temporaryDirectory.appendingPathComponent("test-llm-models")
+        }
         // Use a dummy config to get the base cache location
         let dummyConfig = ModelConfiguration(id: "mlx-community/test")
         return dummyConfig.modelDirectory(hub: hubApi).deletingLastPathComponent().deletingLastPathComponent()
@@ -161,6 +172,8 @@ final class LLMManager {
     
     /// Get the path for a specific model (from Hub cache)
     func pathForModel(_ model: LLMModel) -> URL? {
+        guard !skipHubAccess else { return nil }
+        
         let modelDir = model.modelConfiguration.modelDirectory(hub: hubApi)
         
         // Check for model files (config.json indicates a valid model)

@@ -306,9 +306,9 @@ final class MuesliViewModel {
         refinementCoordinator: RefinementCoordinator? = nil,
         skipInitialLoad: Bool = false
     ) {
-        // Initialize managers (skipScan prevents Documents folder prompt in tests)
+        // Initialize managers (skip scanning during tests to avoid file system/Documents prompts)
         self.modelManager = ModelManager(skipScan: skipInitialLoad)
-        self.llmManager = LLMManager(skipScan: skipInitialLoad)
+        self.llmManager = LLMManager(skipHubAccess: skipInitialLoad)
         
         self.preferencesManager = preferencesManager
         self.historyManager = historyManager ?? MeetingHistoryManager(skipInitialLoad: skipInitialLoad)
