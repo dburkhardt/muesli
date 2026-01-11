@@ -155,6 +155,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showOnboardingWindow()
         }
     }
+    
+    /// Called when onboarding completes - opens main window and closes onboarding window
+    func completeOnboarding() {
+        // Close the onboarding window first
+        onboardingWindow?.close()
+        onboardingWindow = nil
+        onboardingViewModel = nil
+        
+        // Ensure UserDefaults is synced
+        UserDefaults.standard.synchronize()
+        
+        // Use NSWorkspace to open the main window
+        // This ensures SwiftUI creates the window if it doesn't exist
+        Task { @MainActor in
+            // Small delay to ensure window system is ready
+            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+            
+            // Activate the app
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            
+            // Find or create the main window
+            // SwiftUI Window scenes create windows automatically, but we need to trigger it
+            // by using the openWindow environment value or by finding the window scene
+            
+            // First, try to find existing main window
+            var mainWindow = NSApplication.shared.windows.first(where: { window in
+                // Check window identifier (SwiftUI sets this for Window scenes)
+                if let identifier = window.identifier?.rawValue, identifier == "main" {
+                    return true
+                }
+                // Also check by content view type as fallback
+                if window.contentViewController is NSHostingController<MainWindowView> {
+                    return true
+                }
+                return false
+            })
+            
+            // If window doesn't exist, we need to trigger SwiftUI to create it
+            // Since we're using Window (not WindowGroup), SwiftUI should create it on first access
+            // We can trigger this by posting a notification that the app should open the main window
+            if mainWindow == nil {
+                // Post notification to trigger window creation
+                // The MuesliApp's Window scene should respond to this
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("NSApplicationDidFinishLaunching"),
+                    object: NSApplication.shared
+                )
+                
+                // Wait a bit for SwiftUI to create the window
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                
+                // Check again
+                mainWindow = NSApplication.shared.windows.first(where: { window in
+                    if let identifier = window.identifier?.rawValue, identifier == "main" {
+                        return true
+                    }
+                    if window.contentViewController is NSHostingController<MainWindowView> {
+                        return true
+                    }
+                    return false
+                })
+            }
+            
+            // Show the main window
+            if let window = mainWindow {
+                window.makeKeyAndOrderFront(nil)
+                window.orderFrontRegardless()
+            } else {
+                // Last resort: log and try to open via menu bar
+                print("[AppDelegate] Warning: Main window not found. Attempting to open via menu...")
+                // The menu bar should have an option to open the main window
+            }
+        }
+    }
 }
 
 /// Custom view for menu bar icon that uses template rendering for light/dark mode adaptation

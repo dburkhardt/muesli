@@ -27,7 +27,15 @@ final class MuesliViewModel {
     
     // MARK: - Onboarding
     
-    var hasCompletedOnboarding: Bool = false
+    /// Whether onboarding has been completed (always reads from UserDefaults for consistency)
+    var hasCompletedOnboarding: Bool {
+        get {
+            UserDefaults.standard.bool(forKey: Self.onboardingCompletedKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Self.onboardingCompletedKey)
+        }
+    }
     
     private static let onboardingCompletedKey = "hasCompletedOnboarding"
     
@@ -296,9 +304,6 @@ final class MuesliViewModel {
         // Initialize refinement service
         refinementService = TranscriptRefinementService(llmManager: llmManager)
         
-        // Load onboarding state
-        hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingCompletedKey)
-        
         // Load echo cancellation state
         _isEchoCancellationEnabled = UserDefaults.standard.bool(forKey: "echoCancellationEnabled")
         
@@ -476,7 +481,6 @@ final class MuesliViewModel {
     func completeOnboarding() {
         // Model path is now managed by ModelManager, we just mark onboarding as done
         hasCompletedOnboarding = true
-        UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
     }
     
     func resetOnboarding() {

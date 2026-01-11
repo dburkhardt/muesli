@@ -697,15 +697,8 @@ struct OnboardingView: View {
         // Clear saved step
         UserDefaults.standard.removeObject(forKey: Self.currentStepKey)
         
-        // Capture the onboarding window BEFORE opening the main window
-        // (openWindow will change the key window)
-        let onboardingWindow = NSApplication.shared.keyWindow
-        
-        // Open the main window
-        openWindow(id: "main")
-        NSApp.activate(ignoringOtherApps: true)
-        
-        // Close the onboarding window (using the captured reference)
-        onboardingWindow?.close()
+        // Notify AppDelegate to handle window transition
+        // This ensures the main window opens properly
+        AppDelegate.shared?.completeOnboarding()
     }
 }
