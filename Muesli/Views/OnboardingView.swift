@@ -21,6 +21,10 @@ struct OnboardingView: View {
     
     private static let currentStepKey = "onboardingCurrentStep"
     
+    private var appName: String {
+        Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
+    }
+    
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
         case screenRecording = 1
@@ -114,7 +118,7 @@ struct OnboardingView: View {
                 .font(.system(size: 80))
                 .foregroundStyle(Color.accentColor)
             
-            Text("Welcome to Muesli")
+            Text("Welcome to \(appName)")
                 .font(.system(size: 28, weight: .bold))
             
             Text("Local meeting transcription for macOS.\nYour audio never leaves your device.")
@@ -686,12 +690,8 @@ struct OnboardingView: View {
     // MARK: - Complete Onboarding
     
     private func completeOnboarding() {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logEntry = "{\"location\":\"OnboardingView.swift:completeOnboarding\",\"message\":\"OnboardingView completeOnboarding called\",\"data\":{},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"E\"}\n"
-        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry.data(using: .utf8)!); handle.closeFile() } else { FileManager.default.createFile(atPath: logPath, contents: logEntry.data(using: .utf8), attributes: nil) }
-        // #endregion
         stopPermissionPolling()
+        
         viewModel.completeOnboarding()
         
         // Clear saved step

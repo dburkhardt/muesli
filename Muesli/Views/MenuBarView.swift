@@ -6,14 +6,11 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     
-    private var hasCompletedOnboarding: Bool {
-        let value = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logEntry = "{\"location\":\"MenuBarView.swift:hasCompletedOnboarding\",\"message\":\"Checking onboarding status\",\"data\":{\"value\":\(value)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"E\"}\n"
-        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry.data(using: .utf8)!); handle.closeFile() } else { FileManager.default.createFile(atPath: logPath, contents: logEntry.data(using: .utf8), attributes: nil) }
-        // #endregion
-        return value
+    /// Use @AppStorage so SwiftUI automatically observes UserDefaults changes
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+    
+    private var appName: String {
+        Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
     }
     
     var body: some View {
@@ -39,7 +36,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            Button("Quit Muesli") {
+            Button("Quit \(appName)") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q", modifiers: .command)
@@ -60,7 +57,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            Button("Open Muesli") {
+            Button("Open \(appName)") {
                 openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)
             }
@@ -75,7 +72,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            Button("Quit Muesli") {
+            Button("Quit \(appName)") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q", modifiers: .command)
@@ -112,7 +109,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            Button("Quit Muesli") {
+            Button("Quit \(appName)") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q", modifiers: .command)

@@ -15,6 +15,18 @@ final class TranscriptionCoordinator {
         case loading           // Model is being initialized
         case ready             // Model ready for transcription
         case failed(Error)     // Model loading failed
+        
+        /// Check if state is loading
+        var isLoading: Bool {
+            if case .loading = self { return true }
+            return false
+        }
+        
+        /// Check if state is ready
+        var isReady: Bool {
+            if case .ready = self { return true }
+            return false
+        }
     }
     
     // MARK: - Dependencies
@@ -132,9 +144,9 @@ final class TranscriptionCoordinator {
     
     /// Buffer system audio while model loads
     func bufferSystemAudio(_ samples: [Float]) {
-        guard modelState == .loading else {
+        guard modelState.isLoading else {
             // If ready, pass through immediately
-            if modelState == .ready {
+            if modelState.isReady {
                 transcriptionService.appendSystemAudio(samples)
             }
             return
@@ -159,9 +171,9 @@ final class TranscriptionCoordinator {
     
     /// Buffer microphone audio while model loads
     func bufferMicrophoneAudio(_ samples: [Float]) {
-        guard modelState == .loading else {
+        guard modelState.isLoading else {
             // If ready, pass through immediately
-            if modelState == .ready {
+            if modelState.isReady {
                 transcriptionService.appendMicrophoneAudio(samples)
             }
             return
@@ -186,7 +198,7 @@ final class TranscriptionCoordinator {
     
     /// Process buffered audio when model becomes ready
     func processBufferedAudio() {
-        guard modelState == .ready, isInitialized else { return }
+        guard modelState.isReady, isInitialized else { return }
         
         // Process buffered system audio
         if !pendingSystemAudio.isEmpty {
@@ -243,8 +255,8 @@ final class TranscriptionCoordinator {
         let systemAudioURL = meeting.directory.appendingPathComponent("audio.caf")
         let micAudioURL = meeting.directory.appendingPathComponent("microphone.caf")
         
-        // Transcribe
-        var segments: [TranscriptionService.TranscriptSegment] = []
+        // Transcribe - use nonisolated(unsafe) since we're on MainActor and handler runs synchronously
+        nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
         tempService.setTranscriptHandler { segment in
             segments.append(segment)
         }
@@ -257,6 +269,7 @@ final class TranscriptionCoordinator {
         
         // TODO: Update meeting with new transcript segments
         // This will be implemented when we connect to the UI
+        _ = segments  // Use collected segments
         
         progressHandler?(1.0)
     }

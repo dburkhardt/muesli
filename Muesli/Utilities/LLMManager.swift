@@ -10,7 +10,7 @@ import MLXLMCommon
 /// Uses MLX-Swift for on-device LLM inference
 @Observable
 @MainActor
-final class LLMManager {
+final class LLMManager: LLMManagerProtocol {
     
     // MARK: - Model Options
     

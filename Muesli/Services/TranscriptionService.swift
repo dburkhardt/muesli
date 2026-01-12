@@ -6,7 +6,7 @@ import os.lock
 
 /// Service for real-time audio transcription using WhisperKit
 /// Handles both system audio ("Them") and microphone audio ("Me")
-final class TranscriptionService: @unchecked Sendable {
+final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProtocol {
     
     // MARK: - Types
     

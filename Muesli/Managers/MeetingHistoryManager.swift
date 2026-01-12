@@ -44,6 +44,9 @@ final class MeetingHistoryManager {
     /// Meetings pending deletion (after confirmation)
     var meetingsPendingDeletion: [MeetingHistoryItem] = []
     
+    /// Error from most recent deletion attempt (nil if successful)
+    var deletionError: String?
+    
     // MARK: - Window State
     
     /// Meeting to show in completed meeting window
@@ -244,10 +247,21 @@ final class MeetingHistoryManager {
         let meetingsToDelete = meetingsPendingDeletion
         meetingsPendingDeletion = []
         showDeleteConfirmation = false
+        deletionError = nil  // Clear any previous error
         
         // Delete from disk
+        var failedMeetings: [String] = []
         for meeting in meetingsToDelete {
-            deleteMeetingFromDisk(meeting)
+            do {
+                try deleteMeetingFromDisk(meeting)
+            } catch {
+                failedMeetings.append("\(meeting.title): \(error.localizedDescription)")
+            }
+        }
+        
+        // Set error state if any deletions failed
+        if !failedMeetings.isEmpty {
+            deletionError = "Failed to delete:\n" + failedMeetings.joined(separator: "\n")
         }
         
         // Clear selection if deleted meetings were selected
@@ -258,7 +272,7 @@ final class MeetingHistoryManager {
             }
         }
         
-        // Refresh history
+        // Refresh history (will show remaining meetings including any that failed to delete)
         refreshMeetingHistory()
     }
     
@@ -268,14 +282,16 @@ final class MeetingHistoryManager {
         showDeleteConfirmation = false
     }
     
+    /// Clear the deletion error state
+    func clearDeletionError() {
+        deletionError = nil
+    }
+    
     /// Delete a meeting's folder from disk
-    private func deleteMeetingFromDisk(_ meeting: MeetingHistoryItem) {
+    /// - Throws: Any file system error that occurs during deletion
+    private func deleteMeetingFromDisk(_ meeting: MeetingHistoryItem) throws {
         let fileManager = FileManager.default
-        do {
-            try fileManager.removeItem(at: meeting.directory)
-        } catch {
-            print("[MeetingHistoryManager] Failed to delete meeting: \(error.localizedDescription)")
-        }
+        try fileManager.removeItem(at: meeting.directory)
     }
     
     // MARK: - Helper Methods

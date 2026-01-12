@@ -10,6 +10,14 @@ struct MuesliApp: App {
     @State private var permissionManager: PermissionManager
     @State private var refinementCoordinator: RefinementCoordinator
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    
+    /// Get the app's display name from the bundle (e.g., "Muesli" or "Muesli-feature-xyz")
+    static var appDisplayName: String {
+        Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
+    }
+    
+    /// Shared ViewModel instance for the entire app (including onboarding)
+    static var sharedViewModel: MuesliViewModel?
 
     init() {
         // Create managers in dependency order
@@ -17,29 +25,31 @@ struct MuesliApp: App {
         let historyManager = MeetingHistoryManager()
         let permManager = PermissionManager()
 
+        // Create services that need to be shared
+        let fileOutputService = FileOutputService()
+        
         // Create refinement coordinator with dependencies
         // Note: ViewModel also creates its own LLMManager, so we need to share the same one
         let llmManager = LLMManager()
-        let fileOutputService = FileOutputService()
         let coordinator = RefinementCoordinator(llmManager: llmManager, fileOutputService: fileOutputService)
 
-        // Create ViewModel with injected managers
-        // This ensures ViewModel shares the same state with the managers
+        // Create ViewModel with injected managers and services
+        // This ensures ViewModel shares the same state and services with coordinators
         let vm = MuesliViewModel(
             preferencesManager: prefs,
             historyManager: historyManager,
-            refinementCoordinator: coordinator
+            refinementCoordinator: coordinator,
+            fileOutputService: fileOutputService,
+            permissionManager: permManager
         )
 
         // Wire up PreferencesManager callbacks to services
         prefs.outputDirectoryDidChange = { newDirectory in
             fileOutputService.setOutputDirectory(newDirectory)
         }
-        prefs.transcriptionModeDidChange = { newMode in
-            // Now that ViewModel delegates to preferencesManager, this callback
-            // is for external services that need to react to transcription mode changes
-            vm.transcriptionMode = newMode.serviceMode
-        }
+        // Note: transcriptionModeDidChange callback removed to prevent infinite recursion
+        // MuesliViewModel.transcriptionMode setter already updates PreferencesManager AND
+        // TranscriptionCoordinator, so no callback needed here
 
         // Initialize @State properties
         _viewModel = State(initialValue: vm)
@@ -47,6 +57,9 @@ struct MuesliApp: App {
         _meetingHistoryManager = State(initialValue: historyManager)
         _permissionManager = State(initialValue: permManager)
         _refinementCoordinator = State(initialValue: coordinator)
+        
+        // Store shared ViewModel for AppDelegate to access
+        MuesliApp.sharedViewModel = vm
     }
     
     var body: some Scene {
@@ -55,6 +68,7 @@ struct MuesliApp: App {
             MenuBarView(viewModel: viewModel)
                 .environment(meetingHistoryManager)
                 .environment(refinementCoordinator)
+                .background(OpenWindowCallbackSetter())
         } label: {
             MenuBarIconView()
         }
@@ -85,7 +99,7 @@ struct MuesliApp: App {
         .windowResizability(.contentSize)
 
         // Main window - SINGLE window for recordings (not WindowGroup)
-        Window("Muesli", id: "main") {
+        Window(Self.appDisplayName, id: "main") {
             MainWindowView(viewModel: viewModel)
                 .environment(meetingHistoryManager)
                 .environment(permissionManager)
@@ -107,7 +121,9 @@ struct MuesliApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate?
     private var onboardingWindow: NSWindow?
-    private var onboardingViewModel: MuesliViewModel?
+    
+    /// Callback to open the main window (set by MuesliApp body)
+    var openMainWindowCallback: (() -> Void)?
     
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
@@ -133,15 +149,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func showOnboardingWindow() {
-        // Create the onboarding window manually
-        let viewModel = MuesliViewModel()
-        self.onboardingViewModel = viewModel
+        // Use the shared ViewModel from MuesliApp to ensure state synchronization
+        guard let viewModel = MuesliApp.sharedViewModel else {
+            print("[AppDelegate] Error: Shared ViewModel not available")
+            return
+        }
         let onboardingView = OnboardingView(viewModel: viewModel)
         
         let hostingController = NSHostingController(rootView: onboardingView)
         
         let window = NSWindow(contentViewController: hostingController)
-        window.title = "Welcome to Muesli"
+        // Use dynamic app name in window title
+        let appName = Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
+        window.title = "Welcome to \(appName)"
         window.styleMask = [.titled, .closable]
         window.setContentSize(NSSize(width: 500, height: 450))
         window.center()
@@ -167,7 +187,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Close the onboarding window first
         onboardingWindow?.close()
         onboardingWindow = nil
-        onboardingViewModel = nil
         
         // Ensure UserDefaults is synced
         UserDefaults.standard.synchronize()
@@ -228,12 +247,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let window = mainWindow {
                 window.makeKeyAndOrderFront(nil)
                 window.orderFrontRegardless()
+            } else if let callback = self.openMainWindowCallback {
+                // Use the callback to open the main window via SwiftUI's openWindow
+                callback()
             } else {
-                // Last resort: log and try to open via menu bar
-                print("[AppDelegate] Warning: Main window not found. Attempting to open via menu...")
-                // The menu bar should have an option to open the main window
+                // Last resort: log error
+                print("[AppDelegate] Warning: Main window not found and no callback available.")
             }
         }
+    }
+}
+
+/// Helper view that captures openWindow environment and sets callback on AppDelegate
+private struct OpenWindowCallbackSetter: View {
+    @Environment(\.openWindow) private var openWindow
+    
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                // Set the callback so AppDelegate can open the main window
+                AppDelegate.shared?.openMainWindowCallback = { [openWindow] in
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
     }
 }
 

@@ -240,7 +240,7 @@ extension EchoCancellationService {
 /// Reference signal: System audio (what's playing through speakers)
 /// Input signal: Microphone audio (may contain echo)
 /// Output: Clean microphone audio (echo removed)
-final class EchoCancellationService: @unchecked Sendable {
+final class EchoCancellationService: @unchecked Sendable, EchoCancellationServiceProtocol {
     
     // MARK: - Configuration
     

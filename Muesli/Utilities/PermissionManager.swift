@@ -6,7 +6,7 @@ import ScreenCaptureKit
 /// Can be injected into views via @Environment for permission state observation
 @Observable
 @MainActor
-final class PermissionManager {
+final class PermissionManager: PermissionManagerProtocol {
     
     // MARK: - Observable State
     
@@ -37,6 +37,7 @@ final class PermissionManager {
         do {
             // This call will fail with a specific TCC error if permission is not granted
             _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            
             return true
         } catch {
             return false

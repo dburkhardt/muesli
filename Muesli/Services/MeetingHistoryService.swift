@@ -2,7 +2,7 @@ import Foundation
 import AVFoundation
 
 /// Service responsible for discovering and loading meeting recordings from disk
-final class MeetingHistoryService {
+final class MeetingHistoryService: MeetingHistoryServiceProtocol {
     
     // MARK: - Properties
     

@@ -8,13 +8,7 @@ struct MainWindowView: View {
     /// Show split view when a meeting is selected OR recording is active
     /// Show unified list otherwise (idle state)
     private var shouldShowSplitView: Bool {
-        let result = historyManager.selectedMeeting != nil || viewModel.activeRecordingSession != nil || viewModel.isSplitViewVisible
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logEntry = "{\"location\":\"MainWindowView.swift:shouldShowSplitView\",\"message\":\"Checking split view state\",\"data\":{\"historyMgrSelectedMeeting\":\"\(historyManager.selectedMeeting?.title ?? "nil")\",\"vmSelectedMeeting\":\"\(viewModel.selectedMeeting?.title ?? "nil")\",\"activeSession\":\(viewModel.activeRecordingSession != nil),\"isSplitViewVisible\":\(viewModel.isSplitViewVisible),\"result\":\(result)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000),\"sessionId\":\"debug-session\",\"hypothesisId\":\"A\"}\n"
-        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(logEntry.data(using: .utf8)!); handle.closeFile() } else { FileManager.default.createFile(atPath: logPath, contents: logEntry.data(using: .utf8), attributes: nil) }
-        // #endregion
-        return result
+        historyManager.selectedMeeting != nil || viewModel.activeRecordingSession != nil || viewModel.isSplitViewVisible
     }
     
     var body: some View {

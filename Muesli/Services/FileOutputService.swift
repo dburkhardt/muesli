@@ -4,7 +4,7 @@ import CoreMedia
 
 /// Service responsible for saving audio recordings and transcripts to disk
 /// Uses a combination of actor isolation (for setup/teardown) and manual locking (for real-time buffer writing)
-final class FileOutputService: @unchecked Sendable {
+final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     
     // MARK: - Types
     

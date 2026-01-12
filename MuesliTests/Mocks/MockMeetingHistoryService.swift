@@ -1,5 +1,5 @@
 import Foundation
-@testable import Muesli_vmr
+@testable import Muesli_refactor_viewmodel
 
 /// Mock implementation of MeetingHistoryService for testing
 @MainActor

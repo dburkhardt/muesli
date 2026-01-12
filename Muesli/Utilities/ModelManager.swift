@@ -4,7 +4,7 @@ import AppKit
 
 /// Manages WhisperKit model downloading and storage
 @Observable
-final class ModelManager: @unchecked Sendable {
+final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     
     // MARK: - Model Options
     

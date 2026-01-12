@@ -64,23 +64,21 @@ final class MuesliViewModel {
         modelManager.modelPath
     }
     
-    // MARK: - Services
+    // MARK: - Services (injectable for testing)
     
-    private let audioCaptureService = AudioCaptureService()
-    private let fileOutputService = FileOutputService()
-    private let transcriptionService = TranscriptionService()
-    private let meetingAppDetector = MeetingAppDetector()
-    private let permissionManager = PermissionManager()
-    let microphoneManager = MicrophoneManager()
-    private let meetingHistoryService = MeetingHistoryService()
+    private let audioCaptureService: AudioCaptureService
+    private let fileOutputService: FileOutputService
+    private let transcriptionService: TranscriptionService
+    private let meetingAppDetector: MeetingAppDetector
+    private let permissionManager: PermissionManager
+    let microphoneManager: MicrophoneManager
+    private let meetingHistoryService: MeetingHistoryService
     
     // Echo cancellation service (optional - can be enabled/disabled)
-    private let echoCancellationService = EchoCancellationService(
-        filterLength: 256,
-        learningRate: 0.3,
-        sampleRate: 48000,
-        maxDelayMs: 100
-    )
+    private let echoCancellationService: EchoCancellationService
+    
+    // Transcription coordinator (manages model lifecycle and audio buffering)
+    private let transcriptionCoordinator: TranscriptionCoordinator
     
     /// Whether echo cancellation is enabled (delegates to PreferencesManager)
     var isEchoCancellationEnabled: Bool {
@@ -89,14 +87,10 @@ final class MuesliViewModel {
         }
         set {
             preferencesManager.isEchoCancellationEnabled = newValue
-            // Also update local cache for audio callback
-            _isEchoCancellationEnabled = newValue
         }
     }
     
     // MARK: - Transcription State
-    
-    var isTranscriptionInitialized: Bool = false
     
     /// Transcription mode: live (real-time) or post-processing (after recording)
     /// Delegates to PreferencesManager for persistence
@@ -106,7 +100,7 @@ final class MuesliViewModel {
         }
         set {
             preferencesManager.transcriptionMode = PreferencesManager.TranscriptionMode(from: newValue)
-            transcriptionService.setTranscriptionMode(newValue)
+            transcriptionCoordinator.setTranscriptionMode(newValue)
         }
     }
     
@@ -162,6 +156,12 @@ final class MuesliViewModel {
     var meetingsPendingDeletion: [MeetingHistoryItem] {
         get { historyManager.meetingsPendingDeletion }
         set { historyManager.meetingsPendingDeletion = newValue }
+    }
+    
+    /// Error from most recent deletion attempt (delegates to historyManager)
+    var deletionError: String? {
+        get { historyManager.deletionError }
+        set { historyManager.deletionError = newValue }
     }
     
     /// Whether the split view (sidebar + detail) should be visible
@@ -276,10 +276,6 @@ final class MuesliViewModel {
     /// Uses nonisolated(unsafe) for thread-safe access from audio callback
     nonisolated(unsafe) private var isMicrophoneMuted: Bool = false
     
-    /// Echo cancellation enabled state (for synchronous access from audio callback)
-    /// Uses nonisolated(unsafe) for thread-safe access from audio callback
-    nonisolated(unsafe) private var _isEchoCancellationEnabled: Bool = false
-    
     /// Toggle microphone mute state for active recording
     func toggleMicrophoneMute() {
         guard let session = activeRecordingSession else { return }
@@ -294,18 +290,49 @@ final class MuesliViewModel {
     
     // MARK: - Initialization
     
-    /// Initialize the ViewModel with injected managers
+    /// Initialize the ViewModel with injected managers and services
     /// - Parameters:
     ///   - preferencesManager: Manager for user preferences
     ///   - historyManager: Manager for meeting history (if nil, creates one with skipInitialLoad)
     ///   - refinementCoordinator: Coordinator for transcript refinement
+    ///   - audioCaptureService: Service for capturing audio (injectable for testing)
+    ///   - fileOutputService: Service for file output (injectable for testing)
+    ///   - transcriptionService: Service for transcription (injectable for testing)
+    ///   - meetingAppDetector: Service for detecting meeting apps (injectable for testing)
+    ///   - permissionManager: Manager for permissions (injectable for testing)
+    ///   - microphoneManager: Manager for microphone devices (injectable for testing)
+    ///   - meetingHistoryService: Service for meeting history (injectable for testing)
+    ///   - echoCancellationService: Service for echo cancellation (injectable for testing)
     ///   - skipInitialLoad: If true, skips loading meeting history from disk (for testing)
     init(
         preferencesManager: PreferencesManager = PreferencesManager(),
         historyManager: MeetingHistoryManager? = nil,
         refinementCoordinator: RefinementCoordinator? = nil,
+        audioCaptureService: AudioCaptureService? = nil,
+        fileOutputService: FileOutputService? = nil,
+        transcriptionService: TranscriptionService? = nil,
+        meetingAppDetector: MeetingAppDetector? = nil,
+        permissionManager: PermissionManager? = nil,
+        microphoneManager: MicrophoneManager? = nil,
+        meetingHistoryService: MeetingHistoryService? = nil,
+        echoCancellationService: EchoCancellationService? = nil,
         skipInitialLoad: Bool = false
     ) {
+        // Initialize services (use provided or create defaults)
+        self.audioCaptureService = audioCaptureService ?? AudioCaptureService()
+        self.fileOutputService = fileOutputService ?? FileOutputService()
+        self.transcriptionService = transcriptionService ?? TranscriptionService()
+        self.meetingAppDetector = meetingAppDetector ?? MeetingAppDetector()
+        self.permissionManager = permissionManager ?? PermissionManager()
+        self.microphoneManager = microphoneManager ?? MicrophoneManager()
+        self.meetingHistoryService = meetingHistoryService ?? MeetingHistoryService()
+        self.echoCancellationService = echoCancellationService ?? EchoCancellationService(
+            filterLength: 256,
+            learningRate: 0.3,
+            sampleRate: 48000,
+            maxDelayMs: 100
+        )
+        
         // Initialize managers (skip scanning during tests to avoid file system/Documents prompts)
         self.modelManager = ModelManager(skipScan: skipInitialLoad)
         self.llmManager = LLMManager(skipHubAccess: skipInitialLoad)
@@ -313,32 +340,39 @@ final class MuesliViewModel {
         self.preferencesManager = preferencesManager
         self.historyManager = historyManager ?? MeetingHistoryManager(skipInitialLoad: skipInitialLoad)
         
+        // Create transcription coordinator (manages model lifecycle and audio buffering)
+        self.transcriptionCoordinator = TranscriptionCoordinator(
+            transcriptionService: self.transcriptionService,
+            modelManager: self.modelManager
+        )
+        
         // Create refinement coordinator if not provided
         self.refinementCoordinator = refinementCoordinator ?? RefinementCoordinator(
             llmManager: llmManager,
-            fileOutputService: fileOutputService
+            fileOutputService: self.fileOutputService
         )
         
         // Initialize refinement service
         refinementService = TranscriptRefinementService(llmManager: llmManager)
         
-        // Load echo cancellation state from preferences manager
-        _isEchoCancellationEnabled = preferencesManager.echoCancellationEnabledForAudioCallback
-        
         // Check initial permission status
         refreshPermissions()
         
         // Set up audio buffer handler - fork to both file output and transcription
-        let fileService = fileOutputService
-        let transcriptService = transcriptionService
-        let aecService = echoCancellationService
+        // Use self. to capture the non-optional instance properties (not the optional init parameters)
+        let fileService = self.fileOutputService
+        let transcriptService = self.transcriptionService
+        let aecService = self.echoCancellationService
+        let prefs = self.preferencesManager
+        let audioCaptureServiceRef = self.audioCaptureService
         Task {
-            await audioCaptureService.setBufferHandler { [weak self] buffer, type in
+            await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
                 guard let self = self else { return }
                 
                 // Check if microphone is muted (synchronous check)
                 let isMicMuted = self.isMicrophoneMuted
-                let isAECEnabled = self._isEchoCancellationEnabled
+                // Read AEC state from PreferencesManager's nonisolated accessor (single source of truth)
+                let isAECEnabled = prefs.echoCancellationEnabledForAudioCallback
                 
                 let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
                 
@@ -416,14 +450,14 @@ final class MuesliViewModel {
             }
             
             // Set up stream interruption handler (e.g., captured app quits)
-            await audioCaptureService.setInterruptedHandler { [weak self] error in
+            await audioCaptureServiceRef.setInterruptedHandler { [weak self] error in
                 Task { @MainActor in
                     self?.handleCaptureInterrupted(error: error)
                 }
             }
             
             // Set up audio level handler for microphone indicator
-            await audioCaptureService.setLevelHandler { [weak self] level, type in
+            await audioCaptureServiceRef.setLevelHandler { [weak self] level, type in
                 Task { @MainActor in
                     self?.updateAudioLevel(level, type: type)
                 }
@@ -431,7 +465,7 @@ final class MuesliViewModel {
         }
         
         // Set initial transcription mode
-        transcriptionService.setTranscriptionMode(transcriptionMode)
+        transcriptionCoordinator.setTranscriptionMode(transcriptionMode)
         
         // Load available meeting apps
         Task {
@@ -568,25 +602,12 @@ final class MuesliViewModel {
     
     private func startRecordingAsync(for session: RecordingSession) async {
         do {
-            // Validate model - check if active model is complete and usable
-            var validModelPath: URL?
+            // Prepare transcription model using coordinator (handles validation, fallback, initialization)
+            let modelState = await transcriptionCoordinator.prepareModel()
             
-            if let activeModel = modelManager.activeModel {
-                if modelManager.validateModel(activeModel) {
-                    validModelPath = modelManager.pathForModel(activeModel)
-                } else {
-                    modelManager.markModelCorrupted(activeModel)
-                    
-                    // Try to find a fallback model
-                    if let fallback = modelManager.getFirstValidModel() {
-                        modelManager.setActiveModel(fallback)
-                        validModelPath = modelManager.pathForModel(fallback)
-                    }
-                }
-            }
-            
-            // If no valid model, show alert
-            guard let validModelPath = validModelPath else {
+            switch modelState {
+            case .notAvailable:
+                // No valid model available
                 session.isInitializing = false
                 session.state = .idle
                 activeSession = nil
@@ -594,16 +615,30 @@ final class MuesliViewModel {
                 sessionPendingModelDecision = session
                 showModelErrorAlert = true
                 return
+                
+            case .loading:
+                // Model is loading - coordinator will buffer audio until ready
+                // Continue with recording setup
+                break
+                
+            case .ready:
+                // Model is ready - transcription can start immediately
+                break
+                
+            case .failed(let error):
+                // Model loading failed - show error
+                session.isInitializing = false
+                session.state = .idle
+                activeSession = nil
+                resetMuteState()
+                session.showErrorMessage("Model failed to load: \(error.localizedDescription)")
+                sessionPendingModelDecision = session
+                showModelErrorAlert = true
+                return
             }
             
-            // Initialize transcription service if needed
-            if !isTranscriptionInitialized {
-                try await transcriptionService.initialize(modelPath: validModelPath)
-                isTranscriptionInitialized = true
-            }
-            
-            // Set up transcript handler
-            transcriptionService.setTranscriptHandler { [weak session] segment in
+            // Set up transcript handler through coordinator
+            transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
                 Task { @MainActor in
                     guard let session = session else { return }
                     session.appendTranscriptSegment(segment)
@@ -636,8 +671,8 @@ final class MuesliViewModel {
             // Reset echo cancellation filter for new recording
             echoCancellationService.reset()
             
-            // Start transcription
-            transcriptionService.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
+            // Start transcription through coordinator (handles buffering if model still loading)
+            transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
             
         } catch let error as AudioCaptureService.CaptureError {
             switch error {
@@ -661,40 +696,8 @@ final class MuesliViewModel {
                 _ = try? await fileOutputService.stopWriting()
             }
         } catch {
+            // Handle any remaining errors (model errors are handled by coordinator above)
             let errorMsg = error.localizedDescription
-            
-            // Check if this is a model loading error (CoreML)
-            let isCoreMLError = errorMsg.contains("CoreML") || errorMsg.contains("mlmodelc") || errorMsg.contains("weight.bin") || errorMsg.contains("MIL model")
-            
-            if isCoreMLError {
-                // Mark current model as corrupted
-                if let currentModel = modelManager.activeModel {
-                    modelManager.markModelCorrupted(currentModel)
-                }
-                
-                // Try to find a fallback
-                if let fallback = modelManager.getFirstValidModel() {
-                    modelManager.setActiveModel(fallback)
-                    
-                    // Reset state and retry
-                    isTranscriptionInitialized = false
-                    session.state = .idle
-                    activeSession = nil
-                    resetMuteState()
-                    
-                    // Retry with fallback model
-                    startRecording(for: session)
-                    return
-                } else {
-                    // No fallback available, show alert
-                    session.state = .idle
-                    activeSession = nil
-                    resetMuteState()
-                    sessionPendingModelDecision = session
-                    showModelErrorAlert = true
-                    return
-                }
-            }
             
             if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
                 session.showErrorMessage("Please grant Screen Recording permission and try again.")
@@ -777,7 +780,7 @@ final class MuesliViewModel {
             echoCancellationService.reset()
             
             // Stop transcription without processing remaining audio
-            await transcriptionService.stopTranscription()
+            await transcriptionCoordinator.stopTranscription()
             
             // Stop file writing and get directory (will be deleted)
             let directory = try? await fileOutputService.stopWriting()
@@ -816,7 +819,7 @@ final class MuesliViewModel {
             echoCancellationService.reset()
             
             // Stop transcription and process remaining audio (for live mode)
-            await transcriptionService.stopTranscription()
+            await transcriptionCoordinator.stopTranscription()
             
             // Finalize file output
             guard let directory = try? await fileOutputService.stopWriting() else {
@@ -987,7 +990,7 @@ final class MuesliViewModel {
             echoCancellationService.reset()
             
             // Stop transcription and process remaining audio (for live mode)
-            await transcriptionService.stopTranscription()
+            await transcriptionCoordinator.stopTranscription()
             
             // Finalize file output
             guard let directory = try? await fileOutputService.stopWriting() else {
@@ -1066,39 +1069,38 @@ final class MuesliViewModel {
             return
         }
         
-        // Validate model path
-        guard let validModelPath = modelPath else {
-            session.showErrorMessage("No transcription model configured.")
-            return
-        }
-        
-        let configPath = validModelPath.appendingPathComponent("config.json")
-        guard FileManager.default.fileExists(atPath: configPath.path) else {
-            session.showErrorMessage("Transcription model is incomplete or corrupted.")
-            return
-        }
-        
         // Set retranscribing state
         session.isRetranscribing = true
         
-        // Initialize transcription service if needed
-        if !isTranscriptionInitialized {
-            do {
-                try await transcriptionService.initialize(modelPath: validModelPath)
-                isTranscriptionInitialized = true
-            } catch {
-                session.isRetranscribing = false
-                session.showErrorMessage("Failed to initialize transcription: \(error.localizedDescription)")
-                return
-            }
+        // Prepare transcription model using coordinator
+        let modelState = await transcriptionCoordinator.prepareModel()
+        
+        switch modelState {
+        case .notAvailable:
+            session.isRetranscribing = false
+            session.showErrorMessage("No transcription model configured.")
+            return
+            
+        case .loading:
+            // Wait for model to finish loading
+            break
+            
+        case .ready:
+            // Model is ready for transcription
+            break
+            
+        case .failed(let error):
+            session.isRetranscribing = false
+            session.showErrorMessage("Failed to initialize transcription: \(error.localizedDescription)")
+            return
         }
         
         // Set transcription mode to post-processing temporarily
-        let previousMode = transcriptionService.transcriptionMode
-        transcriptionService.setTranscriptionMode(.postProcessing)
+        let previousMode = transcriptionCoordinator.transcriptionMode
+        transcriptionCoordinator.setTranscriptionMode(TranscriptionService.TranscriptionMode.postProcessing)
         
         // Set up transcript handler to process segments through the block pipeline
-        transcriptionService.setTranscriptHandler { [weak session] segment in
+        transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
             Task { @MainActor in
                 guard let session = session else { return }
                 session.appendTranscriptSegment(segment)
@@ -1137,7 +1139,7 @@ final class MuesliViewModel {
         }
         
         // Restore previous mode
-        transcriptionService.setTranscriptionMode(previousMode)
+        transcriptionCoordinator.setTranscriptionMode(previousMode)
         
         // Clear retranscribing state
         session.isRetranscribing = false
@@ -1209,6 +1211,11 @@ final class MuesliViewModel {
         historyManager.cancelDeleteMeetings()
     }
     
+    /// Clear the deletion error state (delegates to historyManager)
+    func clearDeletionError() {
+        historyManager.clearDeletionError()
+    }
+    
     // MARK: - Transcript Refinement (delegating to RefinementCoordinator)
     
     /// Check if refinement is available (delegates to refinementCoordinator)
@@ -1248,21 +1255,21 @@ final class MuesliViewModel {
     /// Async implementation of resume recording
     private func resumeRecordingAsync(for meeting: MeetingHistoryItem) async {
         do {
-            // Validate model path
-            guard let validModelPath = modelPath else {
-                return
-            }
+            // Prepare transcription model using coordinator
+            let modelState = await transcriptionCoordinator.prepareModel()
             
-            // Check that the model directory and config.json exist
-            let configPath = validModelPath.appendingPathComponent("config.json")
-            guard FileManager.default.fileExists(atPath: configPath.path) else {
+            switch modelState {
+            case .notAvailable, .failed:
+                // No valid model available - fail silently for resume
                 return
-            }
-            
-            // Initialize transcription service if needed
-            if !isTranscriptionInitialized {
-                try await transcriptionService.initialize(modelPath: validModelPath)
-                isTranscriptionInitialized = true
+                
+            case .loading:
+                // Model is loading - coordinator will buffer audio until ready
+                break
+                
+            case .ready:
+                // Model is ready for transcription
+                break
             }
             
             // Create new session linked to existing meeting
@@ -1277,8 +1284,8 @@ final class MuesliViewModel {
             activeSession = session
             isMicrophoneMuted = session.isMicrophoneMuted
             
-            // Set up transcript handler
-            transcriptionService.setTranscriptHandler { [weak session] segment in
+            // Set up transcript handler through coordinator
+            transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
                 Task { @MainActor in
                     guard let session = session else { return }
                     session.appendTranscriptSegment(segment)
@@ -1308,8 +1315,8 @@ final class MuesliViewModel {
             session.resetTranscript()
             session.startDisplayTimer()
             
-            // Start transcription
-            transcriptionService.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
+            // Start transcription through coordinator
+            transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
             
             // Transition to split view if not already visible
             isSplitViewVisible = true

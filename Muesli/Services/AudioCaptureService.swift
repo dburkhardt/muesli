@@ -15,7 +15,7 @@ typealias AudioLevelHandler = @Sendable (Float, AudioCaptureService.AudioType) -
 
 /// Service responsible for capturing audio from meeting apps and microphone
 /// Uses ScreenCaptureKit to capture system audio from selected applications
-actor AudioCaptureService {
+actor AudioCaptureService: AudioCaptureServiceProtocol {
     
     // MARK: - Types
     

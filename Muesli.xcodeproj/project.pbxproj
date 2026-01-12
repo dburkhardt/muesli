@@ -49,6 +49,8 @@
 		C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000002241D1A1D00000050 /* PreferencesManager.swift */; };
 		C1000003241D1A1D00000051 /* MeetingHistoryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */; };
 		C1000005241D1A1D00000052 /* RefinementCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000006241D1A1D00000052 /* RefinementCoordinator.swift */; };
+		C1000007241D1A1D00000053 /* TranscriptionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000008241D1A1D00000053 /* TranscriptionCoordinator.swift */; };
+		D1000001241D1A1D00000060 /* ServiceProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1000002241D1A1D00000060 /* ServiceProtocols.swift */; };
 		B1000001241D1A1D00000040 /* MuesliViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000002241D1A1D00000040 /* MuesliViewModelTests.swift */; };
 		B1000003241D1A1D00000040 /* ServiceProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000004241D1A1D00000040 /* ServiceProtocols.swift */; };
 		B1000005241D1A1D00000040 /* MockAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000006241D1A1D00000040 /* MockAudioCaptureService.swift */; };
@@ -128,6 +130,8 @@
 		C1000002241D1A1D00000050 /* PreferencesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManager.swift; sourceTree = "<group>"; };
 		C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryManager.swift; sourceTree = "<group>"; };
 		C1000006241D1A1D00000052 /* RefinementCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementCoordinator.swift; sourceTree = "<group>"; };
+		C1000008241D1A1D00000053 /* TranscriptionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionCoordinator.swift; sourceTree = "<group>"; };
+		D1000002241D1A1D00000060 /* ServiceProtocols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceProtocols.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -181,6 +185,7 @@
 				A1000012241D1A1D00000001 /* Services */,
 				A1000013241D1A1D00000001 /* Utilities */,
 				C1000003241D1A1D00000050 /* Managers */,
+				D1000003241D1A1D00000060 /* Protocols */,
 				A1000014241D1A1D00000001 /* Resources */,
 			);
 			path = Muesli;
@@ -192,8 +197,17 @@
 				C1000002241D1A1D00000050 /* PreferencesManager.swift */,
 				C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */,
 				C1000006241D1A1D00000052 /* RefinementCoordinator.swift */,
+				C1000008241D1A1D00000053 /* TranscriptionCoordinator.swift */,
 			);
 			path = Managers;
+			sourceTree = "<group>";
+		};
+		D1000003241D1A1D00000060 /* Protocols */ = {
+			isa = PBXGroup;
+			children = (
+				D1000002241D1A1D00000060 /* ServiceProtocols.swift */,
+			);
+			path = Protocols;
 			sourceTree = "<group>";
 		};
 		A100000F241D1A1D00000001 /* Models */ = {
@@ -335,7 +349,7 @@
 		);
 		runOnlyForDeploymentPostprocessing = 0;
 		shellPath = /bin/sh;
-		shellScript = "# Reset TCC permissions and app state for Muesli to ensure fresh state after rebuild\n# This clears stale permissions that may be associated with old code signatures\ntccutil reset ScreenCapture com.muesli.app.refactor-viewmodel 2>/dev/null || true\ntccutil reset Microphone com.muesli.app.refactor-viewmodel 2>/dev/null || true\n# Reset UserDefaults (onboarding state, model paths, etc.)\ndefaults delete com.muesli.app.refactor-viewmodel 2>/dev/null || true\necho \"TCC permissions and app state reset for com.muesli.app.refactor-viewmodel\"\n";
+		shellScript = "# Reset TCC permissions and app state for Muesli to ensure fresh state after rebuild\n# This clears stale permissions that may be associated with old code signatures\n# IMPORTANT: This resets ALL UserDefaults including onboarding - ensures clean testing\ntccutil reset ScreenCapture com.muesli.app.refactor-viewmodel 2>/dev/null || true\ntccutil reset Microphone com.muesli.app.refactor-viewmodel 2>/dev/null || true\n# Reset ALL UserDefaults (onboarding state, model paths, etc.) - DO NOT PRESERVE\ndefaults delete com.muesli.app.refactor-viewmodel 2>/dev/null || true\necho \"TCC permissions and app state FULLY reset for com.muesli.app.refactor-viewmodel\"\n";
 	};
 	A100006C241D1A1D00000009 /* Update App Icon */ = {
 		isa = PBXShellScriptBuildPhase;
@@ -507,6 +521,8 @@
 				C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */,
 				C1000003241D1A1D00000051 /* MeetingHistoryManager.swift in Sources */,
 				C1000005241D1A1D00000052 /* RefinementCoordinator.swift in Sources */,
+				C1000007241D1A1D00000053 /* TranscriptionCoordinator.swift in Sources */,
+				D1000001241D1A1D00000060 /* ServiceProtocols.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -110,28 +110,61 @@ Think of it as a local, privacy-focused alternative to Granola—without cloud d
 
 ### State Architecture
 
-**MuesliViewModel** (shared app state):
+**Delegation Pattern** (implemented):
+
+MuesliViewModel acts as a coordinator that delegates state management to focused managers:
+
+```
+MuesliViewModel (Coordinator)
+│
+├── PreferencesManager (owns preferences state)
+│   ├─ outputDirectory: URL
+│   ├─ launchAtLogin: Bool
+│   ├─ transcriptionMode: TranscriptionMode
+│   └─ isEchoCancellationEnabled: Bool
+│
+├── MeetingHistoryManager (owns meeting history state)
+│   ├─ meetingHistory: [MeetingHistoryItem]
+│   ├─ groupedHistory: [MeetingHistoryGroup]
+│   ├─ selectedMeeting: MeetingHistoryItem?
+│   ├─ selectedMeetingIDs: Set<UUID>
+│   └─ meetingsPendingDeletion: [MeetingHistoryItem]
+│
+├── RefinementCoordinator (owns refinement state)
+│   ├─ showRefineSheet: Bool
+│   ├─ meetingBeingRefined: MeetingHistoryItem?
+│   ├─ canRefineTranscripts: Bool
+│   └─ showOriginalTranscript tracking per meeting
+│
+└── Recording Coordination (ViewModel keeps)
+    ├─ activeSession: RecordingSession?
+    ├─ Audio/Transcription/FileOutput Services
+    ├─ Real-time audio callbacks (nonisolated(unsafe))
+    └─ Recording lifecycle state machine
+```
+
+**ViewModel delegation pattern:**
 ```swift
-@Observable
-class MuesliViewModel {
-    // App Detection
-    var availableMeetingApps: [MeetingApp] = []
-    
-    // Permissions
-    var hasScreenRecordingPermission: Bool = false
-    var hasMicrophonePermission: Bool = false
-    
-    // Active Session Tracking (only one can record at a time)
-    private(set) var activeSession: RecordingSession?
-    
-    // Services (shared across sessions)
-    private let audioCaptureService: AudioCaptureService
-    private let transcriptionService: TranscriptionService
-    private let fileOutputService: FileOutputService
+// Computed properties delegate to managers
+var outputDirectory: URL {
+    get { preferencesManager.outputDirectory }
+    set { preferencesManager.outputDirectory = newValue }
+}
+
+var meetingHistory: [MeetingHistoryItem] {
+    get { historyManager.meetingHistory }
+    set { historyManager.meetingHistory = newValue }
 }
 ```
 
-**RecordingSession** (per-window state):
+**Benefits:**
+- Clear separation of concerns (each manager has focused responsibility)
+- Testable components (managers tested in isolation)
+- Single source of truth for views (only observe ViewModel)
+- Stable API (delegation transparent to views)
+- Recording logic preserved (~600 lines of tightly-coupled audio pipeline)
+
+**RecordingSession** (per-recording state):
 ```swift
 @Observable
 class RecordingSession: Identifiable {
