@@ -80,10 +80,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         activeModel != nil && downloadedModels.contains(activeModel!)
     }
     
-    // MARK: - Storage Keys
-    
-    private static let activeModelKey = "activeWhisperModel"
-    private static let downloadedModelsKey = "downloadedWhisperModels"
+    // MARK: - Storage Keys (use centralized AppStorageKeys)
     
     // MARK: - Initialization
     
@@ -103,7 +100,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             scanForDownloadedModels()
             
             // Load saved active model preference
-            if let savedModel = UserDefaults.standard.string(forKey: Self.activeModelKey),
+            if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel),
                let model = ModelSize(rawValue: savedModel),
                downloadedModels.contains(model) {
                 activeModel = model
@@ -202,7 +199,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
                 setActiveModel(valid)
             } else {
                 activeModel = nil
-                UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+                UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
             }
         }
         
@@ -278,14 +275,14 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     func setActiveModel(_ model: ModelSize) {
         guard downloadedModels.contains(model) else { return }
         activeModel = model
-        UserDefaults.standard.set(model.rawValue, forKey: Self.activeModelKey)
+        UserDefaults.standard.set(model.rawValue, forKey: AppStorageKeys.activeWhisperModel)
     }
     
     // MARK: - Persistence
     
     private func saveDownloadedModels() {
         let modelStrings = downloadedModels.map { $0.rawValue }
-        UserDefaults.standard.set(modelStrings, forKey: Self.downloadedModelsKey)
+        UserDefaults.standard.set(modelStrings, forKey: AppStorageKeys.downloadedWhisperModels)
     }
     
     /// Use an existing model from a user-selected folder
@@ -356,7 +353,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             } else {
                 // No other models available
                 activeModel = nil
-                UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+                UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
             }
         }
         
@@ -381,7 +378,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         }
         downloadedModels.removeAll()
         activeModel = nil
-        UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
-        UserDefaults.standard.removeObject(forKey: Self.downloadedModelsKey)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.downloadedWhisperModels)
     }
 }

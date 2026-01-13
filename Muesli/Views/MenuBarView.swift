@@ -7,7 +7,7 @@ struct MenuBarView: View {
     @Environment(\.openSettings) private var openSettings
     
     /// Use @AppStorage so SwiftUI automatically observes UserDefaults changes
-    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+    @AppStorage(AppStorageKeys.hasCompletedOnboarding) private var hasCompletedOnboarding: Bool = false
     
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"

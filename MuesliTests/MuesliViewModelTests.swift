@@ -1,5 +1,5 @@
 import XCTest
-@testable import Muesli_refactor_viewmodel
+@testable import Muesli
 
 /// Comprehensive test suite for MuesliViewModel
 /// Tests verify behavior through the public API before refactoring begins
@@ -1166,11 +1166,11 @@ final class MuesliViewModelTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
     
-    func testRefinementServiceInitialized() async {
+    func testRefinementCoordinatorInitialized() async {
         let viewModel = MuesliViewModel(skipInitialLoad: true)
         
-        // Refinement service should be initialized
-        XCTAssertNotNil(viewModel.refinementService)
+        // Refinement coordinator should be initialized
+        XCTAssertNotNil(viewModel.refinementCoordinator)
     }
     
     func testMeetingIsRefinedInitiallyFalse() async {

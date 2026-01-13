@@ -28,19 +28,21 @@ struct MuesliApp: App {
         // Create services that need to be shared
         let fileOutputService = FileOutputService()
         
-        // Create refinement coordinator with dependencies
-        // Note: ViewModel also creates its own LLMManager, so we need to share the same one
+        // Create shared LLMManager instance (SINGLE source of truth)
         let llmManager = LLMManager()
+        
+        // Create refinement coordinator with shared LLMManager
         let coordinator = RefinementCoordinator(llmManager: llmManager, fileOutputService: fileOutputService)
 
         // Create ViewModel with injected managers and services
-        // This ensures ViewModel shares the same state and services with coordinators
+        // Pass the shared llmManager to ensure state synchronization
         let vm = MuesliViewModel(
             preferencesManager: prefs,
             historyManager: historyManager,
             refinementCoordinator: coordinator,
             fileOutputService: fileOutputService,
-            permissionManager: permManager
+            permissionManager: permManager,
+            llmManager: llmManager
         )
 
         // Wire up PreferencesManager callbacks to services
@@ -131,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Check if onboarding is needed
-        if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+        if !UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding) {
             Task { @MainActor in
                 self.showOnboardingWindow()
             }

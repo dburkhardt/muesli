@@ -1,5 +1,5 @@
 import Foundation
-@testable import Muesli_refactor_viewmodel
+@testable import Muesli
 
 /// Mock implementation of PermissionManager for testing
 @MainActor

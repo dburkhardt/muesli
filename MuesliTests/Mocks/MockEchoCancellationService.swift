@@ -1,6 +1,6 @@
 import Foundation
 import CoreMedia
-@testable import Muesli_refactor_viewmodel
+@testable import Muesli
 
 /// Mock implementation of EchoCancellationService for testing
 final class MockEchoCancellationService: EchoCancellationServiceProtocol, @unchecked Sendable {

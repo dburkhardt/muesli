@@ -19,7 +19,7 @@ struct OnboardingView: View {
     @State private var permissionCheckTimer: Timer?
     @State private var showFilePicker = false
     
-    private static let currentStepKey = "onboardingCurrentStep"
+    // Using centralized AppStorageKeys for onboarding state
     
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
@@ -36,7 +36,7 @@ struct OnboardingView: View {
     init(viewModel: MuesliViewModel) {
         self.viewModel = viewModel
         // Restore saved step, defaulting to welcome
-        let savedStep = UserDefaults.standard.integer(forKey: Self.currentStepKey)
+        let savedStep = UserDefaults.standard.integer(forKey: AppStorageKeys.onboardingCurrentStep)
         _currentStep = State(initialValue: OnboardingStep(rawValue: savedStep) ?? .welcome)
     }
     
@@ -624,7 +624,8 @@ struct OnboardingView: View {
         // Capture whether we need async check based on current step
         let useAsyncCheck = (currentStep == .screenRecording)
         
-        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [viewModel] _ in
+        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak viewModel] _ in
+            guard let viewModel = viewModel else { return }
             Task { @MainActor in
                 if useAsyncCheck {
                     // Use async refresh for reliable screen recording detection
@@ -660,7 +661,7 @@ struct OnboardingView: View {
     
     private func setStep(_ step: OnboardingStep) {
         currentStep = step
-        UserDefaults.standard.set(step.rawValue, forKey: Self.currentStepKey)
+        UserDefaults.standard.set(step.rawValue, forKey: AppStorageKeys.onboardingCurrentStep)
     }
     
     /// Advance to appropriate step based on current permissions (sync version)
@@ -695,7 +696,7 @@ struct OnboardingView: View {
         viewModel.completeOnboarding()
         
         // Clear saved step
-        UserDefaults.standard.removeObject(forKey: Self.currentStepKey)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
         
         // Notify AppDelegate to handle window transition
         // This ensures the main window opens properly

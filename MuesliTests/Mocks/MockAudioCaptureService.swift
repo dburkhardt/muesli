@@ -1,6 +1,6 @@
 import Foundation
 import CoreMedia
-@testable import Muesli_refactor_viewmodel
+@testable import Muesli
 
 /// Mock implementation of AudioCaptureService for testing
 actor MockAudioCaptureService: AudioCaptureServiceProtocol {

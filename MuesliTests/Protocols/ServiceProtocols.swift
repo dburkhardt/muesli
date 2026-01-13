@@ -4,7 +4,7 @@
 
 import Foundation
 import CoreMedia
-@testable import Muesli_refactor_viewmodel
+@testable import Muesli
 
 // All protocol definitions have been moved to the main target.
 // The mock implementations in MuesliTests/Mocks/ conform to those protocols.

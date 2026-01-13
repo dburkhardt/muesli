@@ -1,5 +1,5 @@
 import Foundation
-@testable import Muesli_refactor_viewmodel
+@testable import Muesli
 
 /// Mock implementation of LLMManager for testing
 @MainActor

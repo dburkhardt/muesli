@@ -103,6 +103,7 @@ final class RecordingSession: Identifiable {
     var segmentNumber: Int = 1
     
     /// Reference to the MeetingHistoryItem this session belongs to (for resumed recordings)
+    /// Strong reference is safe because MeetingHistoryItem does not reference RecordingSession
     var parentMeeting: MeetingHistoryItem?
     
     // MARK: - Audio Level State
@@ -126,6 +127,16 @@ final class RecordingSession: Identifiable {
     
     init(id: UUID = UUID()) {
         self.id = id
+    }
+    
+    deinit {
+        // Clean up timer to prevent leaks
+        // Use MainActor.assumeIsolated since RecordingSession is @MainActor
+        // and deinit should only be called when no references remain
+        MainActor.assumeIsolated {
+            displayTimer?.invalidate()
+            displayTimer = nil
+        }
     }
     
     // MARK: - Timer Management

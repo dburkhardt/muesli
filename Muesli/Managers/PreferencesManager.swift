@@ -1,5 +1,6 @@
 import Foundation
 import ServiceManagement
+import os.lock
 
 /// Manages app preferences with UserDefaults persistence
 /// Extracted from MuesliViewModel as part of the god object refactoring
@@ -7,25 +8,18 @@ import ServiceManagement
 @MainActor
 final class PreferencesManager {
     
-    // MARK: - UserDefaults Keys
-    
-    private static let outputDirectoryKey = "outputDirectory"
-    private static let launchAtLoginKey = "launchAtLogin"
-    private static let transcriptionModeKey = "transcriptionMode"
-    private static let echoCancellationEnabledKey = "echoCancellationEnabled"
-    
     // MARK: - Output Directory
     
     /// Output directory for recordings
     var outputDirectory: URL {
         get {
-            if let savedPath = UserDefaults.standard.string(forKey: Self.outputDirectoryKey) {
+            if let savedPath = UserDefaults.standard.string(forKey: AppStorageKeys.outputDirectory) {
                 return URL(fileURLWithPath: savedPath)
             }
             return Self.defaultOutputDirectory
         }
         set {
-            UserDefaults.standard.set(newValue.path, forKey: Self.outputDirectoryKey)
+            UserDefaults.standard.set(newValue.path, forKey: AppStorageKeys.outputDirectory)
             outputDirectoryDidChange?(newValue)
         }
     }
@@ -46,7 +40,7 @@ final class PreferencesManager {
     
     /// Reset output directory to default
     func resetOutputDirectory() {
-        UserDefaults.standard.removeObject(forKey: Self.outputDirectoryKey)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.outputDirectory)
         outputDirectoryDidChange?(Self.defaultOutputDirectory)
     }
     
@@ -58,7 +52,7 @@ final class PreferencesManager {
             if #available(macOS 13.0, *) {
                 return SMAppService.mainApp.status == .enabled
             }
-            return UserDefaults.standard.bool(forKey: Self.launchAtLoginKey)
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.launchAtLogin)
         }
         set {
             if #available(macOS 13.0, *) {
@@ -72,7 +66,7 @@ final class PreferencesManager {
                     print("[PreferencesManager] Failed to set launch at login: \(error)")
                 }
             }
-            UserDefaults.standard.set(newValue, forKey: Self.launchAtLoginKey)
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.launchAtLogin)
         }
     }
     
@@ -86,11 +80,11 @@ final class PreferencesManager {
     /// Transcription mode: live (real-time) or post-processing (after recording)
     var transcriptionMode: TranscriptionMode {
         get {
-            let rawValue = UserDefaults.standard.string(forKey: Self.transcriptionModeKey) ?? "live"
+            let rawValue = UserDefaults.standard.string(forKey: AppStorageKeys.transcriptionMode) ?? "live"
             return TranscriptionMode(rawValue: rawValue) ?? .live
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: Self.transcriptionModeKey)
+            UserDefaults.standard.set(newValue.rawValue, forKey: AppStorageKeys.transcriptionMode)
             transcriptionModeDidChange?(newValue)
         }
     }
@@ -106,32 +100,33 @@ final class PreferencesManager {
     
     // MARK: - Echo Cancellation
     
+    /// Thread-safe storage for echo cancellation state (for synchronous access from audio callbacks)
+    /// Uses OSAllocatedUnfairLock for proper synchronization
+    private let echoCancellationLock = OSAllocatedUnfairLock(initialState: false)
+    
     /// Whether echo cancellation is enabled
     /// Uses a cached value for thread-safe access from audio callbacks
     var isEchoCancellationEnabled: Bool {
         get {
-            _isEchoCancellationEnabled
+            echoCancellationLock.withLock { $0 }
         }
         set {
-            _isEchoCancellationEnabled = newValue
-            UserDefaults.standard.set(newValue, forKey: Self.echoCancellationEnabledKey)
+            echoCancellationLock.withLock { $0 = newValue }
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.echoCancellationEnabled)
         }
     }
     
-    /// Cached value for thread-safe access from audio callbacks
-    /// Uses nonisolated(unsafe) for synchronous access from audio callback
-    nonisolated(unsafe) private var _isEchoCancellationEnabled: Bool = false
-    
     /// Thread-safe getter for audio callbacks (nonisolated)
     nonisolated var echoCancellationEnabledForAudioCallback: Bool {
-        _isEchoCancellationEnabled
+        echoCancellationLock.withLock { $0 }
     }
     
     // MARK: - Initialization
 
     init() {
-        // Load persisted echo cancellation state
-        _isEchoCancellationEnabled = UserDefaults.standard.bool(forKey: Self.echoCancellationEnabledKey)
+        // Load persisted echo cancellation state into the lock
+        let savedValue = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
+        echoCancellationLock.withLock { $0 = savedValue }
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()
@@ -143,7 +138,7 @@ final class PreferencesManager {
     /// (~/Library/Application Support/Muesli/Recordings) while preserving existing recordings
     private func migrateStorageLocationIfNeeded() {
         // Only migrate if user hasn't set a custom output directory
-        guard UserDefaults.standard.string(forKey: Self.outputDirectoryKey) == nil else {
+        guard UserDefaults.standard.string(forKey: AppStorageKeys.outputDirectory) == nil else {
             print("[PreferencesManager] Custom output directory set, skipping migration")
             return
         }
@@ -174,7 +169,7 @@ final class PreferencesManager {
 
         // Set user preference to old location to preserve existing recordings
         // This is safer than moving files and respects user's existing data
-        UserDefaults.standard.set(oldDefaultDirectory.path, forKey: Self.outputDirectoryKey)
+        UserDefaults.standard.set(oldDefaultDirectory.path, forKey: AppStorageKeys.outputDirectory)
 
         // Trigger callback so services update
         outputDirectoryDidChange?(oldDefaultDirectory)

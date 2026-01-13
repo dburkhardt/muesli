@@ -98,10 +98,8 @@ final class LLMManager: LLMManagerProtocol {
     /// MLX-Swift is always available now that we've added the dependency
     let isMLXAvailable: Bool = true
     
-    // MARK: - Storage Keys
+    // MARK: - Storage Keys (use centralized AppStorageKeys)
     
-    private static let activeModelKey = "activeLLMModel"
-    private static let downloadedModelsKey = "downloadedLLMModels"
     private static let llmEnabledKey = "llmStitchingEnabled"
     
     /// User preference: enable LLM stitching
@@ -147,7 +145,7 @@ final class LLMManager: LLMManagerProtocol {
             scanForDownloadedModels()
             
             // Load saved active model preference
-            if let savedModel = UserDefaults.standard.string(forKey: Self.activeModelKey),
+            if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeLLMModel),
                let model = LLMModel(rawValue: savedModel),
                downloadedModels.contains(model) {
                 activeModel = model
@@ -274,7 +272,7 @@ final class LLMManager: LLMManagerProtocol {
             modelContainer = container
             activeModel = model
             downloadStates[model] = .completed
-            UserDefaults.standard.set(model.rawValue, forKey: Self.activeModelKey)
+            UserDefaults.standard.set(model.rawValue, forKey: AppStorageKeys.activeLLMModel)
             
         } catch {
             downloadStates[model] = .failed("Failed to load model: \(error.localizedDescription)")
@@ -291,14 +289,14 @@ final class LLMManager: LLMManagerProtocol {
     func setActiveModel(_ model: LLMModel) {
         guard downloadedModels.contains(model) else { return }
         activeModel = model
-        UserDefaults.standard.set(model.rawValue, forKey: Self.activeModelKey)
+        UserDefaults.standard.set(model.rawValue, forKey: AppStorageKeys.activeLLMModel)
     }
     
     // MARK: - Persistence
     
     private func saveDownloadedModels() {
         let modelStrings = downloadedModels.map { $0.rawValue }
-        UserDefaults.standard.set(modelStrings, forKey: Self.downloadedModelsKey)
+        UserDefaults.standard.set(modelStrings, forKey: AppStorageKeys.downloadedLLMModels)
     }
     
     // MARK: - Delete Model
@@ -332,7 +330,7 @@ final class LLMManager: LLMManagerProtocol {
                 setActiveModel(replacement)
             } else {
                 activeModel = nil
-                UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+                UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeLLMModel)
             }
         }
         
@@ -355,8 +353,8 @@ final class LLMManager: LLMManagerProtocol {
         }
         downloadedModels.removeAll()
         activeModel = nil
-        UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
-        UserDefaults.standard.removeObject(forKey: Self.downloadedModelsKey)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeLLMModel)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.downloadedLLMModels)
         
         // Disable LLM stitching when all models are deleted
         isLLMStitchingEnabled = false

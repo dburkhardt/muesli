@@ -75,9 +75,9 @@ struct RecordingDetailView: View {
         .sheet(isPresented: $viewModel.showRefineSheet) {
             RefineTranscriptSheet(
                 isPresented: $viewModel.showRefineSheet,
-                progress: viewModel.refinementService.progress,
-                isRefining: viewModel.refinementService.isRefining,
-                errorMessage: viewModel.refinementService.errorMessage,
+                progress: viewModel.refinementCoordinator.refinementProgress,
+                isRefining: viewModel.refinementCoordinator.isRefining,
+                errorMessage: viewModel.refinementCoordinator.errorMessage,
                 onCancel: {
                     viewModel.cancelRefinement()
                 }

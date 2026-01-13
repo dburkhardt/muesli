@@ -10,7 +10,7 @@ struct ResumeControlPane: View {
     /// Check if refinement is in progress OR pending (segments exist but not yet refined)
     private var isRefiningOrPending: Bool {
         // Actively refining
-        if viewModel.refinementService.isRefining {
+        if viewModel.refinementCoordinator.isRefining {
             return true
         }
         // Has segments that haven't been refined yet (refinement pending)

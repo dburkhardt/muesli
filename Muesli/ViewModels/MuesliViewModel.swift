@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import ScreenCaptureKit
 import CoreMedia
+import os.lock
 
 /// Main ViewModel for the Muesli app
 /// Owns app-level state (permissions, detected apps) and services
@@ -20,6 +21,10 @@ final class MuesliViewModel {
     
     /// Refinement coordinator (injected, source of truth for refinement state)
     let refinementCoordinator: RefinementCoordinator
+    
+    /// Recording controller (injected, handles recording lifecycle)
+    /// If nil, uses legacy inline implementation for backward compatibility
+    private(set) var recordingController: RecordingController?
     
     // MARK: - App Detection
     
@@ -40,14 +45,12 @@ final class MuesliViewModel {
     /// Whether onboarding has been completed (always reads from UserDefaults for consistency)
     var hasCompletedOnboarding: Bool {
         get {
-            UserDefaults.standard.bool(forKey: Self.onboardingCompletedKey)
+            UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding)
         }
         set {
-            UserDefaults.standard.set(newValue, forKey: Self.onboardingCompletedKey)
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.hasCompletedOnboarding)
         }
     }
-    
-    private static let onboardingCompletedKey = "hasCompletedOnboarding"
     
     // MARK: - Model Management (shared instance)
     
@@ -55,9 +58,6 @@ final class MuesliViewModel {
     
     /// LLM Manager for transcript stitching (optional enhancement)
     let llmManager: LLMManager
-    
-    /// Transcript refinement service for post-meeting cleanup
-    private(set) var refinementService: TranscriptRefinementService!
     
     /// Convenience accessor for the active model path
     var modelPath: URL? {
@@ -79,6 +79,17 @@ final class MuesliViewModel {
     
     // Transcription coordinator (manages model lifecycle and audio buffering)
     private let transcriptionCoordinator: TranscriptionCoordinator
+    
+    // MARK: - Audio Level Throttling
+    
+    /// Last time microphone level was updated (for throttling UI updates)
+    private var lastMicLevelUpdate = Date.distantPast
+    
+    /// Last time system audio level was updated (for throttling UI updates)
+    private var lastSystemLevelUpdate = Date.distantPast
+    
+    /// Minimum interval between audio level UI updates (~30fps)
+    private let levelUpdateInterval: TimeInterval = 0.033
     
     /// Whether echo cancellation is enabled (delegates to PreferencesManager)
     var isEchoCancellationEnabled: Bool {
@@ -273,19 +284,25 @@ final class MuesliViewModel {
     }
     
     /// Microphone mute state (for synchronous access from audio callback)
-    /// Uses nonisolated(unsafe) for thread-safe access from audio callback
-    nonisolated(unsafe) private var isMicrophoneMuted: Bool = false
+    /// Uses OSAllocatedUnfairLock for proper thread-safe access from audio callback
+    private let isMicrophoneMutedLock = OSAllocatedUnfairLock(initialState: false)
+    
+    /// Thread-safe getter for audio callbacks (nonisolated)
+    nonisolated var isMicrophoneMutedSafe: Bool {
+        isMicrophoneMutedLock.withLock { $0 }
+    }
     
     /// Toggle microphone mute state for active recording
     func toggleMicrophoneMute() {
         guard let session = activeRecordingSession else { return }
         session.isMicrophoneMuted.toggle()
-        isMicrophoneMuted = session.isMicrophoneMuted
+        let mutedState = session.isMicrophoneMuted
+        isMicrophoneMutedLock.withLock { $0 = mutedState }
     }
     
     /// Helper to reset mute state when session is cleared
     private func resetMuteState() {
-        isMicrophoneMuted = false
+        isMicrophoneMutedLock.withLock { $0 = false }
     }
     
     // MARK: - Initialization
@@ -295,6 +312,7 @@ final class MuesliViewModel {
     ///   - preferencesManager: Manager for user preferences
     ///   - historyManager: Manager for meeting history (if nil, creates one with skipInitialLoad)
     ///   - refinementCoordinator: Coordinator for transcript refinement
+    ///   - recordingController: Controller for recording lifecycle (if nil, uses legacy inline implementation)
     ///   - audioCaptureService: Service for capturing audio (injectable for testing)
     ///   - fileOutputService: Service for file output (injectable for testing)
     ///   - transcriptionService: Service for transcription (injectable for testing)
@@ -303,11 +321,13 @@ final class MuesliViewModel {
     ///   - microphoneManager: Manager for microphone devices (injectable for testing)
     ///   - meetingHistoryService: Service for meeting history (injectable for testing)
     ///   - echoCancellationService: Service for echo cancellation (injectable for testing)
+    ///   - llmManager: LLM Manager for transcript refinement (injectable, shared instance)
     ///   - skipInitialLoad: If true, skips loading meeting history from disk (for testing)
     init(
         preferencesManager: PreferencesManager = PreferencesManager(),
         historyManager: MeetingHistoryManager? = nil,
         refinementCoordinator: RefinementCoordinator? = nil,
+        recordingController: RecordingController? = nil,
         audioCaptureService: AudioCaptureService? = nil,
         fileOutputService: FileOutputService? = nil,
         transcriptionService: TranscriptionService? = nil,
@@ -316,6 +336,7 @@ final class MuesliViewModel {
         microphoneManager: MicrophoneManager? = nil,
         meetingHistoryService: MeetingHistoryService? = nil,
         echoCancellationService: EchoCancellationService? = nil,
+        llmManager: LLMManager? = nil,
         skipInitialLoad: Bool = false
     ) {
         // Initialize services (use provided or create defaults)
@@ -335,7 +356,10 @@ final class MuesliViewModel {
         
         // Initialize managers (skip scanning during tests to avoid file system/Documents prompts)
         self.modelManager = ModelManager(skipScan: skipInitialLoad)
-        self.llmManager = LLMManager(skipHubAccess: skipInitialLoad)
+        
+        // Use shared LLMManager instance if provided, otherwise create new one
+        // This ensures MuesliApp can inject the shared instance
+        self.llmManager = llmManager ?? LLMManager(skipHubAccess: skipInitialLoad)
         
         self.preferencesManager = preferencesManager
         self.historyManager = historyManager ?? MeetingHistoryManager(skipInitialLoad: skipInitialLoad)
@@ -346,14 +370,21 @@ final class MuesliViewModel {
             modelManager: self.modelManager
         )
         
-        // Create refinement coordinator if not provided
+        // Create refinement coordinator if not provided, using the shared llmManager
         self.refinementCoordinator = refinementCoordinator ?? RefinementCoordinator(
-            llmManager: llmManager,
+            llmManager: self.llmManager,
             fileOutputService: self.fileOutputService
         )
         
-        // Initialize refinement service
-        refinementService = TranscriptRefinementService(llmManager: llmManager)
+        // Store recording controller if provided (for gradual migration)
+        self.recordingController = recordingController
+        
+        // Wire up recording controller callbacks if provided
+        if let controller = recordingController {
+            controller.onRefreshHistory = { [weak self] in
+                self?.refreshMeetingHistory()
+            }
+        }
         
         // Check initial permission status
         refreshPermissions()
@@ -369,8 +400,8 @@ final class MuesliViewModel {
             await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
                 guard let self = self else { return }
                 
-                // Check if microphone is muted (synchronous check)
-                let isMicMuted = self.isMicrophoneMuted
+                // Check if microphone is muted (thread-safe synchronous check)
+                let isMicMuted = self.isMicrophoneMutedSafe
                 // Read AEC state from PreferencesManager's nonisolated accessor (single source of truth)
                 let isAECEnabled = prefs.echoCancellationEnabledForAudioCallback
                 
@@ -483,14 +514,19 @@ final class MuesliViewModel {
         return RecordingSession()
     }
     
-    /// Update audio level for the active session
+    /// Update audio level for the active session (throttled to ~30fps)
     private func updateAudioLevel(_ level: Float, type: AudioCaptureService.AudioType) {
         guard let session = activeSession else { return }
+        let now = Date()
         
         switch type {
         case .microphone:
+            guard now.timeIntervalSince(lastMicLevelUpdate) >= levelUpdateInterval else { return }
+            lastMicLevelUpdate = now
             session.microphoneLevel = level
         case .system:
+            guard now.timeIntervalSince(lastSystemLevelUpdate) >= levelUpdateInterval else { return }
+            lastSystemLevelUpdate = now
             session.systemAudioLevel = level
         }
     }
@@ -536,7 +572,7 @@ final class MuesliViewModel {
     func resetOnboarding() {
         hasCompletedOnboarding = false
         modelManager.reset()
-        UserDefaults.standard.removeObject(forKey: Self.onboardingCompletedKey)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
     }
     
     // MARK: - Meeting App Detection
@@ -586,7 +622,8 @@ final class MuesliViewModel {
         // Set activeSession immediately so UI shows recording view right away
         // (will be cleared if async setup fails)
         activeSession = session
-        isMicrophoneMuted = session.isMicrophoneMuted
+        let mutedState = session.isMicrophoneMuted
+        isMicrophoneMutedLock.withLock { $0 = mutedState }
         
         // Mark as initializing (loading model)
         session.isInitializing = true
@@ -1282,7 +1319,8 @@ final class MuesliViewModel {
             
             // Set activeSession immediately
             activeSession = session
-            isMicrophoneMuted = session.isMicrophoneMuted
+            let mutedState = session.isMicrophoneMuted
+            isMicrophoneMutedLock.withLock { $0 = mutedState }
             
             // Set up transcript handler through coordinator
             transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
