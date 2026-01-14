@@ -13,6 +13,10 @@ final class RecordingSession: Identifiable {
     
     // MARK: - Session State
     
+    /// State machine for atomic state transitions
+    private var stateMachine = RecordingStateMachine()
+    
+    /// Legacy enum for backward compatibility (deprecated - use state machine)
     enum SessionState: Equatable {
         case idle
         case recording
@@ -20,14 +24,74 @@ final class RecordingSession: Identifiable {
         case completed
     }
     
-    var state: SessionState = .idle
+    /// Current state (computed from state machine)
+    var state: SessionState {
+        get {
+            switch stateMachine.currentState {
+            case .idle, .failed:
+                return .idle
+            case .initializing, .paused:
+                return .recording // Map paused/initializing to recording for UI simplicity
+            case .recording:
+                return .recording
+            case .stopping:
+                return .stopping
+            case .completed:
+                return .completed
+            }
+        }
+        set {
+            // Legacy setter for backward compatibility - attempts transition
+            switch newValue {
+            case .idle:
+                stateMachine.reset()
+            case .recording:
+                _ = stateMachine.startRecording()
+            case .stopping:
+                _ = stateMachine.beginStopping()
+            case .completed:
+                _ = stateMachine.complete()
+            }
+        }
+    }
     
     var isRecording: Bool {
-        state == .recording
+        stateMachine.isRecording || stateMachine.isPaused
     }
     
     var isCompleted: Bool {
-        state == .completed
+        stateMachine.isCompleted
+    }
+    
+    // MARK: - State Machine Access
+    
+    /// Begin initialization phase (model loading, etc.)
+    func beginInitialization() -> Result<Void, RecordingStateMachine.TransitionError> {
+        return stateMachine.beginInitialization()
+    }
+    
+    /// Start recording (after initialization or from idle)
+    func startRecording() -> Result<Void, RecordingStateMachine.TransitionError> {
+        return stateMachine.startRecording()
+    }
+    
+    /// Begin stopping process
+    func beginStopping() -> Result<Void, RecordingStateMachine.TransitionError> {
+        return stateMachine.beginStopping()
+    }
+    
+    /// Complete recording (after stopping)
+    func completeRecording() -> Result<Void, RecordingStateMachine.TransitionError> {
+        return stateMachine.complete()
+    }
+    
+    /// Fail recording with reason
+    func failRecording(reason: String) -> Result<Void, RecordingStateMachine.TransitionError> {
+        let result = stateMachine.fail(reason: reason)
+        if case .success = result {
+            showErrorMessage(reason)
+        }
+        return result
     }
     
     // MARK: - Recording Data

@@ -30,6 +30,7 @@
 		A100002D241D1A1D00000002 /* MeetingAppDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002E241D1A1D00000002 /* MeetingAppDetector.swift */; };
 		A100002F241D1A1D00000002 /* PermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000030241D1A1D00000002 /* PermissionManager.swift */; };
 		A1000032241D1A1D00000003 /* RecordingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000033241D1A1D00000003 /* RecordingSession.swift */; };
+		A1000032241D1A1D00000003A /* RecordingStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000033241D1A1D00000003A /* RecordingStateMachine.swift */; };
 		A1000034241D1A1D00000004 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000035241D1A1D00000004 /* OnboardingView.swift */; };
 		A100003C241D1A1D00000006 /* ModelManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100003D241D1A1D00000006 /* ModelManagementView.swift */; };
 		A1000036241D1A1D00000004 /* ModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000037241D1A1D00000004 /* ModelManager.swift */; };
@@ -93,6 +94,7 @@
 		A100002E241D1A1D00000002 /* MeetingAppDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAppDetector.swift; sourceTree = "<group>"; };
 		A1000030241D1A1D00000002 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
 		A1000033241D1A1D00000003 /* RecordingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSession.swift; sourceTree = "<group>"; };
+		A1000033241D1A1D00000003A /* RecordingStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingStateMachine.swift; sourceTree = "<group>"; };
 		A1000035241D1A1D00000004 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		A100003D241D1A1D00000006 /* ModelManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManagementView.swift; sourceTree = "<group>"; };
 		A1000037241D1A1D00000004 /* ModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManager.swift; sourceTree = "<group>"; };
@@ -232,6 +234,7 @@
 			children = (
 				A1000022241D1A1D00000001 /* MeetingApp.swift */,
 				A1000033241D1A1D00000003 /* RecordingSession.swift */,
+				A1000033241D1A1D00000003A /* RecordingStateMachine.swift */,
 				A1000061241D1A1D00000008 /* MeetingHistoryItem.swift */,
 				A1000080241D1A1D00000020 /* TranscriptBlock.swift */,
 				E1000006241D1A1D00000072 /* MuesliError.swift */,
@@ -506,6 +509,7 @@
 				A1000001241D1A1D00000001 /* MuesliApp.swift in Sources */,
 				A1000021241D1A1D00000001 /* MeetingApp.swift in Sources */,
 				A1000032241D1A1D00000003 /* RecordingSession.swift in Sources */,
+				A1000032241D1A1D00000003A /* RecordingStateMachine.swift in Sources */,
 				A1000023241D1A1D00000001 /* MuesliViewModel.swift in Sources */,
 				A1000025241D1A1D00000001 /* MenuBarView.swift in Sources */,
 				A1000027241D1A1D00000001 /* MainWindow.swift in Sources */,

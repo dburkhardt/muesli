@@ -68,6 +68,7 @@ struct MuesliApp: App {
         // Menu bar dropdown - always available
         MenuBarExtra {
             MenuBarView(viewModel: viewModel)
+                .environment(viewModel)
                 .environment(meetingHistoryManager)
                 .environment(refinementCoordinator)
                 .background(OpenWindowCallbackSetter())
@@ -81,6 +82,7 @@ struct MuesliApp: App {
         // Model management window
         WindowGroup("Manage Transcription Models", id: "modelManagement") {
             ModelManagementView(viewModel: viewModel)
+                .environment(viewModel)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -90,6 +92,7 @@ struct MuesliApp: App {
         WindowGroup("Meeting Transcript", id: "completedMeeting") {
             if let meeting = meetingHistoryManager.completedMeetingWindowItem {
                 CompletedMeetingWindow(meeting: meeting, viewModel: viewModel)
+                    .environment(viewModel)
                     .environment(meetingHistoryManager)
                     .environment(refinementCoordinator)
             } else {
@@ -103,6 +106,7 @@ struct MuesliApp: App {
         // Main window - SINGLE window for recordings (not WindowGroup)
         Window(Self.appDisplayName, id: "main") {
             MainWindowView(viewModel: viewModel)
+                .environment(viewModel)
                 .environment(meetingHistoryManager)
                 .environment(permissionManager)
                 .environment(refinementCoordinator)
@@ -113,6 +117,7 @@ struct MuesliApp: App {
         // Preferences window - accessible via Cmd+,
         Settings {
             PreferencesView(viewModel: viewModel)
+                .environment(viewModel)
                 .environment(preferencesManager)
         }
     }

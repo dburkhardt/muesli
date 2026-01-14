@@ -48,6 +48,12 @@ final class RecordingController {
     /// Minimum interval between audio level UI updates (~30fps)
     private let levelUpdateInterval: TimeInterval = 0.033
     
+    /// Consecutive audio processing error counter
+    private var audioErrorCounter: Int = 0
+    
+    /// Maximum consecutive audio errors before stopping recording
+    private let maxConsecutiveAudioErrors: Int = 100
+    
     // MARK: - Thread-safe Mute State
     
     /// Microphone mute state (for synchronous access from audio callback)
@@ -108,82 +114,60 @@ final class RecordingController {
         let aecLock = prefs.echoCancellationLock
         
         Task {
-            await audioCaptureServiceRef.setBufferHandler { buffer, type in
-                // NO self capture - only use captured locks and services (thread-safe)
-                let isMicMuted = muteLock.withLock { $0 }
-                let isAECEnabled = aecLock.withLock { $0 }
-                
-                let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
-                
-                switch type {
-                case .system:
-                    // Store system audio for AEC reference (if AEC enabled)
-                    if isAECEnabled {
-                        if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
-                            aecService.storeSystemAudio(samples: systemSamples, timestamp: timestamp)
-                        }
-                    }
+            await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
+                // Wrap entire handler in error handling for graceful degradation
+                do {
+                    // NO direct self capture in processing - only use captured locks and services (thread-safe)
+                    let isMicMuted = muteLock.withLock { $0 }
+                    let isAECEnabled = aecLock.withLock { $0 }
                     
-                    // Save to file (always)
-                    fileService.appendAudioBuffer(buffer, type: type)
+                    let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
                     
-                    // Feed to transcription in live mode
-                    if transcriptService.transcriptionMode == .live {
-                        if let samples = TranscriptionService.resampleToWhisperFormat(
+                    switch type {
+                    case .system:
+                        try RecordingController.handleSystemAudioBuffer(
                             buffer,
-                            sourceSampleRate: 48000,
-                            sourceChannels: 2
-                        ) {
-                            transcriptService.appendSystemAudio(samples)
-                        }
-                    }
-                    
-                case .microphone:
-                    // Extract microphone samples at 48kHz
-                    guard let micSamples48kHz = EchoCancellationService.extractSamples(from: buffer) else {
-                        // Fallback: save original buffer
-                        fileService.appendAudioBuffer(buffer, type: type)
-                        return
-                    }
-                    
-                    // Apply AEC if enabled
-                    let processedSamples48kHz: [Float]
-                    if isAECEnabled {
-                        processedSamples48kHz = aecService.processMicrophoneAudio(
-                            microphoneSamples: micSamples48kHz,
-                            micTimestamp: timestamp
+                            timestamp: timestamp,
+                            isAECEnabled: isAECEnabled,
+                            fileService: fileService,
+                            transcriptService: transcriptService,
+                            aecService: aecService
                         )
                         
-                        // Create CMSampleBuffer from processed samples for file output
-                        if let processedBuffer = EchoCancellationService.createSampleBuffer(
-                            from: processedSamples48kHz,
-                            timestamp: timestamp
-                        ) {
-                            fileService.appendAudioBuffer(processedBuffer, type: type)
-                        } else {
-                            // Fallback: save original if conversion fails
-                            fileService.appendAudioBuffer(buffer, type: type)
-                        }
-                    } else {
-                        processedSamples48kHz = micSamples48kHz
-                        // Save original buffer when AEC disabled
-                        fileService.appendAudioBuffer(buffer, type: type)
-                    }
-                    
-                    // Skip microphone audio for transcription if muted
-                    if isMicMuted {
-                        return
-                    }
-                    
-                    // Feed to transcription in live mode
-                    if transcriptService.transcriptionMode == .live {
-                        // Resample processed samples to 16kHz for transcription
-                        let resampled = EchoCancellationService.resampleFloat32Public(
-                            samples: processedSamples48kHz,
-                            sourceSampleRate: 48000,
-                            targetSampleRate: 16000
+                    case .microphone:
+                        try RecordingController.handleMicrophoneAudioBuffer(
+                            buffer,
+                            timestamp: timestamp,
+                            isMicMuted: isMicMuted,
+                            isAECEnabled: isAECEnabled,
+                            fileService: fileService,
+                            transcriptService: transcriptService,
+                            aecService: aecService
                         )
-                        transcriptService.appendMicrophoneAudio(resampled)
+                    }
+                    
+                    // Reset error counter on success
+                    Task { @MainActor in
+                        self?.audioErrorCounter = 0
+                    }
+                    
+                } catch {
+                    // Log error but continue processing
+                    print("[RecordingController] Audio buffer processing error: \(error)")
+                    
+                    Task { @MainActor in
+                        guard let self = self else { return }
+                        self.audioErrorCounter += 1
+                        
+                        // If too many consecutive errors, stop recording gracefully
+                        if self.audioErrorCounter > self.maxConsecutiveAudioErrors {
+                            print("[RecordingController] Too many consecutive audio errors (\(self.audioErrorCounter)), stopping recording")
+                            
+                            if let session = self.activeSession {
+                                session.interruptionReason = "Audio processing error"
+                                self.handleCaptureInterrupted(error: error)
+                            }
+                        }
                     }
                 }
             }
@@ -201,6 +185,97 @@ final class RecordingController {
                     self?.updateAudioLevel(level, type: type)
                 }
             }
+        }
+    }
+    
+    // MARK: - Audio Buffer Processing Helpers
+    
+    /// Process system audio buffer (extracted for error handling)
+    private static nonisolated func handleSystemAudioBuffer(
+        _ buffer: CMSampleBuffer,
+        timestamp: CMTime,
+        isAECEnabled: Bool,
+        fileService: FileOutputService,
+        transcriptService: TranscriptionService,
+        aecService: EchoCancellationService
+    ) throws {
+        // Store system audio for AEC reference (if AEC enabled)
+        if isAECEnabled {
+            if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
+                aecService.storeSystemAudio(samples: systemSamples, timestamp: timestamp)
+            }
+        }
+        
+        // Save to file (always)
+        fileService.appendAudioBuffer(buffer, type: .system)
+        
+        // Feed to transcription in live mode
+        if transcriptService.transcriptionMode == .live {
+            if let samples = TranscriptionService.resampleToWhisperFormat(
+                buffer,
+                sourceSampleRate: 48000,
+                sourceChannels: 2
+            ) {
+                transcriptService.appendSystemAudio(samples)
+            }
+        }
+    }
+    
+    /// Process microphone audio buffer (extracted for error handling)
+    private static nonisolated func handleMicrophoneAudioBuffer(
+        _ buffer: CMSampleBuffer,
+        timestamp: CMTime,
+        isMicMuted: Bool,
+        isAECEnabled: Bool,
+        fileService: FileOutputService,
+        transcriptService: TranscriptionService,
+        aecService: EchoCancellationService
+    ) throws {
+        // Extract microphone samples at 48kHz
+        guard let micSamples48kHz = EchoCancellationService.extractSamples(from: buffer) else {
+            // Fallback: save original buffer
+            fileService.appendAudioBuffer(buffer, type: .microphone)
+            return
+        }
+        
+        // Apply AEC if enabled
+        let processedSamples48kHz: [Float]
+        if isAECEnabled {
+            processedSamples48kHz = aecService.processMicrophoneAudio(
+                microphoneSamples: micSamples48kHz,
+                micTimestamp: timestamp
+            )
+            
+            // Create CMSampleBuffer from processed samples for file output
+            if let processedBuffer = EchoCancellationService.createSampleBuffer(
+                from: processedSamples48kHz,
+                timestamp: timestamp
+            ) {
+                fileService.appendAudioBuffer(processedBuffer, type: .microphone)
+            } else {
+                // Fallback: save original if conversion fails
+                fileService.appendAudioBuffer(buffer, type: .microphone)
+            }
+        } else {
+            processedSamples48kHz = micSamples48kHz
+            // Save original buffer when AEC disabled
+            fileService.appendAudioBuffer(buffer, type: .microphone)
+        }
+        
+        // Skip microphone audio for transcription if muted
+        if isMicMuted {
+            return
+        }
+        
+        // Feed to transcription in live mode
+        if transcriptService.transcriptionMode == .live {
+            // Resample processed samples to 16kHz for transcription
+            let resampled = EchoCancellationService.resampleFloat32Public(
+                samples: processedSamples48kHz,
+                sourceSampleRate: 48000,
+                targetSampleRate: 16000
+            )
+            transcriptService.appendMicrophoneAudio(resampled)
         }
     }
     
@@ -462,7 +537,12 @@ final class RecordingController {
             echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
             
-            guard let directory = try? await fileOutputService.stopWriting() else {
+            // Stop file writing and get output directory
+            let directory: URL
+            do {
+                directory = try await fileOutputService.stopWriting()
+            } catch {
+                session.showError(.outputDirectoryCreationFailed)
                 session.state = .completed
                 activeSession = nil
                 resetMuteState()
@@ -480,13 +560,18 @@ final class RecordingController {
             session.finalizeTranscript()
             
             // Save transcript blocks to file
-            try? fileOutputService.saveTranscriptBlocks(
-                session.transcriptBlocks,
-                title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
-                date: session.recordingStartTime ?? Date(),
-                to: directory,
-                filename: nil  // Use default "transcript.md"
-            )
+            do {
+                try fileOutputService.saveTranscriptBlocks(
+                    session.transcriptBlocks,
+                    title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
+                    date: session.recordingStartTime ?? Date(),
+                    to: directory,
+                    filename: nil  // Use default "transcript.md"
+                )
+            } catch {
+                session.showError(.transcriptSaveFailed(underlying: error))
+                // Continue - we have audio files even if transcript save failed
+            }
             
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
@@ -557,7 +642,11 @@ final class RecordingController {
             echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
             
-            guard let directory = try? await fileOutputService.stopWriting() else {
+            // Stop file writing and get output directory
+            let directory: URL
+            do {
+                directory = try await fileOutputService.stopWriting()
+            } catch {
                 session.state = .completed
                 session.showError(.outputDirectoryCreationFailed)
                 activeSession = nil
@@ -572,13 +661,20 @@ final class RecordingController {
             }
             
             session.finalizeTranscript()
-            try? fileOutputService.saveTranscriptBlocks(
-                session.transcriptBlocks,
-                title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
-                date: session.recordingStartTime ?? Date(),
-                to: directory,
-                filename: nil  // Use default "transcript.md"
-            )
+            
+            // Save transcript blocks
+            do {
+                try fileOutputService.saveTranscriptBlocks(
+                    session.transcriptBlocks,
+                    title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
+                    date: session.recordingStartTime ?? Date(),
+                    to: directory,
+                    filename: nil
+                )
+            } catch {
+                session.showError(.transcriptSaveFailed(underlying: error))
+                // Continue - we have audio files even if transcript save failed
+            }
             
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
@@ -727,13 +823,18 @@ final class RecordingController {
             session.finalizeTranscript()
             
             let title = session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle
-            try? fileOutputService.saveTranscriptBlocks(
-                session.transcriptBlocks,
-                title: title,
-                date: session.recordingStartTime ?? Date(),
-                to: directory,
-                filename: nil  // Use default "transcript.md"
-            )
+            do {
+                try fileOutputService.saveTranscriptBlocks(
+                    session.transcriptBlocks,
+                    title: title,
+                    date: session.recordingStartTime ?? Date(),
+                    to: directory,
+                    filename: nil  // Use default "transcript.md"
+                )
+            } catch {
+                session.showError(.transcriptSaveFailed(underlying: error))
+                // Continue - retranscription succeeded even if save failed
+            }
             
         } catch {
             session.showError(.postProcessingFailed(underlying: error))
