@@ -44,7 +44,7 @@ protocol FileOutputServiceProtocol: Sendable {
     func stopWriting() async throws -> URL
     func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL
     func saveTranscript(_ transcript: String, title: String, date: Date, to directory: URL) throws
-    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String) throws
+    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String?) throws
 }
 
 // MARK: - MeetingHistoryServiceProtocol

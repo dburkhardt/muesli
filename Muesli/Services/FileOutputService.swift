@@ -431,9 +431,10 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     ///   - title: Meeting title
     ///   - date: Recording date
     ///   - directory: Output directory
-    ///   - filename: Optional filename (defaults to "transcript.md")
-    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String = "transcript.md") throws {
-        let transcriptURL = directory.appendingPathComponent(filename)
+    ///   - filename: Optional filename (defaults to "transcript.md" if nil)
+    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String? = nil) throws {
+        let actualFilename = filename ?? "transcript.md"
+        let transcriptURL = directory.appendingPathComponent(actualFilename)
         
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"

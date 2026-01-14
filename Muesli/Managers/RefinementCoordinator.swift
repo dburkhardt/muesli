@@ -23,8 +23,8 @@ final class RefinementCoordinator {
     /// Meeting being refined (for UI state)
     var meetingBeingRefined: MeetingHistoryItem?
     
-    /// Cancellation flag for refinement
-    private var refinementCancelled: Bool = false
+    /// Current refinement task (for cancellation)
+    private var refinementTask: Task<Void, Never>?
     
     /// Per-meeting state: whether to show original transcript (vs refined)
     /// Key is meeting ID UUID string
@@ -58,6 +58,10 @@ final class RefinementCoordinator {
         self.llmManager = llmManager
         self.refinementService = TranscriptRefinementService(llmManager: llmManager)
         self.fileOutputService = fileOutputService
+    }
+    
+    deinit {
+        print("[RefinementCoordinator] Deallocating")
     }
     
     // MARK: - Show Original/Refined Toggle
@@ -102,9 +106,8 @@ final class RefinementCoordinator {
         }
         
         meetingBeingRefined = meeting
-        refinementCancelled = false
         
-        Task {
+        refinementTask = Task {
             await refineTranscriptAsync(for: meeting)
         }
     }
@@ -138,7 +141,7 @@ final class RefinementCoordinator {
                 // Refine block-based transcript
                 let refinedBlocks = try await refinementService.refineTranscript(blocks)
                 
-                guard !refinementCancelled else { return }
+                try Task.checkCancellation()
                 
                 // Update meeting with refined blocks
                 meeting.transcriptBlocks = refinedBlocks
@@ -163,11 +166,7 @@ final class RefinementCoordinator {
                 // Refine plain text transcript
                 let refinedText = try await refinementService.refineTranscript(text)
                 
-                guard !refinementCancelled else {
-                    print("[RefinementCoordinator] Refinement cancelled")
-                    meetingBeingRefined = nil
-                    return
-                }
+                try Task.checkCancellation()
                 
                 // Update meeting
                 meeting.transcript = refinedText
@@ -194,7 +193,8 @@ final class RefinementCoordinator {
     
     /// Cancel ongoing refinement
     func cancelRefinement() {
-        refinementCancelled = true
+        refinementTask?.cancel()
+        refinementTask = nil
         meetingBeingRefined = nil
     }
     
@@ -288,12 +288,12 @@ final class RefinementCoordinator {
         do {
             // Save original transcript to separate file if it exists
             if let originalBlocks = meeting.originalTranscriptBlocks {
-                let originalURL = meeting.directory.appendingPathComponent("transcript.original.md")
                 try fileOutputService.saveTranscriptBlocks(
                     originalBlocks,
                     title: meeting.title,
                     date: meeting.date,
-                    to: originalURL
+                    to: meeting.directory,
+                    filename: "transcript.original.md"
                 )
             }
             
@@ -302,7 +302,8 @@ final class RefinementCoordinator {
                 blocks,
                 title: meeting.title,
                 date: meeting.date,
-                to: meeting.directory
+                to: meeting.directory,
+                filename: nil  // Use default "transcript.md"
             )
         } catch {
             print("[RefinementCoordinator] Failed to save refined transcript: \(error)")

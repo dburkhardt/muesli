@@ -90,6 +90,10 @@ final class RecordingController {
         setupAudioBufferHandler()
     }
     
+    deinit {
+        print("[RecordingController] Deallocating")
+    }
+    
     // MARK: - Audio Buffer Handler Setup
     
     private func setupAudioBufferHandler() {
@@ -99,14 +103,15 @@ final class RecordingController {
         let prefs = self.preferencesManager
         let audioCaptureServiceRef = self.audioCaptureService
         
+        // Capture locks directly to avoid @MainActor isolation in callback
+        let muteLock = self.isMicrophoneMutedLock
+        let aecLock = prefs.echoCancellationLock
+        
         Task {
-            await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
-                guard let self = self else { return }
-                
-                // Check if microphone is muted (thread-safe synchronous check)
-                let isMicMuted = self.isMicrophoneMutedSafe
-                // Read AEC state from PreferencesManager's nonisolated accessor
-                let isAECEnabled = prefs.echoCancellationEnabledForAudioCallback
+            await audioCaptureServiceRef.setBufferHandler { buffer, type in
+                // NO self capture - only use captured locks and services (thread-safe)
+                let isMicMuted = muteLock.withLock { $0 }
+                let isAECEnabled = aecLock.withLock { $0 }
                 
                 let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
                 
@@ -251,7 +256,7 @@ final class RecordingController {
     func startRecording(for session: RecordingSession) {
         // Only one session can record at a time
         guard activeSession == nil else {
-            session.showErrorMessage("Another recording is already in progress.")
+            session.showError(.alreadyRecording)
             return
         }
         
@@ -292,7 +297,7 @@ final class RecordingController {
                 session.state = .idle
                 activeSession = nil
                 resetMuteState()
-                session.showErrorMessage("Model failed to load: \(error.localizedDescription)")
+                session.showError(.modelLoadFailed(underlying: error))
                 sessionPendingModelDecision = session
                 showModelErrorAlert = true
                 return
@@ -342,17 +347,21 @@ final class RecordingController {
     }
     
     private func handleCaptureError(_ error: AudioCaptureService.CaptureError, for session: RecordingSession) {
+        let muesliError: MuesliError
         switch error {
         case .noContentToCapture:
-            if let app = session.selectedApp {
-                session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
-            } else {
-                session.showErrorMessage("No audio content available to capture.")
-            }
+            muesliError = .noAudioContent
         case .permissionDenied, .streamStartFailed:
-            session.showErrorMessage("Please grant Screen Recording permission and try again.")
+            muesliError = .screenRecordingDenied
         default:
-            session.showErrorMessage("Failed to start recording: \(error.localizedDescription)")
+            muesliError = .captureStartFailed(underlying: error)
+        }
+        
+        // Add context for specific cases
+        if case .noContentToCapture = error, let app = session.selectedApp {
+            session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
+        } else {
+            session.showError(muesliError)
         }
         cleanupFailedSession(session)
     }
@@ -360,11 +369,13 @@ final class RecordingController {
     private func handleGenericError(_ error: Error, for session: RecordingSession) {
         let errorMsg = error.localizedDescription
         
+        let muesliError: MuesliError
         if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
-            session.showErrorMessage("Please grant Screen Recording permission and try again.")
+            muesliError = .screenRecordingDenied
         } else {
-            session.showErrorMessage("Failed to start recording: \(errorMsg)")
+            muesliError = .captureStartFailed(underlying: error)
         }
+        session.showError(muesliError)
         cleanupFailedSession(session)
     }
     
@@ -473,11 +484,12 @@ final class RecordingController {
                 session.transcriptBlocks,
                 title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
                 date: session.recordingStartTime ?? Date(),
-                to: directory
+                to: directory,
+                filename: nil  // Use default "transcript.md"
             )
             
         } catch {
-            session.showErrorMessage("Error stopping recording: \(error.localizedDescription)")
+            session.showError(.transcriptSaveFailed(underlying: error))
         }
         
         // Mark session as completed
@@ -506,7 +518,7 @@ final class RecordingController {
                 startTime: session.recordingStartTime ?? Date()
             )
         } catch {
-            session.showErrorMessage("Post-processing transcription failed: \(error.localizedDescription)")
+            session.showError(.postProcessingFailed(underlying: error))
         }
     }
     
@@ -516,7 +528,7 @@ final class RecordingController {
         guard let session = sessionPendingModelDecision else { return }
         sessionPendingModelDecision = nil
         showModelErrorAlert = false
-        session.showErrorMessage("Recording without transcription is not yet supported. Please download a working model in Preferences.")
+        session.showError(.whisperKitNotInitialized)
     }
     
     func cancelRecordingDueToModelError() {
@@ -547,7 +559,7 @@ final class RecordingController {
             
             guard let directory = try? await fileOutputService.stopWriting() else {
                 session.state = .completed
-                session.showErrorMessage("Recording was interrupted: \(session.interruptionReason ?? "Unknown reason")")
+                session.showError(.outputDirectoryCreationFailed)
                 activeSession = nil
                 resetMuteState()
                 return
@@ -564,15 +576,21 @@ final class RecordingController {
                 session.transcriptBlocks,
                 title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
                 date: session.recordingStartTime ?? Date(),
-                to: directory
+                to: directory,
+                filename: nil  // Use default "transcript.md"
             )
             
         } catch {
-            session.showErrorMessage("Error saving interrupted recording: \(error.localizedDescription)")
+            session.showError(.transcriptSaveFailed(underlying: error))
         }
         
         session.state = .completed
-        session.showErrorMessage("Recording saved. \(session.interruptionReason ?? "The stream was interrupted.")")
+        // Show success message with interruption reason
+        if let reason = session.interruptionReason {
+            session.showErrorMessage("Recording saved. \(reason)")
+        } else {
+            session.showErrorMessage("Recording saved. The stream was interrupted.")
+        }
         
         onRefreshHistory?()
         activeSession = nil
@@ -663,7 +681,7 @@ final class RecordingController {
     
     private func retranscribeWithPostProcessingAsync(for session: RecordingSession) async {
         guard let directory = session.outputDirectory else {
-            session.showErrorMessage("No recording directory found.")
+            session.showError(.meetingDirectoryNotFound)
             return
         }
         
@@ -674,11 +692,11 @@ final class RecordingController {
         switch modelState {
         case .notAvailable:
             session.isRetranscribing = false
-            session.showErrorMessage("No transcription model configured.")
+            session.showError(.modelNotFound)
             return
         case .failed(let error):
             session.isRetranscribing = false
-            session.showErrorMessage("Failed to initialize transcription: \(error.localizedDescription)")
+            session.showError(.modelLoadFailed(underlying: error))
             return
         case .loading, .ready:
             break
@@ -713,11 +731,12 @@ final class RecordingController {
                 session.transcriptBlocks,
                 title: title,
                 date: session.recordingStartTime ?? Date(),
-                to: directory
+                to: directory,
+                filename: nil  // Use default "transcript.md"
             )
             
         } catch {
-            session.showErrorMessage("Re-transcription failed: \(error.localizedDescription)")
+            session.showError(.postProcessingFailed(underlying: error))
         }
         
         transcriptionCoordinator.setTranscriptionMode(previousMode)

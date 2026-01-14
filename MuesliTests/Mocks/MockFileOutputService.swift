@@ -114,11 +114,11 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         }
     }
     
-    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String = "transcript.md") throws {
+    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String?) throws {
         saveTranscriptBlocksCallCount += 1
         lastSavedBlocks = blocks
         lastSavedTitle = title
-        lastSavedFilename = filename
+        lastSavedFilename = filename ?? "transcript.md"
         
         if shouldFailSaveTranscript {
             throw saveTranscriptError
