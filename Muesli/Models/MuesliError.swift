@@ -190,3 +190,55 @@ enum MuesliError: Error, LocalizedError {
         }
     }
 }
+
+// MARK: - Recording Error Wrapper
+
+/// Contextual recording error that wraps MuesliError with additional metadata
+struct RecordingError: Error, LocalizedError {
+    let underlying: MuesliError
+    let context: Context
+    let timestamp: Date
+    let sessionID: UUID?
+    
+    enum Context {
+        case starting(app: String?)
+        case recording(duration: TimeInterval)
+        case stopping
+        case saving(directory: URL)
+        case transcribing(modelName: String)
+    }
+    
+    init(underlying: MuesliError, context: Context, sessionID: UUID? = nil) {
+        self.underlying = underlying
+        self.context = context
+        self.timestamp = Date()
+        self.sessionID = sessionID
+    }
+    
+    var errorDescription: String? {
+        switch context {
+        case .starting(let app):
+            if let app = app {
+                return "Failed to start recording \(app): \(underlying.localizedDescription)"
+            } else {
+                return "Failed to start recording: \(underlying.localizedDescription)"
+            }
+        case .recording(let duration):
+            return "Recording failed after \(Int(duration))s: \(underlying.localizedDescription)"
+        case .stopping:
+            return "Failed to stop recording: \(underlying.localizedDescription)"
+        case .saving:
+            return "Failed to save recording: \(underlying.localizedDescription)"
+        case .transcribing(let model):
+            return "Transcription failed (\(model)): \(underlying.localizedDescription)"
+        }
+    }
+    
+    var recoverySuggestion: String? {
+        underlying.recoverySuggestion
+    }
+    
+    var failureReason: String? {
+        underlying.failureReason
+    }
+}

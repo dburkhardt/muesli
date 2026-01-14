@@ -165,7 +165,9 @@ struct UnifiedHistoryView: View {
     
     private func openCompletedMeetingWindow(_ meeting: MeetingHistoryItem) {
         historyManager.completedMeetingWindowItem = meeting
-        historyManager.loadTranscript(for: meeting)
+        Task {
+            await historyManager.loadTranscript(for: meeting)
+        }
         openWindow(id: "completedMeeting")
         NSApp.activate(ignoringOtherApps: true)
     }

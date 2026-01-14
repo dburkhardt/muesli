@@ -216,4 +216,15 @@ final class RecordingSession: Identifiable {
         let secs = Int(seconds) % 60
         return String(format: "%02d:%02d", mins, secs)
     }
+    
+    // MARK: - Error Handling
+    
+    /// Show an error using structured MuesliError
+    func showError(_ error: MuesliError) {
+        var message = error.localizedDescription
+        if let suggestion = error.recoverySuggestion {
+            message += "\n\n\(suggestion)"
+        }
+        showErrorMessage(message)
+    }
 }

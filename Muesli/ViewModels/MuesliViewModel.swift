@@ -396,14 +396,16 @@ final class MuesliViewModel {
         let aecService = self.echoCancellationService
         let prefs = self.preferencesManager
         let audioCaptureServiceRef = self.audioCaptureService
+        
+        // Capture locks directly to avoid @MainActor isolation in callback
+        let muteLock = self.isMicrophoneMutedLock
+        let aecLock = prefs.echoCancellationLock
+        
         Task {
-            await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
-                guard let self = self else { return }
-                
-                // Check if microphone is muted (thread-safe synchronous check)
-                let isMicMuted = self.isMicrophoneMutedSafe
-                // Read AEC state from PreferencesManager's nonisolated accessor (single source of truth)
-                let isAECEnabled = prefs.echoCancellationEnabledForAudioCallback
+            await audioCaptureServiceRef.setBufferHandler { buffer, type in
+                // NO self capture - only use captured locks and services (thread-safe)
+                let isMicMuted = muteLock.withLock { $0 }
+                let isAECEnabled = aecLock.withLock { $0 }
                 
                 let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
                 
@@ -615,7 +617,7 @@ final class MuesliViewModel {
     func startRecording(for session: RecordingSession) {
         // Only one session can record at a time
         guard activeSession == nil else {
-            session.showErrorMessage("Another recording is already in progress.")
+            session.showError(.alreadyRecording)
             return
         }
         
@@ -668,7 +670,7 @@ final class MuesliViewModel {
                 session.state = .idle
                 activeSession = nil
                 resetMuteState()
-                session.showErrorMessage("Model failed to load: \(error.localizedDescription)")
+                session.showError(.modelLoadFailed(underlying: error))
                 sessionPendingModelDecision = session
                 showModelErrorAlert = true
                 return
@@ -712,22 +714,27 @@ final class MuesliViewModel {
             transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
             
         } catch let error as AudioCaptureService.CaptureError {
+            let muesliError: MuesliError
             switch error {
             case .noContentToCapture:
-                if let app = session.selectedApp {
-                    session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
-                } else {
-                    session.showErrorMessage("No audio content available to capture.")
-                }
+                muesliError = .noAudioContent
             case .permissionDenied, .streamStartFailed:
-                session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                muesliError = .screenRecordingDenied
             default:
-                session.showErrorMessage("Failed to start recording: \(error.localizedDescription)")
+                muesliError = .captureStartFailed(underlying: error)
             }
+            
+            // Add context for specific cases
+            if case .noContentToCapture = error, let app = session.selectedApp {
+                session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
+            } else {
+                session.showError(muesliError)
+            }
+            
             session.isInitializing = false
             session.state = .idle
             activeSession = nil
-        resetMuteState()  // Clear since setup failed
+            resetMuteState()  // Clear since setup failed
             
             if fileOutputService.isWriting {
                 _ = try? await fileOutputService.stopWriting()
@@ -736,11 +743,14 @@ final class MuesliViewModel {
             // Handle any remaining errors (model errors are handled by coordinator above)
             let errorMsg = error.localizedDescription
             
+            let muesliError: MuesliError
             if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
-                session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                muesliError = .screenRecordingDenied
             } else {
-                session.showErrorMessage("Failed to start recording: \(errorMsg)")
+                muesliError = .captureStartFailed(underlying: error)
             }
+            session.showError(muesliError)
+            
             session.isInitializing = false
             session.state = .idle
             activeSession = nil
@@ -796,7 +806,7 @@ final class MuesliViewModel {
         showModelErrorAlert = false
         
         // For now, just show an error - full recording-only mode would need more work
-        session.showErrorMessage("Recording without transcription is not yet supported. Please download a working model in Preferences.")
+        session.showError(.whisperKitNotInitialized)
     }
     
     /// Cancel recording due to model error
@@ -886,7 +896,7 @@ final class MuesliViewModel {
                         startTime: session.recordingStartTime ?? Date()
                     )
                 } catch {
-                    session.showErrorMessage("Post-processing transcription failed: \(error.localizedDescription)")
+                    session.showError(.postProcessingFailed(underlying: error))
                 }
             }
             
@@ -978,7 +988,7 @@ final class MuesliViewModel {
             try? saveTranscriptWithSegments(meeting, to: directory)
             
         } catch {
-            session.showErrorMessage("Error stopping recording: \(error.localizedDescription)")
+            session.showError(.transcriptSaveFailed(underlying: error))
         }
         
         // Mark session as completed and resumable
@@ -1029,10 +1039,10 @@ final class MuesliViewModel {
             // Stop transcription and process remaining audio (for live mode)
             await transcriptionCoordinator.stopTranscription()
             
-            // Finalize file output
+            // Finalize file output            
             guard let directory = try? await fileOutputService.stopWriting() else {
                 session.state = .completed
-                session.showErrorMessage("Recording was interrupted: \(session.interruptionReason ?? "Unknown reason")")
+                session.showError(.outputDirectoryCreationFailed)
                 activeSession = nil
         resetMuteState()
                 return
@@ -1055,7 +1065,7 @@ final class MuesliViewModel {
                         startTime: session.recordingStartTime ?? Date()
                     )
                 } catch {
-                    session.showErrorMessage("Post-processing failed: \(error.localizedDescription)")
+                    session.showError(.postProcessingFailed(underlying: error))
                 }
             }
             
@@ -1069,12 +1079,16 @@ final class MuesliViewModel {
             )
             
         } catch {
-            session.showErrorMessage("Error saving interrupted recording: \(error.localizedDescription)")
+            session.showError(.transcriptSaveFailed(underlying: error))
         }
         
         // Mark session as completed and show interruption message
         session.state = .completed
-        session.showErrorMessage("Recording saved. \(session.interruptionReason ?? "The stream was interrupted.")")
+        if let reason = session.interruptionReason {
+            session.showErrorMessage("Recording saved. \(reason)")
+        } else {
+            session.showErrorMessage("Recording saved. The stream was interrupted.")
+        }
         
         // Refresh meeting history
         refreshMeetingHistory()
@@ -1102,7 +1116,7 @@ final class MuesliViewModel {
     
     private func retranscribeWithPostProcessingAsync(for session: RecordingSession) async {
         guard let directory = session.outputDirectory else {
-            session.showErrorMessage("No recording directory found.")
+            session.showError(.meetingDirectoryNotFound)
             return
         }
         
@@ -1115,7 +1129,7 @@ final class MuesliViewModel {
         switch modelState {
         case .notAvailable:
             session.isRetranscribing = false
-            session.showErrorMessage("No transcription model configured.")
+            session.showError(.modelNotFound)
             return
             
         case .loading:
@@ -1128,7 +1142,7 @@ final class MuesliViewModel {
             
         case .failed(let error):
             session.isRetranscribing = false
-            session.showErrorMessage("Failed to initialize transcription: \(error.localizedDescription)")
+            session.showError(.modelLoadFailed(underlying: error))
             return
         }
         
@@ -1172,7 +1186,7 @@ final class MuesliViewModel {
             )
             
         } catch {
-            session.showErrorMessage("Re-transcription failed: \(error.localizedDescription)")
+            session.showError(.postProcessingFailed(underlying: error))
         }
         
         // Restore previous mode
@@ -1200,8 +1214,8 @@ final class MuesliViewModel {
     }
     
     /// Load transcript for a meeting (delegates to historyManager)
-    func loadTranscript(for meeting: MeetingHistoryItem) {
-        historyManager.loadTranscript(for: meeting)
+    func loadTranscript(for meeting: MeetingHistoryItem) async {
+        await historyManager.loadTranscript(for: meeting)
     }
     
     // MARK: - Meeting Selection (delegating to MeetingHistoryManager)
@@ -1264,7 +1278,9 @@ final class MuesliViewModel {
     func refineTranscript(for meeting: MeetingHistoryItem) {
         // Ensure transcript is loaded first
         if meeting.transcriptBlocks == nil && meeting.transcript == nil {
-            loadTranscript(for: meeting)
+            Task {
+                await loadTranscript(for: meeting)
+            }
         }
         refinementCoordinator.refineTranscript(for: meeting)
     }
@@ -1361,14 +1377,17 @@ final class MuesliViewModel {
             
         } catch let error as AudioCaptureService.CaptureError {
             if let session = activeSession {
+                let muesliError: MuesliError
                 switch error {
                 case .noContentToCapture:
-                    session.showErrorMessage("No audio content available to capture.")
+                    muesliError = .noAudioContent
                 case .permissionDenied, .streamStartFailed:
-                    session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                    muesliError = .screenRecordingDenied
                 default:
-                    session.showErrorMessage("Failed to resume recording: \(error.localizedDescription)")
+                    muesliError = .captureStartFailed(underlying: error)
                 }
+                session.showError(muesliError)
+                
                 session.state = .idle
                 activeSession = nil
                 resetMuteState()
@@ -1380,11 +1399,15 @@ final class MuesliViewModel {
         } catch {
             if let session = activeSession {
                 let errorMsg = error.localizedDescription
+                
+                let muesliError: MuesliError
                 if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
-                    session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                    muesliError = .screenRecordingDenied
                 } else {
-                    session.showErrorMessage("Failed to resume recording: \(errorMsg)")
+                    muesliError = .captureStartFailed(underlying: error)
                 }
+                session.showError(muesliError)
+                
                 session.state = .idle
                 activeSession = nil
                 resetMuteState()

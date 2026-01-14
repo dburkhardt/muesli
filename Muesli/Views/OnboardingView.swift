@@ -16,7 +16,6 @@ struct OnboardingView: View {
         viewModel.llmManager
     }
     @State private var currentStep: OnboardingStep
-    @State private var permissionCheckTimer: Timer?
     @State private var showFilePicker = false
     
     // Using centralized AppStorageKeys for onboarding state
@@ -66,26 +65,19 @@ struct OnboardingView: View {
         .frame(width: 520, height: 580) // Larger window to fit all content
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
-            // Use sync check on appear (doesn't trigger permission dialog)
-            // Only auto-advance if permissions are already granted
-            viewModel.refreshPermissions()
-            advanceBasedOnPermissions()
-            
-            // Start polling if we're already on a permission step (e.g., restored from UserDefaults)
-            if currentStep == .screenRecording || currentStep == .microphone {
-                startPermissionPolling()
+            // Initial permission check on appear
+            Task {
+                await viewModel.refreshPermissionsAsync()
+                advanceBasedOnPermissions()
             }
         }
         .onChange(of: currentStep) { oldValue, newValue in
-            // Start/stop polling based on which step we're on
+            // Check permissions when switching to permission steps
             if newValue == .screenRecording || newValue == .microphone {
-                startPermissionPolling()
-            } else {
-                stopPermissionPolling()
+                Task {
+                    await viewModel.refreshPermissionsAsync()
+                }
             }
-        }
-        .onDisappear {
-            stopPermissionPolling()
         }
         .fileImporter(
             isPresented: $showFilePicker,
@@ -617,33 +609,6 @@ struct OnboardingView: View {
     
     // MARK: - Permission Polling
     
-    private func startPermissionPolling() {
-        // Stop any existing timer first
-        stopPermissionPolling()
-        
-        // Capture whether we need async check based on current step
-        let useAsyncCheck = (currentStep == .screenRecording)
-        
-        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak viewModel] _ in
-            guard let viewModel = viewModel else { return }
-            Task { @MainActor in
-                if useAsyncCheck {
-                    // Use async refresh for reliable screen recording detection
-                    // This uses SCShareableContent which correctly detects TCC state
-                    await viewModel.refreshPermissionsAsync()
-                } else {
-                    // Use sync refresh for other steps (microphone uses AVCaptureDevice which is reliable)
-                    viewModel.refreshPermissions()
-                }
-            }
-        }
-    }
-    
-    private func stopPermissionPolling() {
-        permissionCheckTimer?.invalidate()
-        permissionCheckTimer = nil
-    }
-    
     // MARK: - File Selection
     
     private func handleFileSelection(_ result: Result<[URL], Error>) {
@@ -691,8 +656,6 @@ struct OnboardingView: View {
     // MARK: - Complete Onboarding
     
     private func completeOnboarding() {
-        stopPermissionPolling()
-        
         viewModel.completeOnboarding()
         
         // Clear saved step

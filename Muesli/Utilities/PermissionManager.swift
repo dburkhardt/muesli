@@ -16,12 +16,50 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Cached microphone permission state (updated via refresh)
     var microphoneGranted: Bool = false
     
+    // MARK: - Notification Observers
+    
+    /// Notification observers for automatic permission refresh
+    private var observers: [NSObjectProtocol] = []
+    
     // MARK: - Initialization
     
     init() {
+        // Skip permission checks when running tests to avoid permission prompts
+        guard !Self.isRunningTests else {
+            // In test environment, assume no permissions granted
+            screenRecordingGranted = false
+            microphoneGranted = false
+            return
+        }
+        
         // Check initial permissions
         screenRecordingGranted = CGPreflightScreenCaptureAccess()
         microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        
+        // Observe app becoming active (user returns from System Settings)
+        observers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    await self?.refreshPermissionsAsync()
+                }
+            }
+        )
+    }
+    
+    /// Detect if running in test environment
+    private static var isRunningTests: Bool {
+        NSClassFromString("XCTestCase") != nil
+    }
+    
+    deinit {
+        // Remove all observers (use MainActor.assumeIsolated since deinit is nonisolated)
+        MainActor.assumeIsolated {
+            observers.forEach { NotificationCenter.default.removeObserver($0) }
+        }
     }
     
     // MARK: - Screen Recording Permission
@@ -34,6 +72,11 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Check screen recording permission using SCShareableContent (async, reliable)
     /// This actually queries the TCC database correctly, unlike CGPreflightScreenCaptureAccess
     func checkScreenRecordingPermissionAsync() async -> Bool {
+        // Skip permission checks when running tests
+        guard !Self.isRunningTests else {
+            return false
+        }
+        
         do {
             // This call will fail with a specific TCC error if permission is not granted
             _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -47,6 +90,11 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Request screen recording permission
     /// Note: This will trigger the system permission dialog
     func requestScreenRecordingPermission() {
+        // Skip permission requests when running tests
+        guard !Self.isRunningTests else {
+            return
+        }
+        
         // This will trigger the permission prompt
         _ = CGRequestScreenCaptureAccess()
     }
@@ -73,6 +121,11 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Request microphone permission
     /// - Returns: Whether permission was granted
     func requestMicrophonePermission() async -> Bool {
+        // Skip permission requests when running tests
+        guard !Self.isRunningTests else {
+            return false
+        }
+        
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         switch status {
         case .authorized:

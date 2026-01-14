@@ -109,8 +109,10 @@ struct CompletedMeetingWindow: View {
     
     private func loadTranscript() {
         if meeting.transcript == nil {
-            historyManager.loadTranscript(for: meeting)
-            transcript = meeting.transcript
+            Task {
+                await historyManager.loadTranscript(for: meeting)
+                transcript = meeting.transcript
+            }
         } else {
             transcript = meeting.transcript
         }

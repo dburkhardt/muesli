@@ -102,7 +102,8 @@ final class PreferencesManager {
     
     /// Thread-safe storage for echo cancellation state (for synchronous access from audio callbacks)
     /// Uses OSAllocatedUnfairLock for proper synchronization
-    private let echoCancellationLock = OSAllocatedUnfairLock(initialState: false)
+    /// Internal access for audio callback setup
+    let echoCancellationLock = OSAllocatedUnfairLock(initialState: false)
     
     /// Whether echo cancellation is enabled
     /// Uses a cached value for thread-safe access from audio callbacks
@@ -130,6 +131,10 @@ final class PreferencesManager {
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()
+    }
+
+    deinit {
+        print("[PreferencesManager] Deallocating")
     }
 
     // MARK: - Storage Migration

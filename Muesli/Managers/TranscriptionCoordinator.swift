@@ -50,6 +50,21 @@ final class TranscriptionCoordinator {
     /// Maximum buffer size (30 seconds at 16kHz = 480,000 samples)
     private let maxBufferSamples: Int = 480_000
     
+    /// Maximum buffering duration (30 seconds) before timeout
+    private let maxBufferDuration: TimeInterval = 30.0
+    
+    /// Maximum retries for model loading to prevent infinite recursion
+    private let maxModelRetries: Int = 3
+    
+    /// Current retry count
+    private var retriesRemaining: Int = 3
+    
+    /// Callback when buffer timeout occurs
+    var onBufferTimeout: (() -> Void)?
+    
+    /// Callback when model switches due to fallback (from, to, reason)
+    var onModelSwitched: ((ModelManager.ModelSize, ModelManager.ModelSize, Error) -> Void)?
+    
     // MARK: - Initialization
     
     init(transcriptionService: TranscriptionService, modelManager: ModelManager) {
@@ -62,6 +77,13 @@ final class TranscriptionCoordinator {
     /// Check model availability and prepare for transcription
     /// Returns immediately with current state, loads async if needed
     func prepareModel() async -> ModelState {
+        // Check retry limit to prevent infinite recursion
+        guard retriesRemaining > 0 else {
+            modelState = .failed(MuesliError.modelNotFound)
+            return .failed(MuesliError.modelNotFound)
+        }
+        retriesRemaining -= 1
+        
         // Check if model is available
         guard let activeModel = modelManager.activeModel else {
             modelState = .notAvailable
@@ -71,11 +93,18 @@ final class TranscriptionCoordinator {
         // Validate model
         guard modelManager.validateModel(activeModel),
               let modelPath = modelManager.pathForModel(activeModel) else {
+            
+            // Only mark corrupted on validation errors
             modelManager.markModelCorrupted(activeModel)
             
             // Try fallback
             if let fallback = modelManager.getFirstValidModel() {
                 modelManager.setActiveModel(fallback)
+                
+                // Notify user of model switch
+                let error = MuesliError.modelCorrupted(modelName: "\(activeModel)")
+                onModelSwitched?(activeModel, fallback, error)
+                
                 return await prepareModel()  // Retry with fallback
             }
             
@@ -86,6 +115,8 @@ final class TranscriptionCoordinator {
         // If already initialized, return ready
         if isInitialized {
             modelState = .ready
+            // Reset retry count on success
+            retriesRemaining = maxModelRetries
             return .ready
         }
         
@@ -96,21 +127,38 @@ final class TranscriptionCoordinator {
             try await transcriptionService.initialize(modelPath: modelPath)
             isInitialized = true
             modelState = .ready
+            // Reset retry count on success
+            retriesRemaining = maxModelRetries
             return .ready
         } catch {
             modelState = .failed(error)
             
-            // Mark as corrupted and try fallback
-            modelManager.markModelCorrupted(activeModel)
+            // Only mark corrupted on specific initialization errors, not temporary failures
+            if isInitializationError(error) {
+                modelManager.markModelCorrupted(activeModel)
+            }
             
             if let fallback = modelManager.getFirstValidModel() {
                 modelManager.setActiveModel(fallback)
                 isInitialized = false
+                
+                // Notify user of model switch
+                onModelSwitched?(activeModel, fallback, error)
+                
                 return await prepareModel()  // Retry with fallback
             }
             
             return .failed(error)
         }
+    }
+    
+    /// Check if error is a permanent initialization error (vs temporary)
+    private func isInitializationError(_ error: Error) -> Bool {
+        let errorMessage = error.localizedDescription.lowercased()
+        return errorMessage.contains("corrupted") ||
+               errorMessage.contains("invalid") ||
+               errorMessage.contains("missing") ||
+               errorMessage.contains("not found")
     }
     
     /// Start transcription (must call prepareModel first)
@@ -123,6 +171,13 @@ final class TranscriptionCoordinator {
     func stopTranscription() async {
         await transcriptionService.stopTranscription()
         clearBuffers()
+        
+        // Clear handler to break retain cycle
+        transcriptionService.setTranscriptHandler { _ in }
+    }
+    
+    deinit {
+        print("[TranscriptionCoordinator] Deallocating")
     }
     
     /// Set transcript handler for receiving segments
@@ -156,6 +211,15 @@ final class TranscriptionCoordinator {
             bufferStartTime = Date()
         }
         
+        // Check for timeout
+        if let startTime = bufferStartTime,
+           Date().timeIntervalSince(startTime) > maxBufferDuration {
+            // Model loading timeout - clear buffers and notify
+            clearBuffers()
+            onBufferTimeout?()
+            return
+        }
+        
         // Add to buffer with size limit
         if pendingSystemAudio.count + samples.count <= maxBufferSamples {
             pendingSystemAudio.append(contentsOf: samples)
@@ -181,6 +245,15 @@ final class TranscriptionCoordinator {
         
         if bufferStartTime == nil {
             bufferStartTime = Date()
+        }
+        
+        // Check for timeout
+        if let startTime = bufferStartTime,
+           Date().timeIntervalSince(startTime) > maxBufferDuration {
+            // Model loading timeout - clear buffers and notify
+            clearBuffers()
+            onBufferTimeout?()
+            return
         }
         
         // Add to buffer with size limit

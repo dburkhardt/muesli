@@ -734,7 +734,9 @@ struct RecordingDetailView: View {
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .onAppear {
-                                        historyManager.loadTranscript(for: meeting)
+                                        Task {
+                                            await historyManager.loadTranscript(for: meeting)
+                                        }
                                     }
                             }
                         }

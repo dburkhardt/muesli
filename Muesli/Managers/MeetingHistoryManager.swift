@@ -65,6 +65,10 @@ final class MeetingHistoryManager {
         }
     }
     
+    deinit {
+        print("[MeetingHistoryManager] Deallocating")
+    }
+    
     // MARK: - History Management
     
     /// Load meeting history from disk
@@ -176,7 +180,9 @@ final class MeetingHistoryManager {
         if selectedMeetingIDs.count == 1, let id = selectedMeetingIDs.first {
             selectedMeeting = meetingHistory.first { $0.id == id }
             if let meeting = selectedMeeting {
-                loadTranscript(for: meeting)
+                Task {
+                    await loadTranscript(for: meeting)
+                }
             }
         } else {
             selectedMeeting = nil
@@ -187,7 +193,9 @@ final class MeetingHistoryManager {
     func selectMeeting(_ meeting: MeetingHistoryItem) {
         selectedMeeting = meeting
         selectedMeetingIDs = [meeting.id]
-        loadTranscript(for: meeting)
+        Task {
+            await loadTranscript(for: meeting)
+        }
     }
     
     /// Select all meetings in a range (for Shift+click)
@@ -213,17 +221,19 @@ final class MeetingHistoryManager {
     
     // MARK: - Transcript Loading
     
-    /// Load transcript for a meeting (lazy-load)
-    func loadTranscript(for meeting: MeetingHistoryItem) {
-        guard meeting.transcript == nil else { return }
+    /// Load transcript for a meeting (lazy-load, async to prevent UI blocking)
+    func loadTranscript(for meeting: MeetingHistoryItem) async {
+        guard meeting.transcript == nil && !meeting.isLoadingTranscript else { return }
         
-        // Load plain text transcript
+        meeting.isLoadingTranscript = true
+        
+        // Load transcript synchronously (meetingHistoryService is @MainActor)
         meeting.transcript = meetingHistoryService.loadTranscript(for: meeting)
-        
-        // Also try to load block-based transcript (new format)
         if meeting.transcriptBlocks == nil {
             meeting.transcriptBlocks = meetingHistoryService.loadTranscriptBlocks(for: meeting)
         }
+        
+        meeting.isLoadingTranscript = false
     }
     
     // MARK: - Meeting Deletion
