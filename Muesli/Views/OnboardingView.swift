@@ -67,16 +67,14 @@ struct OnboardingView: View {
         .onAppear {
             // Initial permission check on appear
             Task {
-                await viewModel.refreshPermissionsAsync()
+                viewModel.refreshPermissions()
                 advanceBasedOnPermissions()
             }
         }
         .onChange(of: currentStep) { oldValue, newValue in
             // Check permissions when switching to permission steps
             if newValue == .screenRecording || newValue == .microphone {
-                Task {
-                    await viewModel.refreshPermissionsAsync()
-                }
+                viewModel.refreshPermissions()
             }
         }
         .fileImporter(

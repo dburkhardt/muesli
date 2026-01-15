@@ -226,13 +226,19 @@ final class MeetingHistoryManager {
         guard meeting.transcript == nil && !meeting.isLoadingTranscript else { return }
         
         meeting.isLoadingTranscript = true
+
+        let directory = meeting.directory
         
-        // Load transcript synchronously (meetingHistoryService is @MainActor)
-        meeting.transcript = meetingHistoryService.loadTranscript(for: meeting)
+        // Both MeetingHistoryManager and MeetingHistoryService are @MainActor
+        // Call the existing service instance
+        let transcript = meetingHistoryService.loadTranscript(at: directory)
+        let blocks = meetingHistoryService.loadTranscriptBlocks(at: directory)
+
+        meeting.transcript = transcript
         if meeting.transcriptBlocks == nil {
-            meeting.transcriptBlocks = meetingHistoryService.loadTranscriptBlocks(for: meeting)
+            meeting.transcriptBlocks = blocks
         }
-        
+
         meeting.isLoadingTranscript = false
     }
     

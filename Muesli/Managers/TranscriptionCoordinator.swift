@@ -42,7 +42,7 @@ final class TranscriptionCoordinator {
     /// Whether transcription service is initialized
     private var isInitialized: Bool = false
     
-    /// Audio buffering while model loads
+    /// Audio buffering while model loads (protected by serial actor execution)
     private var pendingSystemAudio: [Float] = []
     private var pendingMicAudio: [Float] = []
     private var bufferStartTime: Date?
@@ -73,6 +73,15 @@ final class TranscriptionCoordinator {
     }
     
     // MARK: - Model Lifecycle
+    
+    /// Reset per-recording state so new sessions can retry model loading
+    func resetForNewRecording() {
+        retriesRemaining = maxModelRetries
+        if case .failed = modelState {
+            modelState = .notAvailable
+        }
+        clearBuffers()
+    }
     
     /// Check model availability and prepare for transcription
     /// Returns immediately with current state, loads async if needed
@@ -115,6 +124,8 @@ final class TranscriptionCoordinator {
         // If already initialized, return ready
         if isInitialized {
             modelState = .ready
+            // Flush any buffered audio in case we resumed
+            processBufferedAudio()
             // Reset retry count on success
             retriesRemaining = maxModelRetries
             return .ready
@@ -127,6 +138,8 @@ final class TranscriptionCoordinator {
             try await transcriptionService.initialize(modelPath: modelPath)
             isInitialized = true
             modelState = .ready
+            // Flush any buffered audio collected during loading
+            processBufferedAudio()
             // Reset retry count on success
             retriesRemaining = maxModelRetries
             return .ready
@@ -199,14 +212,6 @@ final class TranscriptionCoordinator {
     
     /// Buffer system audio while model loads
     func bufferSystemAudio(_ samples: [Float]) {
-        guard modelState.isLoading else {
-            // If ready, pass through immediately
-            if modelState.isReady {
-                transcriptionService.appendSystemAudio(samples)
-            }
-            return
-        }
-        
         if bufferStartTime == nil {
             bufferStartTime = Date()
         }
@@ -235,14 +240,6 @@ final class TranscriptionCoordinator {
     
     /// Buffer microphone audio while model loads
     func bufferMicrophoneAudio(_ samples: [Float]) {
-        guard modelState.isLoading else {
-            // If ready, pass through immediately
-            if modelState.isReady {
-                transcriptionService.appendMicrophoneAudio(samples)
-            }
-            return
-        }
-        
         if bufferStartTime == nil {
             bufferStartTime = Date()
         }

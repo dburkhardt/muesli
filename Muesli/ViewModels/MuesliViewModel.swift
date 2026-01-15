@@ -22,10 +22,6 @@ final class MuesliViewModel {
     /// Refinement coordinator (injected, source of truth for refinement state)
     let refinementCoordinator: RefinementCoordinator
     
-    /// Recording controller (injected, handles recording lifecycle)
-    /// If nil, uses legacy inline implementation for backward compatibility
-    private(set) var recordingController: RecordingController?
-    
     // MARK: - App Detection
     
     var availableMeetingApps: [MeetingAppDetector.DetectedApp] = []
@@ -312,7 +308,6 @@ final class MuesliViewModel {
     ///   - preferencesManager: Manager for user preferences
     ///   - historyManager: Manager for meeting history (if nil, creates one with skipInitialLoad)
     ///   - refinementCoordinator: Coordinator for transcript refinement
-    ///   - recordingController: Controller for recording lifecycle (if nil, uses legacy inline implementation)
     ///   - audioCaptureService: Service for capturing audio (injectable for testing)
     ///   - fileOutputService: Service for file output (injectable for testing)
     ///   - transcriptionService: Service for transcription (injectable for testing)
@@ -327,7 +322,6 @@ final class MuesliViewModel {
         preferencesManager: PreferencesManager = PreferencesManager(),
         historyManager: MeetingHistoryManager? = nil,
         refinementCoordinator: RefinementCoordinator? = nil,
-        recordingController: RecordingController? = nil,
         audioCaptureService: AudioCaptureService? = nil,
         fileOutputService: FileOutputService? = nil,
         transcriptionService: TranscriptionService? = nil,
@@ -376,112 +370,13 @@ final class MuesliViewModel {
             fileOutputService: self.fileOutputService
         )
         
-        // Store recording controller if provided (for gradual migration)
-        self.recordingController = recordingController
-        
-        // Wire up recording controller callbacks if provided
-        if let controller = recordingController {
-            controller.onRefreshHistory = { [weak self] in
-                self?.refreshMeetingHistory()
-            }
-        }
-        
         // Check initial permission status
         refreshPermissions()
         
-        // Set up audio buffer handler - fork to both file output and transcription
-        // Use self. to capture the non-optional instance properties (not the optional init parameters)
-        let fileService = self.fileOutputService
-        let transcriptService = self.transcriptionService
-        let aecService = self.echoCancellationService
-        let prefs = self.preferencesManager
+        // Audio buffer handling is now managed by RecordingController
+        // Set up stream interruption and level handlers
         let audioCaptureServiceRef = self.audioCaptureService
-        
-        // Capture locks directly to avoid @MainActor isolation in callback
-        let muteLock = self.isMicrophoneMutedLock
-        let aecLock = prefs.echoCancellationLock
-        
         Task {
-            await audioCaptureServiceRef.setBufferHandler { buffer, type in
-                // NO self capture - only use captured locks and services (thread-safe)
-                let isMicMuted = muteLock.withLock { $0 }
-                let isAECEnabled = aecLock.withLock { $0 }
-                
-                let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
-                
-                switch type {
-                case .system:
-                    // Store system audio for AEC reference (if AEC enabled)
-                    if isAECEnabled {
-                        if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
-                            aecService.storeSystemAudio(samples: systemSamples, timestamp: timestamp)
-                        }
-                    }
-                    
-                    // Save to file (always)
-                    fileService.appendAudioBuffer(buffer, type: type)
-                    
-                    // Feed to transcription in live mode
-                    if transcriptService.transcriptionMode == .live {
-                        if let samples = TranscriptionService.resampleToWhisperFormat(
-                            buffer,
-                            sourceSampleRate: 48000,
-                            sourceChannels: 2
-                        ) {
-                            transcriptService.appendSystemAudio(samples)
-                        }
-                    }
-                    
-                case .microphone:
-                    // Extract microphone samples at 48kHz
-                    guard let micSamples48kHz = EchoCancellationService.extractSamples(from: buffer) else {
-                        // Fallback: save original buffer
-                        fileService.appendAudioBuffer(buffer, type: type)
-                        return
-                    }
-                    
-                    // Apply AEC if enabled
-                    let processedSamples48kHz: [Float]
-                    if isAECEnabled {
-                        processedSamples48kHz = aecService.processMicrophoneAudio(
-                            microphoneSamples: micSamples48kHz,
-                            micTimestamp: timestamp
-                        )
-                        
-                        // Create CMSampleBuffer from processed samples for file output
-                        if let processedBuffer = EchoCancellationService.createSampleBuffer(
-                            from: processedSamples48kHz,
-                            timestamp: timestamp
-                        ) {
-                            fileService.appendAudioBuffer(processedBuffer, type: type)
-                        } else {
-                            // Fallback: save original if conversion fails
-                            fileService.appendAudioBuffer(buffer, type: type)
-                        }
-                    } else {
-                        processedSamples48kHz = micSamples48kHz
-                        // Save original buffer when AEC disabled
-                        fileService.appendAudioBuffer(buffer, type: type)
-                    }
-                    
-                    // Skip microphone audio for transcription if muted
-                    if isMicMuted {
-                        return
-                    }
-                    
-                    // Feed to transcription in live mode
-                    if transcriptService.transcriptionMode == .live {
-                        // Resample processed samples to 16kHz for transcription
-                        let resampled = EchoCancellationService.resampleFloat32Public(
-                            samples: processedSamples48kHz,
-                            sourceSampleRate: 48000,
-                            targetSampleRate: 16000
-                        )
-                        transcriptService.appendMicrophoneAudio(resampled)
-                    }
-                }
-            }
-            
             // Set up stream interruption handler (e.g., captured app quits)
             await audioCaptureServiceRef.setInterruptedHandler { [weak self] error in
                 Task { @MainActor in
@@ -641,6 +536,9 @@ final class MuesliViewModel {
     
     private func startRecordingAsync(for session: RecordingSession) async {
         do {
+            // Reset retry budget for a fresh recording session
+            transcriptionCoordinator.resetForNewRecording()
+            
             // Prepare transcription model using coordinator (handles validation, fallback, initialization)
             let modelState = await transcriptionCoordinator.prepareModel()
             
@@ -1007,6 +905,11 @@ final class MuesliViewModel {
         // Clear activeSession
         activeSession = nil
         resetMuteState()
+
+        // If nothing is selected, return to unified view
+        if selectedMeeting == nil {
+            isSplitViewVisible = false
+        }
     }
     
     // MARK: - Capture Interruption Handling
@@ -1097,10 +1000,15 @@ final class MuesliViewModel {
         if let directory = session.outputDirectory {
             selectedMeeting = meetingHistory.first { $0.directory == directory }
             activeSession = nil
-        resetMuteState()
+            resetMuteState()
         } else {
             activeSession = nil
-        resetMuteState()
+            resetMuteState()
+        }
+
+        // If nothing is selected, return to unified view
+        if selectedMeeting == nil {
+            isSplitViewVisible = false
         }
     }
     
@@ -1122,6 +1030,9 @@ final class MuesliViewModel {
         
         // Set retranscribing state
         session.isRetranscribing = true
+        
+        // Reset retry budget for a fresh model load attempt
+        transcriptionCoordinator.resetForNewRecording()
         
         // Prepare transcription model using coordinator
         let modelState = await transcriptionCoordinator.prepareModel()
@@ -1308,6 +1219,9 @@ final class MuesliViewModel {
     /// Async implementation of resume recording
     private func resumeRecordingAsync(for meeting: MeetingHistoryItem) async {
         do {
+            // Reset retry budget for a fresh recording session
+            transcriptionCoordinator.resetForNewRecording()
+            
             // Prepare transcription model using coordinator
             let modelState = await transcriptionCoordinator.prepareModel()
             

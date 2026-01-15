@@ -105,6 +105,7 @@ final class RecordingController {
     private func setupAudioBufferHandler() {
         let fileService = self.fileOutputService
         let transcriptService = self.transcriptionService
+        let transcriptionCoordinator = self.transcriptionCoordinator
         let aecService = self.echoCancellationService
         let prefs = self.preferencesManager
         let audioCaptureServiceRef = self.audioCaptureService
@@ -130,7 +131,7 @@ final class RecordingController {
                             timestamp: timestamp,
                             isAECEnabled: isAECEnabled,
                             fileService: fileService,
-                            transcriptService: transcriptService,
+                            transcriptionCoordinator: transcriptionCoordinator,
                             aecService: aecService
                         )
                         
@@ -141,7 +142,7 @@ final class RecordingController {
                             isMicMuted: isMicMuted,
                             isAECEnabled: isAECEnabled,
                             fileService: fileService,
-                            transcriptService: transcriptService,
+                            transcriptionCoordinator: transcriptionCoordinator,
                             aecService: aecService
                         )
                     }
@@ -196,7 +197,7 @@ final class RecordingController {
         timestamp: CMTime,
         isAECEnabled: Bool,
         fileService: FileOutputService,
-        transcriptService: TranscriptionService,
+        transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
         // Store system audio for AEC reference (if AEC enabled)
@@ -209,14 +210,14 @@ final class RecordingController {
         // Save to file (always)
         fileService.appendAudioBuffer(buffer, type: .system)
         
-        // Feed to transcription in live mode
-        if transcriptService.transcriptionMode == .live {
-            if let samples = TranscriptionService.resampleToWhisperFormat(
-                buffer,
-                sourceSampleRate: 48000,
-                sourceChannels: 2
-            ) {
-                transcriptService.appendSystemAudio(samples)
+        // Feed to transcription coordinator (handles buffering during model load)
+        if let samples = TranscriptionService.resampleToWhisperFormat(
+            buffer,
+            sourceSampleRate: 48000,
+            sourceChannels: 2
+        ) {
+            Task { @MainActor in
+                transcriptionCoordinator.bufferSystemAudio(samples)
             }
         }
     }
@@ -228,7 +229,7 @@ final class RecordingController {
         isMicMuted: Bool,
         isAECEnabled: Bool,
         fileService: FileOutputService,
-        transcriptService: TranscriptionService,
+        transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
         // Extract microphone samples at 48kHz
@@ -267,15 +268,15 @@ final class RecordingController {
             return
         }
         
-        // Feed to transcription in live mode
-        if transcriptService.transcriptionMode == .live {
-            // Resample processed samples to 16kHz for transcription
-            let resampled = EchoCancellationService.resampleFloat32Public(
-                samples: processedSamples48kHz,
-                sourceSampleRate: 48000,
-                targetSampleRate: 16000
-            )
-            transcriptService.appendMicrophoneAudio(resampled)
+        // Feed to transcription coordinator (handles buffering during model load)
+        // Resample processed samples to 16kHz for transcription
+        let resampled = EchoCancellationService.resampleFloat32Public(
+            samples: processedSamples48kHz,
+            sourceSampleRate: 48000,
+            targetSampleRate: 16000
+        )
+        Task { @MainActor in
+            transcriptionCoordinator.bufferMicrophoneAudio(resampled)
         }
     }
     
@@ -350,6 +351,9 @@ final class RecordingController {
     
     private func startRecordingAsync(for session: RecordingSession) async {
         do {
+            // Reset retry budget for a fresh recording session
+            transcriptionCoordinator.resetForNewRecording()
+            
             // Prepare transcription model using coordinator
             let modelState = await transcriptionCoordinator.prepareModel()
             
@@ -706,6 +710,9 @@ final class RecordingController {
     
     private func resumeRecordingAsync(for meeting: MeetingHistoryItem) async {
         do {
+            // Reset retry budget for a fresh recording session
+            transcriptionCoordinator.resetForNewRecording()
+            
             let modelState = await transcriptionCoordinator.prepareModel()
             
             switch modelState {
@@ -782,6 +789,9 @@ final class RecordingController {
         }
         
         session.isRetranscribing = true
+        
+        // Reset retry budget for a fresh model load attempt
+        transcriptionCoordinator.resetForNewRecording()
         
         let modelState = await transcriptionCoordinator.prepareModel()
         

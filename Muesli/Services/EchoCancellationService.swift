@@ -63,22 +63,22 @@ extension EchoCancellationService {
     }
     
     /// Create CMSampleBuffer from Float32 samples
-    /// Converts from 48kHz Float32 mono to 16kHz Int16 stereo for file output
+    /// Converts from mono Float32 to stereo Float32 (optional resample) for file output
     /// - Parameters:
     ///   - samples: Float32 mono samples at source sample rate
     ///   - timestamp: Presentation timestamp for the buffer
     ///   - sourceSampleRate: Source sample rate (default: 48000)
-    ///   - targetSampleRate: Target sample rate (default: 16000)
-    /// - Returns: CMSampleBuffer in 16kHz Int16 stereo format, or nil if conversion fails
+    ///   - targetSampleRate: Target sample rate (default: 48000)
+    /// - Returns: CMSampleBuffer in Float32 stereo format, or nil if conversion fails
     static func createSampleBuffer(
         from samples: [Float],
         timestamp: CMTime,
         sourceSampleRate: Int = 48000,
-        targetSampleRate: Int = 16000
+        targetSampleRate: Int = 48000
     ) -> CMSampleBuffer? {
         guard !samples.isEmpty else { return nil }
         
-        // 1. Resample from sourceSampleRate to targetSampleRate
+        // 1. Resample from sourceSampleRate to targetSampleRate (if needed)
         let resampled = resampleFloat32(
             samples: samples,
             sourceSampleRate: sourceSampleRate,
@@ -87,24 +87,21 @@ extension EchoCancellationService {
         
         guard !resampled.isEmpty else { return nil }
         
-        // 2. Convert mono Float32 to stereo Int16 (duplicate channel)
-        let stereoInt16: [Int16] = resampled.flatMap { sample in
-            // Clamp and convert to Int16
-            let clampedSample = max(-1.0, min(1.0, sample))
-            let int16Value = Int16(clampedSample * 32767.0)
-            return [int16Value, int16Value]  // Duplicate for stereo
+        // 2. Convert mono Float32 to stereo Float32 (duplicate channel)
+        let stereoFloat32: [Float] = resampled.flatMap { sample in
+            [sample, sample]
         }
         
-        // 3. Create AudioStreamBasicDescription for 16kHz Int16 stereo
+        // 3. Create AudioStreamBasicDescription for Float32 stereo
         var asbd = AudioStreamBasicDescription(
             mSampleRate: Double(targetSampleRate),
             mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
-            mBytesPerPacket: 4,  // 2 bytes per sample * 2 channels
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 8,  // 4 bytes per sample * 2 channels
             mFramesPerPacket: 1,
-            mBytesPerFrame: 4,
+            mBytesPerFrame: 8,
             mChannelsPerFrame: 2,
-            mBitsPerChannel: 16,
+            mBitsPerChannel: 32,
             mReserved: 0
         )
         
@@ -125,8 +122,8 @@ extension EchoCancellationService {
             return nil
         }
         
-        // 5. Create block buffer with the stereo Int16 data
-        let dataSize = stereoInt16.count * MemoryLayout<Int16>.size
+        // 5. Create block buffer with the stereo Float32 data
+        let dataSize = stereoFloat32.count * MemoryLayout<Float>.size
         var blockBuffer: CMBlockBuffer?
         
         status = CMBlockBufferCreateWithMemoryBlock(
@@ -145,8 +142,8 @@ extension EchoCancellationService {
             return nil
         }
         
-        // 6. Copy stereo Int16 data to block buffer
-        status = stereoInt16.withUnsafeBufferPointer { bufferPtr in
+        // 6. Copy stereo Float32 data to block buffer
+        status = stereoFloat32.withUnsafeBufferPointer { bufferPtr in
             CMBlockBufferReplaceDataBytes(
                 with: bufferPtr.baseAddress!,
                 blockBuffer: blockBuf,

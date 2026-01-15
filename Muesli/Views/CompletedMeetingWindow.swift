@@ -111,7 +111,9 @@ struct CompletedMeetingWindow: View {
         if meeting.transcript == nil {
             Task {
                 await historyManager.loadTranscript(for: meeting)
-                transcript = meeting.transcript
+                await MainActor.run {
+                    transcript = meeting.transcript
+                }
             }
         } else {
             transcript = meeting.transcript

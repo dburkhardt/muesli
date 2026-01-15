@@ -145,7 +145,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
                 throw OutputError.assetWriterNotReady
             }
             
-            // Writer 2: Microphone audio (16kHz, stereo, Int16 - as provided by ScreenCaptureKit)
+            // Writer 2: Microphone audio (48kHz, stereo, Float32 - high fidelity)
             let micURL = directory.appendingPathComponent(micFilename)
             // Delete existing file if present
             try? FileManager.default.removeItem(at: micURL)
@@ -153,10 +153,10 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             
             let micSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: 16000.0,
+                AVSampleRateKey: 48000.0,
                 AVNumberOfChannelsKey: 2,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
                 AVLinearPCMIsBigEndianKey: false,
                 AVLinearPCMIsNonInterleaved: false
             ]
@@ -359,7 +359,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
                 throw OutputError.assetWriterNotReady
             }
             
-            // Writer 2: Microphone audio (16kHz, stereo, Int16 - as provided by ScreenCaptureKit)
+            // Writer 2: Microphone audio (48kHz, stereo, Float32 - high fidelity)
             let micURL = directory.appendingPathComponent(micFilename)
             // Delete existing file if present
             try? FileManager.default.removeItem(at: micURL)
@@ -367,10 +367,10 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             
             let micSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: 16000.0,
+                AVSampleRateKey: 48000.0,
                 AVNumberOfChannelsKey: 2,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
                 AVLinearPCMIsBigEndianKey: false,
                 AVLinearPCMIsNonInterleaved: false
             ]
