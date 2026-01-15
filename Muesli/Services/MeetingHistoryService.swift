@@ -2,23 +2,26 @@ import Foundation
 import AVFoundation
 
 /// Service responsible for discovering and loading meeting recordings from disk
-final class MeetingHistoryService {
+@MainActor
+final class MeetingHistoryService: MeetingHistoryServiceProtocol {
     
     // MARK: - Properties
     
     private let fileManager = FileManager.default
     
     private static var baseOutputPath: URL {
+        if let savedPath = UserDefaults.standard.string(forKey: AppStorageKeys.outputDirectory) {
+            return URL(fileURLWithPath: savedPath)
+        }
         let fileManager = FileManager.default
-        let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return documentsPath.appendingPathComponent("Meeting Transcripts", isDirectory: true)
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Muesli/Recordings", isDirectory: true)
     }
     
     // MARK: - Discovery
     
     /// Discover all meeting recordings from disk
     /// - Returns: Array of meeting history items, sorted newest first
-    @MainActor
     func discoverMeetings() -> [MeetingHistoryItem] {
         let basePath = Self.baseOutputPath
         
@@ -59,7 +62,6 @@ final class MeetingHistoryService {
     /// Parse a meeting from a directory URL
     /// - Parameter directory: The directory URL containing the meeting files
     /// - Returns: MeetingHistoryItem if valid, nil otherwise
-    @MainActor
     private func parseMeeting(from directory: URL) -> MeetingHistoryItem? {
         // Check for transcript.md file
         let transcriptURL = directory.appendingPathComponent("transcript.md")
@@ -231,7 +233,14 @@ final class MeetingHistoryService {
     /// - Parameter meeting: The meeting to load transcript for
     /// - Returns: Transcript text, or nil if not found
     func loadTranscript(for meeting: MeetingHistoryItem) -> String? {
-        let transcriptURL = meeting.directory.appendingPathComponent("transcript.md")
+        loadTranscript(at: meeting.directory)
+    }
+
+    /// Load transcript content for a meeting directory (plain text format)
+    /// - Parameter directory: The meeting directory
+    /// - Returns: Transcript text, or nil if not found
+    func loadTranscript(at directory: URL) -> String? {
+        let transcriptURL = directory.appendingPathComponent("transcript.md")
         
         guard let content = try? String(contentsOf: transcriptURL, encoding: .utf8) else {
             return nil
@@ -365,7 +374,14 @@ final class MeetingHistoryService {
     /// - Parameter meeting: The meeting to load original transcript blocks for
     /// - Returns: Array of original transcript blocks, or nil if not found
     func loadOriginalTranscriptBlocks(for meeting: MeetingHistoryItem) -> [TranscriptBlock]? {
-        let originalURL = meeting.directory.appendingPathComponent("transcript.original.md")
+        loadOriginalTranscriptBlocks(at: meeting.directory)
+    }
+
+    /// Load original transcript blocks from a meeting directory (if refinement was applied)
+    /// - Parameter directory: The meeting directory
+    /// - Returns: Array of original transcript blocks, or nil if not found
+    func loadOriginalTranscriptBlocks(at directory: URL) -> [TranscriptBlock]? {
+        let originalURL = directory.appendingPathComponent("transcript.original.md")
         guard let content = try? String(contentsOf: originalURL, encoding: .utf8) else {
             return nil
         }
@@ -376,7 +392,14 @@ final class MeetingHistoryService {
     /// - Parameter meeting: The meeting to load original transcript for
     /// - Returns: Original transcript text, or nil if not found
     func loadOriginalTranscript(for meeting: MeetingHistoryItem) -> String? {
-        let originalURL = meeting.directory.appendingPathComponent("transcript.original.md")
+        loadOriginalTranscript(at: meeting.directory)
+    }
+
+    /// Load original transcript text from a meeting directory (if refinement was applied)
+    /// - Parameter directory: The meeting directory
+    /// - Returns: Original transcript text, or nil if not found
+    func loadOriginalTranscript(at directory: URL) -> String? {
+        let originalURL = directory.appendingPathComponent("transcript.original.md")
         guard let content = try? String(contentsOf: originalURL, encoding: .utf8) else {
             return nil
         }
@@ -403,7 +426,15 @@ final class MeetingHistoryService {
     /// - Parameter meeting: The meeting to load transcript blocks for
     /// - Returns: Array of transcript blocks, or nil if not found or legacy format
     func loadTranscriptBlocks(for meeting: MeetingHistoryItem) -> [TranscriptBlock]? {
-        let transcriptURL = meeting.directory.appendingPathComponent("transcript.md")
+        loadTranscriptBlocks(at: meeting.directory)
+    }
+
+    /// Load transcript blocks for a meeting directory (block format)
+    /// Parses the markdown format back into TranscriptBlock objects
+    /// - Parameter directory: The meeting directory
+    /// - Returns: Array of transcript blocks, or nil if not found or legacy format
+    func loadTranscriptBlocks(at directory: URL) -> [TranscriptBlock]? {
+        let transcriptURL = directory.appendingPathComponent("transcript.md")
         
         guard let content = try? String(contentsOf: transcriptURL, encoding: .utf8) else {
             return nil

@@ -3,9 +3,12 @@ import SwiftUI
 /// Unified list view showing all meetings with option to start recording
 struct UnifiedHistoryView: View {
     @Bindable var viewModel: MuesliViewModel
+    @Environment(MeetingHistoryManager.self) private var historyManager
     @Environment(\.openWindow) private var openWindow
     
     var body: some View {
+        @Bindable var history = historyManager
+        
         VStack(spacing: 0) {
             // Header with title and start button
             headerView
@@ -13,7 +16,7 @@ struct UnifiedHistoryView: View {
             Divider()
             
             // Meeting list
-            if viewModel.groupedHistory.isEmpty {
+            if historyManager.groupedHistory.isEmpty {
                 emptyStateView
             } else {
                 meetingListView
@@ -23,20 +26,20 @@ struct UnifiedHistoryView: View {
         .background(.background)
         .onDeleteCommand {
             // Handle Delete key
-            viewModel.requestDeleteSelectedMeetings()
+            historyManager.requestDeleteSelectedMeetings()
         }
-        .alert("Delete Meeting\(viewModel.meetingsPendingDeletion.count > 1 ? "s" : "")?", isPresented: $viewModel.showDeleteConfirmation) {
+        .alert("Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?", isPresented: $history.showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {
-                viewModel.cancelDeleteMeetings()
+                historyManager.cancelDeleteMeetings()
             }
             Button("Delete", role: .destructive) {
-                viewModel.confirmDeleteMeetings()
+                historyManager.confirmDeleteMeetings()
             }
         } message: {
-            if viewModel.meetingsPendingDeletion.count == 1 {
-                Text("This will permanently delete \"\(viewModel.meetingsPendingDeletion.first?.title ?? "Meeting")\" and its audio files.")
+            if historyManager.meetingsPendingDeletion.count == 1 {
+                Text("This will permanently delete \"\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")\" and its audio files.")
             } else {
-                Text("This will permanently delete \(viewModel.meetingsPendingDeletion.count) meetings and their audio files.")
+                Text("This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings and their audio files.")
             }
         }
     }
@@ -102,7 +105,7 @@ struct UnifiedHistoryView: View {
     private var meetingListView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(viewModel.groupedHistory) { group in
+                ForEach(historyManager.groupedHistory) { group in
                     // Group header
                     Text(group.label)
                         .font(.system(size: 13, weight: .semibold))
@@ -116,7 +119,7 @@ struct UnifiedHistoryView: View {
                     ForEach(group.meetings) { meeting in
                         MeetingListItemView(
                             meeting: meeting,
-                            isSelected: viewModel.selectedMeetingIDs.contains(meeting.id),
+                            isSelected: historyManager.selectedMeetingIDs.contains(meeting.id),
                             onSelect: { extendSelection in
                                 handleMeetingClick(meeting, extendSelection: extendSelection)
                             },
@@ -125,14 +128,14 @@ struct UnifiedHistoryView: View {
                             },
                             onDelete: {
                                 // If this meeting is part of a multi-selection, delete all selected
-                                if viewModel.selectedMeetingIDs.contains(meeting.id) && viewModel.selectedMeetingIDs.count > 1 {
-                                    viewModel.requestDeleteSelectedMeetings()
+                                if historyManager.selectedMeetingIDs.contains(meeting.id) && historyManager.selectedMeetingIDs.count > 1 {
+                                    historyManager.requestDeleteSelectedMeetings()
                                 } else {
-                                    viewModel.requestDeleteMeeting(meeting)
+                                    historyManager.requestDeleteMeeting(meeting)
                                 }
                             },
                             onShiftClick: {
-                                viewModel.selectMeetingsInRange(to: meeting)
+                                historyManager.selectMeetingsInRange(to: meeting)
                             }
                         )
                     }
@@ -147,12 +150,10 @@ struct UnifiedHistoryView: View {
     private func handleMeetingClick(_ meeting: MeetingHistoryItem, extendSelection: Bool) {
         if extendSelection {
             // Cmd+click: toggle multi-select
-            viewModel.toggleMeetingSelection(meeting, extendSelection: true)
+            historyManager.toggleMeetingSelection(meeting, extendSelection: true)
         } else {
             // Single click: show in detail pane immediately, switch to split view
-            viewModel.selectedMeeting = meeting
-            viewModel.selectedMeetingIDs = [meeting.id]
-            viewModel.loadTranscript(for: meeting)
+            historyManager.selectMeeting(meeting)
             viewModel.isSplitViewVisible = true
         }
     }
@@ -163,8 +164,10 @@ struct UnifiedHistoryView: View {
     }
     
     private func openCompletedMeetingWindow(_ meeting: MeetingHistoryItem) {
-        viewModel.completedMeetingWindowItem = meeting
-        viewModel.loadTranscript(for: meeting)
+        historyManager.completedMeetingWindowItem = meeting
+        Task {
+            await historyManager.loadTranscript(for: meeting)
+        }
         openWindow(id: "completedMeeting")
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -282,6 +285,8 @@ struct MeetingListItemView: View {
 
 #Preview {
     let vm = MuesliViewModel()
+    let historyManager = MeetingHistoryManager()
     return UnifiedHistoryView(viewModel: vm)
+        .environment(historyManager)
         .frame(width: 600, height: 800)
 }

@@ -3,9 +3,12 @@ import SwiftUI
 /// Sidebar showing meeting history with active recording indicator
 struct MeetingHistorySidebar: View {
     @Bindable var viewModel: MuesliViewModel
+    @Environment(MeetingHistoryManager.self) private var historyManager
     @Environment(\.openWindow) private var openWindow
     
     var body: some View {
+        @Bindable var history = historyManager
+        
         VStack(spacing: 0) {
             // Header
             headerView
@@ -13,7 +16,7 @@ struct MeetingHistorySidebar: View {
             Divider()
             
             // Content
-            if viewModel.groupedHistory.isEmpty && viewModel.activeRecordingSession == nil {
+            if historyManager.groupedHistory.isEmpty && viewModel.activeRecordingSession == nil {
                 emptyStateView
             } else {
                 meetingListView
@@ -23,20 +26,20 @@ struct MeetingHistorySidebar: View {
         .background(.background)
         .onDeleteCommand {
             // Handle Delete key
-            viewModel.requestDeleteSelectedMeetings()
+            historyManager.requestDeleteSelectedMeetings()
         }
-        .alert("Delete Meeting\(viewModel.meetingsPendingDeletion.count > 1 ? "s" : "")?", isPresented: $viewModel.showDeleteConfirmation) {
+        .alert("Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?", isPresented: $history.showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {
-                viewModel.cancelDeleteMeetings()
+                historyManager.cancelDeleteMeetings()
             }
             Button("Delete", role: .destructive) {
-                viewModel.confirmDeleteMeetings()
+                historyManager.confirmDeleteMeetings()
             }
         } message: {
-            if viewModel.meetingsPendingDeletion.count == 1 {
-                Text("This will permanently delete \"\(viewModel.meetingsPendingDeletion.first?.title ?? "Meeting")\" and its audio files.")
+            if historyManager.meetingsPendingDeletion.count == 1 {
+                Text("This will permanently delete \"\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")\" and its audio files.")
             } else {
-                Text("This will permanently delete \(viewModel.meetingsPendingDeletion.count) meetings and their audio files.")
+                Text("This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings and their audio files.")
             }
         }
     }
@@ -96,11 +99,10 @@ struct MeetingHistorySidebar: View {
                     Section {
                         ActiveRecordingItemView(
                             session: activeSession,
-                            isSelected: viewModel.selectedMeeting == nil && viewModel.activeRecordingSession != nil,
+                            isSelected: historyManager.selectedMeeting == nil && viewModel.activeRecordingSession != nil,
                             onTap: {
                                 // Clear selected meeting to show live recording
-                                viewModel.selectedMeeting = nil
-                                viewModel.selectedMeetingIDs.removeAll()
+                                historyManager.clearSelection()
                             }
                         )
                         .padding(.horizontal, 8)
@@ -120,12 +122,12 @@ struct MeetingHistorySidebar: View {
                 }
                 
                 // Historical meetings grouped by date
-                ForEach(viewModel.groupedHistory) { group in
+                ForEach(historyManager.groupedHistory) { group in
                     Section {
                         ForEach(group.meetings) { meeting in
                             MeetingSidebarItemView(
                                 meeting: meeting,
-                                isSelected: viewModel.selectedMeetingIDs.contains(meeting.id),
+                                isSelected: historyManager.selectedMeetingIDs.contains(meeting.id),
                                 onSelect: { extendSelection in
                                     handleMeetingClick(meeting, extendSelection: extendSelection)
                                 },
@@ -134,14 +136,14 @@ struct MeetingHistorySidebar: View {
                                 },
                                 onDelete: {
                                     // If this meeting is part of a multi-selection, delete all selected
-                                    if viewModel.selectedMeetingIDs.contains(meeting.id) && viewModel.selectedMeetingIDs.count > 1 {
-                                        viewModel.requestDeleteSelectedMeetings()
+                                    if historyManager.selectedMeetingIDs.contains(meeting.id) && historyManager.selectedMeetingIDs.count > 1 {
+                                        historyManager.requestDeleteSelectedMeetings()
                                     } else {
-                                        viewModel.requestDeleteMeeting(meeting)
+                                        historyManager.requestDeleteMeeting(meeting)
                                     }
                                 },
                                 onShiftClick: {
-                                    viewModel.selectMeetingsInRange(to: meeting)
+                                    historyManager.selectMeetingsInRange(to: meeting)
                                 }
                             )
                         }
@@ -165,12 +167,10 @@ struct MeetingHistorySidebar: View {
     private func handleMeetingClick(_ meeting: MeetingHistoryItem, extendSelection: Bool) {
         if extendSelection {
             // Cmd+click: toggle multi-select
-            viewModel.toggleMeetingSelection(meeting, extendSelection: true)
+            historyManager.toggleMeetingSelection(meeting, extendSelection: true)
         } else {
             // Single click: show in detail pane immediately
-            viewModel.selectedMeeting = meeting
-            viewModel.selectedMeetingIDs = [meeting.id]
-            viewModel.loadTranscript(for: meeting)
+            historyManager.selectMeeting(meeting)
         }
     }
     
@@ -180,8 +180,10 @@ struct MeetingHistorySidebar: View {
     }
     
     private func openCompletedMeetingWindow(_ meeting: MeetingHistoryItem) {
-        viewModel.completedMeetingWindowItem = meeting
-        viewModel.loadTranscript(for: meeting)
+        historyManager.completedMeetingWindowItem = meeting
+        Task {
+            await historyManager.loadTranscript(for: meeting)
+        }
         openWindow(id: "completedMeeting")
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -291,6 +293,8 @@ struct MeetingSidebarItemView: View {
 
 #Preview {
     let vm = MuesliViewModel()
+    let historyManager = MeetingHistoryManager()
     return MeetingHistorySidebar(viewModel: vm)
+        .environment(historyManager)
         .frame(width: 250, height: 600)
 }

@@ -3,11 +3,12 @@ import SwiftUI
 /// Detail view showing active recording, completed recording, or historical meeting
 struct RecordingDetailView: View {
     @Bindable var viewModel: MuesliViewModel
+    @Environment(MeetingHistoryManager.self) private var historyManager
     
     /// Check if active session is a resumed recording for the selected meeting
     private var isResumedRecordingForSelectedMeeting: Bool {
         guard let activeSession = viewModel.activeRecordingSession,
-              let selectedMeeting = viewModel.selectedMeeting,
+              let selectedMeeting = historyManager.selectedMeeting,
               let parentMeeting = activeSession.parentMeeting else {
             return false
         }
@@ -15,19 +16,21 @@ struct RecordingDetailView: View {
     }
     
     var body: some View {
+        @Bindable var history = historyManager
+        
         Group {
             if let activeSession = viewModel.activeRecordingSession, !activeSession.isCompleted {
                 if isResumedRecordingForSelectedMeeting {
                     // Resumed recording for selected meeting - show as active recording
                     activeRecordingView(session: activeSession)
-                } else if viewModel.selectedMeeting != nil {
+                } else if historyManager.selectedMeeting != nil {
                     // Recording a different meeting while viewing selected one
-                    historicalMeetingViewWithIndicator(meeting: viewModel.selectedMeeting!)
+                    historicalMeetingViewWithIndicator(meeting: historyManager.selectedMeeting!)
                 } else {
                     // New recording (no selected meeting)
                     activeRecordingView(session: activeSession)
                 }
-            } else if let selectedMeeting = viewModel.selectedMeeting {
+            } else if let selectedMeeting = historyManager.selectedMeeting {
                 // Not recording, viewing a saved meeting
                 historicalMeetingViewWithIndicator(meeting: selectedMeeting)
             } else {
@@ -36,15 +39,15 @@ struct RecordingDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
-        .alert("Delete Meeting?", isPresented: $viewModel.showDeleteConfirmation) {
+        .alert("Delete Meeting?", isPresented: $history.showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {
-                viewModel.cancelDeleteMeetings()
+                historyManager.cancelDeleteMeetings()
             }
             Button("Delete", role: .destructive) {
-                viewModel.confirmDeleteMeetings()
+                historyManager.confirmDeleteMeetings()
             }
         } message: {
-            if let meeting = viewModel.meetingsPendingDeletion.first {
+            if let meeting = historyManager.meetingsPendingDeletion.first {
                 Text("This will permanently delete \"\(meeting.title)\" and its audio files.")
             }
         }
@@ -72,9 +75,9 @@ struct RecordingDetailView: View {
         .sheet(isPresented: $viewModel.showRefineSheet) {
             RefineTranscriptSheet(
                 isPresented: $viewModel.showRefineSheet,
-                progress: viewModel.refinementService.progress,
-                isRefining: viewModel.refinementService.isRefining,
-                errorMessage: viewModel.refinementService.errorMessage,
+                progress: viewModel.refinementCoordinator.refinementProgress,
+                isRefining: viewModel.refinementCoordinator.isRefining,
+                errorMessage: viewModel.refinementCoordinator.errorMessage,
                 onCancel: {
                     viewModel.cancelRefinement()
                 }
@@ -647,7 +650,7 @@ struct RecordingDetailView: View {
                                 .foregroundStyle(.tertiary)
                             
                             Button(action: {
-                                viewModel.requestDeleteMeeting(meeting)
+                                historyManager.requestDeleteMeeting(meeting)
                             }) {
                                 Text("Delete Recording")
                                     .font(.system(size: 12))
@@ -731,7 +734,9 @@ struct RecordingDetailView: View {
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .onAppear {
-                                        viewModel.loadTranscript(for: meeting)
+                                        Task {
+                                            await historyManager.loadTranscript(for: meeting)
+                                        }
                                     }
                             }
                         }
@@ -854,12 +859,16 @@ struct FloatingRecordingIndicator: View {
 
 #Preview("Active Recording") {
     let vm = MuesliViewModel()
+    let historyManager = MeetingHistoryManager()
     RecordingDetailView(viewModel: vm)
+        .environment(historyManager)
         .frame(width: 600, height: 800)
 }
 
 #Preview("Empty") {
     let vm = MuesliViewModel()
+    let historyManager = MeetingHistoryManager()
     RecordingDetailView(viewModel: vm)
+        .environment(historyManager)
         .frame(width: 600, height: 800)
 }

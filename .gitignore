@@ -22,3 +22,9 @@ Carthage/Build/
 
 # Cursor/IDE
 .cursor/
+
+# Build and test logs
+build-*.txt
+test-*.txt
+*.profraw
+*.profdata

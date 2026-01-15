@@ -13,6 +13,10 @@ final class RecordingSession: Identifiable {
     
     // MARK: - Session State
     
+    /// State machine for atomic state transitions
+    private var stateMachine = RecordingStateMachine()
+    
+    /// Legacy enum for backward compatibility (deprecated - use state machine)
     enum SessionState: Equatable {
         case idle
         case recording
@@ -20,14 +24,74 @@ final class RecordingSession: Identifiable {
         case completed
     }
     
-    var state: SessionState = .idle
+    /// Current state (computed from state machine)
+    var state: SessionState {
+        get {
+            switch stateMachine.currentState {
+            case .idle, .failed:
+                return .idle
+            case .initializing, .paused:
+                return .recording // Map paused/initializing to recording for UI simplicity
+            case .recording:
+                return .recording
+            case .stopping:
+                return .stopping
+            case .completed:
+                return .completed
+            }
+        }
+        set {
+            // Legacy setter for backward compatibility - attempts transition
+            switch newValue {
+            case .idle:
+                stateMachine.reset()
+            case .recording:
+                _ = stateMachine.startRecording()
+            case .stopping:
+                _ = stateMachine.beginStopping()
+            case .completed:
+                _ = stateMachine.complete()
+            }
+        }
+    }
     
     var isRecording: Bool {
-        state == .recording
+        stateMachine.isRecording || stateMachine.isPaused
     }
     
     var isCompleted: Bool {
-        state == .completed
+        stateMachine.isCompleted
+    }
+    
+    // MARK: - State Machine Access
+    
+    /// Begin initialization phase (model loading, etc.)
+    func beginInitialization() -> Result<Void, RecordingStateMachine.TransitionError> {
+        return stateMachine.beginInitialization()
+    }
+    
+    /// Start recording (after initialization or from idle)
+    func startRecording() -> Result<Void, RecordingStateMachine.TransitionError> {
+        return stateMachine.startRecording()
+    }
+    
+    /// Begin stopping process
+    func beginStopping() -> Result<Void, RecordingStateMachine.TransitionError> {
+        return stateMachine.beginStopping()
+    }
+    
+    /// Complete recording (after stopping)
+    func completeRecording() -> Result<Void, RecordingStateMachine.TransitionError> {
+        return stateMachine.complete()
+    }
+    
+    /// Fail recording with reason
+    func failRecording(reason: String) -> Result<Void, RecordingStateMachine.TransitionError> {
+        let result = stateMachine.fail(reason: reason)
+        if case .success = result {
+            showErrorMessage(reason)
+        }
+        return result
     }
     
     // MARK: - Recording Data
@@ -103,6 +167,7 @@ final class RecordingSession: Identifiable {
     var segmentNumber: Int = 1
     
     /// Reference to the MeetingHistoryItem this session belongs to (for resumed recordings)
+    /// Strong reference is safe because MeetingHistoryItem does not reference RecordingSession
     var parentMeeting: MeetingHistoryItem?
     
     // MARK: - Audio Level State
@@ -126,6 +191,16 @@ final class RecordingSession: Identifiable {
     
     init(id: UUID = UUID()) {
         self.id = id
+    }
+    
+    deinit {
+        // Clean up timer to prevent leaks
+        // Use MainActor.assumeIsolated since RecordingSession is @MainActor
+        // and deinit should only be called when no references remain
+        MainActor.assumeIsolated {
+            displayTimer?.invalidate()
+            displayTimer = nil
+        }
     }
     
     // MARK: - Timer Management
@@ -204,5 +279,16 @@ final class RecordingSession: Identifiable {
         let mins = Int(seconds) / 60
         let secs = Int(seconds) % 60
         return String(format: "%02d:%02d", mins, secs)
+    }
+    
+    // MARK: - Error Handling
+    
+    /// Show an error using structured MuesliError
+    func showError(_ error: MuesliError) {
+        var message = error.localizedDescription
+        if let suggestion = error.recoverySuggestion {
+            message += "\n\n\(suggestion)"
+        }
+        showErrorMessage(message)
     }
 }

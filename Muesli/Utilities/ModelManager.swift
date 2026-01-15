@@ -4,7 +4,7 @@ import AppKit
 
 /// Manages WhisperKit model downloading and storage
 @Observable
-final class ModelManager: @unchecked Sendable {
+final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     
     // MARK: - Model Options
     
@@ -80,30 +80,34 @@ final class ModelManager: @unchecked Sendable {
         activeModel != nil && downloadedModels.contains(activeModel!)
     }
     
-    // MARK: - Storage Keys
-    
-    private static let activeModelKey = "activeWhisperModel"
-    private static let downloadedModelsKey = "downloadedWhisperModels"
+    // MARK: - Storage Keys (use centralized AppStorageKeys)
     
     // MARK: - Initialization
     
-    init() {
+    /// Whether to skip file system scanning (for testing)
+    private let skipScan: Bool
+    
+    init(skipScan: Bool = false) {
+        self.skipScan = skipScan
+        
         // Initialize all models as idle
         for model in ModelSize.allCases {
             downloadStates[model] = .idle
         }
         
-        // Scan for existing downloaded models
-        scanForDownloadedModels()
-        
-        // Load saved active model preference
-        if let savedModel = UserDefaults.standard.string(forKey: Self.activeModelKey),
-           let model = ModelSize(rawValue: savedModel),
-           downloadedModels.contains(model) {
-            activeModel = model
-        } else if let firstDownloaded = downloadedModels.first {
-            // Default to first downloaded model
-            activeModel = firstDownloaded
+        // Scan for existing downloaded models (skip during tests)
+        if !skipScan {
+            scanForDownloadedModels()
+            
+            // Load saved active model preference
+            if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel),
+               let model = ModelSize(rawValue: savedModel),
+               downloadedModels.contains(model) {
+                activeModel = model
+            } else if let firstDownloaded = downloadedModels.first {
+                // Default to first downloaded model
+                activeModel = firstDownloaded
+            }
         }
     }
     
@@ -114,8 +118,10 @@ final class ModelManager: @unchecked Sendable {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let muesliDir = appSupport.appendingPathComponent("Muesli/Models", isDirectory: true)
         
-        // Create directory if it doesn't exist
-        try? FileManager.default.createDirectory(at: muesliDir, withIntermediateDirectories: true)
+        // Create directory if it doesn't exist (skip during tests)
+        if !skipScan {
+            try? FileManager.default.createDirectory(at: muesliDir, withIntermediateDirectories: true)
+        }
         
         return muesliDir
     }
@@ -193,7 +199,7 @@ final class ModelManager: @unchecked Sendable {
                 setActiveModel(valid)
             } else {
                 activeModel = nil
-                UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+                UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
             }
         }
         
@@ -269,14 +275,14 @@ final class ModelManager: @unchecked Sendable {
     func setActiveModel(_ model: ModelSize) {
         guard downloadedModels.contains(model) else { return }
         activeModel = model
-        UserDefaults.standard.set(model.rawValue, forKey: Self.activeModelKey)
+        UserDefaults.standard.set(model.rawValue, forKey: AppStorageKeys.activeWhisperModel)
     }
     
     // MARK: - Persistence
     
     private func saveDownloadedModels() {
         let modelStrings = downloadedModels.map { $0.rawValue }
-        UserDefaults.standard.set(modelStrings, forKey: Self.downloadedModelsKey)
+        UserDefaults.standard.set(modelStrings, forKey: AppStorageKeys.downloadedWhisperModels)
     }
     
     /// Use an existing model from a user-selected folder
@@ -347,7 +353,7 @@ final class ModelManager: @unchecked Sendable {
             } else {
                 // No other models available
                 activeModel = nil
-                UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+                UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
             }
         }
         
@@ -372,7 +378,7 @@ final class ModelManager: @unchecked Sendable {
         }
         downloadedModels.removeAll()
         activeModel = nil
-        UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
-        UserDefaults.standard.removeObject(forKey: Self.downloadedModelsKey)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.downloadedWhisperModels)
     }
 }

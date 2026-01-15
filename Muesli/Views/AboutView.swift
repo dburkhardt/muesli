@@ -12,7 +12,7 @@ struct AboutView: View {
                 .frame(width: 128, height: 128)
             
             // App name
-            Text("Muesli")
+            Text(appName)
                 .font(.system(size: 28, weight: .bold))
             
             // Version
@@ -44,6 +44,10 @@ struct AboutView: View {
         }
         .padding(40)
         .frame(width: 400, height: 500)
+    }
+    
+    private var appName: String {
+        Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
     }
     
     private var appVersion: String {

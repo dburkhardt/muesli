@@ -10,7 +10,7 @@ import MLXLMCommon
 /// Uses MLX-Swift for on-device LLM inference
 @Observable
 @MainActor
-final class LLMManager {
+final class LLMManager: LLMManagerProtocol {
     
     // MARK: - Model Options
     
@@ -98,10 +98,8 @@ final class LLMManager {
     /// MLX-Swift is always available now that we've added the dependency
     let isMLXAvailable: Bool = true
     
-    // MARK: - Storage Keys
+    // MARK: - Storage Keys (use centralized AppStorageKeys)
     
-    private static let activeModelKey = "activeLLMModel"
-    private static let downloadedModelsKey = "downloadedLLMModels"
     private static let llmEnabledKey = "llmStitchingEnabled"
     
     /// User preference: enable LLM stitching
@@ -120,27 +118,40 @@ final class LLMManager {
         }
     }
     
-    /// Hub API for downloading models
-    private let hubApi = HubApi()
+    /// Hub API for downloading models (lazy to avoid Documents prompt on init)
+    private var _hubApi: HubApi?
+    private var hubApi: HubApi {
+        if _hubApi == nil {
+            _hubApi = HubApi()
+        }
+        return _hubApi!
+    }
+    
+    /// Whether to skip Hub API access (for testing)
+    private let skipHubAccess: Bool
     
     // MARK: - Initialization
     
-    init() {
+    init(skipHubAccess: Bool = false) {
+        self.skipHubAccess = skipHubAccess
+        
         // Initialize all models as idle
         for model in LLMModel.allCases {
             downloadStates[model] = .idle
         }
         
-        // Scan for existing downloaded models
-        scanForDownloadedModels()
-        
-        // Load saved active model preference
-        if let savedModel = UserDefaults.standard.string(forKey: Self.activeModelKey),
-           let model = LLMModel(rawValue: savedModel),
-           downloadedModels.contains(model) {
-            activeModel = model
-        } else if let firstDownloaded = downloadedModels.first {
-            activeModel = firstDownloaded
+        // Scan for existing downloaded models (skip if avoiding Hub access)
+        if !skipHubAccess {
+            scanForDownloadedModels()
+            
+            // Load saved active model preference
+            if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeLLMModel),
+               let model = LLMModel(rawValue: savedModel),
+               downloadedModels.contains(model) {
+                activeModel = model
+            } else if let firstDownloaded = downloadedModels.first {
+                activeModel = firstDownloaded
+            }
         }
     }
     
@@ -148,6 +159,10 @@ final class LLMManager {
     
     /// Returns the Hub cache directory for models
     var modelDirectory: URL {
+        guard !skipHubAccess else {
+            // Return a dummy path for tests (won't be accessed)
+            return FileManager.default.temporaryDirectory.appendingPathComponent("test-llm-models")
+        }
         // Use a dummy config to get the base cache location
         let dummyConfig = ModelConfiguration(id: "mlx-community/test")
         return dummyConfig.modelDirectory(hub: hubApi).deletingLastPathComponent().deletingLastPathComponent()
@@ -155,6 +170,8 @@ final class LLMManager {
     
     /// Get the path for a specific model (from Hub cache)
     func pathForModel(_ model: LLMModel) -> URL? {
+        guard !skipHubAccess else { return nil }
+        
         let modelDir = model.modelConfiguration.modelDirectory(hub: hubApi)
         
         // Check for model files (config.json indicates a valid model)
@@ -255,7 +272,7 @@ final class LLMManager {
             modelContainer = container
             activeModel = model
             downloadStates[model] = .completed
-            UserDefaults.standard.set(model.rawValue, forKey: Self.activeModelKey)
+            UserDefaults.standard.set(model.rawValue, forKey: AppStorageKeys.activeLLMModel)
             
         } catch {
             downloadStates[model] = .failed("Failed to load model: \(error.localizedDescription)")
@@ -272,14 +289,14 @@ final class LLMManager {
     func setActiveModel(_ model: LLMModel) {
         guard downloadedModels.contains(model) else { return }
         activeModel = model
-        UserDefaults.standard.set(model.rawValue, forKey: Self.activeModelKey)
+        UserDefaults.standard.set(model.rawValue, forKey: AppStorageKeys.activeLLMModel)
     }
     
     // MARK: - Persistence
     
     private func saveDownloadedModels() {
         let modelStrings = downloadedModels.map { $0.rawValue }
-        UserDefaults.standard.set(modelStrings, forKey: Self.downloadedModelsKey)
+        UserDefaults.standard.set(modelStrings, forKey: AppStorageKeys.downloadedLLMModels)
     }
     
     // MARK: - Delete Model
@@ -313,7 +330,7 @@ final class LLMManager {
                 setActiveModel(replacement)
             } else {
                 activeModel = nil
-                UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+                UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeLLMModel)
             }
         }
         
@@ -336,8 +353,8 @@ final class LLMManager {
         }
         downloadedModels.removeAll()
         activeModel = nil
-        UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
-        UserDefaults.standard.removeObject(forKey: Self.downloadedModelsKey)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeLLMModel)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.downloadedLLMModels)
         
         // Disable LLM stitching when all models are deleted
         isLLMStitchingEnabled = false

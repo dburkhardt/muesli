@@ -4,6 +4,7 @@ import SwiftUI
 struct CompletedMeetingWindow: View {
     let meeting: MeetingHistoryItem
     let viewModel: MuesliViewModel
+    @Environment(MeetingHistoryManager.self) private var historyManager
     @State private var transcript: String?
     
     var body: some View {
@@ -108,8 +109,12 @@ struct CompletedMeetingWindow: View {
     
     private func loadTranscript() {
         if meeting.transcript == nil {
-            viewModel.loadTranscript(for: meeting)
-            transcript = meeting.transcript
+            Task {
+                await historyManager.loadTranscript(for: meeting)
+                await MainActor.run {
+                    transcript = meeting.transcript
+                }
+            }
         } else {
             transcript = meeting.transcript
         }
@@ -125,6 +130,7 @@ struct CompletedMeetingWindow: View {
 
 #Preview {
     let vm = MuesliViewModel()
+    let historyManager = MeetingHistoryManager()
     let meeting = MeetingHistoryItem(
         title: "Team Standup",
         date: Date(),
@@ -133,5 +139,6 @@ struct CompletedMeetingWindow: View {
         hasMicrophone: true
     )
     return CompletedMeetingWindow(meeting: meeting, viewModel: vm)
+        .environment(historyManager)
         .frame(width: 600, height: 500)
 }

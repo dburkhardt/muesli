@@ -4,7 +4,7 @@ import CoreMedia
 
 /// Service responsible for saving audio recordings and transcripts to disk
 /// Uses a combination of actor isolation (for setup/teardown) and manual locking (for real-time buffer writing)
-final class FileOutputService: @unchecked Sendable {
+final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     
     // MARK: - Types
     
@@ -60,10 +60,10 @@ final class FileOutputService: @unchecked Sendable {
     // Configurable base output path
     private var customOutputPath: URL?
     
-    // Default output path
+    // Default output path (Application Support - no special permissions required)
     private static let defaultOutputPath: URL = {
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return documentsPath.appendingPathComponent("Meeting Transcripts", isDirectory: true)
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Muesli/Recordings", isDirectory: true)
     }()
     
     // Current base output path (custom or default)
@@ -145,7 +145,7 @@ final class FileOutputService: @unchecked Sendable {
                 throw OutputError.assetWriterNotReady
             }
             
-            // Writer 2: Microphone audio (16kHz, stereo, Int16 - as provided by ScreenCaptureKit)
+            // Writer 2: Microphone audio (48kHz, stereo, Float32 - high fidelity)
             let micURL = directory.appendingPathComponent(micFilename)
             // Delete existing file if present
             try? FileManager.default.removeItem(at: micURL)
@@ -153,10 +153,10 @@ final class FileOutputService: @unchecked Sendable {
             
             let micSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: 16000.0,
+                AVSampleRateKey: 48000.0,
                 AVNumberOfChannelsKey: 2,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
                 AVLinearPCMIsBigEndianKey: false,
                 AVLinearPCMIsNonInterleaved: false
             ]
@@ -359,7 +359,7 @@ final class FileOutputService: @unchecked Sendable {
                 throw OutputError.assetWriterNotReady
             }
             
-            // Writer 2: Microphone audio (16kHz, stereo, Int16 - as provided by ScreenCaptureKit)
+            // Writer 2: Microphone audio (48kHz, stereo, Float32 - high fidelity)
             let micURL = directory.appendingPathComponent(micFilename)
             // Delete existing file if present
             try? FileManager.default.removeItem(at: micURL)
@@ -367,10 +367,10 @@ final class FileOutputService: @unchecked Sendable {
             
             let micSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: 16000.0,
+                AVSampleRateKey: 48000.0,
                 AVNumberOfChannelsKey: 2,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
                 AVLinearPCMIsBigEndianKey: false,
                 AVLinearPCMIsNonInterleaved: false
             ]
@@ -431,9 +431,10 @@ final class FileOutputService: @unchecked Sendable {
     ///   - title: Meeting title
     ///   - date: Recording date
     ///   - directory: Output directory
-    ///   - filename: Optional filename (defaults to "transcript.md")
-    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String = "transcript.md") throws {
-        let transcriptURL = directory.appendingPathComponent(filename)
+    ///   - filename: Optional filename (defaults to "transcript.md" if nil)
+    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String? = nil) throws {
+        let actualFilename = filename ?? "transcript.md"
+        let transcriptURL = directory.appendingPathComponent(actualFilename)
         
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"

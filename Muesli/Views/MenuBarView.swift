@@ -6,8 +6,11 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     
-    private var hasCompletedOnboarding: Bool {
-        UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+    /// Use @AppStorage so SwiftUI automatically observes UserDefaults changes
+    @AppStorage(AppStorageKeys.hasCompletedOnboarding) private var hasCompletedOnboarding: Bool = false
+    
+    private var appName: String {
+        Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
     }
     
     var body: some View {
@@ -33,7 +36,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            Button("Quit Muesli") {
+            Button("Quit \(appName)") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q", modifiers: .command)
@@ -54,7 +57,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            Button("Open Muesli") {
+            Button("Open \(appName)") {
                 openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)
             }
@@ -69,7 +72,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            Button("Quit Muesli") {
+            Button("Quit \(appName)") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q", modifiers: .command)
@@ -106,7 +109,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            Button("Quit Muesli") {
+            Button("Quit \(appName)") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q", modifiers: .command)

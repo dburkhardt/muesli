@@ -3,7 +3,7 @@ import AppKit
 
 /// Service responsible for detecting running meeting applications
 @MainActor
-final class MeetingAppDetector {
+final class MeetingAppDetector: MeetingAppDetectorProtocol {
     
     // MARK: - Types
     

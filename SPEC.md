@@ -56,10 +56,11 @@ Think of it as a local, privacy-focused alternative to Granola—without cloud d
 ### Stopping a Recording
 
 1. User clicks "Stop Recording" in menu bar or session window
-2. Recording is saved to `~/Documents/Meeting Transcripts/YYYY-MM-DD_HH-MM_[UUID]/`
+2. Recording is saved to `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD_HH-MM_[UUID]/`
    - Folder name uses timestamp + UUID for uniqueness (e.g., `2026-01-15_14-30_A1B2C3D4-E5F6-7890-ABCD-EF1234567890`)
    - Meeting title is stored in `transcript.md` header, not in folder name
    - This ensures stable folder names even when titles change, supporting future history features
+   - Using Application Support instead of Documents avoids permission prompts and follows macOS best practices
 3. Folder contains `audio.caf`, `microphone.caf`, and `transcript.md`
 4. Session window shows "Recording Saved!" completion state with:
    - "Open in Finder" button to view saved files
@@ -109,28 +110,61 @@ Think of it as a local, privacy-focused alternative to Granola—without cloud d
 
 ### State Architecture
 
-**MuesliViewModel** (shared app state):
+**Delegation Pattern** (implemented):
+
+MuesliViewModel acts as a coordinator that delegates state management to focused managers:
+
+```
+MuesliViewModel (Coordinator)
+│
+├── PreferencesManager (owns preferences state)
+│   ├─ outputDirectory: URL
+│   ├─ launchAtLogin: Bool
+│   ├─ transcriptionMode: TranscriptionMode
+│   └─ isEchoCancellationEnabled: Bool
+│
+├── MeetingHistoryManager (owns meeting history state)
+│   ├─ meetingHistory: [MeetingHistoryItem]
+│   ├─ groupedHistory: [MeetingHistoryGroup]
+│   ├─ selectedMeeting: MeetingHistoryItem?
+│   ├─ selectedMeetingIDs: Set<UUID>
+│   └─ meetingsPendingDeletion: [MeetingHistoryItem]
+│
+├── RefinementCoordinator (owns refinement state)
+│   ├─ showRefineSheet: Bool
+│   ├─ meetingBeingRefined: MeetingHistoryItem?
+│   ├─ canRefineTranscripts: Bool
+│   └─ showOriginalTranscript tracking per meeting
+│
+└── Recording Coordination (ViewModel keeps)
+    ├─ activeSession: RecordingSession?
+    ├─ Audio/Transcription/FileOutput Services
+    ├─ Real-time audio callbacks (nonisolated(unsafe))
+    └─ Recording lifecycle state machine
+```
+
+**ViewModel delegation pattern:**
 ```swift
-@Observable
-class MuesliViewModel {
-    // App Detection
-    var availableMeetingApps: [MeetingApp] = []
-    
-    // Permissions
-    var hasScreenRecordingPermission: Bool = false
-    var hasMicrophonePermission: Bool = false
-    
-    // Active Session Tracking (only one can record at a time)
-    private(set) var activeSession: RecordingSession?
-    
-    // Services (shared across sessions)
-    private let audioCaptureService: AudioCaptureService
-    private let transcriptionService: TranscriptionService
-    private let fileOutputService: FileOutputService
+// Computed properties delegate to managers
+var outputDirectory: URL {
+    get { preferencesManager.outputDirectory }
+    set { preferencesManager.outputDirectory = newValue }
+}
+
+var meetingHistory: [MeetingHistoryItem] {
+    get { historyManager.meetingHistory }
+    set { historyManager.meetingHistory = newValue }
 }
 ```
 
-**RecordingSession** (per-window state):
+**Benefits:**
+- Clear separation of concerns (each manager has focused responsibility)
+- Testable components (managers tested in isolation)
+- Single source of truth for views (only observe ViewModel)
+- Stable API (delegation transparent to views)
+- Recording logic preserved (~600 lines of tightly-coupled audio pipeline)
+
+**RecordingSession** (per-recording state):
 ```swift
 @Observable
 class RecordingSession: Identifiable {
@@ -361,6 +395,52 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 
 ---
 
+## Storage Architecture
+
+All Muesli data is stored in `~/Library/Application Support/Muesli/` to avoid permission prompts and follow macOS best practices for app data storage.
+
+### Directory Structure
+
+```
+~/Library/Application Support/Muesli/
+├── Recordings/                    # Meeting recordings and transcripts
+│   ├── 2026-01-15_14-30_[UUID]/
+│   │   ├── audio.caf              # System audio (meeting participants)
+│   │   ├── microphone.caf         # Microphone audio (user's voice)
+│   │   ├── transcript.md          # Markdown transcript with speaker labels
+│   │   └── transcript.original.md # Original transcript (if refined)
+│   └── ...
+└── Models/                        # WhisperKit transcription models
+    └── models/argmaxinc/whisperkit-coreml/
+        ├── openai_whisper-base/
+        ├── openai_whisper-small/
+        └── ...
+```
+
+### LLM Models
+
+LLM models (for transcript refinement) use the standard Hugging Face Hub cache:
+- Location: `~/.cache/huggingface/hub/`
+- This follows the convention used by other ML applications
+
+### User Preferences
+
+User preferences are stored in standard UserDefaults:
+- Output directory (customizable)
+- Active transcription model
+- Launch at login setting
+- Transcription mode (live vs post-processing)
+- Echo cancellation setting
+
+### Why Application Support?
+
+1. **No permission prompts** - Application Support doesn't require user authorization
+2. **Appropriate for app data** - Documents is for user-created files, not app-generated data
+3. **Standard macOS convention** - Follows Apple's Human Interface Guidelines
+4. **Clean separation** - App data stays organized and doesn't clutter user folders
+
+---
+
 ## Implementation Phases
 
 ### Phase 0: Project Setup
@@ -509,7 +589,7 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 - Click "Start Recording" begins capture
 - Menu bar shows recording indicator
 - Click "Stop Recording" ends capture
-- Two audio files saved to `~/Documents/Meeting Transcripts/`:
+- Two audio files saved to `~/Library/Application Support/Muesli/Recordings/`:
   - `audio.caf` (system audio) plays back correctly
   - `microphone.caf` (mic audio) plays back correctly
 - Both files preview with QuickLook (spacebar)

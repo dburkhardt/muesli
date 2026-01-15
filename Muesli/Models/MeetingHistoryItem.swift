@@ -36,6 +36,7 @@ final class MeetingHistoryItem: Identifiable, Hashable {
     let directory: URL
     var transcript: String?
     var transcriptBlocks: [TranscriptBlock]?  // Block-based transcript (if available)
+    var isLoadingTranscript: Bool = false  // Whether transcript is currently being loaded
     
     // Original transcript before refinement (if refinement was applied)
     var originalTranscript: String?

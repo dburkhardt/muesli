@@ -16,10 +16,13 @@ struct OnboardingView: View {
         viewModel.llmManager
     }
     @State private var currentStep: OnboardingStep
-    @State private var permissionCheckTimer: Timer?
     @State private var showFilePicker = false
     
-    private static let currentStepKey = "onboardingCurrentStep"
+    // Using centralized AppStorageKeys for onboarding state
+    
+    private var appName: String {
+        Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
+    }
     
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
@@ -32,7 +35,7 @@ struct OnboardingView: View {
     init(viewModel: MuesliViewModel) {
         self.viewModel = viewModel
         // Restore saved step, defaulting to welcome
-        let savedStep = UserDefaults.standard.integer(forKey: Self.currentStepKey)
+        let savedStep = UserDefaults.standard.integer(forKey: AppStorageKeys.onboardingCurrentStep)
         _currentStep = State(initialValue: OnboardingStep(rawValue: savedStep) ?? .welcome)
     }
     
@@ -62,26 +65,17 @@ struct OnboardingView: View {
         .frame(width: 520, height: 580) // Larger window to fit all content
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
-            // Use sync check on appear (doesn't trigger permission dialog)
-            // Only auto-advance if permissions are already granted
-            viewModel.refreshPermissions()
-            advanceBasedOnPermissions()
-            
-            // Start polling if we're already on a permission step (e.g., restored from UserDefaults)
-            if currentStep == .screenRecording || currentStep == .microphone {
-                startPermissionPolling()
+            // Initial permission check on appear
+            Task {
+                viewModel.refreshPermissions()
+                advanceBasedOnPermissions()
             }
         }
         .onChange(of: currentStep) { oldValue, newValue in
-            // Start/stop polling based on which step we're on
+            // Check permissions when switching to permission steps
             if newValue == .screenRecording || newValue == .microphone {
-                startPermissionPolling()
-            } else {
-                stopPermissionPolling()
+                viewModel.refreshPermissions()
             }
-        }
-        .onDisappear {
-            stopPermissionPolling()
         }
         .fileImporter(
             isPresented: $showFilePicker,
@@ -114,7 +108,7 @@ struct OnboardingView: View {
                 .font(.system(size: 80))
                 .foregroundStyle(Color.accentColor)
             
-            Text("Welcome to Muesli")
+            Text("Welcome to \(appName)")
                 .font(.system(size: 28, weight: .bold))
             
             Text("Local meeting transcription for macOS.\nYour audio never leaves your device.")
@@ -613,32 +607,6 @@ struct OnboardingView: View {
     
     // MARK: - Permission Polling
     
-    private func startPermissionPolling() {
-        // Stop any existing timer first
-        stopPermissionPolling()
-        
-        // Capture whether we need async check based on current step
-        let useAsyncCheck = (currentStep == .screenRecording)
-        
-        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [viewModel] _ in
-            Task { @MainActor in
-                if useAsyncCheck {
-                    // Use async refresh for reliable screen recording detection
-                    // This uses SCShareableContent which correctly detects TCC state
-                    await viewModel.refreshPermissionsAsync()
-                } else {
-                    // Use sync refresh for other steps (microphone uses AVCaptureDevice which is reliable)
-                    viewModel.refreshPermissions()
-                }
-            }
-        }
-    }
-    
-    private func stopPermissionPolling() {
-        permissionCheckTimer?.invalidate()
-        permissionCheckTimer = nil
-    }
-    
     // MARK: - File Selection
     
     private func handleFileSelection(_ result: Result<[URL], Error>) {
@@ -656,7 +624,7 @@ struct OnboardingView: View {
     
     private func setStep(_ step: OnboardingStep) {
         currentStep = step
-        UserDefaults.standard.set(step.rawValue, forKey: Self.currentStepKey)
+        UserDefaults.standard.set(step.rawValue, forKey: AppStorageKeys.onboardingCurrentStep)
     }
     
     /// Advance to appropriate step based on current permissions (sync version)
@@ -686,21 +654,13 @@ struct OnboardingView: View {
     // MARK: - Complete Onboarding
     
     private func completeOnboarding() {
-        stopPermissionPolling()
         viewModel.completeOnboarding()
         
         // Clear saved step
-        UserDefaults.standard.removeObject(forKey: Self.currentStepKey)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
         
-        // Capture the onboarding window BEFORE opening the main window
-        // (openWindow will change the key window)
-        let onboardingWindow = NSApplication.shared.keyWindow
-        
-        // Open the main window
-        openWindow(id: "main")
-        NSApp.activate(ignoringOtherApps: true)
-        
-        // Close the onboarding window (using the captured reference)
-        onboardingWindow?.close()
+        // Notify AppDelegate to handle window transition
+        // This ensures the main window opens properly
+        AppDelegate.shared?.completeOnboarding()
     }
 }

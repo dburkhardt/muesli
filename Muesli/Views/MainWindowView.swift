@@ -3,22 +3,38 @@ import SwiftUI
 /// Main window view that conditionally shows unified list or split view
 struct MainWindowView: View {
     @Bindable var viewModel: MuesliViewModel
+    @Environment(MeetingHistoryManager.self) private var historyManager
+    
+    /// Target window size based on current view mode
+    @State private var targetSize = CGSize(width: 420, height: 600)
     
     /// Show split view when a meeting is selected OR recording is active
     /// Show unified list otherwise (idle state)
     private var shouldShowSplitView: Bool {
-        viewModel.selectedMeeting != nil || viewModel.activeRecordingSession != nil || viewModel.isSplitViewVisible
+        historyManager.selectedMeeting != nil || viewModel.activeRecordingSession != nil || viewModel.isSplitViewVisible
     }
     
     var body: some View {
         Group {
             if shouldShowSplitView {
                 splitView
-                    .frame(minWidth: 750, idealWidth: 900, minHeight: 500, idealHeight: 650)
             } else {
                 unifiedView
-                    .frame(minWidth: 420, maxWidth: 420, minHeight: 400, idealHeight: 600)
             }
+        }
+        .frame(width: targetSize.width, height: targetSize.height)
+        .onChange(of: shouldShowSplitView) { _, newValue in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                targetSize = newValue ?
+                    CGSize(width: 900, height: 650) :
+                    CGSize(width: 420, height: 600)
+            }
+        }
+        .onAppear {
+            // Set initial size without animation
+            targetSize = shouldShowSplitView ?
+                CGSize(width: 900, height: 650) :
+                CGSize(width: 420, height: 600)
         }
         // .overlay(alignment: .topTrailing) {
         //     WorkTreeBadge()
@@ -63,13 +79,17 @@ struct MainWindowView: View {
 
 #Preview("Unified") {
     let vm = MuesliViewModel()
+    let historyManager = MeetingHistoryManager()
     return MainWindowView(viewModel: vm)
+        .environment(historyManager)
         .frame(width: 420, height: 600)
 }
 
 #Preview("Split") {
     let vm = MuesliViewModel()
+    let historyManager = MeetingHistoryManager()
     vm.isSplitViewVisible = true
     return MainWindowView(viewModel: vm)
+        .environment(historyManager)
         .frame(width: 900, height: 650)
 }

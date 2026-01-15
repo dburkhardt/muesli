@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import ScreenCaptureKit
 import CoreMedia
-import ServiceManagement
+import os.lock
 
 /// Main ViewModel for the Muesli app
 /// Owns app-level state (permissions, detected apps) and services
@@ -10,6 +10,17 @@ import ServiceManagement
 @Observable
 @MainActor
 final class MuesliViewModel {
+    
+    // MARK: - Injected Managers
+    
+    /// Preferences manager (injected, source of truth for preferences)
+    private let preferencesManager: PreferencesManager
+    
+    /// Meeting history manager (injected, source of truth for meeting history)
+    let historyManager: MeetingHistoryManager
+    
+    /// Refinement coordinator (injected, source of truth for refinement state)
+    let refinementCoordinator: RefinementCoordinator
     
     // MARK: - App Detection
     
@@ -27,67 +38,76 @@ final class MuesliViewModel {
     
     // MARK: - Onboarding
     
-    var hasCompletedOnboarding: Bool = false
-    
-    private static let onboardingCompletedKey = "hasCompletedOnboarding"
+    /// Whether onboarding has been completed (always reads from UserDefaults for consistency)
+    var hasCompletedOnboarding: Bool {
+        get {
+            UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.hasCompletedOnboarding)
+        }
+    }
     
     // MARK: - Model Management (shared instance)
     
-    let modelManager = ModelManager()
+    let modelManager: ModelManager
     
     /// LLM Manager for transcript stitching (optional enhancement)
-    let llmManager = LLMManager()
-    
-    /// Transcript refinement service for post-meeting cleanup
-    private(set) var refinementService: TranscriptRefinementService!
+    let llmManager: LLMManager
     
     /// Convenience accessor for the active model path
     var modelPath: URL? {
         modelManager.modelPath
     }
     
-    // MARK: - Services
+    // MARK: - Services (injectable for testing)
     
-    private let audioCaptureService = AudioCaptureService()
-    private let fileOutputService = FileOutputService()
-    private let transcriptionService = TranscriptionService()
-    private let meetingAppDetector = MeetingAppDetector()
-    private let permissionManager = PermissionManager()
-    let microphoneManager = MicrophoneManager()
-    private let meetingHistoryService = MeetingHistoryService()
+    private let audioCaptureService: AudioCaptureService
+    private let fileOutputService: FileOutputService
+    private let transcriptionService: TranscriptionService
+    private let meetingAppDetector: MeetingAppDetector
+    private let permissionManager: PermissionManager
+    let microphoneManager: MicrophoneManager
+    private let meetingHistoryService: MeetingHistoryService
     
     // Echo cancellation service (optional - can be enabled/disabled)
-    private let echoCancellationService = EchoCancellationService(
-        filterLength: 256,
-        learningRate: 0.3,
-        sampleRate: 48000,
-        maxDelayMs: 100
-    )
+    private let echoCancellationService: EchoCancellationService
     
-    /// Whether echo cancellation is enabled
+    // Transcription coordinator (manages model lifecycle and audio buffering)
+    private let transcriptionCoordinator: TranscriptionCoordinator
+    
+    // MARK: - Audio Level Throttling
+    
+    /// Last time microphone level was updated (for throttling UI updates)
+    private var lastMicLevelUpdate = Date.distantPast
+    
+    /// Last time system audio level was updated (for throttling UI updates)
+    private var lastSystemLevelUpdate = Date.distantPast
+    
+    /// Minimum interval between audio level UI updates (~30fps)
+    private let levelUpdateInterval: TimeInterval = 0.033
+    
+    /// Whether echo cancellation is enabled (delegates to PreferencesManager)
     var isEchoCancellationEnabled: Bool {
         get {
-            _isEchoCancellationEnabled
+            preferencesManager.isEchoCancellationEnabled
         }
         set {
-            _isEchoCancellationEnabled = newValue
-            UserDefaults.standard.set(newValue, forKey: "echoCancellationEnabled")
+            preferencesManager.isEchoCancellationEnabled = newValue
         }
     }
     
     // MARK: - Transcription State
     
-    var isTranscriptionInitialized: Bool = false
-    
     /// Transcription mode: live (real-time) or post-processing (after recording)
+    /// Delegates to PreferencesManager for persistence
     var transcriptionMode: TranscriptionService.TranscriptionMode {
         get {
-            let rawValue = UserDefaults.standard.string(forKey: "transcriptionMode") ?? "live"
-            return TranscriptionService.TranscriptionMode(rawValue: rawValue) ?? .live
+            preferencesManager.transcriptionMode.serviceMode
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: "transcriptionMode")
-            transcriptionService.setTranscriptionMode(newValue)
+            preferencesManager.transcriptionMode = PreferencesManager.TranscriptionMode(from: newValue)
+            transcriptionCoordinator.setTranscriptionMode(newValue)
         }
     }
     
@@ -101,28 +121,55 @@ final class MuesliViewModel {
         activeSession
     }
     
-    // MARK: - Meeting History
+    // MARK: - Meeting History (delegating to MeetingHistoryManager)
     
-    /// All discovered meeting recordings
-    var meetingHistory: [MeetingHistoryItem] = []
+    /// All discovered meeting recordings (delegates to historyManager)
+    var meetingHistory: [MeetingHistoryItem] {
+        get { historyManager.meetingHistory }
+        set { historyManager.meetingHistory = newValue }
+    }
     
-    /// Meeting history grouped by date
-    var groupedHistory: [MeetingHistoryGroup] = []
+    /// Meeting history grouped by date (delegates to historyManager)
+    var groupedHistory: [MeetingHistoryGroup] {
+        get { historyManager.groupedHistory }
+        set { historyManager.groupedHistory = newValue }
+    }
     
-    /// Currently selected meeting for viewing
-    var selectedMeeting: MeetingHistoryItem?
+    /// Currently selected meeting for viewing (delegates to historyManager)
+    var selectedMeeting: MeetingHistoryItem? {
+        get { historyManager.selectedMeeting }
+        set { historyManager.selectedMeeting = newValue }
+    }
     
-    /// Set of selected meeting IDs (for multi-select)
-    var selectedMeetingIDs: Set<UUID> = []
+    /// Set of selected meeting IDs (for multi-select) (delegates to historyManager)
+    var selectedMeetingIDs: Set<UUID> {
+        get { historyManager.selectedMeetingIDs }
+        set { historyManager.selectedMeetingIDs = newValue }
+    }
     
-    /// Meeting to show in completed meeting window (when recording is active)
-    var completedMeetingWindowItem: MeetingHistoryItem?
+    /// Meeting to show in completed meeting window (delegates to historyManager)
+    var completedMeetingWindowItem: MeetingHistoryItem? {
+        get { historyManager.completedMeetingWindowItem }
+        set { historyManager.completedMeetingWindowItem = newValue }
+    }
     
-    /// Whether to show delete confirmation dialog
-    var showDeleteConfirmation: Bool = false
+    /// Whether to show delete confirmation dialog (delegates to historyManager)
+    var showDeleteConfirmation: Bool {
+        get { historyManager.showDeleteConfirmation }
+        set { historyManager.showDeleteConfirmation = newValue }
+    }
     
-    /// Meetings pending deletion (after confirmation)
-    var meetingsPendingDeletion: [MeetingHistoryItem] = []
+    /// Meetings pending deletion (after confirmation) (delegates to historyManager)
+    var meetingsPendingDeletion: [MeetingHistoryItem] {
+        get { historyManager.meetingsPendingDeletion }
+        set { historyManager.meetingsPendingDeletion = newValue }
+    }
+    
+    /// Error from most recent deletion attempt (delegates to historyManager)
+    var deletionError: String? {
+        get { historyManager.deletionError }
+        set { historyManager.deletionError = newValue }
+    }
     
     /// Whether the split view (sidebar + detail) should be visible
     var isSplitViewVisible: Bool = false
@@ -136,51 +183,36 @@ final class MuesliViewModel {
     /// Session pending stop (waiting for title input)
     var pendingStopSession: RecordingSession?
     
-    // MARK: - Refinement State
+    // MARK: - Refinement State (delegating to RefinementCoordinator)
     
-    /// Whether to show the refinement progress sheet
-    var showRefineSheet: Bool = false
+    /// Whether to show the refinement progress sheet (delegates to refinementCoordinator)
+    var showRefineSheet: Bool {
+        get { refinementCoordinator.showRefineSheet }
+        set { refinementCoordinator.showRefineSheet = newValue }
+    }
     
-    /// Whether to show the post-meeting refinement prompt
-    var showRefinementPrompt: Bool = false
+    /// Whether to show the post-meeting refinement prompt (delegates to refinementCoordinator)
+    var showRefinementPrompt: Bool {
+        get { refinementCoordinator.showRefinementPrompt }
+        set { refinementCoordinator.showRefinementPrompt = newValue }
+    }
     
-    /// Per-meeting state: whether to show original transcript (vs refined)
-    /// Key is meeting ID UUID string
-    private var showOriginalTranscriptForMeeting: [String: Bool] = [:]
-    
-    /// Get whether to show original transcript for a specific meeting
+    /// Get whether to show original transcript for a meeting (delegates to refinementCoordinator)
     func showOriginalTranscript(for meeting: MeetingHistoryItem) -> Bool {
-        showOriginalTranscriptForMeeting[meeting.id.uuidString] ?? false
+        refinementCoordinator.isShowingOriginal(for: meeting)
     }
     
-    /// Toggle showing original transcript for a specific meeting
+    /// Toggle showing original transcript for a meeting (delegates to refinementCoordinator)
     func toggleOriginalTranscript(for meeting: MeetingHistoryItem) {
-        let current = showOriginalTranscriptForMeeting[meeting.id.uuidString] ?? false
-        let newValue = !current
-        showOriginalTranscriptForMeeting[meeting.id.uuidString] = newValue
-        
-        // Load original transcript if switching to original view and not already loaded
-        if newValue && meeting.isRefined {
-            Task {
-                if meeting.originalTranscriptBlocks == nil, let blocks = meetingHistoryService.loadOriginalTranscriptBlocks(for: meeting) {
-                    await MainActor.run {
-                        meeting.originalTranscriptBlocks = blocks
-                    }
-                }
-                if meeting.originalTranscript == nil, let text = meetingHistoryService.loadOriginalTranscript(for: meeting) {
-                    await MainActor.run {
-                        meeting.originalTranscript = text
-                    }
-                }
-            }
-        }
+        let newValue = !refinementCoordinator.isShowingOriginal(for: meeting)
+        refinementCoordinator.setShowingOriginal(newValue, for: meeting, historyService: meetingHistoryService)
     }
     
-    /// Meeting being refined (for UI state)
-    var meetingBeingRefined: MeetingHistoryItem?
-    
-    /// Cancellation flag for refinement
-    private var refinementCancelled: Bool = false
+    /// Meeting being refined (delegates to refinementCoordinator)
+    var meetingBeingRefined: MeetingHistoryItem? {
+        get { refinementCoordinator.meetingBeingRefined }
+        set { refinementCoordinator.meetingBeingRefined = newValue }
+    }
     
     // MARK: - Model Error Alert
     
@@ -190,29 +222,22 @@ final class MuesliViewModel {
     /// Session waiting for user response to model error
     var sessionPendingModelDecision: RecordingSession?
     
-    // MARK: - Preferences
+    // MARK: - Preferences (delegating to PreferencesManager)
     
-    private static let outputDirectoryKey = "outputDirectory"
-    private static let launchAtLoginKey = "launchAtLogin"
-    
-    /// Output directory for recordings
+    /// Output directory for recordings (delegates to PreferencesManager)
     var outputDirectory: URL {
         get {
-            if let savedPath = UserDefaults.standard.string(forKey: Self.outputDirectoryKey) {
-                return URL(fileURLWithPath: savedPath)
-            }
-            return Self.defaultOutputDirectory
+            preferencesManager.outputDirectory
         }
         set {
-            UserDefaults.standard.set(newValue.path, forKey: Self.outputDirectoryKey)
+            preferencesManager.outputDirectory = newValue
             fileOutputService.setOutputDirectory(newValue)
         }
     }
     
-    /// Default output directory: ~/Documents/Meeting Transcripts
+    /// Default output directory: ~/Library/Application Support/Muesli/Recordings
     static var defaultOutputDirectory: URL {
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return documentsPath.appendingPathComponent("Meeting Transcripts")
+        PreferencesManager.defaultOutputDirectory
     }
     
     /// Set the output directory
@@ -222,37 +247,23 @@ final class MuesliViewModel {
     
     /// Reset output directory to default
     func resetOutputDirectory() {
-        UserDefaults.standard.removeObject(forKey: Self.outputDirectoryKey)
+        preferencesManager.resetOutputDirectory()
         fileOutputService.setOutputDirectory(Self.defaultOutputDirectory)
     }
     
-    /// Whether to launch at login
+    /// Whether to launch at login (delegates to PreferencesManager)
     var launchAtLogin: Bool {
         get {
-            if #available(macOS 13.0, *) {
-                return SMAppService.mainApp.status == .enabled
-            }
-            return UserDefaults.standard.bool(forKey: Self.launchAtLoginKey)
+            preferencesManager.launchAtLogin
         }
         set {
-            if #available(macOS 13.0, *) {
-                do {
-                    if newValue {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
-                    }
-                } catch {
-                    print("[MuesliViewModel] Failed to set launch at login: \(error)")
-                }
-            }
-            UserDefaults.standard.set(newValue, forKey: Self.launchAtLoginKey)
+            preferencesManager.launchAtLogin = newValue
         }
     }
     
     /// Set launch at login
     func setLaunchAtLogin(_ enabled: Bool) {
-        launchAtLogin = enabled
+        preferencesManager.setLaunchAtLogin(enabled)
     }
     
     // MARK: - Recording Navigation State
@@ -269,136 +280,112 @@ final class MuesliViewModel {
     }
     
     /// Microphone mute state (for synchronous access from audio callback)
-    /// Uses nonisolated(unsafe) for thread-safe access from audio callback
-    nonisolated(unsafe) private var isMicrophoneMuted: Bool = false
+    /// Uses OSAllocatedUnfairLock for proper thread-safe access from audio callback
+    private let isMicrophoneMutedLock = OSAllocatedUnfairLock(initialState: false)
     
-    /// Echo cancellation enabled state (for synchronous access from audio callback)
-    /// Uses nonisolated(unsafe) for thread-safe access from audio callback
-    nonisolated(unsafe) private var _isEchoCancellationEnabled: Bool = false
+    /// Thread-safe getter for audio callbacks (nonisolated)
+    nonisolated var isMicrophoneMutedSafe: Bool {
+        isMicrophoneMutedLock.withLock { $0 }
+    }
     
     /// Toggle microphone mute state for active recording
     func toggleMicrophoneMute() {
         guard let session = activeRecordingSession else { return }
         session.isMicrophoneMuted.toggle()
-        isMicrophoneMuted = session.isMicrophoneMuted
+        let mutedState = session.isMicrophoneMuted
+        isMicrophoneMutedLock.withLock { $0 = mutedState }
     }
     
     /// Helper to reset mute state when session is cleared
     private func resetMuteState() {
-        isMicrophoneMuted = false
+        isMicrophoneMutedLock.withLock { $0 = false }
     }
     
     // MARK: - Initialization
     
-    init() {
-        // Initialize refinement service
-        refinementService = TranscriptRefinementService(llmManager: llmManager)
+    /// Initialize the ViewModel with injected managers and services
+    /// - Parameters:
+    ///   - preferencesManager: Manager for user preferences
+    ///   - historyManager: Manager for meeting history (if nil, creates one with skipInitialLoad)
+    ///   - refinementCoordinator: Coordinator for transcript refinement
+    ///   - audioCaptureService: Service for capturing audio (injectable for testing)
+    ///   - fileOutputService: Service for file output (injectable for testing)
+    ///   - transcriptionService: Service for transcription (injectable for testing)
+    ///   - meetingAppDetector: Service for detecting meeting apps (injectable for testing)
+    ///   - permissionManager: Manager for permissions (injectable for testing)
+    ///   - microphoneManager: Manager for microphone devices (injectable for testing)
+    ///   - meetingHistoryService: Service for meeting history (injectable for testing)
+    ///   - echoCancellationService: Service for echo cancellation (injectable for testing)
+    ///   - llmManager: LLM Manager for transcript refinement (injectable, shared instance)
+    ///   - skipInitialLoad: If true, skips loading meeting history from disk (for testing)
+    init(
+        preferencesManager: PreferencesManager = PreferencesManager(),
+        historyManager: MeetingHistoryManager? = nil,
+        refinementCoordinator: RefinementCoordinator? = nil,
+        audioCaptureService: AudioCaptureService? = nil,
+        fileOutputService: FileOutputService? = nil,
+        transcriptionService: TranscriptionService? = nil,
+        meetingAppDetector: MeetingAppDetector? = nil,
+        permissionManager: PermissionManager? = nil,
+        microphoneManager: MicrophoneManager? = nil,
+        meetingHistoryService: MeetingHistoryService? = nil,
+        echoCancellationService: EchoCancellationService? = nil,
+        llmManager: LLMManager? = nil,
+        skipInitialLoad: Bool = false
+    ) {
+        // Initialize services (use provided or create defaults)
+        self.audioCaptureService = audioCaptureService ?? AudioCaptureService()
+        self.fileOutputService = fileOutputService ?? FileOutputService()
+        self.transcriptionService = transcriptionService ?? TranscriptionService()
+        self.meetingAppDetector = meetingAppDetector ?? MeetingAppDetector()
+        self.permissionManager = permissionManager ?? PermissionManager()
+        self.microphoneManager = microphoneManager ?? MicrophoneManager()
+        self.meetingHistoryService = meetingHistoryService ?? MeetingHistoryService()
+        self.echoCancellationService = echoCancellationService ?? EchoCancellationService(
+            filterLength: 256,
+            learningRate: 0.3,
+            sampleRate: 48000,
+            maxDelayMs: 100
+        )
         
-        // Load onboarding state
-        hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingCompletedKey)
+        // Initialize managers (skip scanning during tests to avoid file system/Documents prompts)
+        self.modelManager = ModelManager(skipScan: skipInitialLoad)
         
-        // Load echo cancellation state
-        _isEchoCancellationEnabled = UserDefaults.standard.bool(forKey: "echoCancellationEnabled")
+        // Use shared LLMManager instance if provided, otherwise create new one
+        // This ensures MuesliApp can inject the shared instance
+        self.llmManager = llmManager ?? LLMManager(skipHubAccess: skipInitialLoad)
+        
+        self.preferencesManager = preferencesManager
+        self.historyManager = historyManager ?? MeetingHistoryManager(skipInitialLoad: skipInitialLoad)
+        
+        // Create transcription coordinator (manages model lifecycle and audio buffering)
+        self.transcriptionCoordinator = TranscriptionCoordinator(
+            transcriptionService: self.transcriptionService,
+            modelManager: self.modelManager
+        )
+        
+        // Create refinement coordinator if not provided, using the shared llmManager
+        self.refinementCoordinator = refinementCoordinator ?? RefinementCoordinator(
+            llmManager: self.llmManager,
+            fileOutputService: self.fileOutputService
+        )
         
         // Check initial permission status
         refreshPermissions()
         
-        // Set up audio buffer handler - fork to both file output and transcription
-        let fileService = fileOutputService
-        let transcriptService = transcriptionService
-        let aecService = echoCancellationService
+        // Audio buffer handling is now managed by RecordingController
+        // Set up stream interruption and level handlers
+        let audioCaptureServiceRef = self.audioCaptureService
         Task {
-            await audioCaptureService.setBufferHandler { [weak self] buffer, type in
-                guard let self = self else { return }
-                
-                // Check if microphone is muted (synchronous check)
-                let isMicMuted = self.isMicrophoneMuted
-                let isAECEnabled = self._isEchoCancellationEnabled
-                
-                let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
-                
-                switch type {
-                case .system:
-                    // Store system audio for AEC reference (if AEC enabled)
-                    if isAECEnabled {
-                        if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
-                            aecService.storeSystemAudio(samples: systemSamples, timestamp: timestamp)
-                        }
-                    }
-                    
-                    // Save to file (always)
-                    fileService.appendAudioBuffer(buffer, type: type)
-                    
-                    // Feed to transcription in live mode
-                    if transcriptService.transcriptionMode == .live {
-                        if let samples = TranscriptionService.resampleToWhisperFormat(
-                            buffer,
-                            sourceSampleRate: 48000,
-                            sourceChannels: 2
-                        ) {
-                            transcriptService.appendSystemAudio(samples)
-                        }
-                    }
-                    
-                case .microphone:
-                    // Extract microphone samples at 48kHz
-                    guard let micSamples48kHz = EchoCancellationService.extractSamples(from: buffer) else {
-                        // Fallback: save original buffer
-                        fileService.appendAudioBuffer(buffer, type: type)
-                        return
-                    }
-                    
-                    // Apply AEC if enabled
-                    let processedSamples48kHz: [Float]
-                    if isAECEnabled {
-                        processedSamples48kHz = aecService.processMicrophoneAudio(
-                            microphoneSamples: micSamples48kHz,
-                            micTimestamp: timestamp
-                        )
-                        
-                        // Create CMSampleBuffer from processed samples for file output
-                        if let processedBuffer = EchoCancellationService.createSampleBuffer(
-                            from: processedSamples48kHz,
-                            timestamp: timestamp
-                        ) {
-                            fileService.appendAudioBuffer(processedBuffer, type: type)
-                        } else {
-                            // Fallback: save original if conversion fails
-                            fileService.appendAudioBuffer(buffer, type: type)
-                        }
-                    } else {
-                        processedSamples48kHz = micSamples48kHz
-                        // Save original buffer when AEC disabled
-                        fileService.appendAudioBuffer(buffer, type: type)
-                    }
-                    
-                    // Skip microphone audio for transcription if muted
-                    if isMicMuted {
-                        return
-                    }
-                    
-                    // Feed to transcription in live mode
-                    if transcriptService.transcriptionMode == .live {
-                        // Resample processed samples to 16kHz for transcription
-                        let resampled = EchoCancellationService.resampleFloat32Public(
-                            samples: processedSamples48kHz,
-                            sourceSampleRate: 48000,
-                            targetSampleRate: 16000
-                        )
-                        transcriptService.appendMicrophoneAudio(resampled)
-                    }
-                }
-            }
-            
             // Set up stream interruption handler (e.g., captured app quits)
-            await audioCaptureService.setInterruptedHandler { [weak self] error in
+            await audioCaptureServiceRef.setInterruptedHandler { [weak self] error in
                 Task { @MainActor in
                     self?.handleCaptureInterrupted(error: error)
                 }
             }
             
             // Set up audio level handler for microphone indicator
-            await audioCaptureService.setLevelHandler { [weak self] level, type in
+            await audioCaptureServiceRef.setLevelHandler { [weak self] level, type in
                 Task { @MainActor in
                     self?.updateAudioLevel(level, type: type)
                 }
@@ -406,15 +393,15 @@ final class MuesliViewModel {
         }
         
         // Set initial transcription mode
-        transcriptionService.setTranscriptionMode(transcriptionMode)
+        transcriptionCoordinator.setTranscriptionMode(transcriptionMode)
         
         // Load available meeting apps
         Task {
             await refreshMeetingApps()
         }
         
-        // Load meeting history
-        loadMeetingHistory()
+        // Note: Meeting history is already loaded by MeetingHistoryManager's init
+        // No need to call loadMeetingHistory() here as historyManager handles it
     }
     
     // MARK: - Session Management
@@ -424,14 +411,19 @@ final class MuesliViewModel {
         return RecordingSession()
     }
     
-    /// Update audio level for the active session
+    /// Update audio level for the active session (throttled to ~30fps)
     private func updateAudioLevel(_ level: Float, type: AudioCaptureService.AudioType) {
         guard let session = activeSession else { return }
+        let now = Date()
         
         switch type {
         case .microphone:
+            guard now.timeIntervalSince(lastMicLevelUpdate) >= levelUpdateInterval else { return }
+            lastMicLevelUpdate = now
             session.microphoneLevel = level
         case .system:
+            guard now.timeIntervalSince(lastSystemLevelUpdate) >= levelUpdateInterval else { return }
+            lastSystemLevelUpdate = now
             session.systemAudioLevel = level
         }
     }
@@ -472,13 +464,12 @@ final class MuesliViewModel {
     func completeOnboarding() {
         // Model path is now managed by ModelManager, we just mark onboarding as done
         hasCompletedOnboarding = true
-        UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
     }
     
     func resetOnboarding() {
         hasCompletedOnboarding = false
         modelManager.reset()
-        UserDefaults.standard.removeObject(forKey: Self.onboardingCompletedKey)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
     }
     
     // MARK: - Meeting App Detection
@@ -521,14 +512,15 @@ final class MuesliViewModel {
     func startRecording(for session: RecordingSession) {
         // Only one session can record at a time
         guard activeSession == nil else {
-            session.showErrorMessage("Another recording is already in progress.")
+            session.showError(.alreadyRecording)
             return
         }
         
         // Set activeSession immediately so UI shows recording view right away
         // (will be cleared if async setup fails)
         activeSession = session
-        isMicrophoneMuted = session.isMicrophoneMuted
+        let mutedState = session.isMicrophoneMuted
+        isMicrophoneMutedLock.withLock { $0 = mutedState }
         
         // Mark as initializing (loading model)
         session.isInitializing = true
@@ -544,25 +536,15 @@ final class MuesliViewModel {
     
     private func startRecordingAsync(for session: RecordingSession) async {
         do {
-            // Validate model - check if active model is complete and usable
-            var validModelPath: URL?
+            // Reset retry budget for a fresh recording session
+            transcriptionCoordinator.resetForNewRecording()
             
-            if let activeModel = modelManager.activeModel {
-                if modelManager.validateModel(activeModel) {
-                    validModelPath = modelManager.pathForModel(activeModel)
-                } else {
-                    modelManager.markModelCorrupted(activeModel)
-                    
-                    // Try to find a fallback model
-                    if let fallback = modelManager.getFirstValidModel() {
-                        modelManager.setActiveModel(fallback)
-                        validModelPath = modelManager.pathForModel(fallback)
-                    }
-                }
-            }
+            // Prepare transcription model using coordinator (handles validation, fallback, initialization)
+            let modelState = await transcriptionCoordinator.prepareModel()
             
-            // If no valid model, show alert
-            guard let validModelPath = validModelPath else {
+            switch modelState {
+            case .notAvailable:
+                // No valid model available
                 session.isInitializing = false
                 session.state = .idle
                 activeSession = nil
@@ -570,16 +552,30 @@ final class MuesliViewModel {
                 sessionPendingModelDecision = session
                 showModelErrorAlert = true
                 return
+                
+            case .loading:
+                // Model is loading - coordinator will buffer audio until ready
+                // Continue with recording setup
+                break
+                
+            case .ready:
+                // Model is ready - transcription can start immediately
+                break
+                
+            case .failed(let error):
+                // Model loading failed - show error
+                session.isInitializing = false
+                session.state = .idle
+                activeSession = nil
+                resetMuteState()
+                session.showError(.modelLoadFailed(underlying: error))
+                sessionPendingModelDecision = session
+                showModelErrorAlert = true
+                return
             }
             
-            // Initialize transcription service if needed
-            if !isTranscriptionInitialized {
-                try await transcriptionService.initialize(modelPath: validModelPath)
-                isTranscriptionInitialized = true
-            }
-            
-            // Set up transcript handler
-            transcriptionService.setTranscriptHandler { [weak session] segment in
+            // Set up transcript handler through coordinator
+            transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
                 Task { @MainActor in
                     guard let session = session else { return }
                     session.appendTranscriptSegment(segment)
@@ -612,71 +608,47 @@ final class MuesliViewModel {
             // Reset echo cancellation filter for new recording
             echoCancellationService.reset()
             
-            // Start transcription
-            transcriptionService.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
+            // Start transcription through coordinator (handles buffering if model still loading)
+            transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
             
         } catch let error as AudioCaptureService.CaptureError {
+            let muesliError: MuesliError
             switch error {
             case .noContentToCapture:
-                if let app = session.selectedApp {
-                    session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
-                } else {
-                    session.showErrorMessage("No audio content available to capture.")
-                }
+                muesliError = .noAudioContent
             case .permissionDenied, .streamStartFailed:
-                session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                muesliError = .screenRecordingDenied
             default:
-                session.showErrorMessage("Failed to start recording: \(error.localizedDescription)")
+                muesliError = .captureStartFailed(underlying: error)
             }
+            
+            // Add context for specific cases
+            if case .noContentToCapture = error, let app = session.selectedApp {
+                session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
+            } else {
+                session.showError(muesliError)
+            }
+            
             session.isInitializing = false
             session.state = .idle
             activeSession = nil
-        resetMuteState()  // Clear since setup failed
+            resetMuteState()  // Clear since setup failed
             
             if fileOutputService.isWriting {
                 _ = try? await fileOutputService.stopWriting()
             }
         } catch {
+            // Handle any remaining errors (model errors are handled by coordinator above)
             let errorMsg = error.localizedDescription
             
-            // Check if this is a model loading error (CoreML)
-            let isCoreMLError = errorMsg.contains("CoreML") || errorMsg.contains("mlmodelc") || errorMsg.contains("weight.bin") || errorMsg.contains("MIL model")
-            
-            if isCoreMLError {
-                // Mark current model as corrupted
-                if let currentModel = modelManager.activeModel {
-                    modelManager.markModelCorrupted(currentModel)
-                }
-                
-                // Try to find a fallback
-                if let fallback = modelManager.getFirstValidModel() {
-                    modelManager.setActiveModel(fallback)
-                    
-                    // Reset state and retry
-                    isTranscriptionInitialized = false
-                    session.state = .idle
-                    activeSession = nil
-                    resetMuteState()
-                    
-                    // Retry with fallback model
-                    startRecording(for: session)
-                    return
-                } else {
-                    // No fallback available, show alert
-                    session.state = .idle
-                    activeSession = nil
-                    resetMuteState()
-                    sessionPendingModelDecision = session
-                    showModelErrorAlert = true
-                    return
-                }
-            }
-            
+            let muesliError: MuesliError
             if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
-                session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                muesliError = .screenRecordingDenied
             } else {
-                session.showErrorMessage("Failed to start recording: \(errorMsg)")
+                muesliError = .captureStartFailed(underlying: error)
             }
+            session.showError(muesliError)
+            
             session.isInitializing = false
             session.state = .idle
             activeSession = nil
@@ -732,7 +704,7 @@ final class MuesliViewModel {
         showModelErrorAlert = false
         
         // For now, just show an error - full recording-only mode would need more work
-        session.showErrorMessage("Recording without transcription is not yet supported. Please download a working model in Preferences.")
+        session.showError(.whisperKitNotInitialized)
     }
     
     /// Cancel recording due to model error
@@ -753,7 +725,7 @@ final class MuesliViewModel {
             echoCancellationService.reset()
             
             // Stop transcription without processing remaining audio
-            await transcriptionService.stopTranscription()
+            await transcriptionCoordinator.stopTranscription()
             
             // Stop file writing and get directory (will be deleted)
             let directory = try? await fileOutputService.stopWriting()
@@ -792,7 +764,7 @@ final class MuesliViewModel {
             echoCancellationService.reset()
             
             // Stop transcription and process remaining audio (for live mode)
-            await transcriptionService.stopTranscription()
+            await transcriptionCoordinator.stopTranscription()
             
             // Finalize file output
             guard let directory = try? await fileOutputService.stopWriting() else {
@@ -822,7 +794,7 @@ final class MuesliViewModel {
                         startTime: session.recordingStartTime ?? Date()
                     )
                 } catch {
-                    session.showErrorMessage("Post-processing transcription failed: \(error.localizedDescription)")
+                    session.showError(.postProcessingFailed(underlying: error))
                 }
             }
             
@@ -914,13 +886,13 @@ final class MuesliViewModel {
             try? saveTranscriptWithSegments(meeting, to: directory)
             
         } catch {
-            session.showErrorMessage("Error stopping recording: \(error.localizedDescription)")
+            session.showError(.transcriptSaveFailed(underlying: error))
         }
         
         // Mark session as completed and resumable
         session.state = .completed
         session.canResume = true
-        
+
         // Only refresh and select if we haven't already selected the meeting
         // (new recordings set selectedMeeting earlier to preserve segment data)
         if selectedMeeting == nil {
@@ -929,10 +901,15 @@ final class MuesliViewModel {
                 selectedMeeting = meetingHistory.first { $0.directory == directory }
             }
         }
-        
+
         // Clear activeSession
         activeSession = nil
         resetMuteState()
+
+        // If nothing is selected, return to unified view
+        if selectedMeeting == nil {
+            isSplitViewVisible = false
+        }
     }
     
     // MARK: - Capture Interruption Handling
@@ -963,12 +940,12 @@ final class MuesliViewModel {
             echoCancellationService.reset()
             
             // Stop transcription and process remaining audio (for live mode)
-            await transcriptionService.stopTranscription()
+            await transcriptionCoordinator.stopTranscription()
             
-            // Finalize file output
+            // Finalize file output            
             guard let directory = try? await fileOutputService.stopWriting() else {
                 session.state = .completed
-                session.showErrorMessage("Recording was interrupted: \(session.interruptionReason ?? "Unknown reason")")
+                session.showError(.outputDirectoryCreationFailed)
                 activeSession = nil
         resetMuteState()
                 return
@@ -991,7 +968,7 @@ final class MuesliViewModel {
                         startTime: session.recordingStartTime ?? Date()
                     )
                 } catch {
-                    session.showErrorMessage("Post-processing failed: \(error.localizedDescription)")
+                    session.showError(.postProcessingFailed(underlying: error))
                 }
             }
             
@@ -1005,12 +982,16 @@ final class MuesliViewModel {
             )
             
         } catch {
-            session.showErrorMessage("Error saving interrupted recording: \(error.localizedDescription)")
+            session.showError(.transcriptSaveFailed(underlying: error))
         }
         
         // Mark session as completed and show interruption message
         session.state = .completed
-        session.showErrorMessage("Recording saved. \(session.interruptionReason ?? "The stream was interrupted.")")
+        if let reason = session.interruptionReason {
+            session.showErrorMessage("Recording saved. \(reason)")
+        } else {
+            session.showErrorMessage("Recording saved. The stream was interrupted.")
+        }
         
         // Refresh meeting history
         refreshMeetingHistory()
@@ -1019,10 +1000,15 @@ final class MuesliViewModel {
         if let directory = session.outputDirectory {
             selectedMeeting = meetingHistory.first { $0.directory == directory }
             activeSession = nil
-        resetMuteState()
+            resetMuteState()
         } else {
             activeSession = nil
-        resetMuteState()
+            resetMuteState()
+        }
+
+        // If nothing is selected, return to unified view
+        if selectedMeeting == nil {
+            isSplitViewVisible = false
         }
     }
     
@@ -1038,43 +1024,45 @@ final class MuesliViewModel {
     
     private func retranscribeWithPostProcessingAsync(for session: RecordingSession) async {
         guard let directory = session.outputDirectory else {
-            session.showErrorMessage("No recording directory found.")
-            return
-        }
-        
-        // Validate model path
-        guard let validModelPath = modelPath else {
-            session.showErrorMessage("No transcription model configured.")
-            return
-        }
-        
-        let configPath = validModelPath.appendingPathComponent("config.json")
-        guard FileManager.default.fileExists(atPath: configPath.path) else {
-            session.showErrorMessage("Transcription model is incomplete or corrupted.")
+            session.showError(.meetingDirectoryNotFound)
             return
         }
         
         // Set retranscribing state
         session.isRetranscribing = true
         
-        // Initialize transcription service if needed
-        if !isTranscriptionInitialized {
-            do {
-                try await transcriptionService.initialize(modelPath: validModelPath)
-                isTranscriptionInitialized = true
-            } catch {
-                session.isRetranscribing = false
-                session.showErrorMessage("Failed to initialize transcription: \(error.localizedDescription)")
-                return
-            }
+        // Reset retry budget for a fresh model load attempt
+        transcriptionCoordinator.resetForNewRecording()
+        
+        // Prepare transcription model using coordinator
+        let modelState = await transcriptionCoordinator.prepareModel()
+        
+        switch modelState {
+        case .notAvailable:
+            session.isRetranscribing = false
+            session.showError(.modelNotFound)
+            return
+            
+        case .loading:
+            // Wait for model to finish loading
+            break
+            
+        case .ready:
+            // Model is ready for transcription
+            break
+            
+        case .failed(let error):
+            session.isRetranscribing = false
+            session.showError(.modelLoadFailed(underlying: error))
+            return
         }
         
         // Set transcription mode to post-processing temporarily
-        let previousMode = transcriptionService.transcriptionMode
-        transcriptionService.setTranscriptionMode(.postProcessing)
+        let previousMode = transcriptionCoordinator.transcriptionMode
+        transcriptionCoordinator.setTranscriptionMode(TranscriptionService.TranscriptionMode.postProcessing)
         
         // Set up transcript handler to process segments through the block pipeline
-        transcriptionService.setTranscriptHandler { [weak session] segment in
+        transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
             Task { @MainActor in
                 guard let session = session else { return }
                 session.appendTranscriptSegment(segment)
@@ -1109,418 +1097,108 @@ final class MuesliViewModel {
             )
             
         } catch {
-            session.showErrorMessage("Re-transcription failed: \(error.localizedDescription)")
+            session.showError(.postProcessingFailed(underlying: error))
         }
         
         // Restore previous mode
-        transcriptionService.setTranscriptionMode(previousMode)
+        transcriptionCoordinator.setTranscriptionMode(previousMode)
         
         // Clear retranscribing state
         session.isRetranscribing = false
     }
     
-    // MARK: - Meeting History Management
+    // MARK: - Meeting History Management (delegating to MeetingHistoryManager)
     
-    /// Load meeting history from disk
+    /// Load meeting history from disk (delegates to historyManager)
     func loadMeetingHistory() {
-        meetingHistory = meetingHistoryService.discoverMeetings()
-        groupedHistory = groupMeetingsByDate(meetingHistory)
+        historyManager.loadMeetingHistory()
     }
     
-    /// Refresh meeting history (call after recording completes)
+    /// Refresh meeting history (delegates to historyManager)
     func refreshMeetingHistory() {
-        loadMeetingHistory()
+        historyManager.refreshMeetingHistory()
     }
     
-    /// Group meetings by date: by day for last week, by month for older
-    /// - Parameter meetings: Array of meetings to group
-    /// - Returns: Array of groups, sorted newest first
+    /// Group meetings by date (delegates to historyManager)
     func groupMeetingsByDate(_ meetings: [MeetingHistoryItem]) -> [MeetingHistoryGroup] {
-        guard !meetings.isEmpty else { return [] }
-        
-        let calendar = Calendar.current
-        let now = Date()
-        
-        // Separate meetings into last 7 days and older
-        var lastWeekMeetings: [MeetingHistoryItem] = []
-        var olderMeetings: [MeetingHistoryItem] = []
-        
-        for meeting in meetings {
-            let daysSince = calendar.dateComponents([.day], from: meeting.date, to: now).day ?? 0
-            if daysSince < 7 {
-                lastWeekMeetings.append(meeting)
-            } else {
-                olderMeetings.append(meeting)
-            }
-        }
-        
-        var groups: [MeetingHistoryGroup] = []
-        
-        // Group last week by day
-        let lastWeekGroups = Dictionary(grouping: lastWeekMeetings) { meeting -> Date in
-            calendar.startOfDay(for: meeting.date)
-        }
-        
-        for (dayStart, dayMeetings) in lastWeekGroups.sorted(by: { $0.key > $1.key }) {
-            let label = formatDayLabel(dayStart, relativeTo: now)
-            groups.append(MeetingHistoryGroup(
-                date: dayStart,
-                label: label,
-                meetings: dayMeetings.sorted { $0.date > $1.date }
-            ))
-        }
-        
-        // Group older meetings by month
-        let monthGroups = Dictionary(grouping: olderMeetings) { meeting -> Date in
-            let components = calendar.dateComponents([.year, .month], from: meeting.date)
-            return calendar.date(from: components) ?? meeting.date
-        }
-        
-        for (monthStart, monthMeetings) in monthGroups.sorted(by: { $0.key > $1.key }) {
-            let label = formatMonthLabel(monthStart)
-            groups.append(MeetingHistoryGroup(
-                date: monthStart,
-                label: label,
-                meetings: monthMeetings.sorted { $0.date > $1.date }
-            ))
-        }
-        
-        return groups
+        historyManager.groupMeetingsByDate(meetings)
     }
     
-    /// Format a day label (Today, Yesterday, or date)
-    private func formatDayLabel(_ date: Date, relativeTo now: Date) -> String {
-        let calendar = Calendar.current
-        
-        if calendar.isDateInToday(date) {
-            return "Today"
-        } else if calendar.isDateInYesterday(date) {
-            return "Yesterday"
-        } else {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "MMM d, yyyy"
-            return formatter.string(from: date)
-        }
+    /// Load transcript for a meeting (delegates to historyManager)
+    func loadTranscript(for meeting: MeetingHistoryItem) async {
+        await historyManager.loadTranscript(for: meeting)
     }
     
-    /// Format a month label
-    private func formatMonthLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter.string(from: date)
-    }
+    // MARK: - Meeting Selection (delegating to MeetingHistoryManager)
     
-    /// Load transcript for a meeting (lazy-load)
-    func loadTranscript(for meeting: MeetingHistoryItem) {
-        guard meeting.transcript == nil else { return }
-        
-        // Load plain text transcript
-        meeting.transcript = meetingHistoryService.loadTranscript(for: meeting)
-        
-        // Also try to load block-based transcript (new format)
-        if meeting.transcriptBlocks == nil {
-            meeting.transcriptBlocks = meetingHistoryService.loadTranscriptBlocks(for: meeting)
-        }
-    }
-    
-    // MARK: - Meeting Selection (Multi-select)
-    
-    /// Toggle selection of a meeting
+    /// Toggle selection of a meeting (delegates to historyManager)
     func toggleMeetingSelection(_ meeting: MeetingHistoryItem, extendSelection: Bool = false) {
-        if extendSelection {
-            // Cmd+click: toggle individual selection
-            if selectedMeetingIDs.contains(meeting.id) {
-                selectedMeetingIDs.remove(meeting.id)
-            } else {
-                selectedMeetingIDs.insert(meeting.id)
-            }
-        } else {
-            // Regular click: single selection
-            selectedMeetingIDs = [meeting.id]
-        }
-        
-        // Update selectedMeeting for detail view
-        if selectedMeetingIDs.count == 1, let id = selectedMeetingIDs.first {
-            selectedMeeting = meetingHistory.first { $0.id == id }
-            if let meeting = selectedMeeting {
-                loadTranscript(for: meeting)
-            }
-        } else {
-            selectedMeeting = nil
-        }
+        historyManager.toggleMeetingSelection(meeting, extendSelection: extendSelection)
     }
     
-    /// Select all meetings in a range (for Shift+click)
+    /// Select all meetings in a range (delegates to historyManager)
     func selectMeetingsInRange(to meeting: MeetingHistoryItem) {
-        guard let lastSelectedID = selectedMeetingIDs.first,
-              let lastIndex = meetingHistory.firstIndex(where: { $0.id == lastSelectedID }),
-              let targetIndex = meetingHistory.firstIndex(where: { $0.id == meeting.id }) else {
-            toggleMeetingSelection(meeting)
-            return
-        }
-        
-        let range = min(lastIndex, targetIndex)...max(lastIndex, targetIndex)
-        for i in range {
-            selectedMeetingIDs.insert(meetingHistory[i].id)
-        }
+        historyManager.selectMeetingsInRange(to: meeting)
     }
     
-    /// Clear all selections
+    /// Clear all selections (delegates to historyManager)
     func clearSelection() {
-        selectedMeetingIDs.removeAll()
-        selectedMeeting = nil
+        historyManager.clearSelection()
     }
     
-    /// Get selected meetings
+    /// Get selected meetings (delegates to historyManager)
     var selectedMeetings: [MeetingHistoryItem] {
-        meetingHistory.filter { selectedMeetingIDs.contains($0.id) }
+        historyManager.selectedMeetings
     }
     
-    // MARK: - Meeting Deletion
+    // MARK: - Meeting Deletion (delegating to MeetingHistoryManager)
     
-    /// Request deletion of selected meetings (shows confirmation)
+    /// Request deletion of selected meetings (delegates to historyManager)
     func requestDeleteSelectedMeetings() {
-        let meetings = selectedMeetings
-        guard !meetings.isEmpty else { return }
-        meetingsPendingDeletion = meetings
-        showDeleteConfirmation = true
+        historyManager.requestDeleteSelectedMeetings()
     }
     
-    /// Request deletion of a specific meeting (shows confirmation)
+    /// Request deletion of a specific meeting (delegates to historyManager)
     func requestDeleteMeeting(_ meeting: MeetingHistoryItem) {
-        meetingsPendingDeletion = [meeting]
-        showDeleteConfirmation = true
+        historyManager.requestDeleteMeeting(meeting)
     }
     
-    /// Confirm and execute deletion
+    /// Confirm and execute deletion (delegates to historyManager)
     func confirmDeleteMeetings() {
-        let meetingsToDelete = meetingsPendingDeletion
-        meetingsPendingDeletion = []
-        showDeleteConfirmation = false
-        
-        // Delete from disk
-        for meeting in meetingsToDelete {
-            deleteMeetingFromDisk(meeting)
-        }
-        
-        // Clear selection if deleted meetings were selected
-        for meeting in meetingsToDelete {
-            selectedMeetingIDs.remove(meeting.id)
-            if selectedMeeting?.id == meeting.id {
-                selectedMeeting = nil
-            }
-        }
-        
-        // Refresh history
-        refreshMeetingHistory()
+        historyManager.confirmDeleteMeetings()
     }
     
-    /// Cancel deletion
+    /// Cancel deletion (delegates to historyManager)
     func cancelDeleteMeetings() {
-        meetingsPendingDeletion = []
-        showDeleteConfirmation = false
+        historyManager.cancelDeleteMeetings()
     }
     
-    /// Delete a meeting's folder from disk
-    private func deleteMeetingFromDisk(_ meeting: MeetingHistoryItem) {
-        let fileManager = FileManager.default
-        do {
-            try fileManager.removeItem(at: meeting.directory)
-        } catch {
-            print("[MuesliViewModel] Failed to delete meeting: \(error.localizedDescription)")
-        }
+    /// Clear the deletion error state (delegates to historyManager)
+    func clearDeletionError() {
+        historyManager.clearDeletionError()
     }
     
-    // MARK: - Transcript Refinement
+    // MARK: - Transcript Refinement (delegating to RefinementCoordinator)
     
-    /// Check if refinement is available (LLM model downloaded)
+    /// Check if refinement is available (delegates to refinementCoordinator)
     var canRefineTranscripts: Bool {
-        llmManager.hasModel && llmManager.isLLMStitchingEnabled
+        refinementCoordinator.canRefineTranscripts
     }
     
-    /// Start refining a meeting's transcript
+    /// Start refining a meeting's transcript (delegates to refinementCoordinator)
     func refineTranscript(for meeting: MeetingHistoryItem) {
-        guard canRefineTranscripts else {
-            print("[MuesliViewModel] Cannot refine: canRefineTranscripts = false")
-            return
-        }
-        guard !refinementService.isRefining else {
-            print("[MuesliViewModel] Already refining")
-            return
-        }
-        
-        meetingBeingRefined = meeting
-        refinementCancelled = false
-        
-        Task {
-            await refineTranscriptAsync(for: meeting)
-        }
-    }
-    
-    /// Async refinement implementation
-    private func refineTranscriptAsync(for meeting: MeetingHistoryItem) async {
         // Ensure transcript is loaded first
         if meeting.transcriptBlocks == nil && meeting.transcript == nil {
-            loadTranscript(for: meeting)
-        }
-        
-        // Ensure model is loaded
-        if llmManager.modelContainer == nil, let activeModel = llmManager.activeModel {
-            do {
-                try await llmManager.loadModel(activeModel)
-            } catch {
-                refinementService.errorMessage = "Failed to load LLM model: \(error.localizedDescription)"
-                print("[MuesliViewModel] Failed to load LLM model: \(error)")
-                meetingBeingRefined = nil
-                return
+            Task {
+                await loadTranscript(for: meeting)
             }
         }
-        
-        do {
-            // Refine based on available transcript format
-            if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
-                print("[MuesliViewModel] Refining \(blocks.count) transcript blocks")
-                // Store original before refining
-                meeting.originalTranscriptBlocks = blocks
-                if meeting.originalTranscript == nil {
-                    meeting.originalTranscript = blocks.map { block in
-                        "[\(block.speaker.rawValue)] \(block.text)"
-                    }.joined(separator: "\n\n")
-                }
-                
-                // Refine block-based transcript
-                let refinedBlocks = try await refinementService.refineTranscript(blocks)
-                
-                guard !refinementCancelled else { return }
-                
-                // Update meeting with refined blocks
-                meeting.transcriptBlocks = refinedBlocks
-                meeting.isRefined = true
-                
-                // Default to showing refined view
-                showOriginalTranscriptForMeeting[meeting.id.uuidString] = false
-                
-                // Also update plain text version
-                meeting.transcript = refinedBlocks.map { block in
-                    "[\(block.speaker.rawValue)] \(block.text)"
-                }.joined(separator: "\n\n")
-                
-                // Save to disk
-                saveRefinedTranscript(meeting, blocks: refinedBlocks)
-                
-            } else if let text = meeting.transcript, !text.isEmpty {
-                print("[MuesliViewModel] Refining plain text transcript")
-                // Store original before refining
-                meeting.originalTranscript = text
-                
-                // Refine plain text transcript
-                let refinedText = try await refinementService.refineTranscript(text)
-                
-                guard !refinementCancelled else {
-                    print("[MuesliViewModel] Refinement cancelled")
-                    meetingBeingRefined = nil
-                    return
-                }
-                
-                // Update meeting
-                meeting.transcript = refinedText
-                meeting.isRefined = true
-                
-                // Save to disk
-                saveRefinedTranscript(meeting, text: refinedText)
-                print("[MuesliViewModel] Refinement completed successfully")
-            } else {
-                print("[MuesliViewModel] No transcript blocks or text available for refinement")
-                meetingBeingRefined = nil
-                return
-            }
-            
-            // Clear refinement state
-            meetingBeingRefined = nil
-            
-        } catch {
-            // Error is already set in refinementService
-            print("[MuesliViewModel] Refinement failed: \(error)")
-            meetingBeingRefined = nil
-        }
+        refinementCoordinator.refineTranscript(for: meeting)
     }
     
-    /// Save refined block-based transcript to disk
-    private func saveRefinedTranscript(_ meeting: MeetingHistoryItem, blocks: [TranscriptBlock]) {
-        do {
-            // Save original transcript to separate file if it exists
-            if let originalBlocks = meeting.originalTranscriptBlocks {
-                let originalURL = meeting.directory.appendingPathComponent("transcript.original.md")
-                try fileOutputService.saveTranscriptBlocks(
-                    originalBlocks,
-                    title: meeting.title,
-                    date: meeting.date,
-                    to: meeting.directory,
-                    filename: "transcript.original.md"
-                )
-            }
-            
-            // Save refined transcript
-            try fileOutputService.saveTranscriptBlocks(
-                blocks,
-                title: meeting.title,
-                date: meeting.date,
-                to: meeting.directory
-            )
-        } catch {
-            print("[MuesliViewModel] Failed to save refined transcript: \(error)")
-        }
-    }
-    
-    /// Save refined plain text transcript to disk
-    private func saveRefinedTranscript(_ meeting: MeetingHistoryItem, text: String) {
-        do {
-            // Save original transcript to separate file if it exists
-            if let originalText = meeting.originalTranscript {
-                let originalURL = meeting.directory.appendingPathComponent("transcript.original.md")
-                let dateFormatter = DateFormatter()
-                dateFormatter.dateStyle = .full
-                dateFormatter.timeStyle = .short
-                
-                let originalContent = """
-                # \(meeting.title)
-                
-                **Date:** \(dateFormatter.string(from: meeting.date))
-                
-                ---
-                
-                \(originalText)
-                """
-                
-                try originalContent.write(to: originalURL, atomically: true, encoding: .utf8)
-            }
-            
-            // Save refined transcript
-            let transcriptURL = meeting.directory.appendingPathComponent("transcript.md")
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateStyle = .full
-            dateFormatter.timeStyle = .short
-            
-            let content = """
-            # \(meeting.title)
-            
-            **Date:** \(dateFormatter.string(from: meeting.date))
-            
-            ---
-            
-            \(text)
-            """
-            
-            try content.write(to: transcriptURL, atomically: true, encoding: .utf8)
-        } catch {
-            print("[MuesliViewModel] Failed to save refined transcript: \(error)")
-        }
-    }
-    
-    /// Cancel ongoing refinement
+    /// Cancel ongoing refinement (delegates to refinementCoordinator)
     func cancelRefinement() {
-        refinementCancelled = true
-        meetingBeingRefined = nil
+        refinementCoordinator.cancelRefinement()
     }
     
     // MARK: - Resume Recording
@@ -1541,21 +1219,24 @@ final class MuesliViewModel {
     /// Async implementation of resume recording
     private func resumeRecordingAsync(for meeting: MeetingHistoryItem) async {
         do {
-            // Validate model path
-            guard let validModelPath = modelPath else {
-                return
-            }
+            // Reset retry budget for a fresh recording session
+            transcriptionCoordinator.resetForNewRecording()
             
-            // Check that the model directory and config.json exist
-            let configPath = validModelPath.appendingPathComponent("config.json")
-            guard FileManager.default.fileExists(atPath: configPath.path) else {
-                return
-            }
+            // Prepare transcription model using coordinator
+            let modelState = await transcriptionCoordinator.prepareModel()
             
-            // Initialize transcription service if needed
-            if !isTranscriptionInitialized {
-                try await transcriptionService.initialize(modelPath: validModelPath)
-                isTranscriptionInitialized = true
+            switch modelState {
+            case .notAvailable, .failed:
+                // No valid model available - fail silently for resume
+                return
+                
+            case .loading:
+                // Model is loading - coordinator will buffer audio until ready
+                break
+                
+            case .ready:
+                // Model is ready for transcription
+                break
             }
             
             // Create new session linked to existing meeting
@@ -1568,10 +1249,11 @@ final class MuesliViewModel {
             
             // Set activeSession immediately
             activeSession = session
-            isMicrophoneMuted = session.isMicrophoneMuted
+            let mutedState = session.isMicrophoneMuted
+            isMicrophoneMutedLock.withLock { $0 = mutedState }
             
-            // Set up transcript handler
-            transcriptionService.setTranscriptHandler { [weak session] segment in
+            // Set up transcript handler through coordinator
+            transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
                 Task { @MainActor in
                     guard let session = session else { return }
                     session.appendTranscriptSegment(segment)
@@ -1601,22 +1283,25 @@ final class MuesliViewModel {
             session.resetTranscript()
             session.startDisplayTimer()
             
-            // Start transcription
-            transcriptionService.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
+            // Start transcription through coordinator
+            transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
             
             // Transition to split view if not already visible
             isSplitViewVisible = true
             
         } catch let error as AudioCaptureService.CaptureError {
             if let session = activeSession {
+                let muesliError: MuesliError
                 switch error {
                 case .noContentToCapture:
-                    session.showErrorMessage("No audio content available to capture.")
+                    muesliError = .noAudioContent
                 case .permissionDenied, .streamStartFailed:
-                    session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                    muesliError = .screenRecordingDenied
                 default:
-                    session.showErrorMessage("Failed to resume recording: \(error.localizedDescription)")
+                    muesliError = .captureStartFailed(underlying: error)
                 }
+                session.showError(muesliError)
+                
                 session.state = .idle
                 activeSession = nil
                 resetMuteState()
@@ -1628,11 +1313,15 @@ final class MuesliViewModel {
         } catch {
             if let session = activeSession {
                 let errorMsg = error.localizedDescription
+                
+                let muesliError: MuesliError
                 if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
-                    session.showErrorMessage("Please grant Screen Recording permission and try again.")
+                    muesliError = .screenRecordingDenied
                 } else {
-                    session.showErrorMessage("Failed to resume recording: \(errorMsg)")
+                    muesliError = .captureStartFailed(underlying: error)
                 }
+                session.showError(muesliError)
+                
                 session.state = .idle
                 activeSession = nil
                 resetMuteState()
@@ -1646,65 +1335,17 @@ final class MuesliViewModel {
     
     // MARK: - Segment Refinement Helpers
     
-    /// Refine a single transcript segment
+    /// Refine a single transcript segment (delegates to refinementCoordinator, then saves)
     private func refineSegment(_ segment: TranscriptSegment, in meeting: MeetingHistoryItem) async {
-        guard canRefineTranscripts else { return }
-        guard !segment.isRefined else { return }
+        await refinementCoordinator.refineSegment(segment, in: meeting)
         
-        // Ensure model is loaded
-        if llmManager.modelContainer == nil, let activeModel = llmManager.activeModel {
-            do {
-                try await llmManager.loadModel(activeModel)
-            } catch {
-                print("[MuesliViewModel] Failed to load LLM model for segment refinement: \(error)")
-                return
-            }
-        }
-        
-        do {
-            // Refine the segment's blocks
-            let refinedBlocks = try await refinementService.refineTranscript(segment.originalBlocks)
-            
-            // Update segment
-            if let segmentIndex = meeting.transcriptSegments.firstIndex(where: { $0.id == segment.id }) {
-                meeting.transcriptSegments[segmentIndex].refinedBlocks = refinedBlocks
-                meeting.transcriptSegments[segmentIndex].isRefined = true
-            }
-            
-            // Default to showing refined view after refinement completes
-            meeting.isShowingRefined = true
-            
-            // Update meeting transcript display
-            updateMeetingTranscriptDisplay(meeting)
-            
-            // Save updated transcript to disk
+        // Save updated transcript to disk after refinement
             try? saveTranscriptWithSegments(meeting, to: meeting.directory)
-            
-        } catch {
-            print("[MuesliViewModel] Failed to refine segment: \(error)")
-        }
     }
     
-    /// Update meeting's transcript display from segments
+    /// Update meeting's transcript display from segments (delegates to refinementCoordinator)
     func updateMeetingTranscriptDisplay(_ meeting: MeetingHistoryItem) {
-        // Combine all segments based on toggle state
-        var allBlocks: [TranscriptBlock] = []
-        
-        for segment in meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber }) {
-            // Use refined blocks if available and showing refined, otherwise use original
-            let blocksToUse = (meeting.isShowingRefined && segment.isRefined) ?
-                (segment.refinedBlocks ?? segment.originalBlocks) :
-                segment.originalBlocks
-            
-            allBlocks.append(contentsOf: blocksToUse)
-        }
-        
-        meeting.transcriptBlocks = allBlocks
-        
-        // Also update plain text version
-        meeting.transcript = allBlocks.map { block in
-            "[\(block.speaker.rawValue)] \(block.text)"
-        }.joined(separator: "\n\n")
+        refinementCoordinator.updateMeetingTranscriptDisplay(meeting)
     }
     
     /// Save transcript with segment markers to disk
