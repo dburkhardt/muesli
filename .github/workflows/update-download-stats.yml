@@ -1,0 +1,76 @@
+name: Update Download Stats
+
+# Update download statistics from GitHub releases
+# Runs hourly and on manual trigger
+# Privacy-respecting: only tracks aggregate download counts from GitHub API
+
+on:
+  schedule:
+    # Run every hour
+    - cron: '0 * * * *'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  update-stats:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Fetch download statistics
+        id: fetch-stats
+        run: |
+          # Fetch release data from GitHub API
+          RELEASES=$(curl -s -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases")
+          
+          # Calculate total downloads across all releases
+          TOTAL_DOWNLOADS=$(echo "$RELEASES" | \
+            jq '[.[].assets[].download_count] | add // 0')
+          
+          # Get latest release info
+          LATEST_RELEASE=$(echo "$RELEASES" | jq -r '.[0].tag_name // "none"')
+          LATEST_DATE=$(echo "$RELEASES" | jq -r '.[0].published_at // "none"')
+          
+          echo "total_downloads=$TOTAL_DOWNLOADS" >> $GITHUB_OUTPUT
+          echo "latest_version=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+          echo "latest_date=$LATEST_DATE" >> $GITHUB_OUTPUT
+          
+          echo "Total downloads: $TOTAL_DOWNLOADS"
+          echo "Latest version: $LATEST_RELEASE"
+      
+      - name: Update stats file
+        run: |
+          # Create or update download-stats.json
+          cat > download-stats.json << EOF
+          {
+            "total_downloads": ${{ steps.fetch-stats.outputs.total_downloads }},
+            "latest_version": "${{ steps.fetch-stats.outputs.latest_version }}",
+            "latest_release_date": "${{ steps.fetch-stats.outputs.latest_date }}",
+            "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          
+          cat download-stats.json
+      
+      - name: Commit and push if changed
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add download-stats.json
+          
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to download stats"
+          else
+            git commit -m "Update download stats: ${{ steps.fetch-stats.outputs.total_downloads }} total downloads"
+            git push
+            echo "Download stats updated successfully"
+          fi

@@ -1,0 +1,67 @@
+<svg width="1200" height="800" viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="1200" height="800" fill="#f5f5f5"/>
+  
+  <!-- Main window -->
+  <rect x="100" y="80" width="1000" height="640" rx="12" fill="white" stroke="#e5e5e5" stroke-width="1"/>
+  
+  <!-- Window header bar -->
+  <rect x="100" y="80" width="1000" height="50" rx="12" fill="white" stroke="#e5e5e5" stroke-width="0"/>
+  <circle cx="130" cy="105" r="6" fill="#FF5F57"/>
+  <circle cx="150" cy="105" r="6" fill="#FEBC2E"/>
+  <circle cx="170" cy="105" r="6" fill="#28C840"/>
+  
+  <!-- Menu bar at top -->
+  <rect x="100" y="130" width="1000" height="60" fill="white" stroke="#e5e5e5" stroke-width="1" stroke-dasharray="0"/>
+  <text x="120" y="165" font-family="-apple-system, system-ui" font-size="18" fill="#1a1a1a" font-weight="600">Meeting with Design Team</text>
+  <circle cx="1050" cy="160" r="5" fill="#FF5F57"/>
+  <text x="1062" y="165" font-family="-apple-system, system-ui" font-size="14" fill="#666">REC</text>
+  
+  <!-- Main content area with transcript -->
+  <rect x="100" y="190" width="1000" height="530" fill="white"/>
+  
+  <!-- Transcript lines -->
+  <g font-family="-apple-system, system-ui" font-size="16">
+    <text x="140" y="230" fill="#999" font-size="13">[00:00]</text>
+    <text x="200" y="230" fill="#1a1a1a">Hey everyone, thanks for joining today's design review.</text>
+    
+    <text x="140" y="270" fill="#999" font-size="13">[00:04]</text>
+    <text x="200" y="270" fill="#1a1a1a">I wanted to go over the new landing page concepts we've been</text>
+    
+    <text x="140" y="310" fill="#999" font-size="13">[00:07]</text>
+    <text x="200" y="310" fill="#1a1a1a">working on and get everyone's feedback.</text>
+    
+    <text x="140" y="350" fill="#999" font-size="13">[00:11]</text>
+    <text x="200" y="350" fill="#0066cc" font-weight="600">[Me]</text>
+    <text x="250" y="350" fill="#1a1a1a">Great, I'm really excited to see what you've put together.</text>
+    
+    <text x="140" y="390" fill="#999" font-size="13">[00:14]</text>
+    <text x="200" y="390" fill="#1a1a1a">So we focused on three key areas: hero section, feature grid,</text>
+    
+    <text x="140" y="430" fill="#999" font-size="13">[00:17]</text>
+    <text x="200" y="430" fill="#1a1a1a">and testimonials. Let me share my screen...</text>
+    
+    <text x="140" y="470" fill="#999" font-size="13">[00:22]</text>
+    <text x="200" y="470" fill="#0066cc" font-weight="600">[Me]</text>
+    <text x="250" y="470" fill="#1a1a1a">The color palette looks really clean. I like the minimalist</text>
+    
+    <text x="140" y="510" fill="#999" font-size="13">[00:25]</text>
+    <text x="200" y="510" fill="#0066cc" font-weight="600">[Me]</text>
+    <text x="250" y="510" fill="#1a1a1a">approach you've taken.</text>
+    
+    <text x="140" y="550" fill="#999" font-size="13">[00:28]</text>
+    <text x="200" y="550" fill="#1a1a1a">Thanks! We wanted it to feel modern but not overwhelming.</text>
+    
+    <text x="140" y="590" fill="#999" font-size="13">[00:31]</text>
+    <text x="200" y="590" fill="#1a1a1a">The hero section uses a gradient background with the product</text>
+    
+    <text x="140" y="630" fill="#999" font-size="13">[00:34]</text>
+    <text x="200" y="630" fill="#1a1a1a">screenshot front and center...</text>
+  </g>
+  
+  <!-- Bottom control bar -->
+  <rect x="100" y="720" width="1000" height="0" fill="#f5f5f5"/>
+  
+  <!-- Muesli branding at bottom -->
+  <text x="550" y="770" font-family="-apple-system, system-ui" font-size="12" fill="#999" text-anchor="middle">Muesli - Real-time meeting transcription</text>
+</svg>
