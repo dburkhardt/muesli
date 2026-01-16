@@ -1,6 +1,6 @@
-# AGENTS.md — Muesli (macOS local‑first meeting transcription)
+# AGENTS.md — Muesli (macOS meeting transcription)
 
-Local-first meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-time transcription via WhisperKit, saves `audio.caf` + `microphone.caf` + `transcript.md`.
+Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-time transcription via WhisperKit, saves `audio.caf` + `microphone.caf` + `transcript.md`.
 
 **Authoritative docs**: `SPEC.md` (product spec + phases) · This file (architecture + commands + pitfalls)
 **Note for agents**: Additional flow-specific documentation lives in the `spec/` folder. If you are doing a comprehensive architecture review, read those documents as well.
