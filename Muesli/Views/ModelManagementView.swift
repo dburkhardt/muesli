@@ -183,9 +183,17 @@ struct ModelManagementView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                HStack(spacing: 4) {
                 Text(model.sizeDescription)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    Text("·")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    Link(model.sourceRepo, destination: model.sourceURL)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
             }
             
             Spacer()
@@ -273,7 +281,7 @@ struct ModelManagementView: View {
                 get: { modelManager.activeModel ?? .base },
                 set: { modelManager.setActiveModel($0) }
             )) {
-                ForEach(Array(modelManager.downloadedModels).sorted(by: { $0.rawValue < $1.rawValue })) { model in
+                ForEach(modelManager.downloadedModelsOrdered) { model in
                     Text(model.displayName).tag(model)
                 }
             }
@@ -313,14 +321,14 @@ struct ModelManagementView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     Text(model.sizeDescription)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                    Text("•")
+                    Text("·")
                         .font(.system(size: 11))
-                        .foregroundStyle(.quaternary)
-                    Text(model.description)
+                        .foregroundStyle(.tertiary)
+                    Link(model.sourceRepo, destination: model.sourceURL)
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
@@ -420,7 +428,7 @@ struct ModelManagementView: View {
                 get: { llmManager.activeModel ?? .llama3_2_3b },
                 set: { llmManager.setActiveModel($0) }
             )) {
-                ForEach(Array(llmManager.downloadedModels).sorted(by: { $0.rawValue < $1.rawValue })) { model in
+                ForEach(LLMManager.LLMModel.allCases.filter { llmManager.downloadedModels.contains($0) }) { model in
                     Text(model.displayName).tag(model)
                 }
             }

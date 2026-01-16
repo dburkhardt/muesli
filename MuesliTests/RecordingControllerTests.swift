@@ -134,28 +134,8 @@ final class RecordingControllerTests: XCTestCase {
 }
 
 // MARK: - Thread Safety Tests for ViewModel
-
-@MainActor
-final class ViewModelThreadSafetyTests: XCTestCase {
-    
-    func testMicrophoneMutedLockIsThreadSafe() async {
-        let viewModel = MuesliViewModel(skipInitialLoad: true)
-        
-        // Access from multiple threads should not crash
-        let expectation = XCTestExpectation(description: "Concurrent access completes")
-        expectation.expectedFulfillmentCount = 10
-        
-        for _ in 0..<10 {
-            Task.detached {
-                // Access the nonisolated property from a background thread
-                let _ = viewModel.isMicrophoneMutedSafe
-                expectation.fulfill()
-            }
-        }
-        
-        await fulfillment(of: [expectation], timeout: 5.0)
-    }
-}
+// NOTE: Microphone mute state thread safety is now tested via RecordingControllerTests.testIsMicrophoneMutedSafeIsThreadSafe()
+// The ViewModel delegates all recording state to RecordingController
 
 // MARK: - PreferencesManager Thread Safety Tests
 

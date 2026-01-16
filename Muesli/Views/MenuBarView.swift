@@ -67,6 +67,7 @@ struct MenuBarView: View {
             
             Button("Preferences...") {
                 openSettings()
+                NSApp.activate(ignoringOtherApps: true)
             }
             .keyboardShortcut(",", modifiers: .command)
             

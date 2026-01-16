@@ -139,9 +139,21 @@ final class PreferencesManager {
 
     // MARK: - Storage Migration
 
+    /// Key to track if migration has been checked this app installation
+    private static let migrationCheckedKey = "com.muesli.migrationChecked"
+    
     /// Migrate from old default location (~/Documents/Meeting Transcripts) to new location
     /// (~/Library/Application Support/Muesli/Recordings) while preserving existing recordings
     private func migrateStorageLocationIfNeeded() {
+        // Skip if migration was already checked (prevents Documents prompt on SwiftUI App recreation)
+        guard !UserDefaults.standard.bool(forKey: Self.migrationCheckedKey) else {
+            print("[PreferencesManager] Migration already checked, skipping")
+            return
+        }
+        
+        // Mark migration as checked BEFORE accessing Documents to avoid repeated prompts
+        UserDefaults.standard.set(true, forKey: Self.migrationCheckedKey)
+        
         // Only migrate if user hasn't set a custom output directory
         guard UserDefaults.standard.string(forKey: AppStorageKeys.outputDirectory) == nil else {
             print("[PreferencesManager] Custom output directory set, skipping migration")

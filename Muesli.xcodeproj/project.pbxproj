@@ -55,6 +55,7 @@
 		E1000001241D1A1D00000070 /* RecordingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000002241D1A1D00000070 /* RecordingController.swift */; };
 		E1000003241D1A1D00000071 /* AppStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000004241D1A1D00000071 /* AppStorageKeys.swift */; };
 		E1000005241D1A1D00000072 /* MuesliError.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000006241D1A1D00000072 /* MuesliError.swift */; };
+		F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000002241D1A1D00000080 /* AudioConfiguration.swift */; };
 		B1000001241D1A1D00000040 /* MuesliViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000002241D1A1D00000040 /* MuesliViewModelTests.swift */; };
 		B1000003241D1A1D00000040 /* ServiceProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000004241D1A1D00000040 /* ServiceProtocols.swift */; };
 		B1000005241D1A1D00000040 /* MockAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000006241D1A1D00000040 /* MockAudioCaptureService.swift */; };
@@ -68,6 +69,7 @@
 		B1000015241D1A1D00000040 /* MockLLMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000016241D1A1D00000040 /* MockLLMManager.swift */; };
 		B1000017241D1A1D00000040 /* MockEchoCancellationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */; };
 		B1000020241D1A1D00000041 /* RecordingControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000021241D1A1D00000041 /* RecordingControllerTests.swift */; };
+		B1000023241D1A1D00000042 /* TranscriptionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -134,6 +136,7 @@
 		B1000016241D1A1D00000040 /* MockLLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockLLMManager.swift; sourceTree = "<group>"; };
 		B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockEchoCancellationService.swift; sourceTree = "<group>"; };
 		B1000021241D1A1D00000041 /* RecordingControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingControllerTests.swift; sourceTree = "<group>"; };
+		B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionCoordinatorTests.swift; sourceTree = "<group>"; };
 		C1000002241D1A1D00000050 /* PreferencesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManager.swift; sourceTree = "<group>"; };
 		C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryManager.swift; sourceTree = "<group>"; };
 		C1000006241D1A1D00000052 /* RefinementCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementCoordinator.swift; sourceTree = "<group>"; };
@@ -142,6 +145,7 @@
 		E1000002241D1A1D00000070 /* RecordingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingController.swift; sourceTree = "<group>"; };
 		E1000004241D1A1D00000071 /* AppStorageKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStorageKeys.swift; sourceTree = "<group>"; };
 		E1000006241D1A1D00000072 /* MuesliError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliError.swift; sourceTree = "<group>"; };
+		F1000002241D1A1D00000080 /* AudioConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioConfiguration.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -305,6 +309,7 @@
 				A100003B241D1A1D00000007 /* MicrophoneManager.swift */,
 				A1000086241D1A1D00000023 /* LLMManager.swift */,
 				E1000004241D1A1D00000071 /* AppStorageKeys.swift */,
+				F1000002241D1A1D00000080 /* AudioConfiguration.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -321,6 +326,7 @@
 			children = (
 				B1000002241D1A1D00000040 /* MuesliViewModelTests.swift */,
 				B1000021241D1A1D00000041 /* RecordingControllerTests.swift */,
+				B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */,
 				B100001D241D1A1D00000040 /* Protocols */,
 				B100001E241D1A1D00000040 /* Mocks */,
 			);
@@ -550,6 +556,7 @@
 				E1000001241D1A1D00000070 /* RecordingController.swift in Sources */,
 				E1000003241D1A1D00000071 /* AppStorageKeys.swift in Sources */,
 				E1000005241D1A1D00000072 /* MuesliError.swift in Sources */,
+				F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -570,6 +577,7 @@
 				B1000015241D1A1D00000040 /* MockLLMManager.swift in Sources */,
 				B1000017241D1A1D00000040 /* MockEchoCancellationService.swift in Sources */,
 				B1000020241D1A1D00000041 /* RecordingControllerTests.swift in Sources */,
+				B1000023241D1A1D00000042 /* TranscriptionCoordinatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -714,11 +722,12 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
-				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
+			ENABLE_HARDENED_RUNTIME = YES;
+			ENABLE_PREVIEWS = YES;
+			GENERATE_INFOPLIST_FILE = YES;
+			/* IMPORTANT: LSUIElement = NO shows app in Dock (see AGENTS.md). DO NOT change to YES - was accidentally reverted in commit e823aac */
+			INFOPLIST_KEY_LSUIElement = NO;
+			INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
 				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -743,11 +752,12 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
-				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
+			ENABLE_HARDENED_RUNTIME = YES;
+			ENABLE_PREVIEWS = YES;
+			GENERATE_INFOPLIST_FILE = YES;
+			/* IMPORTANT: LSUIElement = NO shows app in Dock (see AGENTS.md). DO NOT change to YES - was accidentally reverted in commit e823aac */
+			INFOPLIST_KEY_LSUIElement = NO;
+			INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
 				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (

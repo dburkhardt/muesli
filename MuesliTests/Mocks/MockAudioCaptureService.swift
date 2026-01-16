@@ -21,7 +21,9 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     var startCaptureCallCount: Int = 0
     var startCaptureWithBundleIDCallCount: Int = 0
     var stopCaptureCallCount: Int = 0
+    var setMicrophoneDeviceCallCount: Int = 0
     var lastBundleIdentifier: String?
+    var lastMicrophoneDeviceID: String?
     
     // MARK: - Handlers
     
@@ -41,6 +43,11 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     
     func setLevelHandler(_ handler: @escaping AudioLevelHandler) {
         levelHandler = handler
+    }
+    
+    func setMicrophoneDevice(_ deviceID: String?) {
+        lastMicrophoneDeviceID = deviceID
+        setMicrophoneDeviceCallCount += 1
     }
     
     func startCapture() async throws {
@@ -99,7 +106,9 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
         startCaptureCallCount = 0
         startCaptureWithBundleIDCallCount = 0
         stopCaptureCallCount = 0
+        setMicrophoneDeviceCallCount = 0
         lastBundleIdentifier = nil
+        lastMicrophoneDeviceID = nil
         bufferHandler = nil
         interruptedHandler = nil
         levelHandler = nil

@@ -105,6 +105,12 @@ final class RecordingSession: Identifiable {
     /// Whether the recording is currently initializing (loading model, etc.)
     var isInitializing: Bool = false
     
+    /// Whether transcription model is currently loading
+    var isModelLoading: Bool = false
+    
+    /// Whether recording without transcription (no model available)
+    var isRecordingOnly: Bool = false
+    
     /// Description of the audio source for UI display
     var audioSourceDescription: String {
         selectedApp?.name ?? "All System Audio"

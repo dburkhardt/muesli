@@ -251,7 +251,12 @@ struct RecordingDetailView: View {
             Spacer()
             
             // Recording indicator (shows loading state during model init)
-            RecordingIndicator(elapsedTime: session.elapsedTimeString, isInitializing: session.isInitializing)
+            RecordingIndicator(
+                elapsedTime: session.elapsedTimeString,
+                isInitializing: session.isInitializing,
+                isModelLoading: session.isModelLoading,
+                isRecordingOnly: session.isRecordingOnly
+            )
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -589,6 +594,8 @@ struct RecordingDetailView: View {
                 FloatingRecordingIndicator(
                     elapsedTime: activeSession.elapsedTimeString,
                     isInitializing: activeSession.isInitializing,
+                    isModelLoading: activeSession.isModelLoading,
+                    isRecordingOnly: activeSession.isRecordingOnly,
                     onTap: {
                         viewModel.returnToLiveRecording()
                     }
@@ -614,6 +621,40 @@ struct RecordingDetailView: View {
                     .foregroundStyle(.primary)
                     
                     Spacer()
+                    
+                    // Reprocess button with model picker
+                    if viewModel.modelManager.downloadedModels.count > 0 {
+                        Menu {
+                            ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
+                                Button("Reprocess with \(model.displayName)") {
+                                    viewModel.reprocessTranscript(for: meeting, using: model)
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                if meeting.isReprocessing {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                        .frame(width: 12, height: 12)
+                                    Text("Reprocessing...")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 12))
+                                    Text("Reprocess")
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                            }
+                            .foregroundStyle(.blue)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.blue.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .disabled(meeting.isReprocessing)
+                        .help("Re-transcribe this recording with a different model")
+                    }
                     
                     CompletedIndicator()
                 }
@@ -802,6 +843,8 @@ struct RecordingDetailView: View {
 struct FloatingRecordingIndicator: View {
     let elapsedTime: String
     var isInitializing: Bool = false
+    var isModelLoading: Bool = false
+    var isRecordingOnly: Bool = false
     let onTap: () -> Void
     
     @State private var isPulsing = false
@@ -815,7 +858,7 @@ struct FloatingRecordingIndicator: View {
                         .scaleEffect(0.5)
                         .frame(width: 12, height: 12)
                     
-                    Text("Loading...")
+                    Text("Starting...")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                 } else {
@@ -839,6 +882,21 @@ struct FloatingRecordingIndicator: View {
                     Text(elapsedTime)
                         .font(.system(size: 12, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
+                    
+                    // Model state indicator
+                    if isModelLoading {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 10, height: 10)
+                    } else if isRecordingOnly {
+                        Image(systemName: "waveform.slash")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "text.append")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.green)
+                    }
                 }
             }
             .padding(.horizontal, 12)

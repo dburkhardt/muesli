@@ -4,6 +4,22 @@ import WhisperKit
 import CoreMedia
 import os.lock
 
+// #region agent log
+fileprivate extension String {
+    func appendToLogFile(atPath path: String) {
+        if let handle = FileHandle(forWritingAtPath: path) {
+            defer { handle.closeFile() }
+            handle.seekToEndOfFile()
+            if let data = self.data(using: .utf8) {
+                handle.write(data)
+            }
+        } else {
+            try? self.write(toFile: path, atomically: false, encoding: .utf8)
+        }
+    }
+}
+// #endregion
+
 /// Service for real-time audio transcription using WhisperKit
 /// Handles both system audio ("Them") and microphone audio ("Me")
 final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProtocol {
@@ -55,21 +71,21 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     // Processing state
     private var processingTask: Task<Void, Never>?
     
-    // Configuration
-    private let chunkDuration: TimeInterval = 5.0  // Process in 5-second chunks
-    private let overlapDuration: TimeInterval = 1.5  // Overlap between chunks (1.5 seconds)
-    private let sampleRate: Int = 16000  // WhisperKit expects 16kHz
+    // Configuration (using centralized AudioConfiguration)
+    private let chunkDuration: TimeInterval = AudioConfiguration.transcriptionChunkDuration
+    private let overlapDuration: TimeInterval = AudioConfiguration.transcriptionOverlapDuration
+    private let sampleRate: Int = AudioConfiguration.whisperSampleRate
     private let minSamplesForProcessing: Int  // Minimum samples before processing
     private let overlapSamples: Int  // Samples to overlap between chunks
     
     // VAD configuration
-    private let vadThreshold: Float = 0.01  // RMS threshold for voice activity (-40dB equivalent)
+    private let vadThreshold: Float = AudioConfiguration.vadThreshold
     
     // MARK: - Initialization
     
     init() {
-        minSamplesForProcessing = sampleRate * Int(chunkDuration)
-        overlapSamples = sampleRate * Int(overlapDuration)
+        minSamplesForProcessing = AudioConfiguration.minSamplesForProcessing
+        overlapSamples = AudioConfiguration.overlapSamples
     }
     
     // MARK: - Setup
@@ -80,8 +96,22 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     func initialize(modelPath: URL) async throws {
         guard !isInitialized else { return }
         
+        // Use Application Support for all WhisperKit storage to avoid Documents folder prompts
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let muesliDir = appSupport.appendingPathComponent("Muesli", isDirectory: true)
+        
+        // Create config with explicit downloadBase and tokenizerFolder in Application Support
+        // This prevents WhisperKit/Hub from defaulting to ~/Documents/huggingface
+        let config = WhisperKitConfig(
+            downloadBase: muesliDir,
+            modelFolder: modelPath.path,
+            tokenizerFolder: muesliDir.appendingPathComponent("Tokenizers"),
+            verbose: false,
+            download: false  // Don't download since we're using a local model
+        )
+        
         // Initialize WhisperKit with optimized configuration for Apple Silicon
-        whisperKit = try await WhisperKit(modelFolder: modelPath.path)
+        whisperKit = try await WhisperKit(config)
         isInitialized = true
     }
     
@@ -99,6 +129,12 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Start transcription processing
     func startTranscription(recordingStartTime: Date) {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"B,C","location":"TranscriptionService.swift:startTranscription","message":"startTranscription called","data":["transcriptionMode":transcriptionMode.rawValue,"isInitialized":isInitialized],"timestamp":Date().timeIntervalSince1970*1000])
+        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+        // #endregion
+        
         bufferState.withLock { state in
             state.recordingStartTime = recordingStartTime
             state.systemAudioBuffer.removeAll()
@@ -110,17 +146,38 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Start background processing loop only for live mode
         if transcriptionMode == .live {
+            // #region agent log
+            let logData2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"B","location":"TranscriptionService.swift:startTranscription","message":"Starting processing loop (live mode)","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
+            if let data = logData2, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+            // #endregion
             startProcessingLoop()
         }
     }
     
     /// Stop transcription processing
     func stopTranscription() async {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let bufferCounts = bufferState.withLock { (sys: $0.systemAudioBuffer.count, mic: $0.micAudioBuffer.count) }
+        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H11,H13","location":"TranscriptionService.swift:stopTranscription","message":"stopTranscription called","data":["systemBufferCount":bufferCounts.sys,"micBufferCount":bufferCounts.mic,"minSamplesNeeded":minSamplesForProcessing],"timestamp":Date().timeIntervalSince1970*1000])
+        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+        // #endregion
+        
+        // Signal the processing loop to stop (it checks isProcessing each iteration)
         bufferState.withLock { state in
             state.isProcessing = false
         }
         
-        processingTask?.cancel()
+        // Wait for the processing task to complete gracefully instead of cancelling
+        // This allows any in-flight WhisperKit transcription to finish
+        if let task = processingTask {
+            // #region agent log
+            let logData2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H12-fix","location":"TranscriptionService.swift:stopTranscription","message":"Waiting for processing task to complete gracefully","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
+            if let data = logData2, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+            // #endregion
+            
+            await task.value  // Wait for task to complete instead of cancelling
+        }
         processingTask = nil
         
         // Process any remaining audio
@@ -132,6 +189,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     /// Append audio samples from system audio (meeting participants)
     /// - Parameter samples: Float32 audio samples at 16kHz mono
     func appendSystemAudio(_ samples: [Float]) {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let isProc = bufferState.withLock { $0.isProcessing }
+        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"A,B","location":"TranscriptionService.swift:appendSystemAudio","message":"appendSystemAudio called","data":["sampleCount":samples.count,"isProcessing":isProc],"timestamp":Date().timeIntervalSince1970*1000])
+        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+        // #endregion
+        
         bufferState.withLock { state in
             guard state.isProcessing else { return }
             state.systemAudioBuffer.append(contentsOf: samples)
@@ -141,6 +205,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     /// Append audio samples from microphone (user's voice)
     /// - Parameter samples: Float32 audio samples at 16kHz mono
     func appendMicrophoneAudio(_ samples: [Float]) {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let isProc = bufferState.withLock { $0.isProcessing }
+        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"A,B","location":"TranscriptionService.swift:appendMicrophoneAudio","message":"appendMicrophoneAudio called","data":["sampleCount":samples.count,"isProcessing":isProc],"timestamp":Date().timeIntervalSince1970*1000])
+        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+        // #endregion
+        
         bufferState.withLock { state in
             guard state.isProcessing else { return }
             state.micAudioBuffer.append(contentsOf: samples)
@@ -163,6 +234,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     }
     
     private func processBuffers() async {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let bufferCounts = bufferState.withLock { (sys: $0.systemAudioBuffer.count, mic: $0.micAudioBuffer.count, proc: $0.isProcessing) }
+        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"B,E","location":"TranscriptionService.swift:processBuffers","message":"processBuffers called","data":["isInitialized":isInitialized,"hasWhisperKit":whisperKit != nil,"transcriptionMode":transcriptionMode.rawValue,"systemBufferCount":bufferCounts.sys,"micBufferCount":bufferCounts.mic,"minSamplesNeeded":minSamplesForProcessing],"timestamp":Date().timeIntervalSince1970*1000])
+        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+        // #endregion
+        
         guard isInitialized, let whisperKit = whisperKit else { return }
         
         // Skip processing if in post-processing mode
@@ -219,6 +297,14 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             return (sysChunk, micChunk, time, sysOffset, micOffset)
         }
         
+        // #region agent log
+        let logPath2 = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let sysHasVoice = systemChunk.map { hasVoiceActivity($0) } ?? false
+        let micHasVoice = micChunk.map { hasVoiceActivity($0) } ?? false
+        let logData2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"E","location":"TranscriptionService.swift:processBuffers","message":"Chunks extracted, checking VAD","data":["hasSystemChunk":systemChunk != nil,"systemChunkSize":systemChunk?.count ?? 0,"systemHasVoice":sysHasVoice,"hasMicChunk":micChunk != nil,"micChunkSize":micChunk?.count ?? 0,"micHasVoice":micHasVoice],"timestamp":Date().timeIntervalSince1970*1000])
+        if let data = logData2, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath2) }
+        // #endregion
+        
         // Process system audio ("Them") with VAD check
         if let chunk = systemChunk, hasVoiceActivity(chunk) {
             await transcribeChunk(chunk, speaker: .them, whisperKit: whisperKit, startTime: startTime, offset: systemOffset)
@@ -231,6 +317,12 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     }
     
     private func processRemainingAudio() async {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H11,H13","location":"TranscriptionService.swift:processRemainingAudio","message":"processRemainingAudio called","data":["isInitialized":isInitialized,"hasWhisperKit":whisperKit != nil],"timestamp":Date().timeIntervalSince1970*1000])
+        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+        // #endregion
+        
         guard isInitialized, let whisperKit = whisperKit else { return }
         
         let (remainingSystem, remainingMic, startTime) = bufferState.withLock { state -> ([Float], [Float], Date) in
@@ -242,6 +334,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             return (sys, mic, time)
         }
         
+        // #region agent log
+        let logData2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H11,H13","location":"TranscriptionService.swift:processRemainingAudio","message":"Remaining audio buffers","data":["remainingSystemCount":remainingSystem.count,"remainingMicCount":remainingMic.count,"minSamplesNeeded":minSamplesForProcessing],"timestamp":Date().timeIntervalSince1970*1000])
+        if let data = logData2, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+        // #endregion
+        
         // Process remaining system audio
         if !remainingSystem.isEmpty {
             await transcribeChunk(remainingSystem, speaker: .them, whisperKit: whisperKit, startTime: startTime)
@@ -249,16 +346,38 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Process remaining mic audio
         if !remainingMic.isEmpty {
+            // #region agent log
+            let logData3 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H11","location":"TranscriptionService.swift:processRemainingAudio","message":"Processing remaining mic audio","data":["micSampleCount":remainingMic.count],"timestamp":Date().timeIntervalSince1970*1000])
+            if let data = logData3, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+            // #endregion
             await transcribeChunk(remainingMic, speaker: .me, whisperKit: whisperKit, startTime: startTime)
         }
     }
     
     private func transcribeChunk(_ samples: [Float], speaker: TranscriptSegment.Speaker, whisperKit: WhisperKit, startTime: Date, offset: Int = 0) async {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H9,H10,H12","location":"TranscriptionService.swift:transcribeChunk","message":"transcribeChunk called","data":["speaker":speaker.rawValue,"sampleCount":samples.count,"offset":offset,"hasHandler":transcriptHandler != nil],"timestamp":Date().timeIntervalSince1970*1000])
+        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+        // #endregion
+        
         do {
             // Transcribe the audio chunk
             let results = try await whisperKit.transcribe(audioArray: samples)
             
+            // #region agent log
+            let resultCount = results.count
+            let firstText = results.first?.text ?? "<no results>"
+            let trimmedText = firstText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let logData2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H9","location":"TranscriptionService.swift:transcribeChunk","message":"WhisperKit transcription result","data":["speaker":speaker.rawValue,"resultCount":resultCount,"firstTextLength":firstText.count,"trimmedTextLength":trimmedText.count,"textPreview":String(trimmedText.prefix(100))],"timestamp":Date().timeIntervalSince1970*1000])
+            if let data = logData2, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+            // #endregion
+            
             guard let result = results.first, !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                // #region agent log
+                let logData3 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H9","location":"TranscriptionService.swift:transcribeChunk","message":"transcribeChunk returning early - empty result","data":["speaker":speaker.rawValue,"hasResult":results.first != nil],"timestamp":Date().timeIntervalSince1970*1000])
+                if let data = logData3, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+                // #endregion
                 return
             }
             
@@ -272,10 +391,19 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 speaker: speaker
             )
             
+            // #region agent log
+            let logData4 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H10","location":"TranscriptionService.swift:transcribeChunk","message":"Calling transcriptHandler","data":["speaker":speaker.rawValue,"text":segment.text.prefix(100),"timestamp":timestamp,"hasHandler":transcriptHandler != nil],"timestamp":Date().timeIntervalSince1970*1000])
+            if let data = logData4, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+            // #endregion
+            
             // Notify handler
             transcriptHandler?(segment)
             
         } catch {
+            // #region agent log
+            let logData5 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H12","location":"TranscriptionService.swift:transcribeChunk","message":"transcribeChunk error","data":["speaker":speaker.rawValue,"error":error.localizedDescription],"timestamp":Date().timeIntervalSince1970*1000])
+            if let data = logData5, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToLogFile(atPath: logPath) }
+            // #endregion
             print("[TranscriptionService] Transcription error: \(error)")
         }
     }

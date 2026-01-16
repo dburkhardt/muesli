@@ -653,6 +653,16 @@ User preferences are stored in standard UserDefaults:
 - Model deletion feature added for managing storage
 - Build script resets UserDefaults (`defaults delete com.muesli.app`) along with TCC for clean debug builds
 - WhisperKit progress reports in ~5% increments; UI uses linear progress bar for smoother feedback
+- Model ordering: All model selection UIs (active model picker, reprocess menus) display models in canonical enum order (Tiny → Base → Small → Medium → Large v3 → Large v3 Turbo) to match the download list order. Use `ModelManager.downloadedModelsOrdered` for consistent ordering.
+
+**Onboarding Auto-Advance Behavior**:
+When the user quits and reopens the app during onboarding, the `advanceBasedOnPermissions()` function automatically advances to the appropriate step based on granted permissions:
+- If screen recording is granted but microphone is not → auto-advance to microphone permission page
+- If both permissions are granted → auto-advance to model setup or LLM setup
+- The user must manually click "Continue" to advance from the welcome screen (no auto-advance from welcome)
+
+**Window Focus Behavior**:
+After the user interacts with the system microphone permission dialog (triggered by `AVCaptureDevice.requestAccess(for: .audio)`), the onboarding window automatically brings itself back to the front via `AppDelegate.bringOnboardingWindowToFront()`. This ensures a smooth UX where the onboarding window doesn't get lost behind other windows after granting permission.
 
 ---
 
