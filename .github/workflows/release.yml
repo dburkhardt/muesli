@@ -146,12 +146,27 @@ jobs:
       
       - name: Generate changelog with git-cliff
         id: git_cliff
-        uses: orhun/git-cliff-action@v3
-        with:
-          config: cliff.toml
-          args: --latest --strip header,footer
-        env:
-          OUTPUT: cliff-changelog.md
+        run: |
+          # Install git-cliff via Homebrew
+          brew install git-cliff
+          
+          # Generate changelog
+          git-cliff --config cliff.toml --latest --strip header,footer > cliff-changelog.md || {
+            echo "⚠️  git-cliff failed, will use fallback method"
+            echo "" > cliff-changelog.md
+          }
+          
+          # Check if we got output
+          if [ -s cliff-changelog.md ]; then
+            echo "✅ Generated changelog with git-cliff"
+            echo "content<<EOF" >> $GITHUB_OUTPUT
+            cat cliff-changelog.md >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️  No changelog generated, will use git log fallback"
+            echo "content=" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
       
       - name: Generate release notes
         id: release_notes
