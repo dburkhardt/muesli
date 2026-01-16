@@ -8,6 +8,7 @@ struct UpdateCheckHelper {
     @Binding var isCheckingForUpdates: Bool
     
     /// Performs an update check
+    @MainActor
     func checkForUpdates() async {
         isCheckingForUpdates = true
         updateStatus = await UpdateChecker.shared.checkForUpdates()
@@ -18,7 +19,7 @@ struct UpdateCheckHelper {
     }
     
     /// Creates the UpdateSheet view for presentation
-    @ViewBuilder
+    @ViewBuilder @MainActor
     func updateSheet(currentVersion: String) -> some View {
         if case .updateAvailable(let version, let notes, let url) = updateStatus {
             UpdateSheet(
