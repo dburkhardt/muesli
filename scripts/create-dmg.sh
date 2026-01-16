@@ -43,30 +43,26 @@ cd "${PROJECT_ROOT}"
 log_info "Starting DMG creation process..."
 log_info "Project root: ${PROJECT_ROOT}"
 
-# Extract version from argument, Version.xcconfig, or project.pbxproj
+# Extract version from argument or Version.xcconfig
 if [ $# -ge 1 ]; then
     VERSION="$1"
     log_info "Using version from argument: ${VERSION}"
 else
-    # Try Version.xcconfig first
-    if [ -f "Version.xcconfig" ]; then
-        VERSION=$(grep "MARKETING_VERSION" Version.xcconfig | cut -d '=' -f2 | xargs)
-        if [ -n "$VERSION" ]; then
-            log_info "Extracted version from Version.xcconfig: ${VERSION}"
-        fi
+    # Extract from Version.xcconfig (required)
+    if [ ! -f "Version.xcconfig" ]; then
+        log_error "Version.xcconfig file not found"
+        log_error "The version must be defined in Version.xcconfig or passed as an argument"
+        exit 1
     fi
     
-    # Fallback to project.pbxproj if Version.xcconfig didn't work
-    if [ -z "$VERSION" ]; then
-        VERSION=$(grep -m 1 "MARKETING_VERSION = " Muesli.xcodeproj/project.pbxproj | sed 's/.*MARKETING_VERSION = \([^;]*\);/\1/' | xargs)
-        if [ -n "$VERSION" ]; then
-            log_info "Extracted version from project.pbxproj: ${VERSION}"
-        fi
+    VERSION=$(grep "MARKETING_VERSION" Version.xcconfig | cut -d '=' -f2 | xargs)
+    if [ -n "$VERSION" ]; then
+        log_info "Extracted version from Version.xcconfig: ${VERSION}"
     fi
     
     # Error if no version found
     if [ -z "$VERSION" ]; then
-        log_error "Could not extract version from Version.xcconfig or project.pbxproj"
+        log_error "Could not extract MARKETING_VERSION from Version.xcconfig"
         exit 1
     fi
 fi
