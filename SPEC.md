@@ -1,5 +1,7 @@
 # Muesli - Software Design Specification
 
+**Note for agents**: Additional flow-specific documentation lives in the `spec/` folder. If you are doing a comprehensive architecture review, read those documents as well.
+
 ## Overview
 
 **Muesli** is a local-first meeting transcription app for macOS. It captures audio from video conferencing apps (Zoom, Teams, Google Meet) along with microphone input, transcribes in real-time using on-device AI (WhisperKit), and saves both the audio recording and transcript for later use.
