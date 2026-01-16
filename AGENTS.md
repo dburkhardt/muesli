@@ -155,72 +155,17 @@ Use `NSWindow` + `NSHostingController` in AppDelegate. Don't auto-advance welcom
 
 ## Git Workflow (GitHub Flow)
 
-**Philosophy**: Simple, agent-friendly branching. All work happens in feature branches merged to `main` via PRs.
+Simple, agent-friendly branching. All work happens in feature branches merged to `main` via PRs.
 
-### For AI Agents: Natural Language Commands
+**For comprehensive workflow documentation**: See [`spec/git_workflow.md`](spec/git_workflow.md)
 
-When the user asks you to work on features or fixes, follow this pattern:
+**Quick commands for agents**:
+- Create PR: `gh pr create --fill`
+- Merge PR: `gh pr merge --squash --delete-branch`
+- Create release: `git tag vX.Y.Z && git push origin vX.Y.Z`
+- Check status: `gh pr status`
 
-**Start new work**:
-- User says: *"Create a feature branch for X"*
-- You: Create branch `feature/descriptive-name` from `main`, configure bundle ID if needed
-
-**Work in progress**:
-- User says: *"Commit this work"*
-- You: Stage changes, commit with descriptive message
-- User says: *"Push changes"*
-- You: `git push -u origin <branch>` (sets up tracking automatically)
-
-**Ready to merge**:
-- User says: *"Create a PR"* or *"Open pull request"*
-- You: `gh pr create --fill` (uses commits for title/body)
-- User says: *"Merge the PR"*
-- You: `gh pr merge --squash --delete-branch` (cleans up automatically)
-
-**Create releases**:
-- User says: *"Create release v0.1.0"* or *"Tag this as v0.2.0"*
-- You: Update `Version.xcconfig`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`
-- GitHub Actions will build DMG and create release automatically
-
-**Emergency fixes**:
-- User says: *"Hotfix for X"*
-- You: Branch from `main` as `hotfix/short-description`, fix, PR, merge, tag patch version
-
-### Key Commands for Agents
-
-```bash
-# Create feature branch
-git checkout main && git pull && git checkout -b feature/name
-
-# Create PR (interactive title/body)
-gh pr create --fill
-
-# Create PR (custom)
-gh pr create --title "Title" --body "Description"
-
-# Merge and cleanup
-gh pr merge --squash --delete-branch
-
-# Create release tag
-git tag v0.1.0 && git push origin v0.1.0
-
-# View PR status
-gh pr status
-
-# Check current branch
-git branch --show-current
-```
-
-### Branch Naming
-- Features: `feature/descriptive-name`
-- Bug fixes: `bugfix/issue-description` or `fix/short-name`
-- Hotfixes: `hotfix/critical-fix`
-- Refactors: `refactor/what-changed`
-
-### GitHub Pages Deployment
-- Website deploys from `main` branch, `/docs` folder
-- Changes to `docs/` go live after merge
-- Download stats updated hourly via GitHub Actions
+**Branch naming**: `feature/name`, `bugfix/name`, `hotfix/name`, `refactor/name`
 
 ## Reference
 
