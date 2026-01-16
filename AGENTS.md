@@ -42,6 +42,9 @@ open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.
 - Test: `xcodebuild ... test 2>&1 | tee "test-${TIMESTAMP}.txt"`
 - Clean: `xcodebuild ... clean`
 - Reset permissions: `tccutil reset ScreenCapture com.muesli.app && tccutil reset Microphone com.muesli.app`
+- Generate changelog: `git-cliff --latest --strip header,footer > CHANGELOG.md`
+- Create DMG (modern): `./scripts/create-dmg-modern.sh [VERSION]`
+- Create DMG (legacy): `./scripts/create-dmg.sh [VERSION]`
 
 **Efficient workflows**: Save build/test output once with `| tee`, then grep the file. Never re-run to extract different info.
 
@@ -75,15 +78,19 @@ Muesli uses automated GitHub Actions to build and publish releases. The process 
    
    # Push tag to trigger release workflow
    git push origin v0.2.0
+   
+   # Watch the build progress
+   ./scripts/watch-release.sh
    ```
 
 3. **Monitor GitHub Actions**:
-   - Go to GitHub Actions tab in repository
    - Watch the "Release" workflow complete
    - Workflow will:
+     - Cache dependencies for faster builds
      - Build app in Release configuration
-     - Create DMG installer
-     - Generate release notes from git log
+     - Create DMG installer (tries modern script, falls back to legacy)
+     - Generate release notes with git-cliff from conventional commits
+     - Generate artifact attestation for supply chain security
      - Create GitHub Release with DMG asset
      - Update website with new version
      - Deploy to GitHub Pages
@@ -112,10 +119,11 @@ Before creating a release tag, verify:
 
 **Build & Installation**:
 - [ ] Clean build succeeds: `xcodebuild clean build`
-- [ ] DMG creation succeeds: `./scripts/create-dmg.sh`
+- [ ] DMG creation succeeds: `./scripts/create-dmg-modern.sh` or `./scripts/create-dmg.sh`
 - [ ] DMG installs on fresh macOS installation
 - [ ] App launches without errors
 - [ ] Gatekeeper bypass works (right-click → Open)
+- [ ] Artifact attestation verifies: `gh attestation verify Muesli-vX.Y.Z.dmg --owner dburkhardt`
 
 **Core Functionality**:
 - [ ] Onboarding flow completes successfully

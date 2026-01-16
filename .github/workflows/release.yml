@@ -109,14 +109,17 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           echo "Building Muesli ${VERSION}..."
           
-          # Make script executable
+          # Make scripts executable
+          chmod +x scripts/create-dmg-modern.sh
           chmod +x scripts/create-dmg.sh
           
-          # Run DMG creation script
-          if ./scripts/create-dmg.sh "${VERSION}"; then
-            echo "✅ DMG created successfully"
+          # Try modern script first, fallback to legacy if it fails
+          if ./scripts/create-dmg-modern.sh "${VERSION}"; then
+            echo "✅ DMG created successfully with modern script"
+          elif ./scripts/create-dmg.sh "${VERSION}"; then
+            echo "✅ DMG created successfully with legacy script"
           else
-            echo "❌ DMG creation failed"
+            echo "❌ DMG creation failed with both scripts"
             exit 1
           fi
           
