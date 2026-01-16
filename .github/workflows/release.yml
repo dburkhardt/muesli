@@ -16,6 +16,8 @@ on:
 
 permissions:
   contents: write  # Required for creating releases and pushing commits
+  attestations: write  # Required for artifact attestations
+  id-token: write  # Required for artifact attestations
 
 jobs:
   release:
@@ -32,6 +34,35 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: 'latest-stable'
+      
+      - name: Cache Homebrew packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Cellar/create-dmg
+          key: ${{ runner.os }}-homebrew-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-homebrew-
+      
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      
+      - name: Install create-dmg
+        run: |
+          if ! command -v create-dmg &> /dev/null; then
+            echo "Installing create-dmg..."
+            brew install create-dmg
+          else
+            echo "create-dmg already installed"
+          fi
       
       - name: Extract version from tag or input
         id: version
@@ -110,6 +141,15 @@ jobs:
           echo "checksum=${CHECKSUM}" >> $GITHUB_OUTPUT
           echo "size=${DMG_SIZE}" >> $GITHUB_OUTPUT
       
+      - name: Generate changelog with git-cliff
+        id: git_cliff
+        uses: orhun/git-cliff-action@v3
+        with:
+          config: cliff.toml
+          args: --latest --strip header,footer
+        env:
+          OUTPUT: cliff-changelog.md
+      
       - name: Generate release notes
         id: release_notes
         run: |
@@ -118,34 +158,48 @@ jobs:
           
           echo "Generating release notes for ${TAG}..."
           
-          # Find the previous tag (if any)
-          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
-          
           # Create release notes
           NOTES_FILE="release_notes.md"
           
-          if [ -n "${PREV_TAG}" ]; then
+          # Use git-cliff generated changelog if available
+          if [ -f "cliff-changelog.md" ] && [ -s "cliff-changelog.md" ]; then
             echo "## What's Changed" > "${NOTES_FILE}"
             echo "" >> "${NOTES_FILE}"
-            
-            # Get commit log since last tag
-            git log "${PREV_TAG}..${TAG}" --pretty=format:"- %s (%h)" --no-merges >> "${NOTES_FILE}"
-            
+            cat cliff-changelog.md >> "${NOTES_FILE}"
             echo "" >> "${NOTES_FILE}"
-            echo "" >> "${NOTES_FILE}"
-            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}" >> "${NOTES_FILE}"
+            
+            # Find the previous tag for comparison link
+            PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+            if [ -n "${PREV_TAG}" ]; then
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}" >> "${NOTES_FILE}"
+            fi
           else
-            # First release - use CHANGELOG.md content if available
-            if [ -f "CHANGELOG.md" ]; then
-              echo "## What's New" > "${NOTES_FILE}"
+            # Fallback to manual git log if git-cliff fails
+            PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+            
+            if [ -n "${PREV_TAG}" ]; then
+              echo "## What's Changed" > "${NOTES_FILE}"
               echo "" >> "${NOTES_FILE}"
               
-              # Extract the relevant version section from CHANGELOG.md
-              awk "/## \[${VERSION}\]/,/## \[/{print}" CHANGELOG.md | head -n -1 >> "${NOTES_FILE}"
-            else
-              echo "## Initial Release" > "${NOTES_FILE}"
+              # Get commit log since last tag
+              git log "${PREV_TAG}..${TAG}" --pretty=format:"- %s (%h)" --no-merges >> "${NOTES_FILE}"
+              
               echo "" >> "${NOTES_FILE}"
-              echo "First public release of Muesli - macOS meeting transcription app." >> "${NOTES_FILE}"
+              echo "" >> "${NOTES_FILE}"
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}" >> "${NOTES_FILE}"
+            else
+              # First release - use CHANGELOG.md content if available
+              if [ -f "CHANGELOG.md" ]; then
+                echo "## What's New" > "${NOTES_FILE}"
+                echo "" >> "${NOTES_FILE}"
+                
+                # Extract the relevant version section from CHANGELOG.md
+                awk "/## \[${VERSION}\]/,/## \[/{print}" CHANGELOG.md | head -n -1 >> "${NOTES_FILE}"
+              else
+                echo "## Initial Release" > "${NOTES_FILE}"
+                echo "" >> "${NOTES_FILE}"
+                echo "First public release of Muesli - macOS meeting transcription app." >> "${NOTES_FILE}"
+              fi
             fi
           fi
           
@@ -183,6 +237,11 @@ jobs:
             cat "${NOTES_FILE}"
             echo "EOF"
           } >> $GITHUB_OUTPUT
+      
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: ${{ steps.build.outputs.dmg_file }}
       
       - name: Create GitHub Release
         id: create_release

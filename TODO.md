@@ -20,8 +20,10 @@ Each item should include:
 - Notes: Research speaker diarization techniques compatible with WhisperKit or as post-processing step
 
 **[Feature]** [Medium] Add database structure for searchable meeting notes
-- Description: Create a database structure that makes searching meeting notes possible
+- Description: Create a database structure that makes searching meeting notes possible, with MCP server integration
 - Notes: Consider SQLite or other embedded database options for indexing transcripts and metadata
+- MCP Integration: Expose transcript data via Model Context Protocol so other local tools can query and access meeting information
+- Related: Research MCP server implementation patterns for Swift
 
 **[Feature]** [Low] Create Google Drive integration for cloud syncing
 - Description: Add integration into Google Drive to enable cloud syncing of recordings and transcripts
@@ -30,6 +32,12 @@ Each item should include:
 **[Feature]** [Low] Add option to use cloud transcription APIs
 - Description: Provide alternative to local WhisperKit transcription using cloud APIs (e.g., OpenAI Whisper API, Google Speech-to-Text)
 - Notes: Should be opt-in preference, requires API key management
+
+**[Feature]** [Medium] Add Outlook calendar integration
+- Description: Integrate with local Outlook app to automatically link recordings to calendar events
+- Notes: Must work locally without cloud API access - use macOS scripting bridge or AppleScript to access Outlook data
+- Implementation: Detect Outlook.app running locally, query calendar via ScriptingBridge, match meeting times to recordings
+- Related: Similar pattern to MeetingAppDetector.swift, requires Outlook.app to be open
 
 ### Enhancements
 
@@ -46,6 +54,11 @@ Each item should include:
 **[Enhancement]** [Medium] Add copy transcript to clipboard button
 - Description: Add a button to make it easy to copy the entire transcript to clipboard
 - Notes: Should be accessible from transcript view, consider adding formatting options (plain text vs markdown)
+
+**[Enhancement]** [Low] Improve DMG installer appearance
+- Description: Make the DMG download folder pretty with custom icon and nice background for drag-to-Applications instruction
+- Notes: Use create-dmg or similar tool to add custom background image, positioned icons, and window styling
+- Related: scripts/create-dmg.sh
 
 ### Bugs
 
