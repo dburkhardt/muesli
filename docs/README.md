@@ -40,10 +40,12 @@ Download statistics are updated hourly by the GitHub Actions workflow `.github/w
 
 1. Fetches release data from GitHub API
 2. Calculates total downloads across all releases
-3. Updates `download-stats.json` in the `gh-pages` branch
+3. Updates `docs/download-stats.json` in the repository
 4. No user tracking or personal data collection
 
-The download count on the homepage is fetched directly from the GitHub API client-side.
+The stats file is committed directly to the repository, making it available when GitHub Pages deploys from the `docs/` folder.
+
+The download count on the homepage is fetched directly from the GitHub Releases API client-side.
 
 ## Design
 

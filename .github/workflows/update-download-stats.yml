@@ -17,10 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout gh-pages branch
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: gh-pages
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Fetch download statistics
@@ -47,8 +46,8 @@ jobs:
       
       - name: Update stats file
         run: |
-          # Create or update download-stats.json
-          cat > download-stats.json << EOF
+          # Create or update download-stats.json in docs/ folder
+          cat > docs/download-stats.json << EOF
           {
             "total_downloads": ${{ steps.fetch-stats.outputs.total_downloads }},
             "latest_version": "${{ steps.fetch-stats.outputs.latest_version }}",
@@ -57,14 +56,14 @@ jobs:
           }
           EOF
           
-          cat download-stats.json
+          cat docs/download-stats.json
       
       - name: Commit and push if changed
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           
-          git add download-stats.json
+          git add docs/download-stats.json
           
           # Only commit if there are changes
           if git diff --staged --quiet; then
