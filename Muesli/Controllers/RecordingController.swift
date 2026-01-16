@@ -645,7 +645,11 @@ final class RecordingController {
         guard let session = sessionPendingModelDecision else { return }
         sessionPendingModelDecision = nil
         showModelErrorAlert = false
-        session.showError(.whisperKitNotInitialized)
+        
+        // Recording is already in progress (audio capture started), just dismiss the alert
+        // The session will continue recording without transcription
+        // Mark session as recording-only mode
+        session.isRecordingOnly = true
     }
     
     func cancelRecordingDueToModelError() {

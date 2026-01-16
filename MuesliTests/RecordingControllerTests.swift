@@ -102,7 +102,7 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertNil(controller.sessionPendingModelDecision, "Should clear pending session")
     }
     
-    func testStartRecordingWithoutTranscriptionShowsError() async {
+    func testStartRecordingWithoutTranscriptionAllowsRecording() async {
         let controller = await createTestController()
         
         let session = controller.createSession()
@@ -113,8 +113,8 @@ final class RecordingControllerTests: XCTestCase {
         
         XCTAssertFalse(controller.showModelErrorAlert, "Should clear model error alert")
         XCTAssertNil(controller.sessionPendingModelDecision, "Should clear pending session")
-        XCTAssertTrue(session.showError, "Session should show error")
-        XCTAssertNotNil(session.errorMessage, "Session should have error message")
+        XCTAssertTrue(session.isRecordingOnly, "Session should be marked as recording-only mode")
+        XCTAssertFalse(session.showError, "Session should NOT show error - recording continues without transcription")
     }
     
     // MARK: - Title Prompt Tests
