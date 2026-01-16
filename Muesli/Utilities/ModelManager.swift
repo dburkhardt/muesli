@@ -2,21 +2,6 @@ import Foundation
 import WhisperKit
 import AppKit
 
-// #region agent log
-fileprivate extension String {
-    func appendToModelLog(atPath path: String) {
-        if let handle = FileHandle(forWritingAtPath: path) {
-            defer { handle.closeFile() }
-            handle.seekToEndOfFile()
-            if let data = self.data(using: .utf8) {
-                handle.write(data)
-            }
-        } else {
-            try? self.write(toFile: path, atomically: false, encoding: .utf8)
-        }
-    }
-}
-// #endregion
 
 /// Manages WhisperKit model downloading and storage
 @Observable
@@ -174,12 +159,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             .appendingPathComponent("models/argmaxinc/whisperkit-coreml")
             .appendingPathComponent(model.whisperKitName)
         
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let exists = FileManager.default.fileExists(atPath: modelDir.path)
-        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"I","location":"ModelManager.swift:pathForModel","message":"pathForModel check","data":["model":model.rawValue,"whisperKitName":model.whisperKitName,"modelDir":modelDir.path,"exists":exists],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToModelLog(atPath: logPath) }
-        // #endregion
         
         if FileManager.default.fileExists(atPath: modelDir.path) {
             return modelDir
@@ -197,15 +176,8 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     /// Validate that a model has all required files (not just config.json)
     /// Returns true if the model is complete and usable
     func validateModel(_ model: ModelSize) -> Bool {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        // #endregion
         
         guard let modelPath = pathForModel(model) else {
-            // #region agent log
-            let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"I","location":"ModelManager.swift:validateModel","message":"validateModel - no modelPath","data":["model":model.rawValue],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToModelLog(atPath: logPath) }
-            // #endregion
             return false
         }
         
@@ -225,10 +197,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         let textWeightsPath = textDecoderPath.appendingPathComponent("weights/weight.bin")
         let textWeightsExists = fm.fileExists(atPath: textWeightsPath.path)
         
-        // #region agent log
-        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"I","location":"ModelManager.swift:validateModel","message":"validateModel checks","data":["model":model.rawValue,"modelPath":modelPath.path,"audioEncoderPath":audioEncoderPath.path,"audioEncoderExists":audioEncoderExists,"audioWeightsPath":audioWeightsPath.path,"audioWeightsExists":audioWeightsExists,"textDecoderPath":textDecoderPath.path,"textDecoderExists":textDecoderExists,"textWeightsPath":textWeightsPath.path,"textWeightsExists":textWeightsExists],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToModelLog(atPath: logPath) }
-        // #endregion
         
         guard audioEncoderExists else { return false }
         guard audioWeightsExists else { return false }

@@ -678,11 +678,10 @@ final class MuesliViewModel {
                     }
                 }
                 
-                // Reload transcript from disk
+                // Reload transcript from disk to refresh the UI
                 await loadTranscript(for: meeting)
                 
             } catch {
-                // Show error on the meeting item
                 print("[MuesliViewModel] Reprocessing failed: \(error.localizedDescription)")
             }
             

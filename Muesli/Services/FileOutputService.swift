@@ -219,46 +219,15 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             // Add new buffer to queue
             systemBufferQueue.append(buffer)
             
-            // #region agent log
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let queueSizeBefore = systemBufferQueue.count
-            let isReady = input.isReadyForMoreMediaData
-            // #endregion
             
             // Drain queue while writer is ready
             drainBufferQueue(&systemBufferQueue, to: input)
             
-            // #region agent log
-            let queueSizeAfter = systemBufferQueue.count
-            let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H3","location":"FileOutputService:appendAudioBuffer:system","message":"System buffer queue state","data":["queueBefore":queueSizeBefore,"queueAfter":queueSizeAfter,"wasReady":isReady],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logData, let json = String(data: data, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: logPath) {
-                    handle.seekToEndOfFile()
-                    handle.write((json + "\n").data(using: .utf8)!)
-                    handle.closeFile()
-                }
-            }
-            // #endregion
             
         case .microphone:
             guard let writer = micWriter, let input = microphoneInput else { return }
             guard writer.status == .writing else { return }
             
-            // #region agent log
-            let isBufferValid = buffer.isValid
-            let bufferSamples = CMSampleBufferGetNumSamples(buffer)
-            if !isBufferValid || bufferSamples == 0 {
-                let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-                let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H6","location":"FileOutputService:appendAudioBuffer:mic:entry","message":"Invalid mic buffer at entry","data":["isValid":isBufferValid,"numSamples":bufferSamples],"timestamp":Date().timeIntervalSince1970*1000])
-                if let data = logData, let json = String(data: data, encoding: .utf8) {
-                    if let handle = FileHandle(forWritingAtPath: logPath) {
-                        handle.seekToEndOfFile()
-                        handle.write((json + "\n").data(using: .utf8)!)
-                        handle.closeFile()
-                    }
-                }
-            }
-            // #endregion
             
             if !micSessionStarted {
                 writer.startSession(atSourceTime: presentationTime)
@@ -268,26 +237,10 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             // Add new buffer to queue
             micBufferQueue.append(buffer)
             
-            // #region agent log
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let queueSizeBefore = micBufferQueue.count
-            let isReady = input.isReadyForMoreMediaData
-            // #endregion
             
             // Drain queue while writer is ready
             drainBufferQueue(&micBufferQueue, to: input)
             
-            // #region agent log
-            let queueSizeAfter = micBufferQueue.count
-            let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H3","location":"FileOutputService:appendAudioBuffer:mic","message":"Mic buffer queue state","data":["queueBefore":queueSizeBefore,"queueAfter":queueSizeAfter,"wasReady":isReady],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logData, let json = String(data: data, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: logPath) {
-                    handle.seekToEndOfFile()
-                    handle.write((json + "\n").data(using: .utf8)!)
-                    handle.closeFile()
-                }
-            }
-            // #endregion
         }
     }
     
@@ -299,22 +252,6 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             let buffer = queue.removeFirst()
             let success = input.append(buffer)
             
-            // #region agent log
-            if !success {
-                let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-                let isValid = buffer.isValid
-                let numSamples = CMSampleBufferGetNumSamples(buffer)
-                let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H6","location":"FileOutputService:drainBufferQueue","message":"APPEND FAILED","data":["isValid":isValid,"numSamples":numSamples],"timestamp":Date().timeIntervalSince1970*1000])
-                if let data = logData, let json = String(data: data, encoding: .utf8) {
-                    if let handle = FileHandle(forWritingAtPath: logPath) {
-                        handle.seekToEndOfFile()
-                        handle.write((json + "\n").data(using: .utf8)!)
-                        handle.closeFile()
-                    }
-                }
-                print("[FileOutputService] APPEND FAILED: buffer valid=\(isValid), samples=\(numSamples)")
-            }
-            // #endregion
         }
         
         // If queue is overflowing, drop oldest buffers with warning

@@ -152,9 +152,10 @@ struct UnifiedHistoryView: View {
             // Cmd+click: toggle multi-select
             historyManager.toggleMeetingSelection(meeting, extendSelection: true)
         } else {
-            // Single click: show in detail pane immediately, switch to split view
+            // Single click: show in detail pane immediately
+            // Note: Setting selectedMeeting alone triggers split view via shouldShowSplitView
+            // (which checks historyManager.selectedMeeting != nil)
             historyManager.selectMeeting(meeting)
-            viewModel.isSplitViewVisible = true
         }
     }
     

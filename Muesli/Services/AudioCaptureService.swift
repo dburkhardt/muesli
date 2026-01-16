@@ -3,21 +3,6 @@ import ScreenCaptureKit
 import AVFoundation
 import CoreMedia
 
-// #region agent log
-fileprivate func logToDebugFile(_ dict: [String: Any]) {
-    let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-    if let data = try? JSONSerialization.data(withJSONObject: dict),
-       let json = String(data: data, encoding: .utf8) {
-        if let handle = FileHandle(forWritingAtPath: logPath) {
-            defer { handle.closeFile() }
-            handle.seekToEndOfFile()
-            handle.write((json + "\n").data(using: .utf8)!)
-        } else {
-            try? (json + "\n").write(toFile: logPath, atomically: false, encoding: .utf8)
-        }
-    }
-}
-// #endregion
 
 // MARK: - AVAudioEngine Microphone Capture Helper
 
@@ -47,9 +32,6 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        // #region agent log
-        logToDebugFile(["sessionId":"debug-session","runId":"post-fix-avengine","hypothesisId":"H18","location":"MicrophoneCaptureEngine:start","message":"Starting AVAudioEngine mic capture","data":["sampleRate":recordingFormat.sampleRate,"channelCount":recordingFormat.channelCount,"deviceID":deviceID ?? "default"],"timestamp":Date().timeIntervalSince1970*1000])
-        // #endregion
         
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, time in
             self?.handleAudioBuffer(buffer, time: time)
@@ -58,9 +40,6 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         try audioEngine.start()
         isRunning = true
         
-        // #region agent log
-        logToDebugFile(["sessionId":"debug-session","runId":"post-fix-avengine","hypothesisId":"H18","location":"MicrophoneCaptureEngine:start","message":"AVAudioEngine started successfully","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
-        // #endregion
     }
     
     func stop() {
@@ -70,9 +49,6 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         audioEngine.stop()
         isRunning = false
         
-        // #region agent log
-        logToDebugFile(["sessionId":"debug-session","runId":"post-fix-avengine","hypothesisId":"H18","location":"MicrophoneCaptureEngine:stop","message":"AVAudioEngine stopped","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
-        // #endregion
     }
     
     private func setInputDevice(deviceID: String) {
@@ -104,13 +80,7 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
                 // Found the device, set it as input
                 do {
                     try audioEngine.inputNode.auAudioUnit.setDeviceID(audioDeviceID)
-                    // #region agent log
-                    logToDebugFile(["sessionId":"debug-session","runId":"post-fix-avengine","hypothesisId":"H18","location":"MicrophoneCaptureEngine:setInputDevice","message":"Set input device","data":["deviceID":deviceID,"audioDeviceID":audioDeviceID],"timestamp":Date().timeIntervalSince1970*1000])
-                    // #endregion
                 } catch {
-                    // #region agent log
-                    logToDebugFile(["sessionId":"debug-session","runId":"post-fix-avengine","hypothesisId":"H18","location":"MicrophoneCaptureEngine:setInputDevice","message":"Failed to set input device","data":["error":error.localizedDescription],"timestamp":Date().timeIntervalSince1970*1000])
-                    // #endregion
                 }
                 return
             }
@@ -133,11 +103,6 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         let level = min(rms * 16.0, 1.0)
         levelHandler?(level)
         
-        // #region agent log (only log occasionally to avoid spam)
-        if Int.random(in: 0..<100) == 0 {
-            logToDebugFile(["sessionId":"debug-session","runId":"post-fix-avengine","hypothesisId":"H18","location":"MicrophoneCaptureEngine:handleAudioBuffer","message":"AVAudioEngine buffer received","data":["frameLength":frameLength,"channelCount":channelCount,"rms":rms,"sampleRate":buffer.format.sampleRate],"timestamp":Date().timeIntervalSince1970*1000])
-        }
-        // #endregion
         
         // Convert AVAudioPCMBuffer to CMSampleBuffer for compatibility
         if let sampleBuffer = createCMSampleBuffer(from: buffer, time: time) {
@@ -402,9 +367,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     
     /// Common capture logic with a given content filter
     private func startCaptureWithFilter(_ filter: SCContentFilter) async throws {
-        // #region agent log
-        logToDebugFile(["sessionId":"debug-session","runId":"initial","hypothesisId":"J","location":"AudioCaptureService.swift:startCaptureWithFilter","message":"startCaptureWithFilter entry","data":["hasBufferHandler":bufferHandler != nil],"timestamp":Date().timeIntervalSince1970*1000])
-        // #endregion
         
         // PRECONDITION: Buffer handler must be set before starting capture
         // This prevents race conditions where audio starts flowing before the handler is configured
@@ -429,9 +391,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // 2. Has been observed to return all-zero samples in some configurations
         // Instead, we use AVAudioEngine for microphone capture below
         
-        // #region agent log
-        logToDebugFile(["sessionId":"debug-session","runId":"post-fix-avengine","hypothesisId":"H18","location":"AudioCaptureService.swift:startCaptureWithFilter","message":"Stream configuration (mic via AVAudioEngine)","data":["capturesAudio":true,"captureMicrophone":false,"sampleRate":sampleRate,"channelCount":channelCount,"selectedMicDeviceID":selectedMicrophoneDeviceID ?? "default"],"timestamp":Date().timeIntervalSince1970*1000])
-        // #endregion
         
         // Create the stream delegate to handle errors/interruptions
         let delegate = StreamDelegate { [weak self] error in
@@ -464,9 +423,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
             try micEngine.start(deviceID: selectedMicrophoneDeviceID)
             self.microphoneEngine = micEngine
         } catch {
-            // #region agent log
-            logToDebugFile(["sessionId":"debug-session","runId":"post-fix-avengine","hypothesisId":"H18","location":"AudioCaptureService.swift:startCaptureWithFilter","message":"Failed to start AVAudioEngine mic capture","data":["error":error.localizedDescription],"timestamp":Date().timeIntervalSince1970*1000])
-            // #endregion
             // Continue without mic capture - system audio will still work
             print("[AudioCaptureService] Warning: Microphone capture failed to start: \(error)")
         }
@@ -474,13 +430,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // Start the stream
         do {
             try await stream.startCapture()
-            // #region agent log
-            logToDebugFile(["sessionId":"debug-session","runId":"initial","hypothesisId":"J","location":"AudioCaptureService.swift:startCaptureWithFilter","message":"stream.startCapture() succeeded","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
-            // #endregion
         } catch {
-            // #region agent log
-            logToDebugFile(["sessionId":"debug-session","runId":"initial","hypothesisId":"J","location":"AudioCaptureService.swift:startCaptureWithFilter","message":"stream.startCapture() FAILED","data":["error":error.localizedDescription],"timestamp":Date().timeIntervalSince1970*1000])
-            // #endregion
             throw CaptureError.streamStartFailed(underlying: error)
         }
         
@@ -543,16 +493,6 @@ private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable 
     }
     
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        // #region agent log
-        let typeStr: String
-        switch type {
-        case .audio: typeStr = "audio"
-        case .microphone: typeStr = "microphone"
-        case .screen: typeStr = "screen"
-        @unknown default: typeStr = "unknown"
-        }
-        logToDebugFile(["sessionId":"debug-session","runId":"initial","hypothesisId":"J","location":"AudioCaptureService.swift:StreamOutput","message":"didOutputSampleBuffer called","data":["type":typeStr,"isValid":sampleBuffer.isValid,"numSamples":CMSampleBufferGetNumSamples(sampleBuffer)],"timestamp":Date().timeIntervalSince1970*1000])
-        // #endregion
         
         // Only process valid audio samples
         guard sampleBuffer.isValid else { return }

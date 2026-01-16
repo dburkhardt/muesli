@@ -9,24 +9,8 @@ extension EchoCancellationService {
     /// - Parameter sampleBuffer: The audio sample buffer
     /// - Returns: Mono Float32 samples, or nil if extraction fails
     static func extractSamples(from sampleBuffer: CMSampleBuffer) -> [Float]? {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        func writeLog(_ msg: String, _ data: [String: Any]) {
-            let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix-rms","hypothesisId":"H17","location":"EchoCancellationService:extractSamples","message":msg,"data":data,"timestamp":Date().timeIntervalSince1970*1000])
-            if let d = logData, let json = String(data: d, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: logPath) {
-                    handle.seekToEndOfFile()
-                    handle.write((json + "\n").data(using: .utf8)!)
-                    handle.closeFile()
-                }
-            }
-        }
-        // #endregion
         
         guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
-            // #region agent log
-            writeLog("FAIL: no blockBuffer", [:])
-            // #endregion
             return nil
         }
         
@@ -42,18 +26,12 @@ extension EchoCancellationService {
         )
         
         guard status == kCMBlockBufferNoErr, let data = dataPointer else {
-            // #region agent log
-            writeLog("FAIL: CMBlockBufferGetDataPointer", ["status": status])
-            // #endregion
             return nil
         }
         
         // Get format info to determine channel count
         guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else {
-            // #region agent log
-            writeLog("FAIL: no formatDescription", [:])
-            // #endregion
             return nil
         }
         
@@ -63,9 +41,6 @@ extension EchoCancellationService {
         let isFloat = (formatFlags & kAudioFormatFlagIsFloat) != 0
         let sampleRate = asbd.pointee.mSampleRate
         
-        // #region agent log
-        writeLog("Audio format detected", ["channelCount": channelCount, "bitsPerChannel": bitsPerChannel, "isFloat": isFloat, "formatFlags": formatFlags, "sampleRate": sampleRate, "dataLength": length])
-        // #endregion
         
         // Convert bytes to Float32 samples
         let floatCount = length / MemoryLayout<Float>.size
@@ -81,29 +56,13 @@ extension EchoCancellationService {
                 let right = floatPointer[i * 2 + 1]
                 monoSamples.append((left + right) / 2.0)
             }
-            // #region agent log
-            let rms = monoSamples.isEmpty ? 0 : sqrt(monoSamples.map { $0 * $0 }.reduce(0, +) / Float(monoSamples.count))
-            let maxSample = monoSamples.max() ?? 0
-            let minSample = monoSamples.min() ?? 0
-            writeLog("SUCCESS: stereo Float32", ["frameCount": frameCount, "rms": rms, "maxSample": maxSample, "minSample": minSample])
-            // #endregion
             return monoSamples
         } else if channelCount == 1 && isFloat && bitsPerChannel == 32 {
             // Mono Float32: return as-is
             let samples = Array(UnsafeBufferPointer(start: floatPointer, count: floatCount))
-            // #region agent log
-            // Calculate RMS and check sample range
-            let rms = samples.isEmpty ? 0 : sqrt(samples.map { $0 * $0 }.reduce(0, +) / Float(samples.count))
-            let maxSample = samples.max() ?? 0
-            let minSample = samples.min() ?? 0
-            writeLog("SUCCESS: mono Float32", ["floatCount": floatCount, "rms": rms, "maxSample": maxSample, "minSample": minSample])
-            // #endregion
             return samples
         } else {
             // Unsupported format
-            // #region agent log
-            writeLog("FAIL: unsupported format", ["channelCount": channelCount, "bitsPerChannel": bitsPerChannel, "isFloat": isFloat, "formatFlags": formatFlags])
-            // #endregion
             return nil
         }
     }

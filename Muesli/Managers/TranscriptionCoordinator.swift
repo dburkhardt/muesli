@@ -1,20 +1,5 @@
 import Foundation
 
-// #region agent log
-fileprivate extension String {
-    func appendToDebugLogFile(atPath path: String) {
-        if let handle = FileHandle(forWritingAtPath: path) {
-            defer { handle.closeFile() }
-            handle.seekToEndOfFile()
-            if let data = self.data(using: .utf8) {
-                handle.write(data)
-            }
-        } else {
-            try? self.write(toFile: path, atomically: false, encoding: .utf8)
-        }
-    }
-}
-// #endregion
 
 /// Coordinates transcription model lifecycle and audio buffering
 /// Decouples transcription from recording - recording can start immediately,
@@ -244,11 +229,6 @@ final class TranscriptionCoordinator {
     
     /// Buffer system audio while model loads, or forward directly if model ready
     func bufferSystemAudio(_ samples: [Float]) {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"A","location":"TranscriptionCoordinator.swift:bufferSystemAudio","message":"bufferSystemAudio called","data":["sampleCount":samples.count,"modelStateReady":modelState.isReady,"isInitialized":isInitialized,"pendingCount":pendingSystemAudio.count],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData, let json = String(data: data, encoding: .utf8) { try? (json + "\n").appendToDebugLogFile(atPath: logPath) }
-        // #endregion
         
         // If model is ready and initialized, forward directly to TranscriptionService
         if modelState.isReady && isInitialized {
@@ -273,23 +253,19 @@ final class TranscriptionCoordinator {
         // Add to buffer with size limit
         if pendingSystemAudio.count + samples.count <= maxBufferSamples {
             pendingSystemAudio.append(contentsOf: samples)
+        } else if samples.count >= maxBufferSamples {
+            // Incoming chunk is larger than max buffer - replace with most recent samples
+            pendingSystemAudio = Array(samples.suffix(maxBufferSamples))
         } else {
-            // Buffer full - drop oldest samples
+            // Drop oldest samples to make room for new ones
             let overflow = pendingSystemAudio.count + samples.count - maxBufferSamples
-            if overflow < pendingSystemAudio.count {
-                pendingSystemAudio.removeFirst(overflow)
-            }
+            pendingSystemAudio.removeFirst(overflow)
             pendingSystemAudio.append(contentsOf: samples)
         }
     }
     
     /// Buffer microphone audio while model loads, or forward directly if model ready
     func bufferMicrophoneAudio(_ samples: [Float]) {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"A","location":"TranscriptionCoordinator.swift:bufferMicrophoneAudio","message":"bufferMicrophoneAudio called","data":["sampleCount":samples.count,"modelStateReady":modelState.isReady,"isInitialized":isInitialized,"pendingCount":pendingMicAudio.count],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData, let json = String(data: data, encoding: .utf8) { try? (json + "\n").appendToDebugLogFile(atPath: logPath) }
-        // #endregion
         
         // If model is ready and initialized, forward directly to TranscriptionService
         if modelState.isReady && isInitialized {
@@ -314,42 +290,30 @@ final class TranscriptionCoordinator {
         // Add to buffer with size limit
         if pendingMicAudio.count + samples.count <= maxBufferSamples {
             pendingMicAudio.append(contentsOf: samples)
+        } else if samples.count >= maxBufferSamples {
+            // Incoming chunk is larger than max buffer - replace with most recent samples
+            pendingMicAudio = Array(samples.suffix(maxBufferSamples))
         } else {
-            // Buffer full - drop oldest samples
+            // Drop oldest samples to make room for new ones
             let overflow = pendingMicAudio.count + samples.count - maxBufferSamples
-            if overflow < pendingMicAudio.count {
-                pendingMicAudio.removeFirst(overflow)
-            }
+            pendingMicAudio.removeFirst(overflow)
             pendingMicAudio.append(contentsOf: samples)
         }
     }
     
     /// Process buffered audio when model becomes ready
     func processBufferedAudio() {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"A,C","location":"TranscriptionCoordinator.swift:processBufferedAudio","message":"processBufferedAudio called","data":["modelStateReady":modelState.isReady,"isInitialized":isInitialized,"pendingSystemCount":pendingSystemAudio.count,"pendingMicCount":pendingMicAudio.count],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData, let json = String(data: data, encoding: .utf8) { try? (json + "\n").appendToDebugLogFile(atPath: logPath) }
-        // #endregion
         
         guard modelState.isReady, isInitialized else { return }
         
         // Process buffered system audio
         if !pendingSystemAudio.isEmpty {
-            // #region agent log
-            let logData2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"A","location":"TranscriptionCoordinator.swift:processBufferedAudio","message":"Forwarding system audio to TranscriptionService","data":["count":pendingSystemAudio.count],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logData2, let json = String(data: data, encoding: .utf8) { try? (json + "\n").appendToDebugLogFile(atPath: logPath) }
-            // #endregion
             transcriptionService.appendSystemAudio(pendingSystemAudio)
             pendingSystemAudio.removeAll()
         }
         
         // Process buffered microphone audio
         if !pendingMicAudio.isEmpty {
-            // #region agent log
-            let logData3 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"A","location":"TranscriptionCoordinator.swift:processBufferedAudio","message":"Forwarding mic audio to TranscriptionService","data":["count":pendingMicAudio.count],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logData3, let json = String(data: data, encoding: .utf8) { try? (json + "\n").appendToDebugLogFile(atPath: logPath) }
-            // #endregion
             transcriptionService.appendMicrophoneAudio(pendingMicAudio)
             pendingMicAudio.removeAll()
         }
@@ -367,10 +331,22 @@ final class TranscriptionCoordinator {
     // MARK: - Reprocessing (for completed meetings)
     
     /// Reprocess a completed meeting's audio with a different model
+    ///
+    /// This function transcribes existing audio files using a specified WhisperKit model,
+    /// converts the results to TranscriptBlocks (chunked to ~50 words max), updates the
+    /// meeting object, and saves the transcript to disk.
+    ///
     /// - Parameters:
     ///   - meeting: The meeting to reprocess
     ///   - modelSize: The model size to use
     ///   - progressHandler: Optional progress callback
+    ///
+    /// - Important: This function MUST:
+    ///   1. Collect transcription segments from the handler
+    ///   2. Convert segments to TranscriptBlocks
+    ///   3. Update meeting.transcriptBlocks and meeting.transcript
+    ///   4. Save the transcript to disk via FileOutputService
+    ///   Failure to complete all steps will result in the UI not updating.
     func reprocessTranscript(
         for meeting: MeetingHistoryItem,
         using modelSize: ModelManager.ModelSize,
@@ -396,6 +372,8 @@ final class TranscriptionCoordinator {
         // Get audio file URLs
         let systemAudioURL = meeting.directory.appendingPathComponent("audio.caf")
         let micAudioURL = meeting.directory.appendingPathComponent("microphone.caf")
+        let systemExists = FileManager.default.fileExists(atPath: systemAudioURL.path)
+        let micExists = FileManager.default.fileExists(atPath: micAudioURL.path)
         
         // Transcribe - use nonisolated(unsafe) since we're on MainActor and handler runs synchronously
         nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
@@ -404,14 +382,52 @@ final class TranscriptionCoordinator {
         }
         
         try await tempService.transcribePostProcessing(
-            systemAudioURL: FileManager.default.fileExists(atPath: systemAudioURL.path) ? systemAudioURL : nil,
-            micAudioURL: FileManager.default.fileExists(atPath: micAudioURL.path) ? micAudioURL : nil,
+            systemAudioURL: systemExists ? systemAudioURL : nil,
+            micAudioURL: micExists ? micAudioURL : nil,
             startTime: meeting.date
         )
         
-        // TODO: Update meeting with new transcript segments
-        // This will be implemented when we connect to the UI
-        _ = segments  // Use collected segments
+        // Convert segments to TranscriptBlocks with ~50 word limit per block
+        // This ensures readable chunk sizes in the UI
+        let maxWordsPerBlock = 50
+        var blocks: [TranscriptBlock] = []
+        
+        for segment in segments {
+            let speaker: TranscriptBlock.Speaker = segment.speaker == .me ? .me : .them
+            let words = segment.text.split(separator: " ")
+            
+            // Split into chunks of maxWordsPerBlock
+            var wordIndex = 0
+            while wordIndex < words.count {
+                let endIndex = min(wordIndex + maxWordsPerBlock, words.count)
+                let chunkWords = words[wordIndex..<endIndex]
+                let chunkText = chunkWords.joined(separator: " ")
+                
+                // Calculate approximate timestamp offset within segment
+                let progressInSegment = Double(wordIndex) / Double(max(words.count, 1))
+                let chunkTimestamp = segment.timestamp + (progressInSegment * 5.0) // Approximate 5 sec per segment
+                
+                let block = TranscriptBlock(
+                    speaker: speaker,
+                    text: chunkText,
+                    startTimestamp: chunkTimestamp,
+                    endTimestamp: chunkTimestamp + 5.0
+                )
+                blocks.append(block)
+                
+                wordIndex = endIndex
+            }
+        }
+        
+        // IMPORTANT: Update meeting AND save to disk - both are required for UI to reflect changes
+        if !blocks.isEmpty {
+            meeting.transcriptBlocks = blocks
+            meeting.transcript = blocks.map { $0.text }.joined(separator: "\n\n")
+            
+            // Save transcript to disk
+            let fileOutput = FileOutputService()
+            try fileOutput.saveTranscriptBlocks(blocks, title: meeting.title, date: meeting.date, to: meeting.directory)
+        }
         
         progressHandler?(1.0)
     }

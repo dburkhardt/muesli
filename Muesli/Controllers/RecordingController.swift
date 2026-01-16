@@ -4,21 +4,6 @@ import ScreenCaptureKit
 import CoreMedia
 import os.lock
 
-// #region agent log
-fileprivate extension String {
-    func appendToDebugLog(atPath path: String) {
-        if let handle = FileHandle(forWritingAtPath: path) {
-            defer { handle.closeFile() }
-            handle.seekToEndOfFile()
-            if let data = self.data(using: .utf8) {
-                handle.write(data)
-            }
-        } else {
-            try? self.write(toFile: path, atomically: false, encoding: .utf8)
-        }
-    }
-}
-// #endregion
 
 /// Controller responsible for recording lifecycle management
 /// Extracted from MuesliViewModel to improve separation of concerns
@@ -129,11 +114,6 @@ final class RecordingController {
     /// Ensures audio handlers are configured before starting capture
     /// Must be called (and awaited) before audioCaptureService.startCapture()
     private func ensureAudioHandlersConfigured() async {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logEntry0 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"K","location":"RecordingController.swift:ensureAudioHandlersConfigured","message":"ensureAudioHandlersConfigured ENTRY","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logEntry0, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-        // #endregion
         
         let fileService = self.fileOutputService
         let transcriptService = self.transcriptionService
@@ -146,18 +126,8 @@ final class RecordingController {
         let muteLock = self.isMicrophoneMutedLock
         let aecLock = prefs.echoCancellationLock
         
-        // #region agent log
-        let logEntry1 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"K","location":"RecordingController.swift:ensureAudioHandlersConfigured","message":"About to call setBufferHandler","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logEntry1, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-        // #endregion
         
         await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
-                // #region agent log
-                let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-                let typeStr = type == .system ? "system" : "microphone"
-                let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"F","location":"RecordingController.swift:bufferHandler","message":"Buffer handler callback invoked","data":["type":typeStr],"timestamp":Date().timeIntervalSince1970*1000])
-                if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-                // #endregion
                 
                 // Wrap entire handler in error handling for graceful degradation
                 do {
@@ -230,11 +200,6 @@ final class RecordingController {
             }
         }
         
-        // #region agent log
-        let logPath2 = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logEntry2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"K","location":"RecordingController.swift:ensureAudioHandlersConfigured","message":"ensureAudioHandlersConfigured COMPLETE - all handlers set","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logEntry2, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath2) }
-        // #endregion
     }
     
     // MARK: - Audio Buffer Processing Helpers
@@ -248,13 +213,6 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let bufferValid = buffer.isValid
-        let numSamples = CMSampleBufferGetNumSamples(buffer)
-        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"F,G","location":"RecordingController.swift:handleSystemAudioBuffer","message":"handleSystemAudioBuffer called","data":["bufferValid":bufferValid,"numSamples":numSamples],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-        // #endregion
         
         // Store system audio for AEC reference (if AEC enabled)
         if isAECEnabled {
@@ -272,10 +230,6 @@ final class RecordingController {
             sourceSampleRate: 48000,
             sourceChannels: 2
         )
-        // #region agent log
-        let logData2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"H","location":"RecordingController.swift:handleSystemAudioBuffer","message":"resampleToWhisperFormat result","data":["gotSamples":samples != nil,"sampleCount":samples?.count ?? 0],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData2, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-        // #endregion
         if let samples = samples {
             Task { @MainActor in
                 transcriptionCoordinator.bufferSystemAudio(samples)
@@ -293,20 +247,9 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let bufferValid = buffer.isValid
-        let numSamples = CMSampleBufferGetNumSamples(buffer)
-        let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H1,H2","location":"RecordingController.swift:handleMicrophoneAudioBuffer","message":"handleMicrophoneAudioBuffer called","data":["bufferValid":bufferValid,"numSamples":numSamples,"isMicMuted":isMicMuted,"isAECEnabled":isAECEnabled],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-        // #endregion
         
         // Extract microphone samples at 48kHz
         let micSamples48kHz = EchoCancellationService.extractSamples(from: buffer)
-        // #region agent log
-        let logData2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"H","location":"RecordingController.swift:handleMicrophoneAudioBuffer","message":"extractSamples result","data":["gotSamples":micSamples48kHz != nil,"sampleCount":micSamples48kHz?.count ?? 0],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData2, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-        // #endregion
         guard let micSamples48kHz = micSamples48kHz else {
             // Fallback: save original buffer
             fileService.appendAudioBuffer(buffer, type: .microphone)
@@ -321,42 +264,21 @@ final class RecordingController {
                 micTimestamp: timestamp
             )
             
-            // #region agent log
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let origSampleCount = micSamples48kHz.count
-            let aecSampleCount = processedSamples48kHz.count
-            let logData4 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H1","location":"RecordingController:handleMicrophoneAudioBuffer:AEC","message":"AEC processing result","data":["origSampleCount":origSampleCount,"aecSampleCount":aecSampleCount,"samplesDiff":origSampleCount-aecSampleCount],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logData4, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-            // #endregion
             
             // Create CMSampleBuffer from processed samples for file output
             if let processedBuffer = EchoCancellationService.createSampleBuffer(
                 from: processedSamples48kHz,
                 timestamp: timestamp
             ) {
-                // #region agent log
-                let recreatedSamples = CMSampleBufferGetNumSamples(processedBuffer)
-                let logData5 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H1","location":"RecordingController:handleMicrophoneAudioBuffer:createBuffer","message":"Recreated buffer for file","data":["inputSamples":aecSampleCount,"outputSamples":recreatedSamples,"success":true],"timestamp":Date().timeIntervalSince1970*1000])
-                if let data = logData5, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-                // #endregion
                 
                 fileService.appendAudioBuffer(processedBuffer, type: .microphone)
             } else {
-                // #region agent log
-                let logData6 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H1","location":"RecordingController:handleMicrophoneAudioBuffer:createBuffer","message":"createSampleBuffer FAILED - using fallback","data":["inputSamples":aecSampleCount],"timestamp":Date().timeIntervalSince1970*1000])
-                if let data = logData6, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-                // #endregion
                 
                 // Fallback: save original if conversion fails
                 fileService.appendAudioBuffer(buffer, type: .microphone)
             }
         } else {
             processedSamples48kHz = micSamples48kHz
-            // #region agent log
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let logData7 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H1","location":"RecordingController:handleMicrophoneAudioBuffer:noAEC","message":"AEC disabled - using original buffer","data":["sampleCount":micSamples48kHz.count],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logData7, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-            // #endregion
             
             // Save original buffer when AEC disabled
             fileService.appendAudioBuffer(buffer, type: .microphone)
@@ -377,13 +299,6 @@ final class RecordingController {
             targetChannels: 1,
             isInterleaved: false
         )
-        // #region agent log
-        // Calculate RMS for audio quality check
-        let inputRMS = processedSamples48kHz.isEmpty ? 0 : sqrt(processedSamples48kHz.map { $0 * $0 }.reduce(0, +) / Float(processedSamples48kHz.count))
-        let outputRMS = (resampled ?? []).isEmpty ? 0 : sqrt((resampled ?? []).map { $0 * $0 }.reduce(0, +) / Float((resampled ?? []).count))
-        let logData3 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"H14,H15,H16","location":"RecordingController.swift:handleMicrophoneAudioBuffer","message":"High-quality resample result","data":["inputCount":processedSamples48kHz.count,"outputCount":resampled?.count ?? 0,"inputRMS":inputRMS,"outputRMS":outputRMS,"gotSamples":resampled != nil],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logData3, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-        // #endregion
         if let resampled = resampled {
             Task { @MainActor in
                 transcriptionCoordinator.bufferMicrophoneAudio(resampled)
@@ -475,18 +390,9 @@ final class RecordingController {
             
             // CRITICAL: Ensure audio handlers are configured BEFORE starting capture
             // This fixes the race condition where handlers weren't set when capture started
-            // #region agent log
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let logA = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"K","location":"RecordingController.swift:startRecordingAsync","message":"BEFORE ensureAudioHandlersConfigured","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logA, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-            // #endregion
             
             await ensureAudioHandlersConfigured()
             
-            // #region agent log
-            let logB = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"post-fix","hypothesisId":"K","location":"RecordingController.swift:startRecordingAsync","message":"AFTER ensureAudioHandlersConfigured, BEFORE startCapture","data":[String:String](),"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logB, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-            // #endregion
             
             // Start audio capture IMMEDIATELY (before model check)
             if let app = session.selectedApp {
@@ -517,11 +423,6 @@ final class RecordingController {
     }
     
     private func prepareTranscriptionAsync(for session: RecordingSession) async {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logEntry1 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"C","location":"RecordingController.swift:prepareTranscriptionAsync","message":"prepareTranscriptionAsync entry","data":["sessionId":session.id.uuidString],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logEntry1, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-        // #endregion
         
         // Set modelLoading indicator
         session.isModelLoading = true
@@ -529,17 +430,6 @@ final class RecordingController {
         transcriptionCoordinator.resetForNewRecording()
         let modelState = await transcriptionCoordinator.prepareModel()
         
-        // #region agent log
-        let stateStr: String
-        switch modelState {
-        case .notAvailable: stateStr = "notAvailable"
-        case .loading: stateStr = "loading"
-        case .ready: stateStr = "ready"
-        case .failed(let e): stateStr = "failed: \(e.localizedDescription)"
-        }
-        let logEntry2 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"C","location":"RecordingController.swift:prepareTranscriptionAsync","message":"prepareModel returned","data":["modelState":stateStr],"timestamp":Date().timeIntervalSince1970*1000])
-        if let data = logEntry2, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-        // #endregion
         
         switch modelState {
         case .notAvailable:
@@ -558,10 +448,6 @@ final class RecordingController {
                     session?.appendTranscriptSegment(segment)
                 }
             }
-            // #region agent log
-            let logEntry3 = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"initial","hypothesisId":"B,C","location":"RecordingController.swift:prepareTranscriptionAsync","message":"Calling startTranscription","data":["recordingStartTime":session.recordingStartTime?.timeIntervalSince1970 ?? 0],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logEntry3, let json = String(data: data, encoding: .utf8) { (json + "\n").appendToDebugLog(atPath: logPath) }
-            // #endregion
             transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
             
         case .failed(let error):
