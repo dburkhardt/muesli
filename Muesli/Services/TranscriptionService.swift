@@ -1,5 +1,5 @@
 import Foundation
-import WhisperKit
+@preconcurrency import WhisperKit
 @preconcurrency import AVFoundation
 import CoreMedia
 import os.lock
