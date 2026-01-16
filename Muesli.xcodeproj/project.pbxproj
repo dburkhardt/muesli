@@ -146,6 +146,7 @@
 		E1000004241D1A1D00000071 /* AppStorageKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStorageKeys.swift; sourceTree = "<group>"; };
 		E1000006241D1A1D00000072 /* MuesliError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliError.swift; sourceTree = "<group>"; };
 		F1000002241D1A1D00000080 /* AudioConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioConfiguration.swift; sourceTree = "<group>"; };
+		V1000001241D1A1D00000090 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -714,13 +715,13 @@
 		};
 		A100001F241D1A1D00000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = V1000001241D1A1D00000090 /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Muesli/Muesli.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 			ENABLE_HARDENED_RUNTIME = YES;
 			ENABLE_PREVIEWS = YES;
@@ -734,7 +735,6 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
 				PRODUCT_NAME = Muesli;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -744,13 +744,13 @@
 		};
 		A1000020241D1A1D00000001 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = V1000001241D1A1D00000090 /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Muesli/Muesli.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 			ENABLE_HARDENED_RUNTIME = YES;
 			ENABLE_PREVIEWS = YES;
@@ -764,7 +764,6 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
 				PRODUCT_NAME = Muesli;
 				SWIFT_EMIT_LOC_STRINGS = YES;
