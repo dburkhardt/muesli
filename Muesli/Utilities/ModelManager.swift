@@ -2,6 +2,7 @@ import Foundation
 import WhisperKit
 import AppKit
 
+
 /// Manages WhisperKit model downloading and storage
 @Observable
 final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
@@ -14,6 +15,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         case small = "small"
         case medium = "medium"
         case large = "large-v3"
+        case largeTurbo = "large-v3-turbo"
         
         var id: String { rawValue }
         
@@ -24,6 +26,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             case .small: return "Small"
             case .medium: return "Medium"
             case .large: return "Large v3"
+            case .largeTurbo: return "Large v3 Turbo"
             }
         }
         
@@ -34,6 +37,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             case .small: return "~465MB"
             case .medium: return "~1.5GB"
             case .large: return "~3GB"
+            case .largeTurbo: return "~1.6GB"
             }
         }
         
@@ -42,9 +46,21 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             switch self {
             case .large:
                 return "openai_whisper-large-v3"
+            case .largeTurbo:
+                return "openai_whisper-large-v3-turbo"
             default:
                 return "openai_whisper-\(rawValue)"
             }
+        }
+        
+        /// Source repository for model downloads
+        var sourceRepo: String {
+            "argmaxinc/whisperkit-coreml"
+        }
+        
+        /// URL to the source repository
+        var sourceURL: URL {
+            URL(string: "https://huggingface.co/argmaxinc/whisperkit-coreml")!
         }
     }
     
@@ -65,6 +81,11 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     
     /// Set of downloaded models
     var downloadedModels: Set<ModelSize> = []
+    
+    /// Downloaded models sorted in canonical order (matching allCases)
+    var downloadedModelsOrdered: [ModelSize] {
+        ModelSize.allCases.filter { downloadedModels.contains($0) }
+    }
     
     /// Currently active model for transcription
     var activeModel: ModelSize?
@@ -99,15 +120,20 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         if !skipScan {
             scanForDownloadedModels()
             
-            // Load saved active model preference
+            // Load saved active model preference with validation
             if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel),
                let model = ModelSize(rawValue: savedModel),
-               downloadedModels.contains(model) {
+               validateModel(model) {
+                // Saved model is valid - use it
                 activeModel = model
-            } else if let firstDownloaded = downloadedModels.first {
-                // Default to first downloaded model
-                activeModel = firstDownloaded
+                // Ensure it's in downloadedModels (should be after scan, but be safe)
+                downloadedModels.insert(model)
+            } else if let firstValid = getFirstValidModel() {
+                // Saved model was invalid or missing - fall back to first valid model
+                activeModel = firstValid
+                UserDefaults.standard.set(firstValid.rawValue, forKey: AppStorageKeys.activeWhisperModel)
             }
+            // If no valid models found, activeModel remains nil
         }
     }
     
@@ -133,6 +159,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             .appendingPathComponent("models/argmaxinc/whisperkit-coreml")
             .appendingPathComponent(model.whisperKitName)
         
+        
         if FileManager.default.fileExists(atPath: modelDir.path) {
             return modelDir
         }
@@ -149,7 +176,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     /// Validate that a model has all required files (not just config.json)
     /// Returns true if the model is complete and usable
     func validateModel(_ model: ModelSize) -> Bool {
-        guard let modelPath = pathForModel(model) else { return false }
+        
+        guard let modelPath = pathForModel(model) else {
+            return false
+        }
         
         let fm = FileManager.default
         
@@ -158,14 +188,20 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         let textDecoderPath = modelPath.appendingPathComponent("TextDecoder.mlmodelc")
         
         // AudioEncoder must exist with weights
-        guard fm.fileExists(atPath: audioEncoderPath.path) else { return false }
+        let audioEncoderExists = fm.fileExists(atPath: audioEncoderPath.path)
         let audioWeightsPath = audioEncoderPath.appendingPathComponent("weights/weight.bin")
-        guard fm.fileExists(atPath: audioWeightsPath.path) else { return false }
+        let audioWeightsExists = fm.fileExists(atPath: audioWeightsPath.path)
         
         // TextDecoder must exist with weights
-        guard fm.fileExists(atPath: textDecoderPath.path) else { return false }
+        let textDecoderExists = fm.fileExists(atPath: textDecoderPath.path)
         let textWeightsPath = textDecoderPath.appendingPathComponent("weights/weight.bin")
-        guard fm.fileExists(atPath: textWeightsPath.path) else { return false }
+        let textWeightsExists = fm.fileExists(atPath: textWeightsPath.path)
+        
+        
+        guard audioEncoderExists else { return false }
+        guard audioWeightsExists else { return false }
+        guard textDecoderExists else { return false }
+        guard textWeightsExists else { return false }
         
         return true
     }
@@ -212,19 +248,19 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     }
     
     /// Scan the models directory to detect previously downloaded models
+    /// Uses full validation to ensure only complete, usable models are marked as downloaded
     func scanForDownloadedModels() {
         downloadedModels.removeAll()
         
-        let whisperKitDir = modelDirectory
-            .appendingPathComponent("models/argmaxinc/whisperkit-coreml")
-        
         for model in ModelSize.allCases {
-            let modelDir = whisperKitDir.appendingPathComponent(model.whisperKitName)
-            let configPath = modelDir.appendingPathComponent("config.json")
-            
-            if FileManager.default.fileExists(atPath: configPath.path) {
+            // Use validateModel() to ensure the model is actually complete and usable
+            // This checks for AudioEncoder.mlmodelc and TextDecoder.mlmodelc with weights
+            if validateModel(model) {
                 downloadedModels.insert(model)
                 downloadStates[model] = .completed
+            } else if pathForModel(model) != nil {
+                // Model directory exists but is incomplete/corrupted
+                downloadStates[model] = .failed("Model is incomplete or corrupted")
             }
         }
     }

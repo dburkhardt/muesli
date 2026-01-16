@@ -6,6 +6,8 @@ import SwiftUI
 struct RecordingIndicator: View {
     let elapsedTime: String
     var isInitializing: Bool = false
+    var isModelLoading: Bool = false
+    var isRecordingOnly: Bool = false
     @State private var isPulsing = false
     
     var body: some View {
@@ -16,7 +18,7 @@ struct RecordingIndicator: View {
                     .scaleEffect(0.6)
                     .frame(width: 12, height: 12)
                 
-                Text("Loading model...")
+                Text("Starting...")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
             } else {
@@ -39,6 +41,24 @@ struct RecordingIndicator: View {
                 Text(elapsedTime)
                     .font(.system(size: 11, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
+                
+                // Model state indicator
+                if isModelLoading {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 12, height: 12)
+                        .help("Transcription model loading...")
+                } else if isRecordingOnly {
+                    Image(systemName: "waveform.slash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .help("Recording audio only (transcription unavailable)")
+                } else {
+                    Image(systemName: "text.append")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.green)
+                        .help("Live transcription active")
+                }
             }
         }
         .padding(.horizontal, 10)

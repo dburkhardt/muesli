@@ -3,6 +3,7 @@
 Local-first meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-time transcription via WhisperKit, saves `audio.caf` + `microphone.caf` + `transcript.md`.
 
 **Authoritative docs**: `SPEC.md` (product spec + phases) · This file (architecture + commands + pitfalls)
+**Note for agents**: Additional flow-specific documentation lives in the `spec/` folder. If you are doing a comprehensive architecture review, read those documents as well.
 
 ## Quick Reference
 
@@ -81,13 +82,14 @@ tccutil reset Microphone com.muesli.app.<suffix> 2>/dev/null || true
 ### State Management (Delegation Pattern)
 ```
 SwiftUI Views → MuesliViewModel (coordinator)
+                    ├── RecordingController (recording lifecycle, audio callbacks)
                     ├── PreferencesManager (output dir, settings)
                     ├── MeetingHistoryManager (history list, selection)
                     ├── RefinementCoordinator (LLM refinement state)
                     └── Services (Audio, Transcription, FileOutput, AEC)
 ```
 
-ViewModel exposes computed properties that delegate to managers. Views observe only ViewModel.
+ViewModel delegates recording operations to RecordingController. Views observe only ViewModel.
 
 ### Key Types
 - `RecordingSession` — active recording state, timer, transcript
@@ -96,9 +98,11 @@ ViewModel exposes computed properties that delegate to managers. Views observe o
 
 ### Audio Pipeline
 ```
-SCStream → parallel fork → AVAssetWriter (save to disk)
-                        → resample to 16kHz → WhisperKit
+System Audio: SCStream → AVAssetWriter (audio.caf) + resample 16kHz → WhisperKit
+Microphone:   AVAudioEngine → AVAssetWriter (microphone.caf) + resample 16kHz → WhisperKit
 ```
+
+Note: Microphone uses AVAudioEngine (not ScreenCaptureKit) to support user device selection.
 
 ## UI Patterns
 
@@ -109,10 +113,10 @@ SCStream → parallel fork → AVAssetWriter (save to disk)
 
 ## Output Contract
 
-Recordings saved to: `~/Documents/Meeting Transcripts/YYYY-MM-DD_HH-MM_[Title]/`
+Recordings saved to: `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD_HH-MM_[UUID]/`
 - `audio.caf` — system audio (48kHz stereo Float32 LPCM)
-- `microphone.caf` — mic audio (24kHz mono Float32 LPCM)
-- `transcript.md` — Markdown with timestamps
+- `microphone.caf` — mic audio (48kHz stereo Float32 LPCM)
+- `transcript.md` — Markdown with timestamps and speaker labels
 
 ## Known Pitfalls
 
@@ -120,7 +124,7 @@ Recordings saved to: `~/Documents/Meeting Transcripts/YYYY-MM-DD_HH-MM_[Title]/`
 `CGPreflightScreenCaptureAccess()` unreliable with ad-hoc signing. Use `PermissionManager.checkScreenRecordingPermissionAsync()` which uses `SCShareableContent`. Only for permission checking—not app detection (triggers prompt).
 
 ### Audio Sample Rates (CRITICAL)
-**If transcription outputs gibberish, check sample rates first!** WhisperKit requires 16kHz. ScreenCaptureKit provides 48kHz. Use `TranscriptionService.resampleToWhisperFormat()`:
+**If transcription outputs gibberish, check sample rates first!** WhisperKit requires 16kHz. Both system audio (ScreenCaptureKit) and microphone (AVAudioEngine) capture at 48kHz. Use `TranscriptionService.resampleToWhisperFormat()`:
 ```swift
 // System: 48kHz stereo → 16kHz mono
 resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
@@ -130,7 +134,7 @@ resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
 
 ### ScreenCaptureKit
 - Display-based `SCContentFilter` required for audio; window-based doesn't work
-- `captureMicrophone` requires macOS 15+
+- We use AVAudioEngine for microphone instead of SCK's `captureMicrophone` (supports device selection)
 - `CMSampleBuffer` not Sendable — use `OSAllocatedUnfairLock`, not actor isolation
 
 ### Meeting App Detection

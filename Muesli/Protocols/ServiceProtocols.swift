@@ -10,6 +10,7 @@ protocol AudioCaptureServiceProtocol: Sendable {
     func setBufferHandler(_ handler: @escaping AudioBufferHandler) async
     func setInterruptedHandler(_ handler: @escaping StreamInterruptedHandler) async
     func setLevelHandler(_ handler: @escaping AudioLevelHandler) async
+    func setMicrophoneDevice(_ deviceID: String?) async
     func startCapture() async throws
     func startCapture(forBundleIdentifier bundleIdentifier: String) async throws
     func stopCapture() async throws

@@ -67,14 +67,25 @@ struct OnboardingView: View {
         .onAppear {
             // Initial permission check on appear
             Task {
-                viewModel.refreshPermissions()
+                // If we're past the welcome screen, use async permission check
+                // This is reliable and won't trigger a prompt if permission is already granted
+                // Only on welcome screen do we avoid async check to prevent prompts
+                if currentStep != .welcome {
+                    await viewModel.refreshPermissionsAsync()
+                } else {
+                    viewModel.refreshPermissions()
+                }
                 advanceBasedOnPermissions()
             }
         }
         .onChange(of: currentStep) { oldValue, newValue in
             // Check permissions when switching to permission steps
+            // Use async check for reliable detection after granting permission
             if newValue == .screenRecording || newValue == .microphone {
-                viewModel.refreshPermissions()
+                Task {
+                    await viewModel.refreshPermissionsAsync()
+                    advanceBasedOnPermissions()
+                }
             }
         }
         .fileImporter(
@@ -186,6 +197,8 @@ struct OnboardingView: View {
                 Button("Grant Screen Recording Access") {
                     viewModel.requestScreenRecordingPermission()
                     screenRecordingRequested = true
+                    // Bring onboarding window back to front after system dialog dismisses
+                    AppDelegate.shared?.bringOnboardingWindowToFront()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -273,6 +286,8 @@ struct OnboardingView: View {
                     Task {
                         await viewModel.requestMicrophonePermission()
                         microphoneRequested = false
+                        // Bring onboarding window back to front after system dialog dismisses
+                        AppDelegate.shared?.bringOnboardingWindowToFront()
                     }
                 }
                 .buttonStyle(.bordered)
@@ -409,14 +424,14 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.displayName)
                     .font(.system(size: 13, weight: .medium))
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     Text(model.sizeDescription)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                    Text("•")
+                    Text("·")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
-                    Text(model.description)
+                    Link(model.sourceRepo, destination: model.sourceURL)
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
@@ -509,9 +524,17 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.displayName)
                     .font(.system(size: 13, weight: .medium))
+                HStack(spacing: 4) {
                 Text(model.sizeDescription)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    Text("·")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    Link(model.sourceRepo, destination: model.sourceURL)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
             }
             
             Spacer()
@@ -581,7 +604,7 @@ struct OnboardingView: View {
                 get: { modelManager.activeModel ?? .base },
                 set: { modelManager.setActiveModel($0) }
             )) {
-                ForEach(Array(modelManager.downloadedModels).sorted(by: { $0.rawValue < $1.rawValue })) { model in
+                ForEach(modelManager.downloadedModelsOrdered) { model in
                     Text(model.displayName).tag(model)
                 }
             }
@@ -627,27 +650,34 @@ struct OnboardingView: View {
         UserDefaults.standard.set(step.rawValue, forKey: AppStorageKeys.onboardingCurrentStep)
     }
     
-    /// Advance to appropriate step based on current permissions (sync version)
-    /// Uses sync permission check which doesn't trigger system dialogs
-    /// Only auto-advances from the welcome screen IF all permissions are already granted
+    /// Advance to appropriate step based on current permissions
+    /// Skips past already-completed permission steps when user returns to the app
     private func advanceBasedOnPermissions() {
-        // Only auto-advance from the welcome screen
-        guard currentStep == .welcome else { return }
+        // Determine the appropriate step based on current permissions
+        let targetStep: OnboardingStep
         
-        // Don't auto-advance to permission screens - let user see welcome and click "Get Started"
-        // Only auto-advance if ALL permissions are already granted (skip to model setup or complete)
-        guard viewModel.hasScreenRecordingPermission && viewModel.hasMicrophonePermission else {
+        if viewModel.hasScreenRecordingPermission && viewModel.hasMicrophonePermission {
+            // All permissions granted - go to model setup or complete
+            if !modelManager.hasModel {
+                targetStep = .modelSetup
+            } else if !llmManager.hasModel {
+                targetStep = .llmSetup
+            } else {
+                // All done - complete onboarding
+                completeOnboarding()
+                return
+            }
+        } else if viewModel.hasScreenRecordingPermission {
+            // Screen recording granted - skip to microphone
+            targetStep = .microphone
+        } else {
+            // No permissions yet - stay on current step (don't auto-advance from welcome)
             return
         }
         
-        // All permissions granted - skip to model setup or complete
-        if !modelManager.hasModel {
-            setStep(.modelSetup)
-        } else if !llmManager.hasModel {
-            setStep(.llmSetup)
-        } else {
-            // All done - complete onboarding
-            completeOnboarding()
+        // Only advance forward, never backward
+        if targetStep.rawValue > currentStep.rawValue {
+            setStep(targetStep)
         }
     }
     

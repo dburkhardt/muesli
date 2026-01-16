@@ -76,16 +76,14 @@ final class MuesliViewModel {
     // Transcription coordinator (manages model lifecycle and audio buffering)
     private let transcriptionCoordinator: TranscriptionCoordinator
     
-    // MARK: - Audio Level Throttling
+    // MARK: - Recording Controller
+    // ⚠️ IMPORTANT: All recording logic lives in RecordingController.
+    // Do NOT add recording implementation here - delegate to recordingController.
+    // See RecordingController.swift for audio capture, transcription coordination, 
+    // and file output management.
     
-    /// Last time microphone level was updated (for throttling UI updates)
-    private var lastMicLevelUpdate = Date.distantPast
-    
-    /// Last time system audio level was updated (for throttling UI updates)
-    private var lastSystemLevelUpdate = Date.distantPast
-    
-    /// Minimum interval between audio level UI updates (~30fps)
-    private let levelUpdateInterval: TimeInterval = 0.033
+    /// Recording controller - owns all recording lifecycle logic
+    private let recordingController: RecordingController
     
     /// Whether echo cancellation is enabled (delegates to PreferencesManager)
     var isEchoCancellationEnabled: Bool {
@@ -112,13 +110,16 @@ final class MuesliViewModel {
     }
     
     // MARK: - Active Session Tracking
+    // NOTE: Delegates to RecordingController - do not manage session state here
     
-    /// The currently recording session (only one can record at a time)
-    private(set) var activeSession: RecordingSession?
+    /// The currently recording session (delegates to RecordingController)
+    var activeSession: RecordingSession? {
+        recordingController.activeSession
+    }
     
     /// Alias for activeSession (for clarity in new UI)
     var activeRecordingSession: RecordingSession? {
-        activeSession
+        recordingController.activeSession
     }
     
     // MARK: - Meeting History (delegating to MeetingHistoryManager)
@@ -183,6 +184,20 @@ final class MuesliViewModel {
     /// Session pending stop (waiting for title input)
     var pendingStopSession: RecordingSession?
     
+    // MARK: - Model Error Alert State (delegating to RecordingController)
+    
+    /// Whether to show the model error alert (delegates to recordingController)
+    var showModelErrorAlert: Bool {
+        get { recordingController.showModelErrorAlert }
+        set { recordingController.showModelErrorAlert = newValue }
+    }
+    
+    /// Session waiting for user response to model error (delegates to recordingController)
+    var sessionPendingModelDecision: RecordingSession? {
+        get { recordingController.sessionPendingModelDecision }
+        set { recordingController.sessionPendingModelDecision = newValue }
+    }
+    
     // MARK: - Refinement State (delegating to RefinementCoordinator)
     
     /// Whether to show the refinement progress sheet (delegates to refinementCoordinator)
@@ -214,13 +229,8 @@ final class MuesliViewModel {
         set { refinementCoordinator.meetingBeingRefined = newValue }
     }
     
-    // MARK: - Model Error Alert
-    
-    /// Whether to show the model error alert
-    var showModelErrorAlert: Bool = false
-    
-    /// Session waiting for user response to model error
-    var sessionPendingModelDecision: RecordingSession?
+    // NOTE: showModelErrorAlert and sessionPendingModelDecision are defined above
+    // in the "Model Error Alert State" section, delegating to recordingController
     
     // MARK: - Preferences (delegating to PreferencesManager)
     
@@ -279,26 +289,11 @@ final class MuesliViewModel {
         selectedMeetingIDs.removeAll()
     }
     
-    /// Microphone mute state (for synchronous access from audio callback)
-    /// Uses OSAllocatedUnfairLock for proper thread-safe access from audio callback
-    private let isMicrophoneMutedLock = OSAllocatedUnfairLock(initialState: false)
-    
-    /// Thread-safe getter for audio callbacks (nonisolated)
-    nonisolated var isMicrophoneMutedSafe: Bool {
-        isMicrophoneMutedLock.withLock { $0 }
-    }
+    // MARK: - Microphone Mute (delegates to RecordingController)
     
     /// Toggle microphone mute state for active recording
     func toggleMicrophoneMute() {
-        guard let session = activeRecordingSession else { return }
-        session.isMicrophoneMuted.toggle()
-        let mutedState = session.isMicrophoneMuted
-        isMicrophoneMutedLock.withLock { $0 = mutedState }
-    }
-    
-    /// Helper to reset mute state when session is cleared
-    private func resetMuteState() {
-        isMicrophoneMutedLock.withLock { $0 = false }
+        recordingController.toggleMicrophoneMute()
     }
     
     // MARK: - Initialization
@@ -370,30 +365,58 @@ final class MuesliViewModel {
             fileOutputService: self.fileOutputService
         )
         
+        // Create recording controller (owns all recording lifecycle logic)
+        self.recordingController = RecordingController(
+            audioCaptureService: self.audioCaptureService,
+            fileOutputService: self.fileOutputService,
+            transcriptionService: self.transcriptionService,
+            transcriptionCoordinator: self.transcriptionCoordinator,
+            echoCancellationService: self.echoCancellationService,
+            preferencesManager: preferencesManager,
+            microphoneManager: self.microphoneManager
+        )
+        
         // Check initial permission status
         refreshPermissions()
         
-        // Audio buffer handling is now managed by RecordingController
-        // Set up stream interruption and level handlers
-        let audioCaptureServiceRef = self.audioCaptureService
-        Task {
-            // Set up stream interruption handler (e.g., captured app quits)
-            await audioCaptureServiceRef.setInterruptedHandler { [weak self] error in
-                Task { @MainActor in
-                    self?.handleCaptureInterrupted(error: error)
-                }
-            }
-            
-            // Set up audio level handler for microphone indicator
-            await audioCaptureServiceRef.setLevelHandler { [weak self] level, type in
-                Task { @MainActor in
-                    self?.updateAudioLevel(level, type: type)
-                }
-            }
+        // If microphone permission is already granted (returning user),
+        // refresh microphone devices. This is safe because permission is already granted.
+        if self.permissionManager.hasMicrophonePermission {
+            self.microphoneManager.refreshDevices()
         }
         
         // Set initial transcription mode
         transcriptionCoordinator.setTranscriptionMode(transcriptionMode)
+        
+        // Wire up RecordingController callbacks to ViewModel state
+        self.recordingController.onSessionCompleted = { [weak self] session, outputDirectory in
+            guard let self = self else { return }
+            
+            // Refresh history first to ensure the new meeting is available
+            self.refreshMeetingHistory()
+            
+            // Find and select the newly completed meeting
+            if let directory = outputDirectory,
+               let newMeeting = self.meetingHistory.first(where: { $0.directory == directory }) {
+                self.selectedMeeting = newMeeting
+                self.isSplitViewVisible = true
+            } else if self.selectedMeeting == nil {
+                // Fallback: if no meeting found and nothing selected, hide split view
+                self.isSplitViewVisible = false
+            }
+        }
+        
+        self.recordingController.onRefreshHistory = { [weak self] in
+            self?.refreshMeetingHistory()
+        }
+        
+        self.recordingController.onSelectedMeetingChanged = { [weak self] meeting in
+            self?.selectedMeeting = meeting
+        }
+        
+        self.recordingController.onSplitViewVisibilityChanged = { [weak self] visible in
+            self?.isSplitViewVisible = visible
+        }
         
         // Load available meeting apps
         Task {
@@ -404,28 +427,11 @@ final class MuesliViewModel {
         // No need to call loadMeetingHistory() here as historyManager handles it
     }
     
-    // MARK: - Session Management
+    // MARK: - Session Management (delegates to RecordingController)
     
     /// Create a new recording session
     func createSession() -> RecordingSession {
-        return RecordingSession()
-    }
-    
-    /// Update audio level for the active session (throttled to ~30fps)
-    private func updateAudioLevel(_ level: Float, type: AudioCaptureService.AudioType) {
-        guard let session = activeSession else { return }
-        let now = Date()
-        
-        switch type {
-        case .microphone:
-            guard now.timeIntervalSince(lastMicLevelUpdate) >= levelUpdateInterval else { return }
-            lastMicLevelUpdate = now
-            session.microphoneLevel = level
-        case .system:
-            guard now.timeIntervalSince(lastSystemLevelUpdate) >= levelUpdateInterval else { return }
-            lastSystemLevelUpdate = now
-            session.systemAudioLevel = level
-        }
+        return recordingController.createSession()
     }
     
     // MARK: - Permission Management
@@ -453,6 +459,12 @@ final class MuesliViewModel {
     
     func requestMicrophonePermission() async {
         hasMicrophonePermission = await permissionManager.requestMicrophonePermission()
+        
+        // If permission was granted, refresh microphone devices
+        // This was deferred during init to avoid triggering the permission prompt
+        if hasMicrophonePermission {
+            microphoneManager.refreshDevices()
+        }
     }
     
     func openMicrophoneSettings() {
@@ -479,632 +491,74 @@ final class MuesliViewModel {
     }
     
     // MARK: - Recording Actions
+    // ⚠️ IMPORTANT: All recording implementation is in RecordingController.
+    // These methods delegate to recordingController. Do NOT duplicate logic here.
     
     /// Quick start recording with all system audio (no app selection needed)
-    /// Creates a new session and immediately starts recording
     func quickStartRecording() {
-        guard activeSession == nil else {
-            return  // Already recording
-        }
-        
-        // Create a new session with no app filter (captures all system audio)
-        let session = createSession()
-        session.selectedApp = nil  // All system audio
-        
-        // Use default microphone
-        if let defaultMic = microphoneManager.currentDefaultDevice {
-            microphoneManager.setSelectedDeviceID(defaultMic.id)
-        }
-        
-        // Ensure live transcription mode
+        // Ensure live transcription mode before starting
         transcriptionMode = .live
         
-        // Start recording
-        startRecording(for: session)
+        // Clear selection before recording
+        selectedMeeting = nil
+        selectedMeetingIDs.removeAll()
         
-        // Transition to split view
+        recordingController.quickStartRecording()
         isSplitViewVisible = true
     }
     
     /// Start recording for a session
-    /// - Parameter session: The session to start recording for
-    /// If session.selectedApp is nil, captures all system audio
     func startRecording(for session: RecordingSession) {
-        // Only one session can record at a time
-        guard activeSession == nil else {
-            session.showError(.alreadyRecording)
-            return
-        }
-        
-        // Set activeSession immediately so UI shows recording view right away
-        // (will be cleared if async setup fails)
-        activeSession = session
-        let mutedState = session.isMicrophoneMuted
-        isMicrophoneMutedLock.withLock { $0 = mutedState }
-        
-        // Mark as initializing (loading model)
-        session.isInitializing = true
-        
-        // Clear selectedMeeting so UI shows the new recording, not an old meeting
+        // Clear selection before recording
         selectedMeeting = nil
         selectedMeetingIDs.removeAll()
         
-        Task {
-            await startRecordingAsync(for: session)
-        }
-    }
-    
-    private func startRecordingAsync(for session: RecordingSession) async {
-        do {
-            // Reset retry budget for a fresh recording session
-            transcriptionCoordinator.resetForNewRecording()
-            
-            // Prepare transcription model using coordinator (handles validation, fallback, initialization)
-            let modelState = await transcriptionCoordinator.prepareModel()
-            
-            switch modelState {
-            case .notAvailable:
-                // No valid model available
-                session.isInitializing = false
-                session.state = .idle
-                activeSession = nil
-                resetMuteState()
-                sessionPendingModelDecision = session
-                showModelErrorAlert = true
-                return
-                
-            case .loading:
-                // Model is loading - coordinator will buffer audio until ready
-                // Continue with recording setup
-                break
-                
-            case .ready:
-                // Model is ready - transcription can start immediately
-                break
-                
-            case .failed(let error):
-                // Model loading failed - show error
-                session.isInitializing = false
-                session.state = .idle
-                activeSession = nil
-                resetMuteState()
-                session.showError(.modelLoadFailed(underlying: error))
-                sessionPendingModelDecision = session
-                showModelErrorAlert = true
-                return
-            }
-            
-            // Set up transcript handler through coordinator
-            transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
-                Task { @MainActor in
-                    guard let session = session else { return }
-                    session.appendTranscriptSegment(segment)
-                }
-            }
-            
-            // Start file output first
-            session.outputDirectory = try fileOutputService.startWriting()
-            
-            // Configure microphone preference before starting capture
-            if let selectedMicID = microphoneManager.selectedDeviceID {
-                microphoneManager.setSelectedDeviceID(selectedMicID)
-            }
-            
-            // Start audio capture - either filtered to a specific app or all system audio
-            if let app = session.selectedApp {
-                try await audioCaptureService.startCapture(forBundleIdentifier: app.bundleIdentifier)
-            } else {
-                // Capture all system audio (no app filter)
-                try await audioCaptureService.startCapture()
-            }
-            
-            // Update session state on success
-            session.isInitializing = false
-            session.state = .recording
-            session.recordingStartTime = Date()
-            session.transcriptText = ""
-            session.startDisplayTimer()
-            
-            // Reset echo cancellation filter for new recording
-            echoCancellationService.reset()
-            
-            // Start transcription through coordinator (handles buffering if model still loading)
-            transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
-            
-        } catch let error as AudioCaptureService.CaptureError {
-            let muesliError: MuesliError
-            switch error {
-            case .noContentToCapture:
-                muesliError = .noAudioContent
-            case .permissionDenied, .streamStartFailed:
-                muesliError = .screenRecordingDenied
-            default:
-                muesliError = .captureStartFailed(underlying: error)
-            }
-            
-            // Add context for specific cases
-            if case .noContentToCapture = error, let app = session.selectedApp {
-                session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
-            } else {
-                session.showError(muesliError)
-            }
-            
-            session.isInitializing = false
-            session.state = .idle
-            activeSession = nil
-            resetMuteState()  // Clear since setup failed
-            
-            if fileOutputService.isWriting {
-                _ = try? await fileOutputService.stopWriting()
-            }
-        } catch {
-            // Handle any remaining errors (model errors are handled by coordinator above)
-            let errorMsg = error.localizedDescription
-            
-            let muesliError: MuesliError
-            if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
-                muesliError = .screenRecordingDenied
-            } else {
-                muesliError = .captureStartFailed(underlying: error)
-            }
-            session.showError(muesliError)
-            
-            session.isInitializing = false
-            session.state = .idle
-            activeSession = nil
-            resetMuteState()
-            
-            if fileOutputService.isWriting {
-                _ = try? await fileOutputService.stopWriting()
-            }
-        }
+        recordingController.startRecording(for: session)
     }
     
     /// Stop recording for a session
-    /// - Parameter session: The session to stop recording for
-    /// If title is empty, shows a prompt sheet first
     func stopRecording(for session: RecordingSession) {
         guard session.id == activeSession?.id else { return }
         
-        // Check if title is empty - show prompt sheet
+        // Check if title is empty - show prompt sheet (UI handled by ViewModel)
         if session.meetingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             pendingStopSession = session
             showTitlePromptSheet = true
             return
         }
         
-        // Title is set, proceed with stop
-        performStopRecording(for: session)
+        recordingController.stopRecording(for: session)
     }
     
     /// Called after title prompt is confirmed or skipped
     func confirmStopRecording() {
         guard let session = pendingStopSession else { return }
         pendingStopSession = nil
-        performStopRecording(for: session)
+        recordingController.stopRecording(for: session)
     }
     
     /// Discard the current recording without saving
     func discardRecording() {
-        guard let session = pendingStopSession ?? activeSession else { return }
         pendingStopSession = nil
         showTitlePromptSheet = false
-        
-        Task {
-            await discardRecordingAsync(for: session)
-        }
+        recordingController.discardRecording()
     }
     
     // MARK: - Model Error Handling
     
     /// Start recording without transcription (audio only)
     func startRecordingWithoutTranscription() {
-        guard let session = sessionPendingModelDecision else { return }
-        sessionPendingModelDecision = nil
-        showModelErrorAlert = false
-        
-        // For now, just show an error - full recording-only mode would need more work
-        session.showError(.whisperKitNotInitialized)
+        recordingController.startRecordingWithoutTranscription()
     }
     
     /// Cancel recording due to model error
     func cancelRecordingDueToModelError() {
-        sessionPendingModelDecision = nil
-        showModelErrorAlert = false
-    }
-    
-    private func discardRecordingAsync(for session: RecordingSession) async {
-        session.state = .stopping
-        session.stopDisplayTimer()
-        
-        do {
-            // Stop audio capture
-            try await audioCaptureService.stopCapture()
-            
-            // Reset echo cancellation filter
-            echoCancellationService.reset()
-            
-            // Stop transcription without processing remaining audio
-            await transcriptionCoordinator.stopTranscription()
-            
-            // Stop file writing and get directory (will be deleted)
-            let directory = try? await fileOutputService.stopWriting()
-            
-            // Delete the output directory if it exists
-            if let directory = directory {
-                try? FileManager.default.removeItem(at: directory)
-            }
-            
-        } catch {
-            // Errors during discard can be ignored
-        }
-        
-        // Clear session without adding to history
-        session.state = .idle
-        activeSession = nil
-        resetMuteState()
-    }
-    
-    /// Actually perform the stop recording operation
-    private func performStopRecording(for session: RecordingSession) {
-        Task {
-            await stopRecordingAsync(for: session)
-        }
-    }
-    
-    private func stopRecordingAsync(for session: RecordingSession) async {
-        session.state = .stopping
-        session.stopDisplayTimer()
-        
-        do {
-            // Stop audio capture
-            try await audioCaptureService.stopCapture()
-            
-            // Reset echo cancellation filter
-            echoCancellationService.reset()
-            
-            // Stop transcription and process remaining audio (for live mode)
-            await transcriptionCoordinator.stopTranscription()
-            
-            // Finalize file output
-            guard let directory = try? await fileOutputService.stopWriting() else {
-                session.state = .completed
-                activeSession = nil
-        resetMuteState()
-                return
-            }
-            
-            session.outputDirectory = directory
-            
-            // Handle post-processing transcription if needed
-            if transcriptionMode == .postProcessing {
-                // Show processing state
-                session.transcriptText = "Processing transcript..."
-                
-                // Get audio file URLs
-                let systemAudioURL = directory.appendingPathComponent("audio.caf")
-                let micAudioURL = directory.appendingPathComponent("microphone.caf")
-                
-                // Transcribe in post-processing mode
-                do {
-                    session.transcriptText = "" // Clear processing message
-                    try await transcriptionService.transcribePostProcessing(
-                        systemAudioURL: FileManager.default.fileExists(atPath: systemAudioURL.path) ? systemAudioURL : nil,
-                        micAudioURL: FileManager.default.fileExists(atPath: micAudioURL.path) ? micAudioURL : nil,
-                        startTime: session.recordingStartTime ?? Date()
-                    )
-                } catch {
-                    session.showError(.postProcessingFailed(underlying: error))
-                }
-            }
-            
-            // Finalize transcript processing
-            session.finalizeTranscript()
-            
-            // Determine if this is a resumed recording or new recording
-            let isResumed = session.resumeCount > 0
-            let meeting: MeetingHistoryItem
-            
-            if isResumed, let parentMeeting = session.parentMeeting {
-                // This is a resumed recording - update existing meeting
-                meeting = parentMeeting
-                
-                // Create transcript segment for this recording segment
-                let segment = TranscriptSegment(
-                    segmentNumber: session.segmentNumber,
-                    originalBlocks: session.transcriptBlocks,
-                    refinedBlocks: nil,
-                    isRefined: false,
-                    startTime: session.recordingStartTime ?? Date()
-                )
-                
-                // Add segment to meeting
-                meeting.transcriptSegments.append(segment)
-                meeting.segmentCount = meeting.transcriptSegments.count
-                
-                // Refine this segment if LLM is available
-                if canRefineTranscripts {
-                    Task {
-                        await refineSegment(segment, in: meeting)
-                    }
-                }
-                
-                // Update transcript display (combine all segments)
-                updateMeetingTranscriptDisplay(meeting)
-                
-            } else {
-                // This is a new recording - save transcript first, then create segment
-                // Save transcript blocks to file (legacy format for compatibility)
-                try? fileOutputService.saveTranscriptBlocks(
-                    session.transcriptBlocks,
-                    title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
-                    date: session.recordingStartTime ?? Date(),
-                    to: directory
-                )
-                
-                // Refresh meeting history to include the new recording
-                refreshMeetingHistory()
-                
-                // Find the newly created meeting
-                if let newMeeting = meetingHistory.first(where: { $0.directory == directory }) {
-                    // Create transcript segment for first segment
-                    let segment = TranscriptSegment(
-                        segmentNumber: 1,
-                        originalBlocks: session.transcriptBlocks,
-                        refinedBlocks: nil,
-                        isRefined: false,
-                        startTime: session.recordingStartTime ?? Date()
-                    )
-                    
-                    newMeeting.transcriptSegments = [segment]
-                    newMeeting.segmentCount = 1
-                    newMeeting.canResume = true  // Mark as resumable
-                    meeting = newMeeting
-                    
-                    // Select this meeting immediately (before any more refreshes)
-                    selectedMeeting = newMeeting
-                    
-                    // Refine this segment if LLM is available
-                    if canRefineTranscripts {
-                        Task {
-                            await refineSegment(segment, in: newMeeting)
-                        }
-                    }
-                    
-                    // Save updated transcript with segments
-                    try? saveTranscriptWithSegments(newMeeting, to: directory)
-                } else {
-                    // Fallback: meeting not found (shouldn't happen)
-                    session.state = .completed
-                    activeSession = nil
-                    resetMuteState()
-                    return
-                }
-            }
-            
-            // Save transcript to file (combined format with segment markers)
-            try? saveTranscriptWithSegments(meeting, to: directory)
-            
-        } catch {
-            session.showError(.transcriptSaveFailed(underlying: error))
-        }
-        
-        // Mark session as completed and resumable
-        session.state = .completed
-        session.canResume = true
-
-        // Only refresh and select if we haven't already selected the meeting
-        // (new recordings set selectedMeeting earlier to preserve segment data)
-        if selectedMeeting == nil {
-            refreshMeetingHistory()
-            if let directory = session.outputDirectory {
-                selectedMeeting = meetingHistory.first { $0.directory == directory }
-            }
-        }
-
-        // Clear activeSession
-        activeSession = nil
-        resetMuteState()
-
-        // If nothing is selected, return to unified view
-        if selectedMeeting == nil {
-            isSplitViewVisible = false
-        }
-    }
-    
-    // MARK: - Capture Interruption Handling
-    
-    /// Handle when the audio capture stream is interrupted (e.g., captured app quits)
-    private func handleCaptureInterrupted(error: Error?) {
-        guard let session = activeSession else { return }
-        
-        // Mark session as interrupted
-        session.wasInterrupted = true
-        session.interruptionReason = "The captured app was closed"
-        
-        // Gracefully stop and save
-        Task {
-            await stopRecordingAfterInterruption(for: session)
-        }
-    }
-    
-    /// Stop recording after an interruption (stream already stopped)
-    private func stopRecordingAfterInterruption(for session: RecordingSession) async {
-        session.state = .stopping
-        session.stopDisplayTimer()
-        
-        do {
-            // Note: We don't call audioCaptureService.stopCapture() here because the stream already stopped
-            
-            // Reset echo cancellation filter
-            echoCancellationService.reset()
-            
-            // Stop transcription and process remaining audio (for live mode)
-            await transcriptionCoordinator.stopTranscription()
-            
-            // Finalize file output            
-            guard let directory = try? await fileOutputService.stopWriting() else {
-                session.state = .completed
-                session.showError(.outputDirectoryCreationFailed)
-                activeSession = nil
-        resetMuteState()
-                return
-            }
-            
-            session.outputDirectory = directory
-            
-            // Handle post-processing transcription if needed
-            if transcriptionMode == .postProcessing {
-                session.transcriptText = "Processing transcript..."
-                
-                let systemAudioURL = directory.appendingPathComponent("audio.caf")
-                let micAudioURL = directory.appendingPathComponent("microphone.caf")
-                
-                do {
-                    session.transcriptText = ""
-                    try await transcriptionService.transcribePostProcessing(
-                        systemAudioURL: FileManager.default.fileExists(atPath: systemAudioURL.path) ? systemAudioURL : nil,
-                        micAudioURL: FileManager.default.fileExists(atPath: micAudioURL.path) ? micAudioURL : nil,
-                        startTime: session.recordingStartTime ?? Date()
-                    )
-                } catch {
-                    session.showError(.postProcessingFailed(underlying: error))
-                }
-            }
-            
-            // Finalize transcript processing and save with speaker labels (block format)
-            session.finalizeTranscript()
-            try? fileOutputService.saveTranscriptBlocks(
-                session.transcriptBlocks,
-                title: session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle,
-                date: session.recordingStartTime ?? Date(),
-                to: directory
-            )
-            
-        } catch {
-            session.showError(.transcriptSaveFailed(underlying: error))
-        }
-        
-        // Mark session as completed and show interruption message
-        session.state = .completed
-        if let reason = session.interruptionReason {
-            session.showErrorMessage("Recording saved. \(reason)")
-        } else {
-            session.showErrorMessage("Recording saved. The stream was interrupted.")
-        }
-        
-        // Refresh meeting history
-        refreshMeetingHistory()
-        
-        // Select the saved meeting
-        if let directory = session.outputDirectory {
-            selectedMeeting = meetingHistory.first { $0.directory == directory }
-            activeSession = nil
-            resetMuteState()
-        } else {
-            activeSession = nil
-            resetMuteState()
-        }
-
-        // If nothing is selected, return to unified view
-        if selectedMeeting == nil {
-            isSplitViewVisible = false
-        }
+        recordingController.cancelRecordingDueToModelError()
     }
     
     /// Re-transcribe a completed recording with post-processing mode
-    /// - Parameter session: The session to re-transcribe
     func retranscribeWithPostProcessing(for session: RecordingSession) {
-        guard session.canRetranscribe, !session.isRetranscribing else { return }
-        
-        Task {
-            await retranscribeWithPostProcessingAsync(for: session)
-        }
-    }
-    
-    private func retranscribeWithPostProcessingAsync(for session: RecordingSession) async {
-        guard let directory = session.outputDirectory else {
-            session.showError(.meetingDirectoryNotFound)
-            return
-        }
-        
-        // Set retranscribing state
-        session.isRetranscribing = true
-        
-        // Reset retry budget for a fresh model load attempt
-        transcriptionCoordinator.resetForNewRecording()
-        
-        // Prepare transcription model using coordinator
-        let modelState = await transcriptionCoordinator.prepareModel()
-        
-        switch modelState {
-        case .notAvailable:
-            session.isRetranscribing = false
-            session.showError(.modelNotFound)
-            return
-            
-        case .loading:
-            // Wait for model to finish loading
-            break
-            
-        case .ready:
-            // Model is ready for transcription
-            break
-            
-        case .failed(let error):
-            session.isRetranscribing = false
-            session.showError(.modelLoadFailed(underlying: error))
-            return
-        }
-        
-        // Set transcription mode to post-processing temporarily
-        let previousMode = transcriptionCoordinator.transcriptionMode
-        transcriptionCoordinator.setTranscriptionMode(TranscriptionService.TranscriptionMode.postProcessing)
-        
-        // Set up transcript handler to process segments through the block pipeline
-        transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
-            Task { @MainActor in
-                guard let session = session else { return }
-                session.appendTranscriptSegment(segment)
-            }
-        }
-        
-        // Get audio file URLs
-        let systemAudioURL = directory.appendingPathComponent("audio.caf")
-        let micAudioURL = directory.appendingPathComponent("microphone.caf")
-        
-        // Transcribe with post-processing
-        do {
-            // Clear existing transcript and blocks
-            session.resetTranscript()
-            
-            try await transcriptionService.transcribePostProcessing(
-                systemAudioURL: FileManager.default.fileExists(atPath: systemAudioURL.path) ? systemAudioURL : nil,
-                micAudioURL: FileManager.default.fileExists(atPath: micAudioURL.path) ? micAudioURL : nil,
-                startTime: session.recordingStartTime ?? Date()
-            )
-            
-            // Finalize transcript processing
-            session.finalizeTranscript()
-            
-            // Save updated transcript to file (block format)
-            let title = session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle
-            try? fileOutputService.saveTranscriptBlocks(
-                session.transcriptBlocks,
-                title: title,
-                date: session.recordingStartTime ?? Date(),
-                to: directory
-            )
-            
-        } catch {
-            session.showError(.postProcessingFailed(underlying: error))
-        }
-        
-        // Restore previous mode
-        transcriptionCoordinator.setTranscriptionMode(previousMode)
-        
-        // Clear retranscribing state
-        session.isRetranscribing = false
+        recordingController.retranscribeWithPostProcessing(for: session)
     }
     
     // MARK: - Meeting History Management (delegating to MeetingHistoryManager)
@@ -1201,136 +655,86 @@ final class MuesliViewModel {
         refinementCoordinator.cancelRefinement()
     }
     
-    // MARK: - Resume Recording
+    // MARK: - Transcript Reprocessing
     
-    /// Resume recording for a completed meeting
-    /// - Parameter meeting: The meeting to resume recording for
-    func resumeRecording(for meeting: MeetingHistoryItem) {
-        guard meeting.canResume else { return }
-        guard activeSession == nil else {
-            return  // Already recording
-        }
+    /// Reprocess a meeting's transcript with a different model
+    /// - Parameters:
+    ///   - meeting: The meeting to reprocess
+    ///   - model: The model to use for reprocessing
+    func reprocessTranscript(for meeting: MeetingHistoryItem, using model: ModelManager.ModelSize) {
+        guard !meeting.isReprocessing else { return }
         
         Task {
-            await resumeRecordingAsync(for: meeting)
+            meeting.isReprocessing = true
+            meeting.reprocessingProgress = 0.0
+            
+            do {
+                try await transcriptionCoordinator.reprocessTranscript(
+                    for: meeting,
+                    using: model
+                ) { progress in
+                    Task { @MainActor in
+                        meeting.reprocessingProgress = progress
+                    }
+                }
+                
+                // Reload transcript from disk to refresh the UI
+                await loadTranscript(for: meeting)
+                
+            } catch {
+                print("[MuesliViewModel] Reprocessing failed: \(error.localizedDescription)")
+            }
+            
+            meeting.isReprocessing = false
+            meeting.reprocessingProgress = 0.0
         }
     }
     
-    /// Async implementation of resume recording
-    private func resumeRecordingAsync(for meeting: MeetingHistoryItem) async {
-        do {
-            // Reset retry budget for a fresh recording session
-            transcriptionCoordinator.resetForNewRecording()
-            
-            // Prepare transcription model using coordinator
-            let modelState = await transcriptionCoordinator.prepareModel()
-            
-            switch modelState {
-            case .notAvailable, .failed:
-                // No valid model available - fail silently for resume
-                return
-                
-            case .loading:
-                // Model is loading - coordinator will buffer audio until ready
-                break
-                
-            case .ready:
-                // Model is ready for transcription
-                break
-            }
-            
-            // Create new session linked to existing meeting
-            let session = createSession()
-            session.parentMeeting = meeting
-            session.resumeCount = meeting.segmentCount
-            session.segmentNumber = meeting.segmentCount + 1
-            session.meetingTitle = meeting.title
-            session.selectedApp = nil  // Use same audio source settings (could be enhanced to remember)
-            
-            // Set activeSession immediately
-            activeSession = session
-            let mutedState = session.isMicrophoneMuted
-            isMicrophoneMutedLock.withLock { $0 = mutedState }
-            
-            // Set up transcript handler through coordinator
-            transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
-                Task { @MainActor in
-                    guard let session = session else { return }
-                    session.appendTranscriptSegment(segment)
-                }
-            }
-            
-            // Resume file output with incremented segment number
-            session.outputDirectory = try fileOutputService.resumeWriting(
-                to: meeting.directory,
-                segmentNumber: session.segmentNumber
-            )
-            
-            // Configure microphone preference before starting capture
-            if let selectedMicID = microphoneManager.selectedDeviceID {
-                microphoneManager.setSelectedDeviceID(selectedMicID)
-            }
-            
-            // Start audio capture (use same settings as original - all system audio for now)
-            try await audioCaptureService.startCapture()
-            
-            // Update session state on success
-            session.isInitializing = false
-            session.state = .recording
-            session.recordingStartTime = Date()
-            session.transcriptText = ""
-            session.transcriptBlocks = []
-            session.resetTranscript()
-            session.startDisplayTimer()
-            
-            // Start transcription through coordinator
-            transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
-            
-            // Transition to split view if not already visible
-            isSplitViewVisible = true
-            
-        } catch let error as AudioCaptureService.CaptureError {
-            if let session = activeSession {
-                let muesliError: MuesliError
-                switch error {
-                case .noContentToCapture:
-                    muesliError = .noAudioContent
-                case .permissionDenied, .streamStartFailed:
-                    muesliError = .screenRecordingDenied
-                default:
-                    muesliError = .captureStartFailed(underlying: error)
-                }
-                session.showError(muesliError)
-                
-                session.state = .idle
-                activeSession = nil
-                resetMuteState()
-                
-                if fileOutputService.isWriting {
-                    _ = try? await fileOutputService.stopWriting()
-                }
-            }
-        } catch {
-            if let session = activeSession {
-                let errorMsg = error.localizedDescription
-                
-                let muesliError: MuesliError
-                if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
-                    muesliError = .screenRecordingDenied
-                } else {
-                    muesliError = .captureStartFailed(underlying: error)
-                }
-                session.showError(muesliError)
-                
-                session.state = .idle
-                activeSession = nil
-                resetMuteState()
-                
-                if fileOutputService.isWriting {
-                    _ = try? await fileOutputService.stopWriting()
-                }
+    /// Bulk reprocess selected meetings with a specific model
+    /// - Parameter model: The model to use for reprocessing
+    func bulkReprocessTranscripts(using model: ModelManager.ModelSize) {
+        let meetingsToProcess = historyManager.selectedMeetings
+        
+        Task {
+            for meeting in meetingsToProcess {
+                await reprocessTranscript(for: meeting, using: model)
             }
         }
+    }
+    
+    /// Helper for synchronous reprocessing wrapper
+    private func reprocessTranscript(for meeting: MeetingHistoryItem, using model: ModelManager.ModelSize) async {
+        guard !meeting.isReprocessing else { return }
+        
+        meeting.isReprocessing = true
+        meeting.reprocessingProgress = 0.0
+        
+        do {
+            try await transcriptionCoordinator.reprocessTranscript(
+                for: meeting,
+                using: model
+            ) { progress in
+                Task { @MainActor in
+                    meeting.reprocessingProgress = progress
+                }
+            }
+            
+            // Reload transcript from disk
+            await loadTranscript(for: meeting)
+            
+        } catch {
+            print("[MuesliViewModel] Reprocessing failed: \(error.localizedDescription)")
+        }
+        
+        meeting.isReprocessing = false
+        meeting.reprocessingProgress = 0.0
+    }
+    
+    // MARK: - Resume Recording (delegates to RecordingController)
+    
+    /// Resume recording for a completed meeting
+    func resumeRecording(for meeting: MeetingHistoryItem) {
+        recordingController.resumeRecording(for: meeting)
     }
     
     // MARK: - Segment Refinement Helpers

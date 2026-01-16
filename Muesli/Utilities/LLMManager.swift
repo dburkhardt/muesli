@@ -54,6 +54,16 @@ final class LLMManager: LLMManagerProtocol {
             }
         }
         
+        /// Source repository display name
+        var sourceRepo: String {
+            "mlx-community"
+        }
+        
+        /// URL to the source repository
+        var sourceURL: URL {
+            URL(string: "https://huggingface.co/\(huggingFaceRepo)")!
+        }
+        
         /// ModelConfiguration for MLXLMCommon
         var modelConfiguration: ModelConfiguration {
             ModelConfiguration(id: huggingFaceRepo)
@@ -76,15 +86,27 @@ final class LLMManager: LLMManagerProtocol {
     /// Download state for each model
     var downloadStates: [LLMModel: DownloadState] = [:]
     
-    /// Set of downloaded models
-    var downloadedModels: Set<LLMModel> = []
+    /// Set of downloaded models (internal storage)
+    private var _downloadedModels: Set<LLMModel> = []
+    
+    /// Set of downloaded models (triggers lazy scan on first access)
+    var downloadedModels: Set<LLMModel> {
+        get {
+            ensureScanned()
+            return _downloadedModels
+        }
+        set {
+            _downloadedModels = newValue
+        }
+    }
     
     /// Currently active model for stitching
     var activeModel: LLMModel?
     
     /// Whether at least one model is downloaded
     var hasModel: Bool {
-        !downloadedModels.isEmpty
+        ensureScanned()
+        return !_downloadedModels.isEmpty
     }
     
     /// Loaded model container for inference
@@ -118,11 +140,19 @@ final class LLMManager: LLMManagerProtocol {
         }
     }
     
-    /// Hub API for downloading models (lazy to avoid Documents prompt on init)
+    /// Hub API for downloading models (configured to use Application Support)
     private var _hubApi: HubApi?
     private var hubApi: HubApi {
         if _hubApi == nil {
-            _hubApi = HubApi()
+            // Use Application Support instead of default Documents folder
+            // This avoids triggering macOS Documents permission prompts
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let hubCacheDir = appSupport.appendingPathComponent("Muesli/HubCache", isDirectory: true)
+            
+            // Create directory if it doesn't exist
+            try? FileManager.default.createDirectory(at: hubCacheDir, withIntermediateDirectories: true)
+            
+            _hubApi = HubApi(downloadBase: hubCacheDir)
         }
         return _hubApi!
     }
@@ -140,19 +170,26 @@ final class LLMManager: LLMManagerProtocol {
             downloadStates[model] = .idle
         }
         
-        // Scan for existing downloaded models (skip if avoiding Hub access)
+        // DEFERRED: Don't scan during init to avoid triggering Documents prompt
+        // scanForDownloadedModels() will be called lazily when needed
+        // The hasScanned flag ensures we only scan once
         if !skipHubAccess {
-            scanForDownloadedModels()
-            
-            // Load saved active model preference
+            // Just load the saved active model preference (doesn't access Hub)
             if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeLLMModel),
-               let model = LLMModel(rawValue: savedModel),
-               downloadedModels.contains(model) {
+               let model = LLMModel(rawValue: savedModel) {
                 activeModel = model
-            } else if let firstDownloaded = downloadedModels.first {
-                activeModel = firstDownloaded
             }
         }
+    }
+    
+    /// Whether models have been scanned yet
+    private var hasScanned = false
+    
+    /// Ensure models are scanned (called lazily)
+    private func ensureScanned() {
+        guard !hasScanned && !skipHubAccess else { return }
+        hasScanned = true
+        scanForDownloadedModels()
     }
     
     // MARK: - Model Directory
@@ -194,17 +231,17 @@ final class LLMManager: LLMManagerProtocol {
     
     /// Scan the models directory to detect previously downloaded models
     func scanForDownloadedModels() {
-        downloadedModels.removeAll()
+        _downloadedModels.removeAll()
         
         for model in LLMModel.allCases {
             if pathForModel(model) != nil {
-                downloadedModels.insert(model)
+                _downloadedModels.insert(model)
                 downloadStates[model] = .completed
             }
         }
         
         // Automatically enable LLM stitching if models are found
-        if hasModel {
+        if !_downloadedModels.isEmpty {
             isLLMStitchingEnabled = true
         }
     }

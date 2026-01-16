@@ -32,11 +32,14 @@ final class PermissionManager: PermissionManagerProtocol {
             return
         }
         
-        // Check initial permissions
-        screenRecordingGranted = CGPreflightScreenCaptureAccess()
+        // Check initial permissions using reliable async method
+        // CGPreflightScreenCaptureAccess() is unreliable with ad-hoc signing
         microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        // Screen recording will be checked async on first use
+        screenRecordingGranted = false
         
         // Observe app becoming active (user returns from System Settings)
+        // Use async refresh for reliable permission detection with ad-hoc signing
         observers.append(
             NotificationCenter.default.addObserver(
                 forName: NSApplication.didBecomeActiveNotification,
@@ -44,7 +47,18 @@ final class PermissionManager: PermissionManagerProtocol {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in
-                    await self?.refreshPermissionsAsync()
+                    // ⚠️ CRITICAL: Do NOT call refreshPermissionsAsync() during onboarding!
+                    // SCShareableContent.excludingDesktopWindows() triggers the screen recording
+                    // permission prompt, which should only happen on the screen recording step.
+                    // See: spec/onboarding_flow.md "SCShareableContent in Notification Observers"
+                    let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding)
+                    guard hasCompletedOnboarding else {
+                        return
+                    }
+                    
+                    // Use reliable async check - SCShareableContent correctly queries TCC
+                    // even with ad-hoc signing (CGPreflightScreenCaptureAccess does not)
+                    _ = await self?.refreshPermissionsAsync()
                 }
             }
         )
@@ -64,13 +78,19 @@ final class PermissionManager: PermissionManagerProtocol {
     
     // MARK: - Screen Recording Permission
     
-    /// Check if screen recording permission is granted (sync, unreliable with ad-hoc signing)
+    /// Check if screen recording permission is granted
+    /// NOTE: Returns cached value from last async check. Use checkScreenRecordingPermissionAsync() 
+    /// for fresh check. CGPreflightScreenCaptureAccess() is unreliable with ad-hoc signing.
     var hasScreenRecordingPermission: Bool {
-        CGPreflightScreenCaptureAccess()
+        screenRecordingGranted
     }
     
     /// Check screen recording permission using SCShareableContent (async, reliable)
     /// This actually queries the TCC database correctly, unlike CGPreflightScreenCaptureAccess
+    ///
+    /// ⚠️ WARNING: This method calls SCShareableContent.excludingDesktopWindows() which
+    /// TRIGGERS the screen recording permission prompt if permission is not granted.
+    /// Do NOT call during onboarding welcome screen - see spec/onboarding_flow.md
     func checkScreenRecordingPermissionAsync() async -> Bool {
         // Skip permission checks when running tests
         guard !Self.isRunningTests else {
@@ -80,7 +100,6 @@ final class PermissionManager: PermissionManagerProtocol {
         do {
             // This call will fail with a specific TCC error if permission is not granted
             _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            
             return true
         } catch {
             return false
@@ -161,6 +180,9 @@ final class PermissionManager: PermissionManagerProtocol {
     }
     
     /// Async refresh that uses reliable SCShareableContent check
+    ///
+    /// ⚠️ WARNING: Calls checkScreenRecordingPermissionAsync() which may trigger
+    /// the screen recording permission prompt. Do NOT call during onboarding.
     func refreshPermissionsAsync() async -> (screenRecording: Bool, microphone: Bool) {
         screenRecordingGranted = await checkScreenRecordingPermissionAsync()
         microphoneGranted = hasMicrophonePermission

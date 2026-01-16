@@ -1,0 +1,359 @@
+# Audio Pipeline Specification
+
+This document specifies how Muesli captures, processes, and transcribes audio from meetings.
+
+## Overview
+
+The audio pipeline handles two parallel streams:
+1. **System Audio**: Captured from meeting apps (Zoom, Teams, Meet) via ScreenCaptureKit
+2. **Microphone Audio**: Captured from the user's selected microphone via AVAudioEngine
+
+Both streams are simultaneously:
+- Written to disk as CAF files (for playback/reprocessing)
+- Resampled and fed to WhisperKit (for real-time transcription)
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          AudioCaptureService                             │
+│  ┌─────────────────────────┐     ┌─────────────────────────────────┐   │
+│  │      SCStream           │     │     MicrophoneCaptureEngine     │   │
+│  │  (ScreenCaptureKit)     │     │       (AVAudioEngine)           │   │
+│  │                         │     │                                  │   │
+│  │  System audio from      │     │  User's microphone via          │   │
+│  │  selected meeting app   │     │  CoreAudio device selection     │   │
+│  └──────────┬──────────────┘     └──────────────┬──────────────────┘   │
+│             │                                    │                       │
+│             │ CMSampleBuffer                     │ CMSampleBuffer        │
+│             │ (48kHz stereo)                     │ (48kHz mono)          │
+│             └─────────────┬──────────────────────┘                       │
+└───────────────────────────┼──────────────────────────────────────────────┘
+                            │
+                            ▼
+          ┌─────────────────┴─────────────────┐
+          │         Buffer Handler            │
+          │    (RecordingController)          │
+          └─────────────────┬─────────────────┘
+                            │
+            ┌───────────────┴───────────────┐
+            │                               │
+            ▼                               ▼
+┌───────────────────────┐       ┌───────────────────────────────┐
+│   FileOutputService   │       │   TranscriptionCoordinator    │
+│                       │       │                               │
+│  System → audio.caf   │       │   Buffers audio while model   │
+│  Mic → microphone.caf │       │   loads, then forwards to:    │
+│                       │       │                               │
+│  (48kHz Float32 LPCM) │       │   TranscriptionService        │
+└───────────────────────┘       └───────────────┬───────────────┘
+                                                │
+                                                ▼
+                                ┌───────────────────────────────┐
+                                │     TranscriptionService      │
+                                │                               │
+                                │  1. Resample 48kHz → 16kHz    │
+                                │  2. Buffer 5-second chunks    │
+                                │  3. WhisperKit transcription  │
+                                │  4. Return segments with      │
+                                │     speaker labels            │
+                                └───────────────────────────────┘
+```
+
+## Sample Rate Reference
+
+| Stage | System Audio | Microphone Audio |
+|-------|-------------|-----------------|
+| Capture | 48kHz stereo Float32 | 48kHz mono Float32 |
+| File Output | 48kHz stereo Float32 | 48kHz stereo Float32* |
+| Transcription | 16kHz mono Float32 | 16kHz mono Float32 |
+
+*Microphone is captured mono but written stereo for format consistency.
+
+**Critical**: WhisperKit requires 16kHz mono audio. Feeding 48kHz audio produces gibberish output.
+
+## Key Configuration
+
+All audio constants are centralized in `AudioConfiguration.swift`:
+
+```swift
+enum AudioConfiguration {
+    // Sample rates
+    static let whisperSampleRate: Int = 16000      // WhisperKit requirement
+    static let captureSampleRate: Int = 48000      // ScreenCaptureKit default
+    static let microphoneSampleRate: Int = 48000   // AVAudioEngine default
+    
+    // Transcription
+    static let transcriptionChunkDuration: TimeInterval = 5.0   // Process in 5-second windows
+    static let transcriptionOverlapDuration: TimeInterval = 1.5 // Overlap for continuity
+    
+    // Buffering
+    static let maxBufferSamples: Int = 480_000     // 30 seconds at 16kHz
+    static let bufferTimeoutSeconds: TimeInterval = 30.0
+    
+    // Voice activity detection
+    static let vadThreshold: Float = 0.01         // RMS threshold (~-40dB)
+}
+```
+
+## Why AVAudioEngine for Microphone?
+
+ScreenCaptureKit's `captureMicrophone` API (macOS 15+) has two issues:
+
+1. **No device selection**: Always uses system default microphone, ignoring user preference
+2. **Reliability**: Observed to return all-zero samples in some configurations
+
+The `MicrophoneCaptureEngine` class wraps AVAudioEngine to provide:
+- Explicit device selection via `AudioObjectSetPropertyData`
+- Consistent Float32 sample format
+- Conversion to CMSampleBuffer for compatibility with the rest of the pipeline
+
+## File Output
+
+### Format Specification
+
+Both audio files use Core Audio Format (CAF) with Linear PCM:
+
+| Property | Value |
+|----------|-------|
+| Format | CAF (Core Audio Format) |
+| Codec | Linear PCM (uncompressed) |
+| Sample Rate | 48,000 Hz |
+| Bit Depth | 32-bit |
+| Sample Type | Float (IEEE 754) |
+| Channels | 2 (stereo) |
+| Byte Order | Little-endian |
+
+### Why Separate Files?
+
+CAF doesn't support multiple audio tracks. Separating system and microphone audio:
+- Allows independent post-processing
+- Enables mixing at different levels
+- Supports reprocessing with different speaker assignments
+
+### Buffer Queue Management
+
+`FileOutputService` uses a buffer queue to handle backpressure:
+
+```swift
+// When AVAssetWriterInput.isReadyForMoreMediaData is false,
+// buffers are queued instead of dropped
+private var systemBufferQueue: [CMSampleBuffer] = []
+private var micBufferQueue: [CMSampleBuffer] = []
+
+// Maximum queue size before dropping oldest buffers
+static let maxQueuedBuffers: Int = 10  // ~200ms of audio
+```
+
+## Transcription Pipeline
+
+### Resampling
+
+`TranscriptionService.resampleToWhisperFormat()` converts capture audio to WhisperKit format:
+
+```swift
+// System: 48kHz stereo → 16kHz mono
+resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
+
+// Microphone: 48kHz mono → 16kHz mono
+resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
+```
+
+### Chunking Strategy
+
+Audio is processed in overlapping chunks for better transcription quality:
+
+```
+Time:    0s    5s    10s   15s   20s
+         |─────|─────|─────|─────|
+Chunk 1: |████████|
+Chunk 2:      |████████|
+Chunk 3:           |████████|
+              ↑
+         1.5s overlap
+```
+
+- **Chunk duration**: 5 seconds (configurable)
+- **Overlap**: 1.5 seconds
+- **Minimum samples**: 80,000 (5s × 16kHz)
+
+### Audio Buffering During Model Load
+
+`TranscriptionCoordinator` buffers audio while the WhisperKit model initializes:
+
+1. Recording starts immediately (audio saved to disk)
+2. Model loading begins asynchronously
+3. Audio samples are buffered (up to 30 seconds)
+4. Once model is ready, buffered audio is processed
+5. If model takes >30 seconds, timeout triggers
+
+## Thread Safety
+
+### CMSampleBuffer Handling
+
+`CMSampleBuffer` is not `Sendable`. The pipeline uses `OSAllocatedUnfairLock` for thread-safe access:
+
+```swift
+// DO NOT use actor isolation for high-frequency audio callbacks
+// OSAllocatedUnfairLock provides lower latency
+
+private let bufferState = OSAllocatedUnfairLock(initialState: BufferState())
+
+func handleBuffer(_ buffer: CMSampleBuffer) {
+    bufferState.withLock { state in
+        state.pendingBuffers.append(buffer)
+    }
+}
+```
+
+### Audio Callback Context
+
+Audio callbacks from ScreenCaptureKit and AVAudioEngine run on high-priority queues:
+
+- **Never block** in callback handlers
+- **Don't acquire locks** that might be held elsewhere
+- **Queue work** for async processing if needed
+
+## Debugging Guide
+
+### Transcription Outputs Gibberish
+
+**Check sample rates first!** This is the most common issue.
+
+1. Verify capture sample rate matches expected (48kHz)
+2. Verify resampling is happening (48kHz → 16kHz)
+3. Check channel count conversion (stereo → mono)
+
+### No Microphone Audio
+
+1. Check microphone permission granted
+2. Verify `MicrophoneCaptureEngine` started successfully
+3. Check selected device ID exists and is valid
+4. Look for "Warning: Microphone capture failed to start" in logs
+
+### Audio Gaps or Dropouts
+
+1. Check `FileOutputService` buffer queue warnings
+2. Verify `AVAssetWriterInput.isReadyForMoreMediaData` is true most of the time
+3. Look for "WARNING: Dropping N audio buffers" messages
+4. Consider reducing other CPU load during recording
+
+### Model Loading Timeout
+
+1. Check if model exists at expected path
+2. Verify model is not corrupted (check `config.json` exists)
+3. Check available memory (large models need ~2GB)
+4. Look for fallback model switch notifications
+
+## Transcript Reprocessing
+
+The reprocess feature allows users to re-transcribe existing audio files with a different WhisperKit model.
+
+### Reprocessing Flow
+
+```
+User clicks "Reprocess" → ViewModel.reprocessTranscript()
+                                    │
+                                    ▼
+                      TranscriptionCoordinator.reprocessTranscript()
+                                    │
+                      ┌─────────────┴─────────────┐
+                      │                           │
+                      ▼                           ▼
+              Validate model             Load audio files
+              Initialize WhisperKit      (audio.caf, microphone.caf)
+                      │                           │
+                      └─────────────┬─────────────┘
+                                    │
+                                    ▼
+                      TranscriptionService.transcribePostProcessing()
+                                    │
+                                    ▼
+                      loadAudioFile() for each file
+                          │
+                          ▼
+                      AVAudioConverter: 48kHz → 16kHz
+                          │
+                          ▼
+                      WhisperKit.transcribe()
+                          │
+                          ▼
+                      Collect segments via handler
+                                    │
+                                    ▼
+                      Convert to TranscriptBlocks (~50 words max)
+                                    │
+                                    ▼
+                      Update meeting.transcriptBlocks
+                      Update meeting.transcript
+                      Save to disk via FileOutputService
+```
+
+### Critical Implementation Details
+
+**1. AVAudioConverter Status Handling**
+
+When loading audio files for reprocessing, `AVAudioConverter` returns different status codes:
+
+| Status | Raw Value | Meaning |
+|--------|-----------|---------|
+| `.haveData` | 0 | Output has data, more input may be available |
+| `.inputRanDry` | 1 | **Input exhausted, BUT output has valid data** |
+| `.endOfStream` | 2 | End of stream |
+| `.error` | 3 | Error occurred |
+
+**WARNING**: When reading an entire file at once (not streaming), the converter ALWAYS returns `.inputRanDry` because all input is consumed. This is a **successful** conversion!
+
+```swift
+// CORRECT: Accept both statuses
+let isValidStatus = (status == .haveData || status == .inputRanDry)
+guard isValidStatus, let floatChannelData = outputBuffer.floatChannelData else {
+    return nil
+}
+
+// WRONG: Only checking .haveData rejects valid conversions!
+// guard status == .haveData, ... // DON'T DO THIS
+```
+
+**2. Transcript Must Be Saved**
+
+After transcription, the results MUST be:
+1. Converted to `TranscriptBlock` objects (chunked to ~50 words)
+2. Stored in `meeting.transcriptBlocks` and `meeting.transcript`
+3. Saved to disk via `FileOutputService.saveTranscriptBlocks()`
+
+If any step is missing, the UI won't update.
+
+**3. Block Chunking**
+
+Long transcription segments are split into multiple `TranscriptBlock` objects:
+- Maximum ~50 words per block for readability
+- Timestamps are approximated based on word position
+- Speaker attribution is preserved across chunks
+
+### Debugging Reprocessing Issues
+
+| Symptom | Likely Cause | Solution |
+|---------|--------------|----------|
+| Button grays out but transcript unchanged | Segments not saved (check for TODO) | Implement saving logic |
+| Very fast completion (no transcription) | Audio load failed | Check AVAudioConverter status handling |
+| Empty transcript after reprocess | WhisperKit returned empty results | Check audio file integrity |
+| App hangs during reprocess | Model initialization stuck | Check model path and memory |
+
+## Key Files
+
+| File | Responsibility |
+|------|----------------|
+| `AudioCaptureService.swift` | ScreenCaptureKit + AVAudioEngine capture |
+| `FileOutputService.swift` | AVAssetWriter dual-file output |
+| `TranscriptionService.swift` | WhisperKit integration, resampling, **loadAudioFile()** |
+| `TranscriptionCoordinator.swift` | Model lifecycle, audio buffering, **reprocessTranscript()** |
+| `AudioConfiguration.swift` | Centralized constants |
+| `EchoCancellationService.swift` | Sample extraction utilities |
+
+## Change History
+
+| Date | Change | Reason |
+|------|--------|--------|
+| 2026-01-16 | Added reprocessing documentation | Document reprocess flow and AVAudioConverter bug fix |
+| 2026-01-16 | Initial specification | Document audio pipeline architecture |

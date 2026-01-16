@@ -9,6 +9,7 @@ extension EchoCancellationService {
     /// - Parameter sampleBuffer: The audio sample buffer
     /// - Returns: Mono Float32 samples, or nil if extraction fails
     static func extractSamples(from sampleBuffer: CMSampleBuffer) -> [Float]? {
+        
         guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
             return nil
         }
@@ -36,7 +37,10 @@ extension EchoCancellationService {
         
         let channelCount = Int(asbd.pointee.mChannelsPerFrame)
         let bitsPerChannel = Int(asbd.pointee.mBitsPerChannel)
-        let isFloat = (asbd.pointee.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let formatFlags = asbd.pointee.mFormatFlags
+        let isFloat = (formatFlags & kAudioFormatFlagIsFloat) != 0
+        let sampleRate = asbd.pointee.mSampleRate
+        
         
         // Convert bytes to Float32 samples
         let floatCount = length / MemoryLayout<Float>.size
@@ -55,7 +59,8 @@ extension EchoCancellationService {
             return monoSamples
         } else if channelCount == 1 && isFloat && bitsPerChannel == 32 {
             // Mono Float32: return as-is
-            return Array(UnsafeBufferPointer(start: floatPointer, count: floatCount))
+            let samples = Array(UnsafeBufferPointer(start: floatPointer, count: floatCount))
+            return samples
         } else {
             // Unsupported format
             return nil

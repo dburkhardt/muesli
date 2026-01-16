@@ -44,7 +44,7 @@ struct MuesliApp: App {
             permissionManager: permManager,
             llmManager: llmManager
         )
-
+        
         // Wire up PreferencesManager callbacks to services
         prefs.outputDirectoryDidChange = { newDirectory in
             fileOutputService.setOutputDirectory(newDirectory)
@@ -162,6 +162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print("[AppDelegate] Error: Shared ViewModel not available")
             return
         }
+        
+        // CRITICAL: Hide the main window during onboarding
+        // SwiftUI Window scenes automatically create their window on launch,
+        // so we need to explicitly hide it when showing onboarding
+        hideMainWindow()
+        
         let onboardingView = OnboardingView(viewModel: viewModel)
         
         let hostingController = NSHostingController(rootView: onboardingView)
@@ -178,6 +184,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.onboardingWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    /// Hide the main window (used during onboarding)
+    private func hideMainWindow() {
+        // Find and hide the main window that SwiftUI auto-creates
+        for window in NSApplication.shared.windows {
+            if let identifier = window.identifier?.rawValue, identifier == "main" {
+                window.orderOut(nil)
+                break
+            }
+            // Also check window title as fallback (SwiftUI may set this from the scene title)
+            if window.title == MuesliApp.appDisplayName {
+                window.orderOut(nil)
+                break
+            }
+        }
     }
     
     /// Brings onboarding window to front, or creates one if it doesn't exist

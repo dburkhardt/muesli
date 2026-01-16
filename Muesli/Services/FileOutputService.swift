@@ -57,6 +57,10 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     // Thread safety lock for buffer writing
     private let lock = NSLock()
     
+    // Buffer queues for handling backpressure (when writer isn't ready)
+    private var systemBufferQueue: [CMSampleBuffer] = []
+    private var micBufferQueue: [CMSampleBuffer] = []
+    
     // Configurable base output path
     private var customOutputPath: URL?
     
@@ -173,10 +177,12 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             self.systemWriter = sysWriter
             self.systemAudioInput = sysInput
             self.systemSessionStarted = false
+            self.systemBufferQueue = []  // Clear any stale buffers
             
             self.micWriter = micWr
             self.microphoneInput = micIn
             self.micSessionStarted = false
+            self.micBufferQueue = []  // Clear any stale buffers
             
             self._isWriting = true
             
@@ -210,20 +216,50 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
                 systemSessionStarted = true
             }
             
-            guard input.isReadyForMoreMediaData else { return }
-            input.append(buffer)
+            // Add new buffer to queue
+            systemBufferQueue.append(buffer)
+            
+            
+            // Drain queue while writer is ready
+            drainBufferQueue(&systemBufferQueue, to: input)
+            
             
         case .microphone:
             guard let writer = micWriter, let input = microphoneInput else { return }
             guard writer.status == .writing else { return }
+            
             
             if !micSessionStarted {
                 writer.startSession(atSourceTime: presentationTime)
                 micSessionStarted = true
             }
             
-            guard input.isReadyForMoreMediaData else { return }
-            input.append(buffer)
+            // Add new buffer to queue
+            micBufferQueue.append(buffer)
+            
+            
+            // Drain queue while writer is ready
+            drainBufferQueue(&micBufferQueue, to: input)
+            
+        }
+    }
+    
+    /// Drain buffer queue to writer input, dropping oldest if queue overflows
+    /// Call with lock held
+    private func drainBufferQueue(_ queue: inout [CMSampleBuffer], to input: AVAssetWriterInput) {
+        // Write as many queued buffers as possible
+        while !queue.isEmpty && input.isReadyForMoreMediaData {
+            let buffer = queue.removeFirst()
+            let success = input.append(buffer)
+            
+        }
+        
+        // If queue is overflowing, drop oldest buffers with warning
+        // This is a last resort - means we're falling seriously behind
+        if queue.count > AudioConfiguration.maxQueuedBuffers {
+            let dropCount = queue.count - AudioConfiguration.maxQueuedBuffers
+            print("[FileOutputService] WARNING: Dropping \(dropCount) audio buffers due to write backpressure")
+            queue.removeFirst(dropCount)
         }
     }
     
@@ -244,6 +280,20 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             return
         }
         
+        // Final drain of any remaining queued buffers
+        if let input = systemAudioInput {
+            drainBufferQueue(&systemBufferQueue, to: input)
+            if !systemBufferQueue.isEmpty {
+                print("[FileOutputService] WARNING: \(systemBufferQueue.count) system audio buffers lost on stop")
+            }
+        }
+        if let input = microphoneInput {
+            drainBufferQueue(&micBufferQueue, to: input)
+            if !micBufferQueue.isEmpty {
+                print("[FileOutputService] WARNING: \(micBufferQueue.count) microphone audio buffers lost on stop")
+            }
+        }
+        
         // Mark inputs as finished
         if systemSessionStarted {
             systemAudioInput?.markAsFinished()
@@ -260,9 +310,11 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         self.systemWriter = nil
         self.systemAudioInput = nil
         self.systemSessionStarted = false
+        self.systemBufferQueue = []
         self.micWriter = nil
         self.microphoneInput = nil
         self.micSessionStarted = false
+        self.micBufferQueue = []
         self._isWriting = false
         
         lock.unlock()
@@ -387,10 +439,12 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             self.systemWriter = sysWriter
             self.systemAudioInput = sysInput
             self.systemSessionStarted = false
+            self.systemBufferQueue = []  // Clear any stale buffers
             
             self.micWriter = micWr
             self.microphoneInput = micIn
             self.micSessionStarted = false
+            self.micBufferQueue = []  // Clear any stale buffers
             
             self._isWriting = true
             

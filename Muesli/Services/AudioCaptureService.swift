@@ -3,6 +3,217 @@ import ScreenCaptureKit
 import AVFoundation
 import CoreMedia
 
+
+// MARK: - AVAudioEngine Microphone Capture Helper
+
+/// Helper class to capture microphone audio via AVAudioEngine
+/// This is used instead of ScreenCaptureKit's captureMicrophone because SCK
+/// always uses the system default mic and ignores user device selection
+private final class MicrophoneCaptureEngine: @unchecked Sendable {
+    private let audioEngine = AVAudioEngine()
+    private var isRunning = false
+    private let bufferHandler: ((CMSampleBuffer) -> Void)?
+    private let levelHandler: ((Float) -> Void)?
+    
+    init(bufferHandler: ((CMSampleBuffer) -> Void)?, levelHandler: ((Float) -> Void)?) {
+        self.bufferHandler = bufferHandler
+        self.levelHandler = levelHandler
+    }
+    
+    func start(deviceID: String?) throws {
+        guard !isRunning else { return }
+        
+        let inputNode = audioEngine.inputNode
+        
+        // Try to set the preferred device if specified
+        if let deviceID = deviceID {
+            setInputDevice(deviceID: deviceID)
+        }
+        
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        
+        
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, time in
+            self?.handleAudioBuffer(buffer, time: time)
+        }
+        
+        try audioEngine.start()
+        isRunning = true
+        
+    }
+    
+    func stop() {
+        guard isRunning else { return }
+        
+        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.stop()
+        isRunning = false
+        
+    }
+    
+    private func setInputDevice(deviceID: String) {
+        // Find the audio device with matching UID
+        var propertySize: UInt32 = 0
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize)
+        let deviceCount = Int(propertySize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize, &deviceIDs)
+        
+        for audioDeviceID in deviceIDs {
+            // Get device UID
+            var deviceUID: CFString = "" as CFString
+            var uidSize = UInt32(MemoryLayout<CFString>.size)
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            
+            let status = AudioObjectGetPropertyData(audioDeviceID, &uidAddress, 0, nil, &uidSize, &deviceUID)
+            if status == noErr && (deviceUID as String) == deviceID {
+                // Found the device, set it as input
+                do {
+                    try audioEngine.inputNode.auAudioUnit.setDeviceID(audioDeviceID)
+                } catch {
+                }
+                return
+            }
+        }
+    }
+    
+    private func handleAudioBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
+        guard let floatChannelData = buffer.floatChannelData else { return }
+        
+        let frameLength = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        
+        // Calculate RMS for level meter
+        var sumOfSquares: Float = 0.0
+        let samples = UnsafeBufferPointer(start: floatChannelData[0], count: frameLength)
+        for sample in samples {
+            sumOfSquares += sample * sample
+        }
+        let rms = sqrt(sumOfSquares / Float(frameLength))
+        let level = min(rms * 16.0, 1.0)
+        levelHandler?(level)
+        
+        
+        // Convert AVAudioPCMBuffer to CMSampleBuffer for compatibility
+        if let sampleBuffer = createCMSampleBuffer(from: buffer, time: time) {
+            bufferHandler?(sampleBuffer)
+        }
+    }
+    
+    private func createCMSampleBuffer(from buffer: AVAudioPCMBuffer, time: AVAudioTime) -> CMSampleBuffer? {
+        guard let floatChannelData = buffer.floatChannelData else { return nil }
+        
+        let frameLength = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        let sampleRate = buffer.format.sampleRate
+        
+        // Create mono Float32 data
+        var monoData: [Float]
+        if channelCount == 1 {
+            monoData = Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
+        } else {
+            // Average channels for mono
+            monoData = [Float](repeating: 0, count: frameLength)
+            for i in 0..<frameLength {
+                var sum: Float = 0
+                for ch in 0..<channelCount {
+                    sum += floatChannelData[ch][i]
+                }
+                monoData[i] = sum / Float(channelCount)
+            }
+        }
+        
+        // Create AudioStreamBasicDescription for mono Float32
+        var asbd = AudioStreamBasicDescription(
+            mSampleRate: sampleRate,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 4,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 4,
+            mChannelsPerFrame: 1,
+            mBitsPerChannel: 32,
+            mReserved: 0
+        )
+        
+        // Create format description
+        var formatDesc: CMFormatDescription?
+        var status = CMAudioFormatDescriptionCreate(
+            allocator: nil,
+            asbd: &asbd,
+            layoutSize: 0,
+            layout: nil,
+            magicCookieSize: 0,
+            magicCookie: nil,
+            extensions: nil,
+            formatDescriptionOut: &formatDesc
+        )
+        guard status == noErr, let format = formatDesc else { return nil }
+        
+        // Create block buffer
+        let dataSize = monoData.count * MemoryLayout<Float>.size
+        var blockBuffer: CMBlockBuffer?
+        status = CMBlockBufferCreateWithMemoryBlock(
+            allocator: nil,
+            memoryBlock: nil,
+            blockLength: dataSize,
+            blockAllocator: nil,
+            customBlockSource: nil,
+            offsetToData: 0,
+            dataLength: dataSize,
+            flags: 0,
+            blockBufferOut: &blockBuffer
+        )
+        guard status == noErr, let block = blockBuffer else { return nil }
+        
+        // Copy data
+        status = monoData.withUnsafeBufferPointer { ptr in
+            CMBlockBufferReplaceDataBytes(
+                with: ptr.baseAddress!,
+                blockBuffer: block,
+                offsetIntoDestination: 0,
+                dataLength: dataSize
+            )
+        }
+        guard status == noErr else { return nil }
+        
+        // Create sample buffer
+        var sampleBuffer: CMSampleBuffer?
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
+            presentationTimeStamp: CMTime(seconds: time.audioTimeStamp.mHostTime > 0 ? Double(time.audioTimeStamp.mHostTime) / 1_000_000_000.0 : CACurrentMediaTime(), preferredTimescale: CMTimeScale(sampleRate)),
+            decodeTimeStamp: .invalid
+        )
+        
+        status = CMSampleBufferCreate(
+            allocator: nil,
+            dataBuffer: block,
+            dataReady: true,
+            makeDataReadyCallback: nil,
+            refcon: nil,
+            formatDescription: format,
+            sampleCount: monoData.count,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleSizeEntryCount: 0,
+            sampleSizeArray: nil,
+            sampleBufferOut: &sampleBuffer
+        )
+        
+        return status == noErr ? sampleBuffer : nil
+    }
+}
+
 /// Callback type for receiving audio buffers
 /// Note: Buffers are processed synchronously in the callback - do not block
 typealias AudioBufferHandler = @Sendable (CMSampleBuffer, AudioCaptureService.AudioType) -> Void
@@ -32,6 +243,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         case alreadyRecording
         case notRecording
         case streamInterrupted(underlying: Error?)
+        case bufferHandlerNotSet
         
         var errorDescription: String? {
             switch self {
@@ -52,6 +264,8 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
                     return "Stream interrupted: \(error.localizedDescription)"
                 }
                 return "Stream was interrupted"
+            case .bufferHandlerNotSet:
+                return "Buffer handler must be set before starting capture. Call setBufferHandler() first."
             }
         }
     }
@@ -65,15 +279,26 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     private var interruptedHandler: StreamInterruptedHandler?
     private var levelHandler: AudioLevelHandler?
     
+    // AVAudioEngine-based microphone capture (replaces SCK's captureMicrophone)
+    private var microphoneEngine: MicrophoneCaptureEngine?
+    
+    /// Selected microphone device ID (set before starting capture)
+    private var selectedMicrophoneDeviceID: String?
+    
     private(set) var isRecording = false
     
-    // Audio configuration
-    private let sampleRate: Int = 48000
-    private let channelCount: Int = 2
+    // Audio configuration (using centralized AudioConfiguration)
+    private let sampleRate: Int = AudioConfiguration.captureSampleRate
+    private let channelCount: Int = AudioConfiguration.captureChannelCount
     
     // MARK: - Initialization
     
     init() {}
+    
+    /// Set the microphone device to use for capture
+    func setMicrophoneDevice(_ deviceID: String?) {
+        selectedMicrophoneDeviceID = deviceID
+    }
     
     // MARK: - Public API
     
@@ -142,6 +367,13 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     
     /// Common capture logic with a given content filter
     private func startCaptureWithFilter(_ filter: SCContentFilter) async throws {
+        
+        // PRECONDITION: Buffer handler must be set before starting capture
+        // This prevents race conditions where audio starts flowing before the handler is configured
+        guard bufferHandler != nil else {
+            throw CaptureError.bufferHandlerNotSet
+        }
+        
         // Configure stream for AUDIO-ONLY capture
         let configuration = SCStreamConfiguration()
         configuration.capturesAudio = true
@@ -154,10 +386,11 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         configuration.height = 2
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1) // 1 FPS minimum
         
-        // Enable microphone capture on macOS 15+
-        if #available(macOS 15.0, *) {
-            configuration.captureMicrophone = true
-        }
+        // NOTE: We do NOT use ScreenCaptureKit's captureMicrophone because it:
+        // 1. Always uses system default mic, ignoring user selection
+        // 2. Has been observed to return all-zero samples in some configurations
+        // Instead, we use AVAudioEngine for microphone capture below
+        
         
         // Create the stream delegate to handle errors/interruptions
         let delegate = StreamDelegate { [weak self] error in
@@ -170,13 +403,28 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // Create the stream
         let stream = SCStream(filter: filter, configuration: configuration, delegate: delegate)
         
-        // Create and add stream output
+        // Create and add stream output for system audio
         let output = StreamOutput(handler: bufferHandler, levelHandler: levelHandler)
         try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
         
-        // Add microphone output on macOS 15+
-        if #available(macOS 15.0, *) {
-            try stream.addStreamOutput(output, type: .microphone, sampleHandlerQueue: .global(qos: .userInteractive))
+        // Start AVAudioEngine for microphone capture (instead of SCK's captureMicrophone)
+        let micHandler = bufferHandler
+        let micLevelHandler = levelHandler
+        let micEngine = MicrophoneCaptureEngine(
+            bufferHandler: { buffer in
+                micHandler?(buffer, .microphone)
+            },
+            levelHandler: { level in
+                micLevelHandler?(level, .microphone)
+            }
+        )
+        
+        do {
+            try micEngine.start(deviceID: selectedMicrophoneDeviceID)
+            self.microphoneEngine = micEngine
+        } catch {
+            // Continue without mic capture - system audio will still work
+            print("[AudioCaptureService] Warning: Microphone capture failed to start: \(error)")
         }
         
         // Start the stream
@@ -197,6 +445,10 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // Only process if we're still recording
         guard isRecording else { return }
         
+        // Stop microphone engine
+        microphoneEngine?.stop()
+        microphoneEngine = nil
+        
         // Mark as not recording
         self.isRecording = false
         self.stream = nil
@@ -212,6 +464,10 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         guard isRecording, let stream = stream else {
             throw CaptureError.notRecording
         }
+        
+        // Stop microphone engine first
+        microphoneEngine?.stop()
+        microphoneEngine = nil
         
         try await stream.stopCapture()
         
@@ -237,6 +493,7 @@ private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable 
     }
     
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        
         // Only process valid audio samples
         guard sampleBuffer.isValid else { return }
         

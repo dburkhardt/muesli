@@ -35,7 +35,13 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     init() {
         // Load saved preference from UserDefaults
         selectedDeviceID = UserDefaults.standard.string(forKey: Self.selectedDeviceIDKey)
-        refreshDevices()
+        
+        // ⚠️ WARNING: Do NOT call refreshDevices() here!
+        // AVCaptureDevice.DiscoverySession for audio devices can trigger the
+        // microphone permission prompt on macOS. We must defer device enumeration
+        // until after microphone permission has been granted during onboarding.
+        // Call refreshDevices() explicitly when permission is confirmed.
+        // See: spec/onboarding_flow.md "AVCaptureDevice and Permission Prompts"
     }
     
     // MARK: - Device Selection
@@ -57,7 +63,19 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     // MARK: - Device Enumeration
     
     /// Refresh the list of available microphone devices
+    ///
+    /// ⚠️ WARNING: Only call this after microphone permission has been granted.
+    /// AVCaptureDevice.DiscoverySession can trigger permission prompts on macOS.
+    /// See: spec/onboarding_flow.md "AVCaptureDevice and Permission Prompts"
     func refreshDevices() {
+        // Check if microphone permission is granted before accessing devices
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        guard status == .authorized else {
+            // Permission not granted - clear devices and return
+            availableDevices = []
+            return
+        }
+        
         var devices: [MicrophoneDevice] = []
         
         // Use AVCaptureDevice to enumerate audio input devices (works on macOS)
@@ -105,9 +123,15 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     // MARK: - System Default Management
     
     /// Set the preferred microphone device
-    /// Note: On macOS, ScreenCaptureKit uses the system default microphone.
-    /// We store the user's preference for UI display.
+    /// Note: We now use AVAudioEngine which allows specifying the input device.
     private func setSystemDefaultMicrophone(deviceID: String) {
+        // Check permission before accessing devices
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            // Just store the preference, device validation will happen when permission is granted
+            print("[MicrophoneManager] Selected microphone (pending permission): \(deviceID)")
+            return
+        }
+        
         // Verify the device exists
         let discoverySession = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone],
@@ -122,7 +146,16 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     }
     
     /// Get the current default microphone device
+    ///
+    /// ⚠️ WARNING: Only call this after microphone permission has been granted.
+    /// AVCaptureDevice.DiscoverySession can trigger permission prompts.
     var currentDefaultDevice: MicrophoneDevice? {
+        // Check if microphone permission is granted before accessing devices
+        // to avoid triggering the permission prompt during onboarding
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            return nil
+        }
+        
         let discoverySession = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone],
             mediaType: .audio,

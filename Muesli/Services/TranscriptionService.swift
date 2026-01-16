@@ -55,21 +55,21 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     // Processing state
     private var processingTask: Task<Void, Never>?
     
-    // Configuration
-    private let chunkDuration: TimeInterval = 5.0  // Process in 5-second chunks
-    private let overlapDuration: TimeInterval = 1.5  // Overlap between chunks (1.5 seconds)
-    private let sampleRate: Int = 16000  // WhisperKit expects 16kHz
+    // Configuration (using centralized AudioConfiguration)
+    private let chunkDuration: TimeInterval = AudioConfiguration.transcriptionChunkDuration
+    private let overlapDuration: TimeInterval = AudioConfiguration.transcriptionOverlapDuration
+    private let sampleRate: Int = AudioConfiguration.whisperSampleRate
     private let minSamplesForProcessing: Int  // Minimum samples before processing
     private let overlapSamples: Int  // Samples to overlap between chunks
     
     // VAD configuration
-    private let vadThreshold: Float = 0.01  // RMS threshold for voice activity (-40dB equivalent)
+    private let vadThreshold: Float = AudioConfiguration.vadThreshold
     
     // MARK: - Initialization
     
     init() {
-        minSamplesForProcessing = sampleRate * Int(chunkDuration)
-        overlapSamples = sampleRate * Int(overlapDuration)
+        minSamplesForProcessing = AudioConfiguration.minSamplesForProcessing
+        overlapSamples = AudioConfiguration.overlapSamples
     }
     
     // MARK: - Setup
@@ -80,8 +80,22 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     func initialize(modelPath: URL) async throws {
         guard !isInitialized else { return }
         
+        // Use Application Support for all WhisperKit storage to avoid Documents folder prompts
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let muesliDir = appSupport.appendingPathComponent("Muesli", isDirectory: true)
+        
+        // Create config with explicit downloadBase and tokenizerFolder in Application Support
+        // This prevents WhisperKit/Hub from defaulting to ~/Documents/huggingface
+        let config = WhisperKitConfig(
+            downloadBase: muesliDir,
+            modelFolder: modelPath.path,
+            tokenizerFolder: muesliDir.appendingPathComponent("Tokenizers"),
+            verbose: false,
+            download: false  // Don't download since we're using a local model
+        )
+        
         // Initialize WhisperKit with optimized configuration for Apple Silicon
-        whisperKit = try await WhisperKit(modelFolder: modelPath.path)
+        whisperKit = try await WhisperKit(config)
         isInitialized = true
     }
     
@@ -116,11 +130,16 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Stop transcription processing
     func stopTranscription() async {
+        // Signal the processing loop to stop (it checks isProcessing each iteration)
         bufferState.withLock { state in
             state.isProcessing = false
         }
         
-        processingTask?.cancel()
+        // Wait for the processing task to complete gracefully instead of cancelling
+        // This allows any in-flight WhisperKit transcription to finish
+        if let task = processingTask {
+            await task.value  // Wait for task to complete instead of cancelling
+        }
         processingTask = nil
         
         // Process any remaining audio
@@ -310,6 +329,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         if let systemURL = systemAudioURL {
             if let samples = await loadAudioFile(url: systemURL) {
                 let results = try await whisperKit.transcribe(audioArray: samples)
+                
                 for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let segment = TranscriptSegment(
                         text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -325,6 +345,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         if let micURL = micAudioURL {
             if let samples = await loadAudioFile(url: micURL) {
                 let results = try await whisperKit.transcribe(audioArray: samples)
+                
                 for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let segment = TranscriptSegment(
                         text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -338,6 +359,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     }
     
     /// Load audio file and convert to Float32 samples at 16kHz mono
+    ///
+    /// - Warning: AVAudioConverter returns different status codes that must be handled correctly:
+    ///   - `.haveData` (rawValue 0): Output buffer has data, more input available
+    ///   - `.inputRanDry` (rawValue 1): Input exhausted BUT output buffer has valid data - THIS IS SUCCESS!
+    ///   - `.endOfStream` (rawValue 2): End of stream reached
+    ///   - `.error` (rawValue 3): An error occurred
+    ///   See: https://developer.apple.com/documentation/avfaudio/avaudioconverteroutputstatus
     private func loadAudioFile(url: URL) async -> [Float]? {
         do {
             let file = try AVAudioFile(forReading: url)
@@ -376,7 +404,12 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 }
             }
             
-            guard status == .haveData, let floatChannelData = outputBuffer.floatChannelData else {
+            // IMPORTANT: Accept both .haveData AND .inputRanDry as valid statuses!
+            // .inputRanDry (rawValue 1) means input was exhausted but output buffer contains valid data.
+            // This is a SUCCESSFUL conversion - the output is ready to use.
+            // Bug fix: Previously only checked for .haveData, which incorrectly rejected valid conversions.
+            let isValidStatus = (status == .haveData || status == .inputRanDry)
+            guard isValidStatus, let floatChannelData = outputBuffer.floatChannelData else {
                 print("[TranscriptionService] Conversion failed: \(error?.localizedDescription ?? "unknown error")")
                 return nil
             }

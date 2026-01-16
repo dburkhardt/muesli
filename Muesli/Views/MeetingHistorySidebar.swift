@@ -144,7 +144,9 @@ struct MeetingHistorySidebar: View {
                                 },
                                 onShiftClick: {
                                     historyManager.selectMeetingsInRange(to: meeting)
-                                }
+                                },
+                                viewModel: viewModel,
+                                selectedCount: historyManager.selectedMeetingIDs.count
                             )
                         }
                     } header: {
@@ -237,6 +239,10 @@ struct MeetingSidebarItemView: View {
     let onDelete: () -> Void
     var onShiftClick: () -> Void = {}
     
+    // For bulk actions
+    var viewModel: MuesliViewModel?
+    var selectedCount: Int = 1
+    
     @State private var isHovered = false
     
     var body: some View {
@@ -280,12 +286,43 @@ struct MeetingSidebarItemView: View {
             }
         }
         .contextMenu {
-            Button("Open") {
-                onDoubleClick()
-            }
-            Divider()
-            Button("Delete", role: .destructive) {
-                onDelete()
+            if selectedCount > 1, let viewModel = viewModel {
+                // Bulk actions for multi-select
+                Menu("Reprocess Selected (\(selectedCount))") {
+                    ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
+                        Button("With \(model.displayName)") {
+                            viewModel.bulkReprocessTranscripts(using: model)
+                        }
+                    }
+                }
+                .disabled(viewModel.modelManager.downloadedModels.isEmpty)
+                
+                Divider()
+                
+                Button("Delete \(selectedCount) Meetings", role: .destructive) {
+                    onDelete()
+                }
+            } else {
+                // Single-select actions
+                Button("Open") {
+                    onDoubleClick()
+                }
+                
+                if let viewModel = viewModel, viewModel.modelManager.downloadedModels.count > 0 {
+                    Divider()
+                    Menu("Reprocess Transcript") {
+                        ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
+                            Button("With \(model.displayName)") {
+                                viewModel.reprocessTranscript(for: meeting, using: model)
+                            }
+                        }
+                    }
+                }
+                
+                Divider()
+                Button("Delete", role: .destructive) {
+                    onDelete()
+                }
             }
         }
     }
