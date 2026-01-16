@@ -9,6 +9,11 @@ struct MenuBarView: View {
     /// Use @AppStorage so SwiftUI automatically observes UserDefaults changes
     @AppStorage(AppStorageKeys.hasCompletedOnboarding) private var hasCompletedOnboarding: Bool = false
     
+    /// Update checking state
+    @State private var updateStatus: UpdateChecker.UpdateStatus?
+    @State private var showUpdateSheet = false
+    @State private var isCheckingForUpdates = false
+    
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
     }
@@ -71,12 +76,66 @@ struct MenuBarView: View {
             }
             .keyboardShortcut(",", modifiers: .command)
             
+            // Check for Updates menu item with indicator
+            if let status = updateStatus, case .updateAvailable = status {
+                Button {
+                    showUpdateSheet = true
+                } label: {
+                    HStack {
+                        Text("Update Available")
+                        Circle()
+                            .fill(.orange)
+                            .frame(width: 8, height: 8)
+                    }
+                }
+            } else {
+                Button("Check for Updates...") {
+                    Task {
+                        isCheckingForUpdates = true
+                        updateStatus = await UpdateChecker.shared.checkForUpdates()
+                        isCheckingForUpdates = false
+                        if case .updateAvailable = updateStatus {
+                            showUpdateSheet = true
+                        }
+                    }
+                }
+                .disabled(isCheckingForUpdates)
+            }
+            
             Divider()
             
             Button("Quit \(appName)") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q", modifiers: .command)
+        }
+        .sheet(isPresented: $showUpdateSheet) {
+            if case .updateAvailable(let version, let notes, let url) = updateStatus {
+                UpdateSheet(
+                    currentVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown",
+                    newVersion: version,
+                    releaseNotes: notes,
+                    downloadURL: url,
+                    onDownload: {
+                        NSWorkspace.shared.open(url)
+                        showUpdateSheet = false
+                    },
+                    onSkip: {
+                        UpdateChecker.shared.skipVersion(version)
+                        updateStatus = .upToDate
+                        showUpdateSheet = false
+                    },
+                    onRemindLater: {
+                        showUpdateSheet = false
+                    }
+                )
+            }
+        }
+        .onAppear {
+            // Check for updates on menu bar open if we have a cached status from ViewModel
+            if let vmStatus = viewModel.latestUpdateStatus {
+                updateStatus = vmStatus
+            }
         }
     }
     

@@ -1,0 +1,37 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" rx="110" fill="white"/>
+  
+  <defs>
+    <linearGradient id="grad_orange" x1="100" y1="450" x2="412" y2="62" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E86A34"/>
+      <stop offset="1" stop-color="#F9C66B"/>
+    </linearGradient>
+  </defs>
+
+  <g stroke="url(#grad_orange)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    
+    <path d="M140 210 
+             V290 
+             Q140 330 180 330 
+             L185 330
+             C185 435 327 435 327 330
+             L332 330
+             Q372 330 372 290
+             V210" />
+
+    <line x1="256" y1="90" x2="256" y2="345" />
+    
+    <line x1="198" y1="165" x2="198" y2="315" />
+    
+    <line x1="314" y1="135" x2="314" y2="315" />
+  </g>
+
+  <g fill="url(#grad_orange)">
+    <circle cx="196" cy="115" r="11" />
+    <circle cx="156" cy="150" r="11" />
+    <circle cx="356" cy="115" r="11" />
+  </g>
+
+  <circle cx="314" cy="65" r="15" stroke="url(#grad_orange)" stroke-width="9" fill="none" />
+
+</svg>

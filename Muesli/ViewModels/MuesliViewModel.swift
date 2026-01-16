@@ -55,6 +55,12 @@ final class MuesliViewModel {
     /// LLM Manager for transcript stitching (optional enhancement)
     let llmManager: LLMManager
     
+    /// Update checker for app updates
+    let updateChecker = UpdateChecker.shared
+    
+    /// Latest update status from background check
+    var latestUpdateStatus: UpdateChecker.UpdateStatus?
+    
     /// Convenience accessor for the active model path
     var modelPath: URL? {
         modelManager.modelPath
@@ -735,6 +741,23 @@ final class MuesliViewModel {
     /// Resume recording for a completed meeting
     func resumeRecording(for meeting: MeetingHistoryItem) {
         recordingController.resumeRecording(for: meeting)
+    }
+    
+    // MARK: - Update Checking
+    
+    /// Check for updates on app launch (with 24-hour throttling)
+    func checkForUpdatesOnLaunch() async {
+        // Only check if enough time has passed since last check (24 hours)
+        guard updateChecker.shouldCheckForUpdates() else {
+            return
+        }
+        
+        latestUpdateStatus = await updateChecker.checkForUpdates()
+    }
+    
+    /// Check for updates immediately (ignores throttling)
+    func checkForUpdatesNow() async {
+        latestUpdateStatus = await updateChecker.checkForUpdates()
     }
     
     // MARK: - Segment Refinement Helpers

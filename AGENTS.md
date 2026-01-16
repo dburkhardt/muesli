@@ -24,6 +24,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 3. **Check in frequently** — confirm approach before significant work; report progress at milestones
 4. **Native patterns** — Swift 6 concurrency, `@Observable`, one type per file
 5. **UI principle** — "Granola-inspired": minimal, clean, fast
+6. **Track future work** — when asked to "add a todo" or "note this for later", add it to `TODO.md` and continue working without interruption
 
 ## Commands
 
