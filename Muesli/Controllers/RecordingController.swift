@@ -263,24 +263,19 @@ final class RecordingController {
                 microphoneSamples: micSamples48kHz,
                 micTimestamp: timestamp
             )
-            
-            
-            // Create CMSampleBuffer from processed samples for file output
-            if let processedBuffer = EchoCancellationService.createSampleBuffer(
-                from: processedSamples48kHz,
-                timestamp: timestamp
-            ) {
-                
-                fileService.appendAudioBuffer(processedBuffer, type: .microphone)
-            } else {
-                
-                // Fallback: save original if conversion fails
-                fileService.appendAudioBuffer(buffer, type: .microphone)
-            }
         } else {
             processedSamples48kHz = micSamples48kHz
-            
-            // Save original buffer when AEC disabled
+        }
+        
+        // Convert to stereo CMSampleBuffer for file output (FileOutputService expects stereo)
+        // This ensures format consistency regardless of AEC state
+        if let processedBuffer = EchoCancellationService.createSampleBuffer(
+            from: processedSamples48kHz,
+            timestamp: timestamp
+        ) {
+            fileService.appendAudioBuffer(processedBuffer, type: .microphone)
+        } else {
+            // Fallback: save original if conversion fails
             fileService.appendAudioBuffer(buffer, type: .microphone)
         }
         

@@ -1,4 +1,6 @@
 import XCTest
+import AVFoundation
+import CoreMedia
 @testable import Muesli
 
 /// Tests for RecordingController functionality
@@ -130,6 +132,40 @@ final class RecordingControllerTests: XCTestCase {
         
         XCTAssertFalse(controller.showTitlePromptSheet, "Should clear title prompt sheet")
         XCTAssertNil(controller.pendingStopSession, "Should clear pending stop session")
+    }
+    
+    // MARK: - Audio Buffer Format Tests
+    
+    func testMicrophoneBufferConversionWithAECDisabled() async throws {
+        // Test that microphone buffers are converted to stereo format even when AEC is disabled
+        // This ensures format consistency with FileOutputService expectations
+        
+        // Create test mono samples (simulates what MicrophoneCaptureEngine produces)
+        let sampleRate: Double = 48000
+        let frameCount = 1024
+        let monoSamples = [Float](repeating: 0.5, count: frameCount)
+        
+        // Verify we can convert mono samples to stereo buffer
+        let timestamp = CMTime(value: 0, timescale: CMTimeScale(sampleRate))
+        guard let stereoBuffer = EchoCancellationService.createSampleBuffer(
+            from: monoSamples,
+            timestamp: timestamp
+        ) else {
+            XCTFail("Failed to create stereo buffer from mono samples")
+            return
+        }
+        
+        // Verify the converted buffer is stereo (2 channels) as expected by FileOutputService
+        guard let convertedFormatDesc = CMSampleBufferGetFormatDescription(stereoBuffer),
+              let convertedAsbd = CMAudioFormatDescriptionGetStreamBasicDescription(convertedFormatDesc) else {
+            XCTFail("Failed to get format description from converted buffer")
+            return
+        }
+        
+        XCTAssertEqual(convertedAsbd.pointee.mChannelsPerFrame, 2, "Converted buffer should be stereo")
+        XCTAssertEqual(convertedAsbd.pointee.mSampleRate, sampleRate, "Sample rate should match")
+        XCTAssertTrue((convertedAsbd.pointee.mFormatFlags & kAudioFormatFlagIsFloat) != 0, "Should be Float32")
+        XCTAssertEqual(convertedAsbd.pointee.mBitsPerChannel, 32, "Should be 32-bit")
     }
 }
 
