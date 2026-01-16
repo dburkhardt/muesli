@@ -47,12 +47,22 @@ final class PermissionManager: PermissionManagerProtocol {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in
-                    // ⚠️ CRITICAL: Do NOT call refreshPermissionsAsync() during onboarding!
+                    // ⚠️ CRITICAL: Do NOT call refreshPermissionsAsync() on the welcome screen!
                     // SCShareableContent.excludingDesktopWindows() triggers the screen recording
-                    // permission prompt, which should only happen on the screen recording step.
+                    // permission prompt if permission not granted.
+                    // 
+                    // However, once user is on permission screens (step >= 1), we SHOULD refresh
+                    // when they return from System Settings, otherwise they have to manually
+                    // click "Check Again" which is poor UX.
+                    // 
                     // See: spec/onboarding_flow.md "SCShareableContent in Notification Observers"
                     let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding)
-                    guard hasCompletedOnboarding else {
+                    let currentStep = UserDefaults.standard.integer(forKey: AppStorageKeys.onboardingCurrentStep)
+                    
+                    // Allow refresh if:
+                    // 1. Onboarding is complete, OR
+                    // 2. User is on permission screens (step 1+), not welcome (step 0)
+                    guard hasCompletedOnboarding || currentStep > 0 else {
                         return
                     }
                     

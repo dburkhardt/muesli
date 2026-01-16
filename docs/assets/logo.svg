@@ -6,56 +6,58 @@
     </linearGradient>
   </defs>
   
-  <!-- Bowl - outer curve -->
-  <path d="M 45 130 Q 45 170, 100 175 Q 155 170, 155 130" 
+  <!-- Bowl - outer curve (smooth single curve) -->
+  <path d="M 40 145 Q 40 182, 100 185 Q 160 182, 160 145" 
         fill="none" 
         stroke="url(#gradient)" 
         stroke-width="10" 
-        stroke-linecap="round"/>
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
   
   <!-- Bowl - inner curve for depth -->
-  <path d="M 55 135 Q 55 160, 100 163 Q 145 160, 145 135" 
+  <path d="M 52 140 Q 52 168, 100 170 Q 148 168, 148 140" 
         fill="none" 
         stroke="url(#gradient)" 
         stroke-width="8" 
         stroke-linecap="round"
+        stroke-linejoin="round"
         opacity="0.6"/>
   
-  <!-- Waveform bars (muesli pieces) - more varied heights -->
+  <!-- Waveform bars (muesli pieces) - with more spacing -->
   <!-- Leftmost bar -->
-  <rect x="58" y="95" width="9" height="40" rx="4.5" fill="url(#gradient)"/>
+  <rect x="52" y="95" width="9" height="40" rx="4.5" fill="url(#gradient)"/>
   
   <!-- Second from left -->
-  <rect x="73" y="75" width="9" height="60" rx="4.5" fill="url(#gradient)"/>
+  <rect x="69" y="75" width="9" height="60" rx="4.5" fill="url(#gradient)"/>
   
   <!-- Center tall bar -->
-  <rect x="88" y="50" width="9" height="85" rx="4.5" fill="url(#gradient)"/>
+  <rect x="86" y="50" width="9" height="85" rx="4.5" fill="url(#gradient)"/>
   
   <!-- Second from right -->
   <rect x="103" y="70" width="9" height="65" rx="4.5" fill="url(#gradient)"/>
   
+  <!-- Second rightmost bar -->
+  <rect x="120" y="85" width="9" height="50" rx="4.5" fill="url(#gradient)"/>
+  
   <!-- Rightmost bar -->
-  <rect x="118" y="85" width="9" height="50" rx="4.5" fill="url(#gradient)"/>
+  <rect x="137" y="95" width="9" height="40" rx="4.5" fill="url(#gradient)"/>
   
-  <!-- Additional thin bar on far left -->
-  <rect x="133" y="95" width="9" height="40" rx="4.5" fill="url(#gradient)"/>
-  
-  <!-- Dots/berries floating above - mix of filled and outlined -->
+  <!-- Dots/berries floating above - spread out more -->
   <!-- Small filled dot left -->
-  <circle cx="50" cy="75" r="3.5" fill="url(#gradient)" opacity="0.85"/>
+  <circle cx="45" cy="75" r="3.5" fill="url(#gradient)" opacity="0.85"/>
   
   <!-- Outlined circle left-center -->
-  <circle cx="65" cy="60" r="5" fill="none" stroke="url(#gradient)" stroke-width="2.5" opacity="0.9"/>
+  <circle cx="62" cy="60" r="5" fill="none" stroke="url(#gradient)" stroke-width="2.5" opacity="0.9"/>
   
-  <!-- Outlined circle top center -->
-  <circle cx="88" cy="38" r="6" fill="none" stroke="url(#gradient)" stroke-width="3" opacity="0.9"/>
+  <!-- Outlined circle top center-left -->
+  <circle cx="82" cy="38" r="6" fill="none" stroke="url(#gradient)" stroke-width="3" opacity="0.9"/>
   
-  <!-- Large outlined circle right-center -->
-  <circle cx="118" cy="45" r="7" fill="none" stroke="url(#gradient)" stroke-width="3" opacity="0.9"/>
+  <!-- Large outlined circle top center-right -->
+  <circle cx="118" cy="38" r="6" fill="none" stroke="url(#gradient)" stroke-width="3" opacity="0.9"/>
   
   <!-- Medium outlined circle right -->
-  <circle cx="135" cy="60" r="5.5" fill="none" stroke="url(#gradient)" stroke-width="2.5" opacity="0.9"/>
+  <circle cx="138" cy="60" r="5" fill="none" stroke="url(#gradient)" stroke-width="2.5" opacity="0.9"/>
   
   <!-- Small filled dot right -->
-  <circle cx="148" cy="78" r="4" fill="url(#gradient)" opacity="0.85"/>
+  <circle cx="155" cy="75" r="3.5" fill="url(#gradient)" opacity="0.85"/>
 </svg>

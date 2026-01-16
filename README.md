@@ -1,76 +1,54 @@
 # Muesli
 
-A local-first meeting transcription app for macOS. Captures meeting audio (Zoom/Teams/Meet via browser) + microphone, provides real-time on-device transcription via WhisperKit, and saves audio files + transcript to a local folder.
+**Local-first meeting transcription for macOS.** Capture and transcribe Zoom, Teams, and Google Meet meetings with complete privacy. Everything runs on your Mac—no cloud, no subscriptions, no data sharing.
 
-## Documentation
+## Download
 
-- **AGENTS.md** - Working rules, architecture, build commands, conventions, and common pitfalls
-- **SPEC.md** - Detailed software design specification with UX flows, technical architecture, and phased implementation plan
+🔗 **[Download from our website](https://dburkhardt.github.io/muesli)**
 
-## Getting Started with Cursor
+The latest release is available as a DMG installer from our [GitHub releases page](https://github.com/dburkhardt/muesli/releases/latest).
 
-### 1. Clone the Repository
+**Note:** Muesli is currently unsigned. When you first open it, macOS will show a security warning. Right-click the app in your Applications folder and choose "Open" to bypass Gatekeeper. See our [installation guide](https://dburkhardt.github.io/muesli/download.html) for detailed instructions.
+
+**Requirements:**
+- macOS 14.0+ (Sonoma)
+- Apple Silicon Mac (M1/M2/M3/M4)
+
+## Building from Source
+
+Developers can build Muesli from source using Xcode:
 
 ```bash
+# Clone the repository
 git clone https://github.com/dburkhardt/muesli.git
 cd muesli
+
+# Build and launch
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+killall Muesli 2>/dev/null
+xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee "build-${TIMESTAMP}.txt"
+open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
 ```
 
-### 2. Open in Cursor
-
-Open the project folder in Cursor. The agent rules in `AGENTS.md` and `.cursorrules` will automatically guide AI assistants.
-
-### 3. Build the Project
-
-```bash
-# Fast build (with -quiet flag - critical for speed)
-killall Muesli 2>/dev/null; xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build -quiet && open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
-```
-
-### 4. Working with AI Agents
-
-When working with Cursor's AI agent:
-
-1. **Follow the phase plan** - Work through phases defined in `SPEC.md` one at a time
-2. **Verify checkpoints** - Confirm each phase's checkpoint before moving to the next
-3. **Use branches for parallel work** - Create separate branches for different agents/features
-
-Example prompt to start:
-```
-I'm building Muesli, a meeting transcription app. Please read SPEC.md and continue from the current phase.
-```
-
-### 5. Using Multiple Agents
-
-You can use different branches for different Cursor agents:
-
-```bash
-# Create a branch for specific work
-git checkout -b agent-feature-name
-git push -u origin agent-feature-name
-```
-
-## Tips for AI-Assisted Development
-
-1. **Verify each checkpoint** before moving on. Run the app and confirm the expected behavior.
-
-2. **If something breaks**, provide the error message. The AI can often fix issues if it can see the build output.
-
-3. **Keep sessions focused** - if context gets long, start a new session and point the agent to read `AGENTS.md` and continue from the current phase.
-
-4. **Take screenshots** if UI doesn't look right - you can paste them into Cursor.
-
-## Reference Projects
-
-These open-source projects demonstrate patterns used in Muesli:
-
-- **Azayaka** (menu bar + ScreenCaptureKit): https://github.com/Mnpn/Azayaka
-- **WhisperKit Sample** (transcription): https://github.com/rudrankriyam/WhisperKit-Sample
-- **Apple ScreenCaptureKit Sample**: https://developer.apple.com/documentation/screencapturekit/capturing_screen_content_in_macos
-
-## Requirements
-
+**Requirements:**
 - macOS 14.0+ (Sonoma)
 - Xcode 15.0+
-- Apple Silicon Mac (M1/M2/M3)
-- Cursor IDE
+- Apple Silicon Mac (M1/M2/M3/M4)
+
+**Architecture and Technical Details:**
+- See [AGENTS.md](AGENTS.md) for architecture, build commands, and common pitfalls
+- See [SPEC.md](SPEC.md) for product specification and implementation phases
+
+## For Cursor Users
+
+If you're developing Muesli with Cursor's AI agent:
+
+1. **Read [AGENTS.md](AGENTS.md) first** - Contains working rules, architecture, and conventions
+2. **Follow the phased plan in [SPEC.md](SPEC.md)** - Work through one phase at a time
+3. **Verify checkpoints** - Confirm each phase works before proceeding
+
+The agent rules in `AGENTS.md` will automatically guide AI assistants through the codebase.
+
+## License
+
+Muesli is free and open source software. See [LICENSE](LICENSE) for details.
