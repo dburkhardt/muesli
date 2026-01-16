@@ -14,6 +14,14 @@ struct MenuBarView: View {
     @State private var showUpdateSheet = false
     @State private var isCheckingForUpdates = false
     
+    private var updateHelper: UpdateCheckHelper {
+        UpdateCheckHelper(
+            updateStatus: $updateStatus,
+            showUpdateSheet: $showUpdateSheet,
+            isCheckingForUpdates: $isCheckingForUpdates
+        )
+    }
+    
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
     }
@@ -91,12 +99,7 @@ struct MenuBarView: View {
             } else {
                 Button("Check for Updates...") {
                     Task {
-                        isCheckingForUpdates = true
-                        updateStatus = await UpdateChecker.shared.checkForUpdates()
-                        isCheckingForUpdates = false
-                        if case .updateAvailable = updateStatus {
-                            showUpdateSheet = true
-                        }
+                        await updateHelper.checkForUpdates()
                     }
                 }
                 .disabled(isCheckingForUpdates)
@@ -110,26 +113,7 @@ struct MenuBarView: View {
             .keyboardShortcut("q", modifiers: .command)
         }
         .sheet(isPresented: $showUpdateSheet) {
-            if case .updateAvailable(let version, let notes, let url) = updateStatus {
-                UpdateSheet(
-                    currentVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown",
-                    newVersion: version,
-                    releaseNotes: notes,
-                    downloadURL: url,
-                    onDownload: {
-                        NSWorkspace.shared.open(url)
-                        showUpdateSheet = false
-                    },
-                    onSkip: {
-                        UpdateChecker.shared.skipVersion(version)
-                        updateStatus = .upToDate
-                        showUpdateSheet = false
-                    },
-                    onRemindLater: {
-                        showUpdateSheet = false
-                    }
-                )
-            }
+            updateHelper.updateSheet(currentVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
         }
         .onAppear {
             // Check for updates on menu bar open if we have a cached status from ViewModel

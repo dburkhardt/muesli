@@ -8,6 +8,14 @@ struct AboutView: View {
     @State private var isCheckingForUpdates = false
     @State private var showUpdateSheet = false
     
+    private var updateHelper: UpdateCheckHelper {
+        UpdateCheckHelper(
+            updateStatus: $updateStatus,
+            showUpdateSheet: $showUpdateSheet,
+            isCheckingForUpdates: $isCheckingForUpdates
+        )
+    }
+    
     var body: some View {
         VStack(spacing: 20) {
             // App icon
@@ -53,12 +61,7 @@ struct AboutView: View {
                 // Check for Updates button
                 Button(action: {
                     Task {
-                        isCheckingForUpdates = true
-                        updateStatus = await UpdateChecker.shared.checkForUpdates()
-                        isCheckingForUpdates = false
-                        if case .updateAvailable = updateStatus {
-                            showUpdateSheet = true
-                        }
+                        await updateHelper.checkForUpdates()
                     }
                 }) {
                     HStack(spacing: 6) {
@@ -66,10 +69,20 @@ struct AboutView: View {
                         Text("Check for Updates")
                     }
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(case .updateAvailable = updateStatus ? .white : .primary)
+                    .foregroundStyle({
+                        if case .updateAvailable = updateStatus {
+                            return Color.white
+                        }
+                        return Color.primary
+                    }() as Color)
                     .frame(width: 180)
                     .padding(.vertical, 8)
-                    .background(case .updateAvailable = updateStatus ? Color.accentColor : Color.secondary.opacity(0.15))
+                    .background({
+                        if case .updateAvailable = updateStatus {
+                            return Color.accentColor
+                        }
+                        return Color.secondary.opacity(0.15)
+                    }() as Color)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
@@ -109,26 +122,7 @@ struct AboutView: View {
         .padding(40)
         .frame(width: 400, height: 600)
         .sheet(isPresented: $showUpdateSheet) {
-            if case .updateAvailable(let version, let notes, let url) = updateStatus {
-                UpdateSheet(
-                    currentVersion: appVersion,
-                    newVersion: version,
-                    releaseNotes: notes,
-                    downloadURL: url,
-                    onDownload: {
-                        NSWorkspace.shared.open(url)
-                        showUpdateSheet = false
-                    },
-                    onSkip: {
-                        UpdateChecker.shared.skipVersion(version)
-                        updateStatus = .upToDate
-                        showUpdateSheet = false
-                    },
-                    onRemindLater: {
-                        showUpdateSheet = false
-                    }
-                )
-            }
+            updateHelper.updateSheet(currentVersion: appVersion)
         }
         .onAppear {
             // Load cached update status if available

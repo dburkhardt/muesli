@@ -23,7 +23,13 @@ Each item should include:
 
 ### Bugs
 
-*No items yet*
+**[Bug]** [High] Handle blank audio and random snippets properly
+- Description: Ensure blank audio segments and random snippets at the end of meetings are handled correctly
+- Occurs in two scenarios:
+  1. End of live meetings - may capture trailing silence or brief noise
+  2. During reprocessing - should skip/filter empty or spurious audio chunks
+- Notes: Need to add audio detection/filtering logic in transcription pipeline
+- Related: TranscriptionService.swift, TranscriptProcessor.swift
 
 ### Refactoring
 
