@@ -152,6 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
                     window.makeKeyAndOrderFront(nil)
                 }
+                
+                // Check for updates after 5 seconds
+                try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+                await MuesliApp.sharedViewModel?.checkForUpdatesOnLaunch()
             }
         }
     }

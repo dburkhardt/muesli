@@ -21,6 +21,7 @@ ENGINEERING PRINCIPLES
 - One primary type per file; reusable UI in Views/Components
 
 SAFETY
+- No telemetry or cloud upload
 - No secrets/keys in repo
 - No large binaries (models, audio, build artifacts)
 

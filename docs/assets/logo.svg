@@ -1,0 +1,63 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#F5B85F;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#E67E22;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Bowl - outer curve (smooth single curve) -->
+  <path d="M 40 145 Q 40 182, 100 185 Q 160 182, 160 145" 
+        fill="none" 
+        stroke="url(#gradient)" 
+        stroke-width="10" 
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+  
+  <!-- Bowl - inner curve for depth -->
+  <path d="M 52 140 Q 52 168, 100 170 Q 148 168, 148 140" 
+        fill="none" 
+        stroke="url(#gradient)" 
+        stroke-width="8" 
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        opacity="0.6"/>
+  
+  <!-- Waveform bars (muesli pieces) - with more spacing -->
+  <!-- Leftmost bar -->
+  <rect x="52" y="95" width="9" height="40" rx="4.5" fill="url(#gradient)"/>
+  
+  <!-- Second from left -->
+  <rect x="69" y="75" width="9" height="60" rx="4.5" fill="url(#gradient)"/>
+  
+  <!-- Center tall bar -->
+  <rect x="86" y="50" width="9" height="85" rx="4.5" fill="url(#gradient)"/>
+  
+  <!-- Second from right -->
+  <rect x="103" y="70" width="9" height="65" rx="4.5" fill="url(#gradient)"/>
+  
+  <!-- Second rightmost bar -->
+  <rect x="120" y="85" width="9" height="50" rx="4.5" fill="url(#gradient)"/>
+  
+  <!-- Rightmost bar -->
+  <rect x="137" y="95" width="9" height="40" rx="4.5" fill="url(#gradient)"/>
+  
+  <!-- Dots/berries floating above - spread out more -->
+  <!-- Small filled dot left -->
+  <circle cx="45" cy="75" r="3.5" fill="url(#gradient)" opacity="0.85"/>
+  
+  <!-- Outlined circle left-center -->
+  <circle cx="62" cy="60" r="5" fill="none" stroke="url(#gradient)" stroke-width="2.5" opacity="0.9"/>
+  
+  <!-- Outlined circle top center-left -->
+  <circle cx="82" cy="38" r="6" fill="none" stroke="url(#gradient)" stroke-width="3" opacity="0.9"/>
+  
+  <!-- Large outlined circle top center-right -->
+  <circle cx="118" cy="38" r="6" fill="none" stroke="url(#gradient)" stroke-width="3" opacity="0.9"/>
+  
+  <!-- Medium outlined circle right -->
+  <circle cx="138" cy="60" r="5" fill="none" stroke="url(#gradient)" stroke-width="2.5" opacity="0.9"/>
+  
+  <!-- Small filled dot right -->
+  <circle cx="155" cy="75" r="3.5" fill="url(#gradient)" opacity="0.85"/>
+</svg>

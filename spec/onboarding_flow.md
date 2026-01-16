@@ -183,6 +183,22 @@ guard UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding) 
 _ = await self?.refreshPermissionsAsync()
 ```
 
+## Debugging Onboarding Issues
+
+### Common Issue: Running Wrong Binary
+
+**Symptom**: Permission detection appears broken after code changes, but you're certain the fix should work.
+
+**Root Cause**: macOS may launch an installed version from `/Applications/` instead of the freshly built version in `~/Library/Developer/Xcode/DerivedData/`.
+
+**Solution**:
+1. Kill the app: `killall Muesli`
+2. Check which version is running: `ps aux | grep Muesli.app | grep -v grep`
+3. If path shows `/Applications/Muesli.app`, delete it: `rm -rf /Applications/Muesli.app`
+4. Launch the debug build: `open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app`
+
+**Prevention**: After building, always verify the correct binary is running by checking the process path.
+
 ## Change History
 
 | Date | Change | Reason |
@@ -191,3 +207,4 @@ _ = await self?.refreshPermissionsAsync()
 | 2026-01-15 | Add async check on step change | Reliable detection after granting |
 | 2026-01-15 | Defer MicrophoneManager.refreshDevices() | AVCaptureDevice.DiscoverySession triggers mic permission prompt |
 | 2026-01-16 | Guard didBecomeActiveNotification observer | SCShareableContent triggers screen recording prompt |
+| 2026-01-16 | Update guard to allow refresh during onboarding | Allow auto-detection when currentStep > 0 (not on welcome screen) |

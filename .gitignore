@@ -28,3 +28,9 @@ build-*.txt
 test-*.txt
 *.profraw
 *.profdata
+
+# Auto-generated website stats
+docs/download-stats.json
+
+# DMG files (should only exist in GitHub Releases)
+*.dmg

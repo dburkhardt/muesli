@@ -40,4 +40,12 @@ enum AppStorageKeys {
     
     /// Set of downloaded LLM model identifiers (stored as JSON array)
     static let downloadedLLMModels = "downloadedLLMModels"
+    
+    // MARK: - Update Checking
+    
+    /// Timestamp of last update check (ISO8601 date string)
+    static let lastUpdateCheckDate = "lastUpdateCheckDate"
+    
+    /// Array of version strings the user chose to skip (stored as JSON array)
+    static let skippedVersions = "skippedVersions"
 }

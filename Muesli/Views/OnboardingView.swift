@@ -186,8 +186,10 @@ struct OnboardingView: View {
                     }
                     .buttonStyle(.bordered)
                     
-                    Button("Try Again") {
-                        viewModel.requestScreenRecordingPermission()
+                    Button("Check Again") {
+                        Task {
+                            await viewModel.refreshPermissionsAsync()
+                        }
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(Color.accentColor)
@@ -259,16 +261,60 @@ struct OnboardingView: View {
                             .foregroundStyle(.orange)
                     }
                     
-                    Text("Microphone access was denied. To use Muesli, please grant permission in System Settings.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+                    VStack(spacing: 8) {
+                        Text("To use Muesli, please enable microphone access:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 4) {
+                                Text("1.")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                Text("Click 'Open System Settings' below")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: 4) {
+                                Text("2.")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                Text("Find \(appName) in the Microphone list and enable it")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: 4) {
+                                Text("3.")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                Text("Return here and click 'Check Again'")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                    }
                     
                     Button("Open System Settings") {
                         viewModel.openMicrophoneSettings()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
+                    
+                    Button("Check Again") {
+                        Task {
+                            await viewModel.refreshPermissionsAsync()
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Color.accentColor)
+                    
+                    Text("Don't see \(appName) in the list? Restart the app and grant permission when prompted.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 4)
                 }
             } else if microphoneRequested {
                 // Permission was requested but response pending

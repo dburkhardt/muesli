@@ -24,6 +24,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 3. **Check in frequently** — confirm approach before significant work; report progress at milestones
 4. **Native patterns** — Swift 6 concurrency, `@Observable`, one type per file
 5. **UI principle** — "Granola-inspired": minimal, clean, fast
+6. **Track future work** — when asked to "add a todo" or "note this for later", add it to `TODO.md` and continue working without interruption
 
 ## Commands
 
@@ -43,6 +44,162 @@ open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.
 - Reset permissions: `tccutil reset ScreenCapture com.muesli.app && tccutil reset Microphone com.muesli.app`
 
 **Efficient workflows**: Save build/test output once with `| tee`, then grep the file. Never re-run to extract different info.
+
+## Release Process
+
+### Creating a Release
+
+Muesli uses automated GitHub Actions to build and publish releases. The process is triggered by git tags.
+
+**Prerequisites**:
+- All changes committed to `main` branch
+- Tests passing
+- Pre-release testing completed (see checklist below)
+- Version number decided (follows [Semantic Versioning](https://semver.org/))
+
+**Steps**:
+
+1. **Update Version.xcconfig** (if not already updated):
+   ```bash
+   # Edit Version.xcconfig and set MARKETING_VERSION
+   vim Version.xcconfig  # Change to desired version (e.g., 0.2.0)
+   git add Version.xcconfig
+   git commit -m "chore: Bump version to 0.2.0"
+   git push origin main
+   ```
+
+2. **Create and push version tag**:
+   ```bash
+   # Create tag (must start with 'v')
+   git tag v0.2.0
+   
+   # Push tag to trigger release workflow
+   git push origin v0.2.0
+   ```
+
+3. **Monitor GitHub Actions**:
+   - Go to GitHub Actions tab in repository
+   - Watch the "Release" workflow complete
+   - Workflow will:
+     - Build app in Release configuration
+     - Create DMG installer
+     - Generate release notes from git log
+     - Create GitHub Release with DMG asset
+     - Update website with new version
+     - Deploy to GitHub Pages
+
+4. **Verify release**:
+   - Check GitHub Releases page
+   - Download DMG and test installation
+   - Verify website shows correct version
+
+### Version Numbering
+
+Follow [Semantic Versioning](https://semver.org/) (MAJOR.MINOR.PATCH):
+
+- **MAJOR** (1.0.0): Breaking changes, major new features
+- **MINOR** (0.2.0): New features, backward compatible
+- **PATCH** (0.1.1): Bug fixes, minor improvements
+
+**Pre-release versions**: Use hyphenated suffix for testing:
+- `0.2.0-alpha.1` — early testing
+- `0.2.0-beta.1` — feature complete, testing
+- `0.2.0-rc.1` — release candidate
+
+### Pre-Release Testing Checklist
+
+Before creating a release tag, verify:
+
+**Build & Installation**:
+- [ ] Clean build succeeds: `xcodebuild clean build`
+- [ ] DMG creation succeeds: `./scripts/create-dmg.sh`
+- [ ] DMG installs on fresh macOS installation
+- [ ] App launches without errors
+- [ ] Gatekeeper bypass works (right-click → Open)
+
+**Core Functionality**:
+- [ ] Onboarding flow completes successfully
+- [ ] Screen recording permission granted
+- [ ] Microphone permission granted
+- [ ] Whisper model downloads successfully
+- [ ] System audio capture works (test with Zoom/Teams/Meet)
+- [ ] Microphone capture works
+- [ ] Real-time transcription appears correctly
+- [ ] Recording stops cleanly
+- [ ] Transcript saved to correct location
+- [ ] Meeting history displays past recordings
+- [ ] Search works in meeting history
+- [ ] Transcript export works
+
+**Edge Cases**:
+- [ ] Multiple recordings in succession
+- [ ] Recording during app restart
+- [ ] Different Whisper models (tiny, base, small)
+- [ ] Different microphone devices
+- [ ] Long recordings (30+ minutes)
+- [ ] No internet connection (on-device still works)
+
+**UI/UX**:
+- [ ] Menu bar icon displays correctly
+- [ ] All windows resize properly
+- [ ] Dark mode works correctly
+- [ ] Keyboard shortcuts work
+- [ ] No console errors or warnings
+
+**Performance**:
+- [ ] Memory usage reasonable during recording
+- [ ] CPU usage reasonable during transcription
+- [ ] No audio glitches or dropouts
+- [ ] Transcription keeps up with real-time audio
+
+### Manual Release (Workflow Dispatch)
+
+If you need to create a release without pushing a tag:
+
+1. Go to GitHub Actions → Release workflow
+2. Click "Run workflow"
+3. Enter version number (without 'v' prefix, e.g., `0.2.0`)
+4. Click "Run workflow"
+
+This is useful for:
+- Testing the release workflow
+- Creating builds from non-main branches
+- Re-running failed releases
+
+### Release Artifacts
+
+Each release produces:
+- **DMG file**: `Muesli-vX.Y.Z.dmg` (uploaded to GitHub Release)
+- **SHA-256 checksum**: Included in release notes
+- **Release notes**: Auto-generated from git log or CHANGELOG.md
+- **Website update**: docs/download.html updated with new version
+
+### Troubleshooting Releases
+
+**Build fails in CI**:
+- Check build logs in GitHub Actions
+- Verify Xcode version matches (15.2 on macos-14)
+- Ensure all dependencies resolve correctly
+- Test build locally first: `./scripts/create-dmg.sh`
+
+**DMG not created**:
+- Check scripts/create-dmg.sh has correct permissions
+- Verify Version.xcconfig contains valid version
+- Look for disk space issues in CI
+
+**Website not updated**:
+- Check git push permissions in workflow
+- Verify GitHub Pages is enabled (Settings → Pages → Source: main/docs)
+- Check for merge conflicts in docs/download.html
+
+**Release not appearing**:
+- Verify tag was pushed: `git ls-remote --tags origin`
+- Check workflow triggered: GitHub Actions tab
+- Verify GITHUB_TOKEN has contents:write permission
+
+### Version History
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history and release notes.
 
 ## Branch Development
 
@@ -153,11 +310,26 @@ Single source of truth. ViewModel accesses via computed property. OnboardingView
 ### Onboarding Window
 Use `NSWindow` + `NSHostingController` in AppDelegate. Don't auto-advance welcome screen. Poll permissions only on permission screens.
 
+## Git Workflow (GitHub Flow)
+
+Simple, agent-friendly branching. All work happens in feature branches merged to `main` via PRs.
+
+**For comprehensive workflow documentation**: See [`spec/git_workflow.md`](spec/git_workflow.md)
+
+**Quick commands for agents**:
+- Create PR: `gh pr create --fill`
+- Merge PR: `gh pr merge --squash --delete-branch`
+- Create release: `git tag vX.Y.Z && git push origin vX.Y.Z`
+- Check status: `gh pr status`
+
+**Branch naming**: `feature/name`, `bugfix/name`, `hotfix/name`, `refactor/name`
+
 ## Reference
 
 **Dependencies**:
 - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — on-device speech-to-text
 - ScreenCaptureKit — system framework for audio capture
+- GitHub CLI (`gh`) — for PR management from command line
 
 **Testing**: Use Zoom/Meet/Teams or QuickTime Player. Verify permissions, recording cycles, transcript accuracy.
 

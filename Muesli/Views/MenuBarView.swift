@@ -9,6 +9,19 @@ struct MenuBarView: View {
     /// Use @AppStorage so SwiftUI automatically observes UserDefaults changes
     @AppStorage(AppStorageKeys.hasCompletedOnboarding) private var hasCompletedOnboarding: Bool = false
     
+    /// Update checking state
+    @State private var updateStatus: UpdateChecker.UpdateStatus?
+    @State private var showUpdateSheet = false
+    @State private var isCheckingForUpdates = false
+    
+    private var updateHelper: UpdateCheckHelper {
+        UpdateCheckHelper(
+            updateStatus: $updateStatus,
+            showUpdateSheet: $showUpdateSheet,
+            isCheckingForUpdates: $isCheckingForUpdates
+        )
+    }
+    
     private var appName: String {
         Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
     }
@@ -71,12 +84,42 @@ struct MenuBarView: View {
             }
             .keyboardShortcut(",", modifiers: .command)
             
+            // Check for Updates menu item with indicator
+            if let status = updateStatus, case .updateAvailable = status {
+                Button {
+                    showUpdateSheet = true
+                } label: {
+                    HStack {
+                        Text("Update Available")
+                        Circle()
+                            .fill(.orange)
+                            .frame(width: 8, height: 8)
+                    }
+                }
+            } else {
+                Button("Check for Updates...") {
+                    Task {
+                        await updateHelper.checkForUpdates()
+                    }
+                }
+                .disabled(isCheckingForUpdates)
+            }
+            
             Divider()
             
             Button("Quit \(appName)") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q", modifiers: .command)
+        }
+        .sheet(isPresented: $showUpdateSheet) {
+            updateHelper.updateSheet(currentVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
+        }
+        .onAppear {
+            // Check for updates on menu bar open if we have a cached status from ViewModel
+            if let vmStatus = viewModel.latestUpdateStatus {
+                updateStatus = vmStatus
+            }
         }
     }
     

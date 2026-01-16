@@ -1,0 +1,262 @@
+name: Release
+
+on:
+  # Trigger on version tags (e.g., v0.1.0, v1.0.0)
+  push:
+    tags:
+      - 'v*'
+  
+  # Allow manual workflow dispatch with version input
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write  # Required for creating releases and pushing commits
+
+jobs:
+  release:
+    name: Build and Release Muesli
+    runs-on: macos-14
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for changelog generation
+      
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.2'
+      
+      - name: Extract version from tag or input
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            echo "Using version from manual input: ${VERSION}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            echo "Using version from tag: ${VERSION}"
+          fi
+          
+          # Validate version format (semantic versioning)
+          if ! echo "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$'; then
+            echo "Error: Invalid version format: ${VERSION}"
+            echo "Expected format: X.Y.Z or X.Y.Z-prerelease"
+            exit 1
+          fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "✅ Version: ${VERSION}"
+      
+      - name: Update Version.xcconfig
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Updating Version.xcconfig to ${VERSION}..."
+          
+          # Update MARKETING_VERSION in Version.xcconfig
+          sed -i '' "s/MARKETING_VERSION = .*/MARKETING_VERSION = ${VERSION}/" Version.xcconfig
+          
+          # Verify the update
+          if grep -q "MARKETING_VERSION = ${VERSION}" Version.xcconfig; then
+            echo "✅ Version.xcconfig updated successfully"
+            cat Version.xcconfig
+          else
+            echo "❌ Failed to update Version.xcconfig"
+            exit 1
+          fi
+      
+      - name: Build and create DMG
+        id: build
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Building Muesli ${VERSION}..."
+          
+          # Make script executable
+          chmod +x scripts/create-dmg.sh
+          
+          # Run DMG creation script
+          if ./scripts/create-dmg.sh "${VERSION}"; then
+            echo "✅ DMG created successfully"
+          else
+            echo "❌ DMG creation failed"
+            exit 1
+          fi
+          
+          # Verify DMG exists
+          DMG_FILE="Muesli-v${VERSION}.dmg"
+          if [ ! -f "${DMG_FILE}" ]; then
+            echo "❌ DMG file not found: ${DMG_FILE}"
+            ls -la *.dmg || true
+            exit 1
+          fi
+          
+          # Calculate checksum
+          CHECKSUM=$(shasum -a 256 "${DMG_FILE}" | awk '{print $1}')
+          echo "SHA-256: ${CHECKSUM}"
+          
+          # Get file size
+          DMG_SIZE=$(ls -lh "${DMG_FILE}" | awk '{print $5}')
+          echo "Size: ${DMG_SIZE}"
+          
+          # Export outputs
+          echo "dmg_file=${DMG_FILE}" >> $GITHUB_OUTPUT
+          echo "checksum=${CHECKSUM}" >> $GITHUB_OUTPUT
+          echo "size=${DMG_SIZE}" >> $GITHUB_OUTPUT
+      
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          
+          echo "Generating release notes for ${TAG}..."
+          
+          # Find the previous tag (if any)
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          
+          # Create release notes
+          NOTES_FILE="release_notes.md"
+          
+          if [ -n "${PREV_TAG}" ]; then
+            echo "## What's Changed" > "${NOTES_FILE}"
+            echo "" >> "${NOTES_FILE}"
+            
+            # Get commit log since last tag
+            git log "${PREV_TAG}..${TAG}" --pretty=format:"- %s (%h)" --no-merges >> "${NOTES_FILE}"
+            
+            echo "" >> "${NOTES_FILE}"
+            echo "" >> "${NOTES_FILE}"
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}" >> "${NOTES_FILE}"
+          else
+            # First release - use CHANGELOG.md content if available
+            if [ -f "CHANGELOG.md" ]; then
+              echo "## What's New" > "${NOTES_FILE}"
+              echo "" >> "${NOTES_FILE}"
+              
+              # Extract the relevant version section from CHANGELOG.md
+              awk "/## \[${VERSION}\]/,/## \[/{print}" CHANGELOG.md | head -n -1 >> "${NOTES_FILE}"
+            else
+              echo "## Initial Release" > "${NOTES_FILE}"
+              echo "" >> "${NOTES_FILE}"
+              echo "First public release of Muesli - macOS meeting transcription app." >> "${NOTES_FILE}"
+            fi
+          fi
+          
+          # Add download instructions
+          echo "" >> "${NOTES_FILE}"
+          echo "## Installation" >> "${NOTES_FILE}"
+          echo "" >> "${NOTES_FILE}"
+          echo "1. Download \`${{ steps.build.outputs.dmg_file }}\` from the assets below" >> "${NOTES_FILE}"
+          echo "2. Open the DMG and drag Muesli to your Applications folder" >> "${NOTES_FILE}"
+          echo "3. Right-click the app and select \"Open\" to bypass Gatekeeper" >> "${NOTES_FILE}"
+          echo "4. Follow the onboarding wizard to grant permissions" >> "${NOTES_FILE}"
+          echo "" >> "${NOTES_FILE}"
+          echo "📖 [Detailed installation instructions](https://dburkhardt.github.io/muesli/download.html)" >> "${NOTES_FILE}"
+          echo "" >> "${NOTES_FILE}"
+          echo "## System Requirements" >> "${NOTES_FILE}"
+          echo "" >> "${NOTES_FILE}"
+          echo "- macOS 14.0 (Sonoma) or later" >> "${NOTES_FILE}"
+          echo "- Apple Silicon (M1, M2, M3, or newer)" >> "${NOTES_FILE}"
+          echo "- 8 GB RAM minimum (16 GB recommended)" >> "${NOTES_FILE}"
+          echo "" >> "${NOTES_FILE}"
+          echo "## Verification" >> "${NOTES_FILE}"
+          echo "" >> "${NOTES_FILE}"
+          echo "**SHA-256 Checksum:**" >> "${NOTES_FILE}"
+          echo "\`\`\`" >> "${NOTES_FILE}"
+          echo "${{ steps.build.outputs.checksum }}" >> "${NOTES_FILE}"
+          echo "\`\`\`" >> "${NOTES_FILE}"
+          
+          # Display release notes
+          echo "📝 Release notes:"
+          cat "${NOTES_FILE}"
+          
+          # Export as output (escape newlines for GitHub Actions)
+          {
+            echo "notes<<EOF"
+            cat "${NOTES_FILE}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+      
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Muesli ${{ steps.version.outputs.version }}
+          body: ${{ steps.release_notes.outputs.notes }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          files: ${{ steps.build.outputs.dmg_file }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Update website with new version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          
+          echo "Updating docs/download.html with version ${VERSION}..."
+          
+          # Update version reference in download.html
+          # Replace "Muesli-v0.1.0.dmg" with new version
+          sed -i '' "s/Muesli-v[0-9]\+\.[0-9]\+\.[0-9]\+\.dmg/Muesli-v${VERSION}.dmg/g" docs/download.html
+          
+          # Verify update
+          if grep -q "Muesli-v${VERSION}.dmg" docs/download.html; then
+            echo "✅ download.html updated successfully"
+          else
+            echo "⚠️  Could not verify download.html update"
+          fi
+          
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Commit website updates (if any changes)
+          if git diff --quiet docs/download.html; then
+            echo "ℹ️  No changes to commit"
+          else
+            git add docs/download.html
+            git commit -m "docs: Update download links for ${TAG}"
+            echo "✅ Website updates committed"
+          fi
+      
+      - name: Deploy to GitHub Pages
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          
+          echo "Deploying website to GitHub Pages..."
+          
+          # Push updates to main branch (GitHub Pages serves from main/docs/)
+          git push origin HEAD:main || {
+            echo "⚠️  Failed to push website updates"
+            echo "This is non-critical; the release was successful"
+          }
+          
+          echo "✅ Website deployment complete"
+      
+      - name: Summary
+        if: always()
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+          
+          echo "## 🎉 Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag:** ${TAG}" >> $GITHUB_STEP_SUMMARY
+          echo "- **DMG:** ${{ steps.build.outputs.dmg_file }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Size:** ${{ steps.build.outputs.size }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Checksum:** \`${{ steps.build.outputs.checksum }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release URL:** ${RELEASE_URL}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View Release](${RELEASE_URL})" >> $GITHUB_STEP_SUMMARY

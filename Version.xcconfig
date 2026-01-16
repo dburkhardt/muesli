@@ -1,0 +1,13 @@
+//
+// Version.xcconfig
+// Muesli
+//
+// Version configuration for Muesli app
+// This file defines the marketing version and build number used across all configurations
+//
+
+// Marketing version (user-facing version number, follows semantic versioning)
+MARKETING_VERSION = 0.1.0
+
+// Build number (incremented for each build/release)
+CURRENT_PROJECT_VERSION = 1
