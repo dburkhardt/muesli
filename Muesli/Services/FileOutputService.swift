@@ -1,5 +1,5 @@
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreMedia
 
 /// Service responsible for saving audio recordings and transcripts to disk

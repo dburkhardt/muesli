@@ -1,6 +1,6 @@
 import Foundation
-import AVFoundation
-import ScreenCaptureKit
+@preconcurrency import AVFoundation
+@preconcurrency import ScreenCaptureKit
 
 /// Manages app permissions for screen recording and microphone access
 /// Can be injected into views via @Environment for permission state observation
