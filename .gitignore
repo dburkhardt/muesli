@@ -34,3 +34,6 @@ docs/download-stats.json
 
 # DMG files (should only exist in GitHub Releases)
 *.dmg
+
+# Hidden scripts with credentials (never commit!)
+hidden_scripts/
