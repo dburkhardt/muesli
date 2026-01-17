@@ -388,7 +388,6 @@ show_summary() {
         echo "Will DELETE:"
         echo "  Meeting Recordings:"
         echo "    - $RECORDINGS_COUNT recording(s) in $RECORDINGS_DIR"
-        echo ""
     fi
     
     # Application Support
