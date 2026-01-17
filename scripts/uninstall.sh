@@ -385,6 +385,7 @@ show_summary() {
         echo ""
     elif [ "$RECORDING_ACTION" = "delete" ]; then
         has_items=1
+        echo "Will DELETE:"
         echo "  Meeting Recordings:"
         echo "    - $RECORDINGS_COUNT recording(s) in $RECORDINGS_DIR"
         echo ""
@@ -393,7 +394,9 @@ show_summary() {
     # Application Support
     if [ "$RECORDING_ACTION" != "keep" ]; then
         has_items=1
-        echo "Will DELETE:"
+        if [ "$RECORDING_ACTION" != "delete" ]; then
+            echo "Will DELETE:"
+        fi
         echo "  Application Support:"
         if [ "$RECORDING_ACTION" = "move" ]; then
             echo "    - ~/Library/Application Support/Muesli/ (after moving recordings)"
@@ -623,7 +626,7 @@ execute_uninstall() {
     
     # Move recordings first (if requested)
     if [ "$RECORDING_ACTION" = "move" ]; then
-        move_recordings
+        move_recordings || print_warning "Recording move failed, continuing with uninstall..."
     fi
     
     # Kill running processes
@@ -642,7 +645,7 @@ execute_uninstall() {
     delete_user_defaults
     
     # Delete Application Support (unless keeping recordings)
-    delete_application_support
+    delete_application_support || print_warning "Application Support deletion failed, continuing..."
     
     print_header "UNINSTALL COMPLETE"
     
