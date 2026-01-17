@@ -118,12 +118,34 @@ fi
 
 log_info "Built app found at: ${APP_PATH}"
 
+# Sign the app if Developer ID certificate is available
+log_info "Checking for code signing certificate..."
+SIGNING_IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -n 1 | awk '{print $2}')
+
+if [ -n "$SIGNING_IDENTITY" ]; then
+    log_info "Found Developer ID certificate: ${SIGNING_IDENTITY}"
+    log_info "Signing app with hardened runtime..."
+    
+    if codesign --force --deep --options runtime \
+        --sign "$SIGNING_IDENTITY" \
+        --timestamp \
+        "${APP_PATH}"; then
+        log_success "App signed successfully with Developer ID"
+    else
+        log_warning "Code signing failed, continuing with unsigned app"
+    fi
+else
+    log_warning "No Developer ID certificate found"
+    log_warning "App will be signed ad-hoc (users will see warnings)"
+fi
+
 # Verify app is signed (even if ad-hoc)
 log_info "Verifying app signature..."
 if ! codesign -dv "${APP_PATH}" 2>&1 | grep -q "Signature"; then
     log_warning "App does not appear to be signed. This may cause issues on other machines."
 else
     log_success "App signature verified"
+    codesign -dv --verbose=2 "${APP_PATH}" 2>&1 | head -n 5
 fi
 
 # Remove any existing DMG

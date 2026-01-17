@@ -5,6 +5,8 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 **Authoritative docs**: `SPEC.md` (product spec + phases) · This file (architecture + commands + pitfalls)
 **Note for agents**: Additional flow-specific documentation lives in the `spec/` folder. If you are doing a comprehensive architecture review, read those documents as well.
 
+**Code signing & notarization**: App is signed with Developer ID and notarized by Apple when released via GitHub Actions. Credentials stored in repository secrets (never committed to git).
+
 ## Quick Reference
 
 | Aspect | Value |
