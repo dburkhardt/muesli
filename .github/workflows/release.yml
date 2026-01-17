@@ -105,7 +105,7 @@ jobs:
           fi
       
       - name: Setup code signing certificates
-        if: ${{ secrets.DEVELOPER_ID_CERT_P12 != '' }}
+        if: ${{ env.P12_BASE64 != '' }}
         env:
           P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
           P12_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
@@ -180,8 +180,9 @@ jobs:
           echo "size=${DMG_SIZE}" >> $GITHUB_OUTPUT
       
       - name: Sign and notarize DMG
-        if: ${{ secrets.DEVELOPER_ID_CERT_P12 != '' && secrets.APPLE_ID != '' }}
+        if: ${{ env.APPLE_ID != '' && env.P12_BASE64 != '' }}
         env:
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
