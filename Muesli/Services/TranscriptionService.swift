@@ -309,8 +309,24 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         let sumSquares = samples.reduce(0.0) { $0 + ($1 * $1) }
         let rms = sqrt(sumSquares / Float(samples.count))
         
-        // Return true if RMS exceeds threshold
-        return rms > vadThreshold
+        // Basic threshold check
+        guard rms > vadThreshold else { return false }
+        
+        // Duration check: chunk should be at least 1 second of actual audio
+        // Whisper format is 16kHz, so minimum 16000 samples for 1 second
+        let minimumSamples = 16000
+        guard samples.count >= minimumSamples else { return false }
+        
+        // Energy distribution check: reject chunks with sparse energy
+        // (mostly silence with brief noise spikes that could cause hallucinations)
+        // Calculate what percentage of the audio has significant energy
+        let significantThreshold = vadThreshold * 0.5 // Lower threshold for individual samples
+        let significantSamples = samples.filter { abs($0) > significantThreshold }.count
+        let significantRatio = Float(significantSamples) / Float(samples.count)
+        
+        // Require at least 10% of samples to have significant energy
+        // This filters out sparse noise that triggers the RMS threshold but isn't real speech
+        return significantRatio >= 0.1
     }
     
     // MARK: - Post-Processing Transcription

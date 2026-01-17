@@ -147,6 +147,11 @@ final class TranscriptProcessor {
     private func filterArtifacts(_ text: String) -> String? {
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         
+        // Check for common Whisper hallucinations on silence first
+        if isHallucination(cleaned) {
+            return nil
+        }
+        
         guard let regex = artifactRegex else { return cleaned }
         
         // Remove all artifact patterns
@@ -166,6 +171,56 @@ final class TranscriptProcessor {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         
         return cleaned.isEmpty ? nil : cleaned
+    }
+    
+    /// Detect common Whisper hallucinations that occur on silence/blank audio
+    private func isHallucination(_ text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Filter very short segments (< 3 words) - often noise at recording boundaries
+        let words = lower.split(separator: " ")
+        if words.count < 3 {
+            // Allow short segments that contain actual content words
+            // But filter common filler words and noise artifacts
+            let fillerWords: Set<String> = ["uh", "um", "hmm", "ah", "eh", "oh", "huh", "mhm", "mmm", "yeah", "yep", "nope", "okay"]
+            let hasOnlyFiller = words.allSatisfy { fillerWords.contains(String($0)) }
+            if hasOnlyFiller {
+                return true
+            }
+        }
+        
+        // Detect repetitive text (common hallucination pattern)
+        // e.g. "Thank you. Thank you. Thank you."
+        if let firstWord = words.first, words.count >= 3 {
+            let isAllSameWord = words.allSatisfy { $0 == firstWord }
+            if isAllSameWord {
+                return true
+            }
+        }
+        
+        // Detect common Whisper hallucinations on blank audio
+        let hallucinations = [
+            "thank you",
+            "thanks for watching",
+            "thank you for watching",
+            "subscribe",
+            "like and subscribe",
+            "bye",
+            "bye-bye",
+            "goodbye",
+            "see you next time",
+            "thanks for listening",
+            "you",
+            "i",
+            "the",
+            "a",
+        ]
+        
+        if hallucinations.contains(lower) {
+            return true
+        }
+        
+        return false
     }
     
     /// Add a segment to the blocks array, handling merging logic

@@ -72,6 +72,9 @@ struct CompletedMeetingWindow: View {
             
             Spacer()
             
+            // Copy transcript button
+            copyTranscriptButton
+            
             // Reprocess button with model picker
             if viewModel.modelManager.downloadedModels.count > 0 {
                 Menu {
@@ -110,6 +113,81 @@ struct CompletedMeetingWindow: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
+    }
+    
+    // MARK: - Copy Transcript Button
+    
+    @State private var showCopyConfirmation = false
+    
+    private var copyTranscriptButton: some View {
+        Menu {
+            Button("Copy as Plain Text") {
+                if let blocks = getTranscriptBlocks() {
+                    ClipboardHelper.copyTranscriptAsPlainText(blocks)
+                    showCopyFeedback()
+                }
+            }
+            
+            Button("Copy as Markdown") {
+                if let blocks = getTranscriptBlocks() {
+                    ClipboardHelper.copyTranscriptAsMarkdown(blocks)
+                    showCopyFeedback()
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if showCopyConfirmation {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 12))
+                    Text("Copied!")
+                        .font(.system(size: 11, weight: .medium))
+                } else {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12))
+                    Text("Copy")
+                        .font(.system(size: 11, weight: .medium))
+                }
+            }
+            .foregroundStyle(.blue)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.blue.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .disabled(getTranscriptBlocks() == nil)
+        .help("Copy transcript to clipboard")
+    }
+    
+    /// Get transcript blocks from the meeting
+    private func getTranscriptBlocks() -> [TranscriptBlock]? {
+        // Try segments first (preferred)
+        if !meeting.transcriptSegments.isEmpty {
+            var allBlocks: [TranscriptBlock] = []
+            for segment in meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber }) {
+                let blocksToUse = (meeting.isShowingRefined && segment.isRefined) ?
+                    (segment.refinedBlocks ?? segment.originalBlocks) :
+                    segment.originalBlocks
+                allBlocks.append(contentsOf: blocksToUse)
+            }
+            return allBlocks.isEmpty ? nil : allBlocks
+        }
+        
+        // Fallback to transcriptBlocks
+        if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
+            let showingOriginal = viewModel.showOriginalTranscript(for: meeting) && meeting.originalTranscriptBlocks != nil
+            return showingOriginal ? meeting.originalTranscriptBlocks : blocks
+        }
+        
+        return nil
+    }
+    
+    /// Show temporary copy confirmation feedback
+    private func showCopyFeedback() {
+        showCopyConfirmation = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            showCopyConfirmation = false
+        }
     }
     
     // MARK: - Metadata Row

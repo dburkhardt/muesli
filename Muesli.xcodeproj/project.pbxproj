@@ -61,6 +61,7 @@
 		E1000003241D1A1D00000071 /* AppStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000004241D1A1D00000071 /* AppStorageKeys.swift */; };
 		E1000005241D1A1D00000072 /* MuesliError.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000006241D1A1D00000072 /* MuesliError.swift */; };
 		F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000002241D1A1D00000080 /* AudioConfiguration.swift */; };
+		114BBE69396045369DA85097 /* ClipboardHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 114BBE69396045369DA85098 /* ClipboardHelper.swift */; };
 		B1000001241D1A1D00000040 /* MuesliViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000002241D1A1D00000040 /* MuesliViewModelTests.swift */; };
 		B1000003241D1A1D00000040 /* ServiceProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000004241D1A1D00000040 /* ServiceProtocols.swift */; };
 		B1000005241D1A1D00000040 /* MockAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000006241D1A1D00000040 /* MockAudioCaptureService.swift */; };
@@ -156,6 +157,7 @@
 		E1000004241D1A1D00000071 /* AppStorageKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStorageKeys.swift; sourceTree = "<group>"; };
 		E1000006241D1A1D00000072 /* MuesliError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliError.swift; sourceTree = "<group>"; };
 		F1000002241D1A1D00000080 /* AudioConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioConfiguration.swift; sourceTree = "<group>"; };
+		114BBE69396045369DA85098 /* ClipboardHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHelper.swift; sourceTree = "<group>"; };
 		V1000001241D1A1D00000090 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -325,6 +327,7 @@
 				A1000086241D1A1D00000023 /* LLMManager.swift */,
 				E1000004241D1A1D00000071 /* AppStorageKeys.swift */,
 				F1000002241D1A1D00000080 /* AudioConfiguration.swift */,
+				114BBE69396045369DA85098 /* ClipboardHelper.swift */,
 				UC00002241D1A1D00000099 /* UpdateChecker.swift */,
 			);
 			path = Utilities;
@@ -578,6 +581,7 @@
 				E1000003241D1A1D00000071 /* AppStorageKeys.swift in Sources */,
 				E1000005241D1A1D00000072 /* MuesliError.swift in Sources */,
 				F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */,
+				114BBE69396045369DA85097 /* ClipboardHelper.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

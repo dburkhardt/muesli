@@ -77,7 +77,10 @@ Each item should include:
 
 ### Refactoring
 
-*No items yet*
+**[Refactor]** [Low] Use GitHub milestones and project plans for release management
+- Description: Implement GitHub milestones and project plans to better organize and track release cycles
+- Notes: Would provide better visibility into what features/fixes are planned for each release version, integrate with PR workflow
+- Related: .github/workflows/release.yml, git_workflow.md
 
 ---
 

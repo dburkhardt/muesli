@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "description": "Per-branch worktree configuration indicator for Muesli",
+  "needsWorktree": true,
+  "suffix": "xxx",
+  "bundleId": "com.muesli.app.xxx",
+  "productName": "Muesli-xxx",
+  "reason": "parallel development with main branch",
+  "_instructions": {
+    "suffix": "3-letter code derived from branch name or random",
+    "bundleId": "Must match pattern: com.muesli.app.<suffix>",
+    "productName": "Must match pattern: Muesli-<suffix>",
+    "reason": "Optional: explain why this branch needs worktree isolation",
+    "examples": {
+      "suffixes": [
+        "abc - from feature/a-b-c",
+        "xyz - from feature/xyz-feature", 
+        "fix - from bugfix/fix-something",
+        "rfx - from refactor/xyz"
+      ],
+      "reasons": [
+        "parallel development with main branch",
+        "long-lived feature requiring isolation",
+        "side-by-side testing with other branches",
+        "TCC permission debugging"
+      ]
+    }
+  }
+}

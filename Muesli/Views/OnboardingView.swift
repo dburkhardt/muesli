@@ -146,6 +146,7 @@ struct OnboardingView: View {
     // MARK: - Screen Recording Screen
     
     @State private var screenRecordingRequested = false
+    @State private var screenRecordingPollingTask: Task<Void, Never>?
     
     private var screenRecordingScreen: some View {
         VStack(spacing: 20) {
@@ -183,6 +184,8 @@ struct OnboardingView: View {
                     
                     Button("Open System Settings") {
                         viewModel.openScreenRecordingSettings()
+                        // Start aggressive polling when user clicks to open settings
+                        startScreenRecordingPolling()
                     }
                     .buttonStyle(.bordered)
                     
@@ -222,11 +225,22 @@ struct OnboardingView: View {
         .padding(.horizontal, 60)
         .padding(.top, 40)
         .padding(.bottom, 24)
+        .onAppear {
+            // Start polling when arriving at screen
+            if screenRecordingRequested && !viewModel.hasScreenRecordingPermission {
+                startScreenRecordingPolling()
+            }
+        }
+        .onDisappear {
+            // Stop polling when leaving screen
+            stopScreenRecordingPolling()
+        }
     }
     
     // MARK: - Microphone Screen
     
     @State private var microphoneRequested = false
+    @State private var microphonePollingTask: Task<Void, Never>?
     
     private var microphoneScreen: some View {
         VStack(spacing: 20) {
@@ -298,6 +312,8 @@ struct OnboardingView: View {
                     
                     Button("Open System Settings") {
                         viewModel.openMicrophoneSettings()
+                        // Start aggressive polling when user clicks to open settings
+                        startMicrophonePolling()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
@@ -358,6 +374,16 @@ struct OnboardingView: View {
         .padding(.horizontal, 60)
         .padding(.top, 40)
         .padding(.bottom, 24)
+        .onAppear {
+            // Start polling when arriving at screen if waiting for permission
+            if (microphoneRequested || viewModel.isMicrophonePermissionDenied) && !viewModel.hasMicrophonePermission {
+                startMicrophonePolling()
+            }
+        }
+        .onDisappear {
+            // Stop polling when leaving screen
+            stopMicrophonePolling()
+        }
     }
     
     // MARK: - Model Setup Screen
@@ -677,6 +703,66 @@ struct OnboardingView: View {
     }
     
     // MARK: - Permission Polling
+    
+    /// Start aggressive polling for screen recording permission
+    /// Uses 0.2s interval for instant feedback when user grants permission
+    private func startScreenRecordingPolling() {
+        // Cancel existing task if any
+        stopScreenRecordingPolling()
+        
+        screenRecordingPollingTask = Task { @MainActor in
+            while !Task.isCancelled && !viewModel.hasScreenRecordingPermission {
+                await viewModel.refreshPermissionsAsync()
+                
+                // If permission granted, advance to next step automatically
+                if viewModel.hasScreenRecordingPermission {
+                    withAnimation {
+                        setStep(.microphone)
+                    }
+                    break
+                }
+                
+                // Wait 0.2 seconds before next check
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+    }
+    
+    /// Stop screen recording permission polling
+    private func stopScreenRecordingPolling() {
+        screenRecordingPollingTask?.cancel()
+        screenRecordingPollingTask = nil
+    }
+    
+    /// Start aggressive polling for microphone permission
+    /// Uses 0.2s interval for instant feedback when user grants permission
+    private func startMicrophonePolling() {
+        // Cancel existing task if any
+        stopMicrophonePolling()
+        
+        microphonePollingTask = Task { @MainActor in
+            while !Task.isCancelled && !viewModel.hasMicrophonePermission {
+                await viewModel.refreshPermissionsAsync()
+                
+                // If permission granted, advance to next step automatically
+                if viewModel.hasMicrophonePermission {
+                    withAnimation {
+                        setStep(.modelSetup)
+                    }
+                    break
+                }
+                
+                // Wait 0.2 seconds before next check
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+    }
+    
+    /// Stop microphone permission polling
+    private func stopMicrophonePolling() {
+        microphonePollingTask?.cancel()
+        microphonePollingTask = nil
+    }
     
     // MARK: - File Selection
     

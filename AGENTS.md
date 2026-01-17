@@ -214,29 +214,80 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history and release notes.
 
 ## Branch Development
 
-When using git worktrees for parallel development, each branch needs a unique bundle ID.
+### Worktree Isolation (Optional)
+
+Most branches work fine in the standard workspace. However, when you need **parallel development** (testing multiple branches simultaneously), each branch needs a unique bundle ID.
 
 **Why**: macOS caches apps by bundle ID. Unique IDs enable side-by-side testing and correct TCC permissions.
 
-**Setup checklist**:
-1. Get branch: `git branch --show-current`
-2. Sanitize name: `feature/foo-bar` → `feature-foo-bar` (slashes → dashes, ~25 chars max)
+### When to Use Worktree Isolation
+
+**Use worktree config when**:
+- Parallel development (testing multiple branches simultaneously)
+- Long-lived feature branches
+- Side-by-side comparison with main
+- Need TCC permission isolation between branches
+
+**Skip worktree config when**:
+- Short-lived branches
+- Quick fixes or hotfixes
+- Single-branch workflow
+- Not testing multiple builds simultaneously
+
+### Agent Workflow: Creating New Branches
+
+When a user asks to create a new branch, **always prompt**:
+
+> "Should this branch need worktree isolation for parallel development? (yes/no)"
+
+**If yes**: Create `.worktree-config.json` indicator file and apply bundle ID configuration
+**If no**: Create standard branch, work normally in main workspace
+
+### Worktree Indicator File
+
+Branches that need worktree isolation include a `.worktree-config.json` file:
+
+```json
+{
+  "needsWorktree": true,
+  "suffix": "xxx",
+  "bundleId": "com.muesli.app.xxx",
+  "productName": "Muesli-xxx",
+  "reason": "parallel development with main branch"
+}
+```
+
+**Suffix naming**: Sanitize branch name to 3-letter code: `feature/foo-bar` → `foo` or use random 3-letter code.
+
+### Setup Checklist (When Indicator Present)
+
+1. Check if `.worktree-config.json` exists in branch root
+2. If present, read suffix from file
 3. In `project.pbxproj`, update BOTH Debug and Release:
-   - `PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.<branch-suffix>;`
-   - `PRODUCT_NAME = "Muesli-<branch-suffix>";`
-4. Update TCC reset script in same file to use `com.muesli.app.<branch-suffix>`
-5. Commit: `git commit -m "Configure bundle ID for branch: <branch>"`
+   - `PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.<suffix>;`
+   - `PRODUCT_NAME = "Muesli-<suffix>";`
+4. Update TCC reset script in same file to use `com.muesli.app.<suffix>`
+5. Commit: `git add .worktree-config.json project.pbxproj && git commit -m "Configure worktree isolation for branch"`
 6. Push: `git push -u origin <branch>`
+
+Alternatively, use the automated script: `./scripts/configure-worktree.sh`
 
 **main branch**: Always `com.muesli.app` (no suffix). Never commit bundle ID changes to main.
 
-**Cleanup after merge**:
+### Cleanup After Merge
+
 ```bash
 killall Muesli-<suffix> 2>/dev/null
 rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app
 tccutil reset ScreenCapture com.muesli.app.<suffix> 2>/dev/null || true
 tccutil reset Microphone com.muesli.app.<suffix> 2>/dev/null || true
 ```
+
+### Backward Compatibility
+
+The project also supports `.cursorworktrees.json` (global config at repo root) for managing multiple worktrees. The configure script checks:
+1. `.worktree-config.json` in branch (preferred, per-branch)
+2. `.cursorworktrees.json` at repo root (legacy, global)
 
 **Troubleshooting**: If bundle ID doesn't match branch, verify with `grep PRODUCT_BUNDLE_IDENTIFIER project.pbxproj | head -1` and reconfigure.
 
