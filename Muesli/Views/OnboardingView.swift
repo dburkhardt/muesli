@@ -331,6 +331,8 @@ struct OnboardingView: View {
                     microphoneRequested = true
                     Task {
                         await viewModel.requestMicrophonePermission()
+                        // Refresh permission state after request completes
+                        await viewModel.refreshPermissionsAsync()
                         microphoneRequested = false
                         // Bring onboarding window back to front after system dialog dismisses
                         AppDelegate.shared?.bringOnboardingWindowToFront()

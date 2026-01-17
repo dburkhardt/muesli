@@ -181,7 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appName = Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
         window.title = "Welcome to \(appName)"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 500, height: 450))
+        window.setContentSize(NSSize(width: 520, height: 580))
         window.center()
         window.isReleasedWhenClosed = false
         

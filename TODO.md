@@ -62,6 +62,11 @@ Each item should include:
 
 ### Bugs
 
+**[Bug]** [High] Onboarding should instantly update when screen recording permission is approved
+- Description: When user approves screen recording permissions in System Settings, the onboarding pane should immediately show a green checkmark without requiring app restart
+- Notes: Currently requires quitting and reopening the app to see permission status update. Need to implement real-time permission monitoring or more aggressive polling when permission screen is active
+- Related: OnboardingView.swift, PermissionManager.swift
+
 **[Bug]** [High] Handle blank audio and random snippets properly
 - Description: Ensure blank audio segments and random snippets at the end of meetings are handled correctly
 - Occurs in two scenarios:
