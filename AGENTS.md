@@ -42,6 +42,7 @@ open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.
 - Test: `xcodebuild ... test 2>&1 | tee "test-${TIMESTAMP}.txt"`
 - Clean: `xcodebuild ... clean`
 - Reset permissions: `tccutil reset ScreenCapture com.muesli.app && tccutil reset Microphone com.muesli.app`
+- Uninstall completely (interactive): `./scripts/uninstall.sh`
 - Generate changelog: `git-cliff --latest --strip header,footer > CHANGELOG.md`
 - Create DMG (modern): `./scripts/create-dmg-modern.sh [VERSION]`
 - Create DMG (legacy): `./scripts/create-dmg.sh [VERSION]`
