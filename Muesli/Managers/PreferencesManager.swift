@@ -122,6 +122,29 @@ final class PreferencesManager {
         echoCancellationLock.withLock { $0 }
     }
     
+    // MARK: - Audio Chunk Duration
+    
+    /// Audio chunk duration for transcription (2-10 seconds)
+    var audioChunkDuration: TimeInterval {
+        get {
+            let saved = UserDefaults.standard.double(forKey: AppStorageKeys.audioChunkDuration)
+            // Return default if not set or invalid
+            if saved < 2.0 || saved > 10.0 {
+                return 5.0
+            }
+            return saved
+        }
+        set {
+            // Clamp to valid range
+            let clamped = min(max(newValue, 2.0), 10.0)
+            UserDefaults.standard.set(clamped, forKey: AppStorageKeys.audioChunkDuration)
+            audioChunkDurationDidChange?(clamped)
+        }
+    }
+    
+    /// Callback when audio chunk duration changes
+    var audioChunkDurationDidChange: ((TimeInterval) -> Void)?
+    
     // MARK: - Initialization
 
     init() {

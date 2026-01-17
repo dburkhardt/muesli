@@ -337,7 +337,12 @@ final class MuesliViewModel {
         // Initialize services (use provided or create defaults)
         self.audioCaptureService = audioCaptureService ?? AudioCaptureService()
         self.fileOutputService = fileOutputService ?? FileOutputService()
-        self.transcriptionService = transcriptionService ?? TranscriptionService()
+        
+        // Initialize transcription service with chunk duration from preferences
+        self.transcriptionService = transcriptionService ?? TranscriptionService(
+            chunkDuration: preferencesManager.audioChunkDuration
+        )
+        
         self.meetingAppDetector = meetingAppDetector ?? MeetingAppDetector()
         self.permissionManager = permissionManager ?? PermissionManager()
         self.microphoneManager = microphoneManager ?? MicrophoneManager()
@@ -381,6 +386,15 @@ final class MuesliViewModel {
             preferencesManager: preferencesManager,
             microphoneManager: self.microphoneManager
         )
+        
+        // Set up callback for chunk duration changes
+        // Note: Changing chunk duration during an active recording would require recreating
+        // the TranscriptionService, which is complex. For now, changes will apply to new recordings.
+        preferencesManager.audioChunkDurationDidChange = { [weak self] newDuration in
+            guard let self = self else { return }
+            // Log the change - it will apply to the next recording
+            print("[MuesliViewModel] Audio chunk duration changed to \(newDuration)s - will apply to next recording")
+        }
         
         // Check initial permission status
         refreshPermissions()

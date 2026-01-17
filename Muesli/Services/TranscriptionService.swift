@@ -56,7 +56,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     private var processingTask: Task<Void, Never>?
     
     // Configuration (using centralized AudioConfiguration)
-    private let chunkDuration: TimeInterval = AudioConfiguration.transcriptionChunkDuration
+    private let chunkDuration: TimeInterval
     private let overlapDuration: TimeInterval = AudioConfiguration.transcriptionOverlapDuration
     private let sampleRate: Int = AudioConfiguration.whisperSampleRate
     private let minSamplesForProcessing: Int  // Minimum samples before processing
@@ -67,8 +67,14 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     // MARK: - Initialization
     
-    init() {
-        minSamplesForProcessing = AudioConfiguration.minSamplesForProcessing
+    /// Initialize transcription service with optional chunk duration
+    /// - Parameter chunkDuration: Duration of each transcription chunk (2-10 seconds), defaults to 5.0
+    init(chunkDuration: TimeInterval = AudioConfiguration.transcriptionChunkDuration) {
+        // Clamp chunk duration to valid range
+        self.chunkDuration = min(max(chunkDuration, 2.0), 10.0)
+        
+        // Calculate samples based on chunk duration
+        minSamplesForProcessing = sampleRate * Int(self.chunkDuration)
         overlapSamples = AudioConfiguration.overlapSamples
     }
     

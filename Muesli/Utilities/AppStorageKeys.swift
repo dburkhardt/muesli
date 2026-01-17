@@ -25,6 +25,9 @@ enum AppStorageKeys {
     /// Whether echo cancellation is enabled
     static let echoCancellationEnabled = "echoCancellationEnabled"
     
+    /// Audio chunk duration for transcription (2-10 seconds)
+    static let audioChunkDuration = "audioChunkDuration"
+    
     // MARK: - WhisperKit Models
     
     /// Active WhisperKit model identifier

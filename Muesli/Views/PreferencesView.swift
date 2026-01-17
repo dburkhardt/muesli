@@ -169,6 +169,24 @@ struct GeneralPreferencesTab: View {
                         }
                     }
                     .toggleStyle(.switch)
+                    
+                    Divider()
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Audio Chunk Duration")
+                            Spacer()
+                            Text(String(format: "%.1f seconds", prefs.audioChunkDuration))
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
+                        
+                        Text("Shorter chunks provide faster transcription but may reduce accuracy. Longer chunks improve accuracy but increase latency.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding()
