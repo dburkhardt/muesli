@@ -79,7 +79,7 @@ git branch --show-current
 
 - Website deploys automatically from `main` branch, `/docs` folder
 - Changes to `docs/` go live within 1-2 minutes after merge to `main`
-- Download statistics updated hourly via GitHub Actions (`.github/workflows/update-download-stats.yml`)
+- Download statistics updated daily via GitHub Actions (`.github/workflows/update-download-stats.yml`)
 - Configure at: https://github.com/dburkhardt/muesli/settings/pages
 
 ## Hotfix Workflow

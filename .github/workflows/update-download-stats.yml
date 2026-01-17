@@ -1,13 +1,13 @@
 name: Update Download Stats
 
 # Update download statistics from GitHub releases
-# Runs hourly and on manual trigger
+# Runs daily and on manual trigger
 # Privacy-respecting: only tracks aggregate download counts from GitHub API
 
 on:
   schedule:
-    # Run every hour
-    - cron: '0 * * * *'
+    # Run daily at midnight UTC
+    - cron: '0 0 * * *'
   workflow_dispatch:
   release:
     types: [published]

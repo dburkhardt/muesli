@@ -36,7 +36,7 @@ Configure in repository Settings → Pages:
 
 ## Analytics
 
-Download statistics are updated hourly by the GitHub Actions workflow `.github/workflows/update-download-stats.yml`. The workflow:
+Download statistics are updated daily by the GitHub Actions workflow `.github/workflows/update-download-stats.yml`. The workflow:
 
 1. Fetches release data from GitHub API
 2. Calculates total downloads across all releases
