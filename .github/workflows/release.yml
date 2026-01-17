@@ -13,6 +13,11 @@ on:
         description: 'Version number (e.g., 0.1.0)'
         required: true
         type: string
+      notarization_timeout:
+        description: 'Notarization timeout in minutes (default: 30)'
+        required: false
+        default: '30'
+        type: string
 
 permissions:
   contents: write  # Required for creating releases and pushing commits
@@ -204,14 +209,16 @@ jobs:
           
           # Notarize the DMG
           if [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
-            echo "Submitting DMG for notarization (this may take several minutes)..."
+            # Determine timeout (use input parameter if provided, otherwise default to 30m for tag-triggered builds)
+            TIMEOUT="${{ github.event.inputs.notarization_timeout || '30' }}m"
+            echo "Submitting DMG for notarization (timeout: ${TIMEOUT})..."
             
             xcrun notarytool submit "$DMG_FILE" \
               --apple-id "$APPLE_ID" \
               --team-id "$APPLE_TEAM_ID" \
               --password "$APPLE_APP_PASSWORD" \
               --wait \
-              --timeout 30m
+              --timeout "${TIMEOUT}"
             
             if [ $? -eq 0 ]; then
               echo "✅ Notarization successful"
