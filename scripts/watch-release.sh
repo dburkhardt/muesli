@@ -1,17 +1,40 @@
 #!/bin/bash
 
-# Watch GitHub Actions release workflow with timeout
-# Usage: ./scripts/watch-release.sh
+# Watch GitHub Actions release workflow with configurable timeout
+# Usage: ./scripts/watch-release.sh [TIMEOUT_MINUTES]
+#
+# Examples:
+#   ./scripts/watch-release.sh        # Default: 10 minutes
+#   ./scripts/watch-release.sh 180    # 3 hours
 
 set -e
 
 cd "$(dirname "$0")/.."
 
-TIMEOUT_MINUTES=10
-CHECK_INTERVAL=0.8
-MAX_CHECKS=$((TIMEOUT_MINUTES * 60 * 10 / 8))
+# Get timeout from argument or use default
+TIMEOUT_MINUTES=${1:-10}
+
+# Smart polling configuration
+if [ $TIMEOUT_MINUTES -gt 10 ]; then
+    # For long timeouts: poll every second, but print strategically
+    CHECK_INTERVAL=1
+    PRINT_INTERVAL_EARLY=5  # Print every 5 seconds for first 5 minutes
+    PRINT_INTERVAL_LATE=60  # Print every minute after 5 minutes
+    EARLY_PHASE_DURATION=300  # First 5 minutes in seconds
+else
+    # For short timeouts: poll and print every 2 seconds
+    CHECK_INTERVAL=0.8
+    PRINT_INTERVAL_EARLY=2
+    PRINT_INTERVAL_LATE=2
+    EARLY_PHASE_DURATION=0
+fi
+
+MAX_CHECKS=$((TIMEOUT_MINUTES * 60 / CHECK_INTERVAL))
 
 echo "⏱️  Watching release workflow (timeout: ${TIMEOUT_MINUTES} minutes)"
+if [ $TIMEOUT_MINUTES -gt 10 ]; then
+    echo "📊 Smart polling: Every ${PRINT_INTERVAL_EARLY}s for first 5min, then every ${PRINT_INTERVAL_LATE}s"
+fi
 echo ""
 
 check_count=0
@@ -101,8 +124,18 @@ while [ $check_count -lt $MAX_CHECKS ]; do
         fi
     fi
     
-    # Print update every 2 seconds
-    if [ $((watch_elapsed - last_print)) -ge 2 ]; then
+    # Smart printing based on elapsed time
+    time_since_last_print=$((watch_elapsed - last_print))
+    
+    if [ $watch_elapsed -lt $EARLY_PHASE_DURATION ]; then
+        # Early phase: print every PRINT_INTERVAL_EARLY seconds
+        should_print=$((time_since_last_print >= PRINT_INTERVAL_EARLY))
+    else
+        # Late phase: print every PRINT_INTERVAL_LATE seconds
+        should_print=$((time_since_last_print >= PRINT_INTERVAL_LATE))
+    fi
+    
+    if [ $should_print -eq 1 ]; then
         echo "[Watch: ${watch_min}m${watch_sec}s] Runner: ${runner_min}m${runner_sec}s | ${status} | Run ${run_id}"
         last_print=$watch_elapsed
     fi
@@ -116,11 +149,21 @@ echo ""
 echo "⏰ Timeout reached (${TIMEOUT_MINUTES} minutes)"
 echo "Run ID: ${run_id} | Status: ${status}"
 echo ""
+
+if [ $TIMEOUT_MINUTES -ge 60 ]; then
+    echo "Large timeout reached. The workflow is still running:"
+    echo "  gh run watch ${run_id}"
+    echo ""
+    echo "Or check status later:"
+    echo "  gh run list --workflow=release.yml"
+    exit 0
+fi
+
 read -p "Continue for another ${TIMEOUT_MINUTES}m? (y/n) " -n 1 -r
 echo ""
 
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    exec "$0"
+    exec "$0" "$TIMEOUT_MINUTES"
 else
     echo "Check later: gh run list --workflow=release.yml"
     exit 0
