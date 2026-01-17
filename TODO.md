@@ -60,6 +60,12 @@ Each item should include:
 - Notes: Use create-dmg or similar tool to add custom background image, positioned icons, and window styling
 - Related: scripts/create-dmg.sh
 
+**[Enhancement]** [Medium] Add visuals to website
+- Description: Add screenshots, GIFs, or videos demonstrating the app in action to the website
+- Notes: Show key features like onboarding, recording in progress, transcript view, meeting history
+- Consider animated GIF of full workflow or individual screenshots for each major feature
+- Related: docs/index.html, docs/assets/
+
 ### Bugs
 
 **[Bug]** [High] Onboarding should instantly update when screen recording permission is approved
@@ -81,6 +87,18 @@ Each item should include:
 - Description: Implement GitHub milestones and project plans to better organize and track release cycles
 - Notes: Would provide better visibility into what features/fixes are planned for each release version, integrate with PR workflow
 - Related: .github/workflows/release.yml, git_workflow.md
+
+**[Refactor]** [Medium] Investigate sandboxed build and launch for agent testing
+- Description: Research and implement ways to build and launch the app in a sandbox environment that AI agents can interact with
+- Notes: Would enable agents to test permission flows, inspect UI for visual errors, verify onboarding screens, and test recording functionality
+- Potential approaches: Headless testing frameworks, UI automation APIs, screenshot comparison tools, virtual display environments
+- Related: Testing infrastructure, CI/CD workflows
+
+**[Refactor]** [Medium] Create integration tests with paired audio/transcript fixtures
+- Description: Build test suite that uses known audio files with expected transcripts to verify end-to-end transcription accuracy
+- Notes: Create fixture directory with sample audio files (CAF format) and their expected transcript outputs
+- Tests should verify: audio processing pipeline, transcription accuracy, timestamp generation, file output format
+- Related: MuesliTests/, TranscriptionService.swift, AudioCaptureService.swift
 
 ---
 

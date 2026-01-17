@@ -21,8 +21,8 @@ enum ClipboardHelper {
         var output: [String] = []
         
         for block in blocks {
-            // Format timestamp
-            let timestamp = TimeFormatter.formatTimestamp(block.startTimestamp)
+            // Format timestamp as HH:MM:SS or MM:SS
+            let timestamp = formatTimestamp(block.startTimestamp)
             
             // Format speaker
             let speaker: String
@@ -31,8 +31,6 @@ enum ClipboardHelper {
                 speaker = "Me"
             case .them:
                 speaker = "Them"
-            case .unknown:
-                speaker = "Unknown"
             }
             
             // Build plain text line
@@ -49,8 +47,8 @@ enum ClipboardHelper {
         var output: [String] = []
         
         for block in blocks {
-            // Format timestamp
-            let timestamp = TimeFormatter.formatTimestamp(block.startTimestamp)
+            // Format timestamp as HH:MM:SS or MM:SS
+            let timestamp = formatTimestamp(block.startTimestamp)
             
             // Format speaker
             let speaker: String
@@ -59,8 +57,6 @@ enum ClipboardHelper {
                 speaker = "**Me**"
             case .them:
                 speaker = "**Them**"
-            case .unknown:
-                speaker = "**Unknown**"
             }
             
             // Build markdown line
@@ -68,6 +64,20 @@ enum ClipboardHelper {
         }
         
         return output.joined(separator: "\n\n")
+    }
+    
+    /// Format a timestamp as HH:MM:SS or MM:SS
+    private static func formatTimestamp(_ seconds: TimeInterval) -> String {
+        let totalSeconds = Int(seconds)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        } else {
+            return String(format: "%02d:%02d", minutes, secs)
+        }
     }
     
     /// Copy transcript blocks as plain text
