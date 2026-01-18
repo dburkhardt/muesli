@@ -267,14 +267,31 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             return (sys, mic, time)
         }
         
-        // Process remaining system audio
+        // Log remaining audio for debugging
         if !remainingSystem.isEmpty {
-            await transcribeChunk(remainingSystem, speaker: .them, whisperKit: whisperKit, startTime: startTime)
+            let durationMs = (Double(remainingSystem.count) / Double(sampleRate)) * 1000
+            print("[TranscriptionService] Remaining system audio: \(remainingSystem.count) samples (\(String(format: "%.1f", durationMs))ms)")
+        }
+        if !remainingMic.isEmpty {
+            let durationMs = (Double(remainingMic.count) / Double(sampleRate)) * 1000
+            print("[TranscriptionService] Remaining mic audio: \(remainingMic.count) samples (\(String(format: "%.1f", durationMs))ms)")
         }
         
-        // Process remaining mic audio
-        if !remainingMic.isEmpty {
+        // Process remaining system audio ONLY if it passes VAD check
+        // This prevents short/noisy trailing audio from generating hallucinations
+        if !remainingSystem.isEmpty && hasVoiceActivity(remainingSystem) {
+            print("[TranscriptionService] Processing remaining system audio (passed VAD)")
+            await transcribeChunk(remainingSystem, speaker: .them, whisperKit: whisperKit, startTime: startTime)
+        } else if !remainingSystem.isEmpty {
+            print("[TranscriptionService] Skipping remaining system audio (failed VAD)")
+        }
+        
+        // Process remaining mic audio ONLY if it passes VAD check
+        if !remainingMic.isEmpty && hasVoiceActivity(remainingMic) {
+            print("[TranscriptionService] Processing remaining mic audio (passed VAD)")
             await transcribeChunk(remainingMic, speaker: .me, whisperKit: whisperKit, startTime: startTime)
+        } else if !remainingMic.isEmpty {
+            print("[TranscriptionService] Skipping remaining mic audio (failed VAD)")
         }
     }
     
