@@ -117,45 +117,8 @@ struct CompletedMeetingWindow: View {
     
     // MARK: - Copy Transcript Button
     
-    @State private var showCopyConfirmation = false
-    
     private var copyTranscriptButton: some View {
-        Menu {
-            Button("Copy as Plain Text") {
-                if let blocks = getTranscriptBlocks() {
-                    ClipboardHelper.copyTranscriptAsPlainText(blocks)
-                    showCopyFeedback()
-                }
-            }
-            
-            Button("Copy as Markdown") {
-                if let blocks = getTranscriptBlocks() {
-                    ClipboardHelper.copyTranscriptAsMarkdown(blocks)
-                    showCopyFeedback()
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                if showCopyConfirmation {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12))
-                    Text("Copied!")
-                        .font(.system(size: 11, weight: .medium))
-                } else {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 12))
-                    Text("Copy")
-                        .font(.system(size: 11, weight: .medium))
-                }
-            }
-            .foregroundStyle(.blue)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.blue.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .disabled(getTranscriptBlocks() == nil)
-        .help("Copy transcript to clipboard")
+        CopyTranscriptButton(getBlocks: { getTranscriptBlocks() })
     }
     
     /// Get transcript blocks from the meeting
@@ -179,15 +142,6 @@ struct CompletedMeetingWindow: View {
         }
         
         return nil
-    }
-    
-    /// Show temporary copy confirmation feedback
-    private func showCopyFeedback() {
-        showCopyConfirmation = true
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.5))
-            showCopyConfirmation = false
-        }
     }
     
     // MARK: - Metadata Row

@@ -155,6 +155,31 @@ if [ -f "${FINAL_DMG}" ]; then
     rm -f "${FINAL_DMG}"
 fi
 
+# Check for custom background image
+BACKGROUND_IMAGE="${PROJECT_ROOT}/assets/dmg-background.png"
+BACKGROUND_ARG=""
+
+if [ -f "${BACKGROUND_IMAGE}" ]; then
+    log_info "Using custom background image: ${BACKGROUND_IMAGE}"
+    BACKGROUND_ARG="--background ${BACKGROUND_IMAGE}"
+elif [ -f "${PROJECT_ROOT}/assets/dmg-background.svg" ]; then
+    log_info "Found SVG background, attempting to convert to PNG..."
+    # Try to convert SVG to PNG using available tools
+    if command -v rsvg-convert &> /dev/null; then
+        rsvg-convert -w 1280 -h 720 "${PROJECT_ROOT}/assets/dmg-background.svg" > "${BACKGROUND_IMAGE}"
+        log_success "Converted SVG to PNG"
+        BACKGROUND_ARG="--background ${BACKGROUND_IMAGE}"
+    elif command -v convert &> /dev/null; then
+        convert -density 300 -background none "${PROJECT_ROOT}/assets/dmg-background.svg" -resize 1280x720 "${BACKGROUND_IMAGE}"
+        log_success "Converted SVG to PNG with ImageMagick"
+        BACKGROUND_ARG="--background ${BACKGROUND_IMAGE}"
+    else
+        log_warning "No tool found to convert SVG. Install rsvg-convert or ImageMagick for custom background."
+    fi
+else
+    log_warning "No custom background found, using default"
+fi
+
 # Create DMG using create-dmg tool
 log_info "Creating DMG with create-dmg tool..."
 
@@ -164,18 +189,27 @@ TEMP_APP_DIR="${BUILD_DIR}/app-for-dmg"
 mkdir -p "${TEMP_APP_DIR}"
 cp -R "${APP_PATH}" "${TEMP_APP_DIR}/"
 
-# Create DMG with custom settings
-if create-dmg \
-    --volname "${APP_NAME}" \
+# Build create-dmg command with optional background
+CREATE_DMG_CMD="create-dmg \
+    --volname \"${APP_NAME}\" \
     --window-pos 200 120 \
     --window-size 800 400 \
-    --icon-size 100 \
-    --icon "${APP_NAME}.app" 200 190 \
-    --hide-extension "${APP_NAME}.app" \
+    --icon-size 128 \
+    --icon \"${APP_NAME}.app\" 200 190 \
+    --hide-extension \"${APP_NAME}.app\" \
     --app-drop-link 600 185 \
-    --no-internet-enable \
-    "${FINAL_DMG}" \
-    "${TEMP_APP_DIR}"; then
+    --no-internet-enable"
+
+# Add background if available
+if [ -n "${BACKGROUND_ARG}" ]; then
+    CREATE_DMG_CMD="${CREATE_DMG_CMD} ${BACKGROUND_ARG}"
+fi
+
+# Add output path and source
+CREATE_DMG_CMD="${CREATE_DMG_CMD} \"${FINAL_DMG}\" \"${TEMP_APP_DIR}\""
+
+# Execute create-dmg
+if eval ${CREATE_DMG_CMD}; then
     log_success "DMG created successfully"
 else
     log_error "Failed to create DMG with create-dmg"

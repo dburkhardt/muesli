@@ -138,6 +138,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AppDelegate.shared = self
         }
         
+        // Check for UI testing mode
+        let commandLineArgs = ProcessInfo.processInfo.arguments
+        let isUITesting = commandLineArgs.contains("-UITestingSkipOnboarding") ||
+                         commandLineArgs.contains("-UITestingMockPermissions") ||
+                         commandLineArgs.contains("-UITestingUseFixtures") ||
+                         commandLineArgs.contains("-UITestingMockModels")
+        
+        if isUITesting {
+            // UI testing mode - handle launch arguments
+            Task { @MainActor in
+                self.configureUITestingEnvironment()
+                
+                // Open main window for UI testing
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
+            return
+        }
+        
         // Check if onboarding is needed
         if !UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding) {
             Task { @MainActor in
@@ -157,6 +179,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
                 await MuesliApp.sharedViewModel?.checkForUpdatesOnLaunch()
             }
+        }
+    }
+    
+    /// Configure app for UI testing based on launch arguments
+    private func configureUITestingEnvironment() {
+        let commandLineArgs = ProcessInfo.processInfo.arguments
+        
+        // Skip onboarding
+        if commandLineArgs.contains("-UITestingSkipOnboarding") {
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.hasCompletedOnboarding)
+        }
+        
+        // Mock permissions as granted
+        if commandLineArgs.contains("-UITestingMockPermissions") {
+            // Note: Actual permission mocking would require modifying PermissionManager
+            // For now, we mark onboarding as complete
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.hasCompletedOnboarding)
+        }
+        
+        // Mock models as available
+        if commandLineArgs.contains("-UITestingMockModels") {
+            // Set a dummy model path to simulate having models
+            UserDefaults.standard.set("tiny", forKey: AppStorageKeys.activeWhisperModel)
+        }
+        
+        // Use fixture data
+        if commandLineArgs.contains("-UITestingUseFixtures") {
+            // Flag that can be checked by services to return fixture data
+            UserDefaults.standard.set(true, forKey: "UITestingUseFixtures")
+        }
+        
+        // Set appearance mode
+        if commandLineArgs.contains("-UITestingLightAppearance") {
+            NSApp.appearance = NSAppearance(named: .aqua)
+        } else if commandLineArgs.contains("-UITestingDarkAppearance") {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
         }
     }
     

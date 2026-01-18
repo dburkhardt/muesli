@@ -93,7 +93,8 @@ jobs:
           else
             echo "ℹ️ No .swiftlint.yml found, skipping lint"
           fi
-        continue-on-error: true  # Don't fail build on lint errors yet
+        continue-on-error: true  # Advisory only - violations reported but don't block merges
+                                 # TODO: Remove after baseline cleanup (track in TODO.md)
   
   build-release:
     name: Build Release Configuration

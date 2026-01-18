@@ -183,7 +183,7 @@ struct GeneralPreferencesTab: View {
                         
                         Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
                         
-                        Text("Shorter chunks provide faster transcription but may reduce accuracy. Longer chunks improve accuracy but increase latency.")
+                        Text("Shorter chunks provide faster transcription but may reduce accuracy. Longer chunks improve accuracy but increase latency. Changes apply to new recordings only.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

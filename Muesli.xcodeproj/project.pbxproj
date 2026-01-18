@@ -52,6 +52,7 @@
 		A1000070241D1A1D00000010 /* MeetingTitlePromptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */; };
 		A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000073241D1A1D00000011 /* PreferencesView.swift */; };
 		A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000075241D1A1D00000012 /* RecordingIndicator.swift */; };
+		CT00001241D1A1D00000013 /* CopyTranscriptButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = CT00002241D1A1D00000013 /* CopyTranscriptButton.swift */; };
 		C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000002241D1A1D00000050 /* PreferencesManager.swift */; };
 		C1000003241D1A1D00000051 /* MeetingHistoryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */; };
 		C1000005241D1A1D00000052 /* RefinementCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000006241D1A1D00000052 /* RefinementCoordinator.swift */; };
@@ -123,8 +124,9 @@
 		A100006B241D1A1D00000008 /* MeetingHistoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryService.swift; sourceTree = "<group>"; };
 		A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTitlePromptSheet.swift; sourceTree = "<group>"; };
 		A1000073241D1A1D00000011 /* PreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesView.swift; sourceTree = "<group>"; };
-		A1000075241D1A1D00000012 /* RecordingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIndicator.swift; sourceTree = "<group>"; };
-		A1000080241D1A1D00000020 /* TranscriptBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlock.swift; sourceTree = "<group>"; };
+	A1000075241D1A1D00000012 /* RecordingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIndicator.swift; sourceTree = "<group>"; };
+	CT00002241D1A1D00000013 /* CopyTranscriptButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyTranscriptButton.swift; sourceTree = "<group>"; };
+	A1000080241D1A1D00000020 /* TranscriptBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlock.swift; sourceTree = "<group>"; };
 		A1000082241D1A1D00000021 /* TranscriptProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptProcessor.swift; sourceTree = "<group>"; };
 		A1000084241D1A1D00000022 /* LLMStitchingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMStitchingService.swift; sourceTree = "<group>"; };
 		A1000086241D1A1D00000023 /* LLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMManager.swift; sourceTree = "<group>"; };
@@ -291,9 +293,10 @@
 		A1000015241D1A1D00000001 /* Components */ = {
 			isa = PBXGroup;
 			children = (
-				A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */,
-				A1000075241D1A1D00000012 /* RecordingIndicator.swift */,
-				A1000088241D1A1D00000024 /* TranscriptBlockView.swift */,
+			A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */,
+			A1000075241D1A1D00000012 /* RecordingIndicator.swift */,
+			CT00002241D1A1D00000013 /* CopyTranscriptButton.swift */,
+			A1000088241D1A1D00000024 /* TranscriptBlockView.swift */,
 				A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */,
 				A1000095241D1A1D00000027 /* ResumeControlPane.swift */,
 				US00002241D1A1D00000098 /* UpdateSheet.swift */,
@@ -560,10 +563,11 @@
 				A1000066241D1A1D00000008 /* MeetingHistorySidebar.swift in Sources */,
 				A1000068241D1A1D00000008 /* RecordingDetailView.swift in Sources */,
 				A100006A241D1A1D00000008 /* MeetingHistoryService.swift in Sources */,
-				A1000070241D1A1D00000010 /* MeetingTitlePromptSheet.swift in Sources */,
-				A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */,
-				A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */,
-				A1000081241D1A1D00000020 /* TranscriptBlock.swift in Sources */,
+			A1000070241D1A1D00000010 /* MeetingTitlePromptSheet.swift in Sources */,
+			A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */,
+			A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */,
+			CT00001241D1A1D00000013 /* CopyTranscriptButton.swift in Sources */,
+			A1000081241D1A1D00000020 /* TranscriptBlock.swift in Sources */,
 				A1000083241D1A1D00000021 /* TranscriptProcessor.swift in Sources */,
 				A1000085241D1A1D00000022 /* LLMStitchingService.swift in Sources */,
 				A1000087241D1A1D00000023 /* LLMManager.swift in Sources */,

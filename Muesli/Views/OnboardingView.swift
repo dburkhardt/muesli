@@ -72,19 +72,32 @@ struct OnboardingView: View {
                 // Only on welcome screen do we avoid async check to prevent prompts
                 if currentStep != .welcome {
                     await viewModel.refreshPermissionsAsync()
+                    // Start real-time monitoring on permission screens
+                    startPermissionMonitoring()
                 } else {
                     viewModel.refreshPermissions()
                 }
                 advanceBasedOnPermissions()
             }
         }
+        .onDisappear {
+            // Stop monitoring when view disappears
+            stopPermissionMonitoring()
+        }
         .onChange(of: currentStep) { oldValue, newValue in
+            // Stop monitoring when leaving permission screens
+            if oldValue == .screenRecording || oldValue == .microphone {
+                stopPermissionMonitoring()
+            }
+            
             // Check permissions when switching to permission steps
             // Use async check for reliable detection after granting permission
             if newValue == .screenRecording || newValue == .microphone {
                 Task {
                     await viewModel.refreshPermissionsAsync()
                     advanceBasedOnPermissions()
+                    // Start real-time monitoring
+                    startPermissionMonitoring()
                 }
             }
         }
@@ -762,6 +775,31 @@ struct OnboardingView: View {
     private func stopMicrophonePolling() {
         microphonePollingTask?.cancel()
         microphonePollingTask = nil
+    }
+    
+    // MARK: - Permission Monitoring
+    
+    /// Start real-time permission monitoring
+    private func startPermissionMonitoring() {
+        // Set up callback for instant updates
+        viewModel.permissionManager.permissionDidChange = { [weak viewModel] screenRecording, microphone in
+            Task { @MainActor in
+                guard let viewModel = viewModel else { return }
+                // Update viewModel state
+                await viewModel.refreshPermissionsAsync()
+                // Auto-advance if permission granted
+                advanceBasedOnPermissions()
+            }
+        }
+        
+        // Start monitoring
+        viewModel.permissionManager.startMonitoringPermissions()
+    }
+    
+    /// Stop permission monitoring
+    private func stopPermissionMonitoring() {
+        viewModel.permissionManager.stopMonitoringPermissions()
+        viewModel.permissionManager.permissionDidChange = nil
     }
     
     // MARK: - File Selection

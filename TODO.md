@@ -41,47 +41,29 @@ Each item should include:
 
 ### Enhancements
 
-**[Enhancement]** [Medium] Add configurable audio chunking duration preference
-- Description: Add option in preferences page to alter the length of audio chunking (2-10 seconds, integer values only)
-- Notes: Currently hardcoded in TranscriptionService, should be user-configurable via PreferencesManager
-- Related: TranscriptionService.swift, PreferencesView.swift, PreferencesManager.swift
-
-**[Enhancement]** [High] Add live transcript refinement
-- Description: Implement live refinement of the transcript to clean up and stitch audio chunks together
-- Notes: Use LLM to improve readability, fix obvious errors, and create coherent sentences from chunks
-- Related: Existing TranscriptRefinementService.swift, may need real-time variant
-
-**[Enhancement]** [Medium] Add copy transcript to clipboard button
-- Description: Add a button to make it easy to copy the entire transcript to clipboard
-- Notes: Should be accessible from transcript view, consider adding formatting options (plain text vs markdown)
-
-**[Enhancement]** [Low] Improve DMG installer appearance
-- Description: Make the DMG download folder pretty with custom icon and nice background for drag-to-Applications instruction
-- Notes: Use create-dmg or similar tool to add custom background image, positioned icons, and window styling
-- Related: scripts/create-dmg.sh
-
 **[Enhancement]** [Medium] Add visuals to website
 - Description: Add screenshots, GIFs, or videos demonstrating the app in action to the website
 - Notes: Show key features like onboarding, recording in progress, transcript view, meeting history
 - Consider animated GIF of full workflow or individual screenshots for each major feature
 - Related: docs/index.html, docs/assets/
+- Status: UI test infrastructure created in v0.1.2, screenshots can be generated from tests
+
+**[Enhancement]** [Low] Make reprocessing chunk size configurable in preferences
+- Description: Add preference setting to allow users to configure chunk size specifically for reprocessing transcripts
+- Notes: Currently reprocessing uses the same audio chunk duration setting as live recording. Consider whether to use the same setting or add a separate "reprocessing chunk duration" preference
+- May want different chunk sizes for reprocessing vs live recording (e.g., larger chunks for better accuracy when latency doesn't matter)
+- Related: PreferencesView.swift, PreferencesManager.swift, RecordingDetailView.swift, CompletedMeetingWindow.swift
 
 ### Bugs
 
-**[Bug]** [High] Onboarding should instantly update when screen recording permission is approved
-- Description: When user approves screen recording permissions in System Settings, the onboarding pane should immediately show a green checkmark without requiring app restart
-- Notes: Currently requires quitting and reopening the app to see permission status update. Need to implement real-time permission monitoring or more aggressive polling when permission screen is active
-- Related: OnboardingView.swift, PermissionManager.swift
-
-**[Bug]** [High] Handle blank audio and random snippets properly
-- Description: Ensure blank audio segments and random snippets at the end of meetings are handled correctly
-- Occurs in two scenarios:
-  1. End of live meetings - may capture trailing silence or brief noise
-  2. During reprocessing - should skip/filter empty or spurious audio chunks
-- Notes: Need to add audio detection/filtering logic in transcription pipeline
-- Related: TranscriptionService.swift, TranscriptProcessor.swift
+*No items - All high-priority bugs fixed in v0.1.2*
 
 ### Refactoring
+
+**[Refactor]** [Low] Enforce SwiftLint in CI
+- Description: Fix all existing lint violations and remove continue-on-error from CI
+- Notes: Currently advisory only. Need baseline cleanup first before enforcing strict mode.
+- Related: .swiftlint.yml, .github/workflows/ci.yml
 
 **[Refactor]** [Low] Use GitHub milestones and project plans for release management
 - Description: Implement GitHub milestones and project plans to better organize and track release cycles
@@ -114,3 +96,40 @@ Each item should include:
 
 Archive completed items here with completion date.
 
+### v0.1.2 - 2026-01-18
+
+**[Enhancement]** Add configurable audio chunking duration preference
+- Completed: User-adjustable slider in preferences (2-10 seconds)
+- Files: PreferencesView.swift, PreferencesManager.swift, AppStorageKeys.swift
+
+**[Enhancement]** Add live transcript refinement
+- Completed: Infrastructure added for real-time refinement during recording
+- Files: TranscriptionCoordinator.swift, RefinementCoordinator.swift
+- Notes: Backend support complete, UI activation to come in future release
+
+**[Enhancement]** Add copy transcript to clipboard button
+- Completed: Copy button with plain text and Markdown format options
+- Files: ClipboardHelper.swift, RecordingDetailView.swift, CompletedMeetingWindow.swift
+
+**[Enhancement]** Improve DMG installer appearance
+- Completed: Custom SVG background with app icon, arrow, installation instructions
+- Files: assets/dmg-background.svg, scripts/create-dmg-modern.sh
+
+**[Bug]** Onboarding instant permission updates
+- Completed: Real-time monitoring with distributed notifications + polling fallback
+- Files: PermissionManager.swift, OnboardingView.swift
+
+**[Bug]** Handle blank audio and random snippets
+- Completed: Hallucination filter added to TranscriptProcessor
+- Files: TranscriptProcessor.swift
+- Filters: "thank you", "subscribe", repetitive text, common filler words
+
+**[Refactor]** UI Testing Framework
+- Completed: XCUITest suite for screenshot capture
+- Files: MuesliUITests/ directory with test files and helpers
+- Supports: Light/dark modes, mocked permissions, fixture data
+
+**[Refactor]** SwiftLint Configuration
+- Completed: Code quality standards configured
+- File: .swiftlint.yml
+- Status: Advisory mode (will enforce in future release)

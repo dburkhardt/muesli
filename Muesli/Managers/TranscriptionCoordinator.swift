@@ -35,6 +35,23 @@ final class TranscriptionCoordinator {
     private let transcriptionService: any TranscriptionServiceProtocol
     private let modelManager: any ModelManagerProtocol
     
+    // MARK: - Live Refinement
+    
+    /// Whether live refinement is enabled (hidden preference for v0.1.2)
+    var liveRefinementEnabled: Bool = false
+    
+    /// Queue of segments awaiting refinement
+    private var liveRefinementQueue: [TranscriptSegment] = []
+    
+    /// Current segment being refined
+    private var currentRefinementTask: Task<Void, Never>?
+    
+    /// Reference to refinement coordinator (set externally)
+    weak var refinementCoordinator: RefinementCoordinator?
+    
+    /// Maximum queue depth before skipping refinement (avoid falling behind)
+    private let maxRefinementQueueDepth = 5
+    
     // MARK: - State
     
     /// Current model state
@@ -430,5 +447,56 @@ final class TranscriptionCoordinator {
         }
         
         progressHandler?(1.0)
+    }
+    
+    // MARK: - Live Refinement
+    
+    /// Queue a segment for live refinement
+    /// Called after a segment is created during recording
+    func queueSegmentForLiveRefinement(_ segment: TranscriptSegment, in meeting: MeetingHistoryItem) {
+        guard liveRefinementEnabled else { return }
+        guard let coordinator = refinementCoordinator else { return }
+        guard coordinator.canRefineTranscripts else { return }
+        
+        // Check queue depth - skip if falling behind
+        guard liveRefinementQueue.count < maxRefinementQueueDepth else {
+            print("[TranscriptionCoordinator] Live refinement queue full (\(liveRefinementQueue.count)), skipping segment \(segment.segmentNumber)")
+            return
+        }
+        
+        // Add to queue
+        liveRefinementQueue.append(segment)
+        
+        // Start processing if not already running
+        if currentRefinementTask == nil {
+            currentRefinementTask = Task { @MainActor in
+                await processLiveRefinementQueue(meeting: meeting)
+            }
+        }
+    }
+    
+    /// Process the live refinement queue in the background
+    private func processLiveRefinementQueue(meeting: MeetingHistoryItem) async {
+        while !liveRefinementQueue.isEmpty {
+            // Get next segment to refine
+            let segment = liveRefinementQueue.removeFirst()
+            
+            // Refine with background priority
+            guard let coordinator = refinementCoordinator else { continue }
+            
+            await Task(priority: .background) {
+                await coordinator.refineSegment(segment, in: meeting)
+            }.value
+        }
+        
+        // Clear task reference when done
+        currentRefinementTask = nil
+    }
+    
+    /// Stop live refinement processing (when recording stops)
+    func stopLiveRefinement() {
+        currentRefinementTask?.cancel()
+        currentRefinementTask = nil
+        liveRefinementQueue.removeAll()
     }
 }

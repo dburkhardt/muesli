@@ -831,46 +831,9 @@ struct RecordingDetailView: View {
     
     // MARK: - Helpers
     
-    @State private var showCopyConfirmation = false
-    
     /// Copy transcript button for historical meeting view
     private func copyTranscriptButton(for meeting: MeetingHistoryItem) -> some View {
-        Menu {
-            Button("Copy as Plain Text") {
-                if let blocks = getTranscriptBlocks(for: meeting) {
-                    ClipboardHelper.copyTranscriptAsPlainText(blocks)
-                    showCopyFeedback()
-                }
-            }
-            
-            Button("Copy as Markdown") {
-                if let blocks = getTranscriptBlocks(for: meeting) {
-                    ClipboardHelper.copyTranscriptAsMarkdown(blocks)
-                    showCopyFeedback()
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                if showCopyConfirmation {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12))
-                    Text("Copied!")
-                        .font(.system(size: 11, weight: .medium))
-                } else {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 12))
-                    Text("Copy")
-                        .font(.system(size: 11, weight: .medium))
-                }
-            }
-            .foregroundStyle(.blue)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.blue.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .disabled(getTranscriptBlocks(for: meeting) == nil)
-        .help("Copy transcript to clipboard")
+        CopyTranscriptButton(getBlocks: { getTranscriptBlocks(for: meeting) })
     }
     
     /// Get transcript blocks from the meeting
@@ -894,15 +857,6 @@ struct RecordingDetailView: View {
         }
         
         return nil
-    }
-    
-    /// Show temporary copy confirmation feedback
-    private func showCopyFeedback() {
-        showCopyConfirmation = true
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.5))
-            showCopyConfirmation = false
-        }
     }
     
     private func formatDate(_ date: Date) -> String {

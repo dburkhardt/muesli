@@ -77,7 +77,8 @@ final class MuesliViewModel {
     private let fileOutputService: FileOutputService
     private let transcriptionService: TranscriptionService
     private let meetingAppDetector: MeetingAppDetector
-    private let permissionManager: PermissionManager
+    /// Permission manager (exposed for onboarding view)
+    let permissionManager: PermissionManager
     let microphoneManager: MicrophoneManager
     private let meetingHistoryService: MeetingHistoryService
     

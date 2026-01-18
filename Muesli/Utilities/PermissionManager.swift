@@ -21,6 +21,15 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Notification observers for automatic permission refresh
     private var observers: [NSObjectProtocol] = []
     
+    /// Callback for real-time permission changes
+    var permissionDidChange: ((Bool, Bool) -> Void)?
+    
+    /// Whether permission monitoring is active (for onboarding screens)
+    private var isMonitoring: Bool = false
+    
+    /// Polling timer for permission checks (fallback)
+    private var pollingTimer: Timer?
+    
     // MARK: - Initialization
     
     init() {
@@ -83,6 +92,63 @@ final class PermissionManager: PermissionManagerProtocol {
         // Remove all observers (use MainActor.assumeIsolated since deinit is nonisolated)
         MainActor.assumeIsolated {
             observers.forEach { NotificationCenter.default.removeObserver($0) }
+            pollingTimer?.invalidate()
+        }
+    }
+    
+    // MARK: - Real-time Permission Monitoring
+    
+    /// Start monitoring permissions for real-time updates
+    /// This is more aggressive than the default app activation observer
+    /// Use this when on permission screens to provide instant feedback
+    func startMonitoringPermissions() {
+        guard !isMonitoring else { return }
+        isMonitoring = true
+        
+        // Register for distributed notifications (system-level)
+        // Note: These may not fire reliably for all permission changes
+        let distributedCenter = DistributedNotificationCenter.default()
+        
+        // Listen for TCC authorization changes
+        let tccObserver = distributedCenter.addObserver(
+            forName: NSNotification.Name("com.apple.security.authorization-right-change"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.checkAndNotifyPermissionChanges()
+            }
+        }
+        observers.append(tccObserver)
+        
+        // Start polling as fallback (1 second interval)
+        pollingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.checkAndNotifyPermissionChanges()
+            }
+        }
+    }
+    
+    /// Stop monitoring permissions
+    func stopMonitoringPermissions() {
+        guard isMonitoring else { return }
+        isMonitoring = false
+        
+        pollingTimer?.invalidate()
+        pollingTimer = nil
+    }
+    
+    /// Check permissions and notify if changed
+    private func checkAndNotifyPermissionChanges() async {
+        let oldScreenRecording = screenRecordingGranted
+        let oldMicrophone = microphoneGranted
+        
+        // Check current state
+        let (newScreenRecording, newMicrophone) = await refreshPermissionsAsync()
+        
+        // Notify if changed
+        if newScreenRecording != oldScreenRecording || newMicrophone != oldMicrophone {
+            permissionDidChange?(newScreenRecording, newMicrophone)
         }
     }
     

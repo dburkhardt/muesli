@@ -360,6 +360,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     // MARK: - Post-Processing Transcription
     
     /// Transcribe entire audio files after recording (post-processing mode)
+    /// Uses 30-second chunks with 5-second overlap for optimal Whisper performance
     /// - Parameters:
     ///   - systemAudioURL: URL to system audio file
     ///   - micAudioURL: URL to microphone audio file
@@ -369,37 +370,114 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             throw NSError(domain: "TranscriptionService", code: 1, userInfo: [NSLocalizedDescriptionKey: "WhisperKit not initialized"])
         }
         
-        // Transcribe system audio if available
+        // Transcribe system audio if available (with chunking)
         if let systemURL = systemAudioURL {
             if let samples = await loadAudioFile(url: systemURL) {
-                let results = try await whisperKit.transcribe(audioArray: samples)
+                logger.info("Post-processing system audio: \(samples.count) samples (\(String(format: "%.1f", Double(samples.count) / Double(self.sampleRate)))s)")
                 
-                for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    let segment = TranscriptSegment(
-                        text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                        timestamp: 0, // Will be updated based on result timestamps if available
-                        speaker: .them
-                    )
-                    transcriptHandler?(segment)
+                // Split into 30-second chunks with 5-second overlap
+                let chunks = splitIntoChunks(
+                    samples: samples,
+                    chunkDuration: AudioConfiguration.postProcessingChunkDuration,
+                    overlap: AudioConfiguration.postProcessingOverlapDuration
+                )
+                
+                logger.info("Split system audio into \(chunks.count) chunks")
+                
+                // Process each chunk
+                for (index, chunk) in chunks.enumerated() {
+                    let results = try await whisperKit.transcribe(audioArray: chunk.samples)
+                    
+                    for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        let segment = TranscriptSegment(
+                            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                            timestamp: chunk.timestamp,
+                            speaker: .them
+                        )
+                        transcriptHandler?(segment)
+                    }
+                    
+                    // Log progress
+                    if (index + 1) % 5 == 0 || index == chunks.count - 1 {
+                        logger.info("Processed system audio chunk \(index + 1)/\(chunks.count)")
+                    }
                 }
             }
         }
         
-        // Transcribe mic audio if available
+        // Transcribe mic audio if available (with chunking)
         if let micURL = micAudioURL {
             if let samples = await loadAudioFile(url: micURL) {
-                let results = try await whisperKit.transcribe(audioArray: samples)
+                logger.info("Post-processing mic audio: \(samples.count) samples (\(String(format: "%.1f", Double(samples.count) / Double(self.sampleRate)))s)")
                 
-                for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    let segment = TranscriptSegment(
-                        text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                        timestamp: 0,
-                        speaker: .me
-                    )
-                    transcriptHandler?(segment)
+                // Split into 30-second chunks with 5-second overlap
+                let chunks = splitIntoChunks(
+                    samples: samples,
+                    chunkDuration: AudioConfiguration.postProcessingChunkDuration,
+                    overlap: AudioConfiguration.postProcessingOverlapDuration
+                )
+                
+                logger.info("Split mic audio into \(chunks.count) chunks")
+                
+                // Process each chunk
+                for (index, chunk) in chunks.enumerated() {
+                    let results = try await whisperKit.transcribe(audioArray: chunk.samples)
+                    
+                    for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        let segment = TranscriptSegment(
+                            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                            timestamp: chunk.timestamp,
+                            speaker: .me
+                        )
+                        transcriptHandler?(segment)
+                    }
+                    
+                    // Log progress
+                    if (index + 1) % 5 == 0 || index == chunks.count - 1 {
+                        logger.info("Processed mic audio chunk \(index + 1)/\(chunks.count)")
+                    }
                 }
             }
         }
+    }
+    
+    /// Split audio samples into chunks with overlap for post-processing
+    /// - Parameters:
+    ///   - samples: Audio samples to split
+    ///   - chunkDuration: Duration of each chunk in seconds
+    ///   - overlap: Overlap duration between chunks in seconds
+    /// - Returns: Array of tuples containing chunk samples and their timestamp offsets
+    private func splitIntoChunks(
+        samples: [Float],
+        chunkDuration: TimeInterval,
+        overlap: TimeInterval
+    ) -> [(samples: [Float], timestamp: TimeInterval)] {
+        let chunkSamples = Int(chunkDuration * Double(sampleRate))
+        let overlapSamples = Int(overlap * Double(sampleRate))
+        let stride = chunkSamples - overlapSamples
+        
+        var chunks: [(samples: [Float], timestamp: TimeInterval)] = []
+        var offset = 0
+        
+        while offset < samples.count {
+            let endOffset = min(offset + chunkSamples, samples.count)
+            let chunkArray = Array(samples[offset..<endOffset])
+            
+            // Calculate timestamp for this chunk
+            let timestamp = Double(offset) / Double(sampleRate)
+            
+            chunks.append((samples: chunkArray, timestamp: timestamp))
+            
+            // Move forward by stride (chunk size - overlap)
+            offset += stride
+            
+            // If we're at the end and have a tiny remaining chunk, break
+            if offset >= samples.count {
+                break
+            }
+        }
+        
+        return chunks
     }
     
     /// Load audio file and convert to Float32 samples at 16kHz mono
