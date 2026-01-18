@@ -249,19 +249,19 @@ final class LLMStitchingService {
     private func levenshteinDistance(_ s1: String, _ s2: String) -> Int {
         let s1Array = Array(s1)
         let s2Array = Array(s2)
-        let m = s1Array.count
-        let n = s2Array.count
+        let len1 = s1Array.count
+        let len2 = s2Array.count
         
-        if m == 0 { return n }
-        if n == 0 { return m }
+        if len1 == 0 { return len2 }
+        if len2 == 0 { return len1 }
         
-        var matrix = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
+        var matrix = Array(repeating: Array(repeating: 0, count: len2 + 1), count: len1 + 1)
         
-        for i in 0...m { matrix[i][0] = i }
-        for j in 0...n { matrix[0][j] = j }
+        for i in 0...len1 { matrix[i][0] = i }
+        for j in 0...len2 { matrix[0][j] = j }
         
-        for i in 1...m {
-            for j in 1...n {
+        for i in 1...len1 {
+            for j in 1...len2 {
                 let cost = s1Array[i - 1] == s2Array[j - 1] ? 0 : 1
                 matrix[i][j] = min(
                     matrix[i - 1][j] + 1,      // deletion
@@ -271,7 +271,7 @@ final class LLMStitchingService {
             }
         }
         
-        return matrix[m][n]
+        return matrix[len1][len2]
     }
 }
 

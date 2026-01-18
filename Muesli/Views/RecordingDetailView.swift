@@ -121,9 +121,9 @@ struct RecordingDetailView: View {
                         HStack {
                             Spacer()
                             let formatter: DateFormatter = {
-                                let f = DateFormatter()
-                                f.dateFormat = "MMMM d, yyyy 'at' h:mm a"
-                                return f
+                                let dateFormatter = DateFormatter()
+                                dateFormatter.dateFormat = "MMMM d, yyyy 'at' h:mm a"
+                                return dateFormatter
                             }()
                             Text("Recording started: \(formatter.string(from: firstSegment.startTime))")
                                 .font(.system(size: 12))
@@ -140,10 +140,10 @@ struct RecordingDetailView: View {
                             HStack {
                                 Spacer()
                                 let formatter: DateFormatter = {
-                                    let f = DateFormatter()
-                                    f.dateStyle = .none
-                                    f.timeStyle = .short
-                                    return f
+                                    let dateFormatter = DateFormatter()
+                                    dateFormatter.dateStyle = .none
+                                    dateFormatter.timeStyle = .short
+                                    return dateFormatter
                                 }()
                                 Text("Recording resumed at \(formatter.string(from: segment.startTime))")
                                     .font(.system(size: 12))
@@ -167,10 +167,10 @@ struct RecordingDetailView: View {
                     HStack {
                         Spacer()
                         let formatter: DateFormatter = {
-                            let f = DateFormatter()
-                            f.dateStyle = .none
-                            f.timeStyle = .short
-                            return f
+                            let dateFormatter = DateFormatter()
+                            dateFormatter.dateStyle = .none
+                            dateFormatter.timeStyle = .short
+                            return dateFormatter
                         }()
                         Text("Recording resumed at \(formatter.string(from: session.recordingStartTime ?? Date()))")
                             .font(.system(size: 12))
@@ -708,10 +708,10 @@ struct RecordingDetailView: View {
                         if meeting.canResume, let firstSegment = meeting.transcriptSegments.first {
                             Group {
                                 let formatter: DateFormatter = {
-                                    let f = DateFormatter()
-                                    f.dateStyle = .medium
-                                    f.timeStyle = .short
-                                    return f
+                                    let dateFormatter = DateFormatter()
+                                    dateFormatter.dateStyle = .medium
+                                    dateFormatter.timeStyle = .short
+                                    return dateFormatter
                                 }()
                                 Text("Recording started: \(formatter.string(from: firstSegment.startTime))")
                                     .font(.system(size: 12))
@@ -729,10 +729,10 @@ struct RecordingDetailView: View {
                                         // Segment marker (except for first segment)
                                         if segment.segmentNumber > 1 {
                                             let formatter: DateFormatter = {
-                                                let f = DateFormatter()
-                                                f.dateStyle = .none
-                                                f.timeStyle = .short
-                                                return f
+                                                let dateFormatter = DateFormatter()
+                                                dateFormatter.dateStyle = .none
+                                                dateFormatter.timeStyle = .short
+                                                return dateFormatter
                                             }()
                                             Text("Recording resumed at \(formatter.string(from: segment.startTime))")
                                                 .font(.system(size: 12))

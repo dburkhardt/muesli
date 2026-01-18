@@ -189,10 +189,10 @@ struct CompletedMeetingWindow: View {
     private var recordingStartTimeView: some View {
         if meeting.canResume, let firstSegment = meeting.transcriptSegments.first {
             let formatter: DateFormatter = {
-                let f = DateFormatter()
-                f.dateStyle = .medium
-                f.timeStyle = .short
-                return f
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateStyle = .medium
+                dateFormatter.timeStyle = .short
+                return dateFormatter
             }()
             Text("Recording started: \(formatter.string(from: firstSegment.startTime))")
                 .font(.system(size: 12))
@@ -214,10 +214,10 @@ struct CompletedMeetingWindow: View {
                         // Segment marker (except for first segment)
                         if segment.segmentNumber > 1 {
                             let formatter: DateFormatter = {
-                                let f = DateFormatter()
-                                f.dateStyle = .none
-                                f.timeStyle = .short
-                                return f
+                                let dateFormatter = DateFormatter()
+                                dateFormatter.dateStyle = .none
+                                dateFormatter.timeStyle = .short
+                                return dateFormatter
                             }()
                             Text("Recording resumed at \(formatter.string(from: segment.startTime))")
                                 .font(.system(size: 12))
