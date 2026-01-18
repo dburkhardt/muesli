@@ -481,12 +481,14 @@ final class TranscriptionCoordinator {
             // Get next segment to refine
             let segment = liveRefinementQueue.removeFirst()
             
-            // Refine with background priority
+            // Refine with background priority (detached to actually run in background)
             guard let coordinator = refinementCoordinator else { continue }
             
-            await Task(priority: .background) {
+            // Use Task.detached to ensure background priority is respected
+            // Don't await here to allow concurrent processing
+            Task.detached(priority: .background) {
                 await coordinator.refineSegment(segment, in: meeting)
-            }.value
+            }
         }
         
         // Clear task reference when done
