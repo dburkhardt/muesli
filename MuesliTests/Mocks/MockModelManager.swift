@@ -3,7 +3,6 @@ import Foundation
 
 /// Mock implementation of ModelManager for testing
 final class MockModelManager: ModelManagerProtocol, @unchecked Sendable {
-    
     // MARK: - State
     
     var downloadStates: [ModelManager.ModelSize: ModelManager.DownloadState] = [:]

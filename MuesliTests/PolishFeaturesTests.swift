@@ -1,10 +1,9 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Tests for v0.1.2 polish features
 @MainActor
 final class PolishFeaturesTests: XCTestCase {
-    
     // MARK: - ClipboardHelper Tests
     
     func testClipboardHelperFormatAsPlainText() {
@@ -208,7 +207,7 @@ final class PolishFeaturesTests: XCTestCase {
             "Goodbye!",
             "Subscribe.",
             "You.",
-            "Okay.",
+            "Okay."
         ]
         
         for text in hallucinationsWithPunctuation {
@@ -276,7 +275,7 @@ final class PolishFeaturesTests: XCTestCase {
             "bye-bye",
             "Bye-bye.",
             "Bye-bye!",
-            "bye-bye?",
+            "bye-bye?"
         ]
         
         for text in hyphenatedTests {

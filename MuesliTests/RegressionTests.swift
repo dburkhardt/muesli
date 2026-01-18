@@ -1,11 +1,10 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Regression tests for bug fixes
 /// These tests document and verify fixes for specific bugs found during development
 @MainActor
 final class RegressionTests: XCTestCase {
-    
     // MARK: - Permission Detection Regression Tests (Bug Fix: Jan 15, 2026)
     
     /// Regression test: hasScreenRecordingPermission should return cached async result

@@ -5,7 +5,6 @@ import Foundation
 @Observable
 @MainActor
 final class TranscriptProcessor {
-    
     // MARK: - Configuration
     
     /// Maximum words per block before forcing a split
@@ -57,7 +56,7 @@ final class TranscriptProcessor {
             "\\(.*?playing.*?\\)",
             "\\(.*?speaking.*?foreign.*?\\)",
             "♪[^♪]*♪",  // Music notes
-            "\\.\\.\\.$",  // Trailing ellipsis only
+            "\\.\\.\\.$"  // Trailing ellipsis only
         ]
         let pattern = patterns.joined(separator: "|")
         return try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
@@ -221,7 +220,7 @@ final class TranscriptProcessor {
             "you",
             "i",
             "the",
-            "a",
+            "a"
         ]
         
         // Check against clean text (hyphens preserved)

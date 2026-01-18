@@ -1,6 +1,6 @@
-import Foundation
-import CoreMedia
 import AVFoundation
+import CoreMedia
+import Foundation
 
 // MARK: - Helper Extensions
 
@@ -9,7 +9,6 @@ extension EchoCancellationService {
     /// - Parameter sampleBuffer: The audio sample buffer
     /// - Returns: Mono Float32 samples, or nil if extraction fails
     static func extractSamples(from sampleBuffer: CMSampleBuffer) -> [Float]? {
-        
         guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
             return nil
         }
@@ -40,7 +39,6 @@ extension EchoCancellationService {
         let formatFlags = asbd.pointee.mFormatFlags
         let isFloat = (formatFlags & kAudioFormatFlagIsFloat) != 0
         let sampleRate = asbd.pointee.mSampleRate
-        
         
         // Convert bytes to Float32 samples
         let floatCount = length / MemoryLayout<Float>.size
@@ -243,7 +241,6 @@ extension EchoCancellationService {
 /// Input signal: Microphone audio (may contain echo)
 /// Output: Clean microphone audio (echo removed)
 final class EchoCancellationService: @unchecked Sendable, EchoCancellationServiceProtocol {
-    
     // MARK: - Configuration
     
     /// Filter length (number of taps)

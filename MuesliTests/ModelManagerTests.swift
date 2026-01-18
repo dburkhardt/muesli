@@ -1,12 +1,11 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Regression tests for ModelManager validation and detection logic
 /// These tests ensure that model detection and validation are consistent
 /// to prevent issues where models appear downloaded in UI but fail at runtime
 @MainActor
 final class ModelManagerTests: XCTestCase {
-    
     // MARK: - Properties
     
     /// Temporary directory for test model files
@@ -268,7 +267,7 @@ final class ModelManagerTests: XCTestCase {
                 state == .idle,
                 state == .completed,
                 {
-                    if case .failed(_) = state { return true }
+                    if case .failed = state { return true }
                     return false
                 }()
             ]

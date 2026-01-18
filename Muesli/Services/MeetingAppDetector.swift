@@ -1,10 +1,9 @@
-import Foundation
 import AppKit
+import Foundation
 
 /// Service responsible for detecting running meeting applications
 @MainActor
 final class MeetingAppDetector: MeetingAppDetectorProtocol {
-    
     // MARK: - Types
     
     struct DetectedApp: Identifiable, Hashable {

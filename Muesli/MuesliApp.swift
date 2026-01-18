@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
-import SwiftUI
 import os.log
+import SwiftUI
 
 @main
 struct MuesliApp: App {

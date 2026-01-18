@@ -1,9 +1,8 @@
-import Foundation
-@preconcurrency import ScreenCaptureKit
 @preconcurrency import AVFoundation
 import CoreMedia
+import Foundation
 import os.log
-
+@preconcurrency import ScreenCaptureKit
 
 // MARK: - AVAudioEngine Microphone Capture Helper
 
@@ -33,14 +32,12 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, time in
             self?.handleAudioBuffer(buffer, time: time)
         }
         
         try audioEngine.start()
         isRunning = true
-        
     }
     
     func stop() {
@@ -49,7 +46,6 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
         isRunning = false
-        
     }
     
     private func setInputDevice(deviceID: String) {
@@ -103,7 +99,6 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         let rms = sqrt(sumOfSquares / Float(frameLength))
         let level = min(rms * 16.0, 1.0)
         levelHandler?(level)
-        
         
         // Convert AVAudioPCMBuffer to CMSampleBuffer for compatibility
         if let sampleBuffer = createCMSampleBuffer(from: buffer, time: time) {
@@ -230,7 +225,6 @@ typealias AudioLevelHandler = @Sendable (Float, AudioCaptureService.AudioType) -
 /// Service responsible for capturing audio from meeting apps and microphone
 /// Uses ScreenCaptureKit to capture system audio from selected applications
 actor AudioCaptureService: AudioCaptureServiceProtocol {
-    
     // MARK: - Types
     
     private nonisolated let logger = LoggerFactory.logger(category: "AudioCaptureService")
@@ -330,10 +324,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
             throw CaptureError.alreadyRecording
         }
         
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/479643ff-bd3c-4f32-9fd4-c21f7950fef0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AudioCaptureService.swift:328',message:'startCapture() called - about to call SCShareableContent',data:{isRunningTests:NSClassFromString("XCTestCase") != nil,isRecording:isRecording},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-        
         // Get available content - this is where TCC permission is checked
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         
@@ -356,9 +346,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         }
         
         // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/479643ff-bd3c-4f32-9fd4-c21f7950fef0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AudioCaptureService.swift:349',message:'startCapture(forBundleIdentifier:) called - about to call SCShareableContent',data:{isRunningTests:NSClassFromString("XCTestCase") != nil,bundleIdentifier:bundleIdentifier,isRecording:isRecording},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-        
         // Get available content - this is where TCC permission is checked
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         
@@ -380,7 +367,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     
     /// Common capture logic with a given content filter
     private func startCaptureWithFilter(_ filter: SCContentFilter) async throws {
-        
         // PRECONDITION: Buffer handler must be set before starting capture
         // This prevents race conditions where audio starts flowing before the handler is configured
         guard bufferHandler != nil else {
@@ -403,7 +389,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // 1. Always uses system default mic, ignoring user selection
         // 2. Has been observed to return all-zero samples in some configurations
         // Instead, we use AVAudioEngine for microphone capture below
-        
         
         // Create the stream delegate to handle errors/interruptions
         let delegate = StreamDelegate { [weak self] error in
@@ -495,7 +480,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
 
 /// Handles incoming audio samples from ScreenCaptureKit
 private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
-    
     private let handler: AudioBufferHandler?
     private let levelHandler: AudioLevelHandler?
     
@@ -506,7 +490,6 @@ private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable 
     }
     
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        
         // Only process valid audio samples
         guard sampleBuffer.isValid else { return }
         
@@ -604,7 +587,6 @@ private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable 
 
 /// Handles stream lifecycle events like errors and interruptions
 private final class StreamDelegate: NSObject, SCStreamDelegate, @unchecked Sendable {
-    
     private let onInterrupted: (Error?) -> Void
     
     init(onInterrupted: @escaping (Error?) -> Void) {

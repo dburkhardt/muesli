@@ -1,12 +1,11 @@
-import XCTest
 import AVFoundation
 import CoreMedia
 @testable import Muesli
+import XCTest
 
 /// Tests for RecordingController functionality
 @MainActor
 final class RecordingControllerTests: XCTestCase {
-    
     // MARK: - Test Setup
     
     private func createTestController() async -> RecordingController {
@@ -75,7 +74,7 @@ final class RecordingControllerTests: XCTestCase {
         for _ in 0..<10 {
             Task.detached {
                 // Access the nonisolated property from a background thread
-                let _ = controller.isMicrophoneMutedSafe
+                _ = controller.isMicrophoneMutedSafe
                 expectation.fulfill()
             }
         }
@@ -476,7 +475,6 @@ final class RecordingControllerTests: XCTestCase {
 
 @MainActor
 final class PreferencesManagerThreadSafetyTests: XCTestCase {
-    
     func testEchoCancellationLockIsThreadSafe() async {
         let manager = PreferencesManager()
         
@@ -487,7 +485,7 @@ final class PreferencesManagerThreadSafetyTests: XCTestCase {
         // Read from multiple threads
         for _ in 0..<10 {
             Task.detached {
-                let _ = manager.echoCancellationEnabledForAudioCallback
+                _ = manager.echoCancellationEnabledForAudioCallback
                 expectation.fulfill()
             }
         }

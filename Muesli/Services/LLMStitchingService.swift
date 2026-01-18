@@ -13,7 +13,6 @@ import os.log
 /// - Natural text flow improvement
 @MainActor
 final class LLMStitchingService {
-    
     // MARK: - Dependencies
     
     private let llmManager: LLMManager

@@ -1,10 +1,9 @@
-import Foundation
 import CoreMedia
+import Foundation
 @testable import Muesli
 
 /// Mock implementation of FileOutputService for testing
 final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendable {
-    
     // MARK: - State
     
     private(set) var isWritingInternal: Bool = false

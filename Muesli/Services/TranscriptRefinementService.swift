@@ -8,7 +8,6 @@ import MLXLMCommon
 @Observable
 @MainActor
 final class TranscriptRefinementService {
-    
     // MARK: - Dependencies
     
     private let llmManager: LLMManager

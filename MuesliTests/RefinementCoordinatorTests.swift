@@ -1,11 +1,10 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Tests for RefinementCoordinator
 /// Focus: State management, refinement workflows, and file saving without actual LLM inference
 @MainActor
 final class RefinementCoordinatorTests: XCTestCase {
-    
     var mockLLMManager: MockLLMManager!
     var mockFileOutputService: MockFileOutputService!
     var coordinator: RefinementCoordinator!

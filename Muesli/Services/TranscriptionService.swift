@@ -1,14 +1,13 @@
-import Foundation
-@preconcurrency import WhisperKit
 @preconcurrency import AVFoundation
 import CoreMedia
+import Foundation
 import os.lock
 import os.log
+@preconcurrency import WhisperKit
 
 /// Service for real-time audio transcription using WhisperKit
 /// Handles both system audio ("Them") and microphone audio ("Me")
 final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProtocol {
-    
     // MARK: - Logging
     
     private let logger = Logger(subsystem: "com.muesli.app", category: "TranscriptionService")
@@ -351,7 +350,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             
             // Notify handler
             transcriptHandler?(segment)
-            
         } catch {
             logger.error("Transcription error: \(error.localizedDescription)")
         }
@@ -573,7 +571,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             
             let frameLength = Int(outputBuffer.frameLength)
             return Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
-            
         } catch {
             logger.error("Failed to load audio file: \(error.localizedDescription)")
             return nil
@@ -584,7 +581,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
 // MARK: - Audio Resampling Utilities
 
 extension TranscriptionService {
-    
     /// Convert Int16 CMSampleBuffer (microphone) to Float32 samples at 16kHz mono
     /// Handles stereo to mono conversion if needed
     /// - Parameter sampleBuffer: The audio sample buffer containing Int16 samples

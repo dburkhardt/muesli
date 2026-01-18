@@ -5,7 +5,6 @@ import WhisperKit
 /// Manages WhisperKit model downloading and storage
 @Observable
 final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
-    
     // MARK: - Model Options
     
     enum ModelSize: String, CaseIterable, Identifiable, Hashable {
@@ -174,7 +173,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     /// Validate that a model has all required files (not just config.json)
     /// Returns true if the model is complete and usable
     func validateModel(_ model: ModelSize) -> Bool {
-        
         guard let modelPath = pathForModel(model) else {
             return false
         }
@@ -298,7 +296,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             
             // Persist
             saveDownloadedModels()
-            
         } catch {
             downloadStates[model] = .failed(error.localizedDescription)
         }

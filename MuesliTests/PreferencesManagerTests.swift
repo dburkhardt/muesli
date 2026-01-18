@@ -1,11 +1,10 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Comprehensive tests for PreferencesManager
 /// Target coverage: 90% (146/162 lines)
 @MainActor
 final class PreferencesManagerTests: XCTestCase {
-    
     // MARK: - Properties
     
     private var preferencesManager: PreferencesManager!

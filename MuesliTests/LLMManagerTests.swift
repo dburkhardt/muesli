@@ -1,11 +1,10 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Tests for LLMManager
 /// Focus: Model management, state tracking, and Hub API coordination WITHOUT actual downloads
 @MainActor
 final class LLMManagerTests: XCTestCase {
-    
     // MARK: - Part 1: Initialization & Model Discovery
     
     /// Test manager initialization with lazy scan deferred

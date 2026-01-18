@@ -1,14 +1,13 @@
-import XCTest
-@testable import Muesli
-import CoreMedia
 import AVFoundation
+import CoreMedia
+@testable import Muesli
 import os.log
+import XCTest
 
 /// Comprehensive tests for AudioCaptureService
 /// Part 1/3: Initialization and Configuration Tests
 /// Target: 30% → 50% coverage for AudioCaptureService.swift
 final class AudioCaptureServiceTests: XCTestCase {
-    
     var service: AudioCaptureService!
     private let logger = LoggerFactory.logger(category: "AudioCaptureServiceTests")
     
@@ -53,7 +52,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var bufferReceived = false
         
         // When: Setting a buffer handler
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { _, _ in
             bufferReceived = true
         }
         
@@ -65,13 +64,13 @@ final class AudioCaptureServiceTests: XCTestCase {
     func testBufferHandlerCanBeUpdated() async {
         // Given: A service with an initial handler
         var firstHandlerCalled = false
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { _, _ in
             firstHandlerCalled = true
         }
         
         // When: Setting a new handler
         var secondHandlerCalled = false
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { _, _ in
             secondHandlerCalled = true
         }
         
@@ -86,9 +85,9 @@ final class AudioCaptureServiceTests: XCTestCase {
         var callCount = 0
         
         // When: Setting handler multiple times
-        await service.setBufferHandler { buffer, type in callCount += 1 }
-        await service.setBufferHandler { buffer, type in callCount += 2 }
-        await service.setBufferHandler { buffer, type in callCount += 3 }
+        await service.setBufferHandler { _, _ in callCount += 1 }
+        await service.setBufferHandler { _, _ in callCount += 2 }
+        await service.setBufferHandler { _, _ in callCount += 3 }
         
         // Then: Last handler should be the active one
         XCTAssertEqual(callCount, 0, "Handlers should not be called during setup")
@@ -101,7 +100,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var interruptionReceived = false
         
         // When: Setting an interrupted handler
-        await service.setInterruptedHandler { error in
+        await service.setInterruptedHandler { _ in
             interruptionReceived = true
         }
         
@@ -112,13 +111,13 @@ final class AudioCaptureServiceTests: XCTestCase {
     func testInterruptedHandlerCanBeUpdated() async {
         // Given: A service with an initial interrupted handler
         var firstHandlerCalled = false
-        await service.setInterruptedHandler { error in
+        await service.setInterruptedHandler { _ in
             firstHandlerCalled = true
         }
         
         // When: Setting a new interrupted handler
         var secondHandlerCalled = false
-        await service.setInterruptedHandler { error in
+        await service.setInterruptedHandler { _ in
             secondHandlerCalled = true
         }
         
@@ -134,7 +133,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var levelReceived = false
         
         // When: Setting a level handler
-        await service.setLevelHandler { level, type in
+        await service.setLevelHandler { _, _ in
             levelReceived = true
         }
         
@@ -145,13 +144,13 @@ final class AudioCaptureServiceTests: XCTestCase {
     func testLevelHandlerCanBeUpdated() async {
         // Given: A service with an initial level handler
         var firstHandlerCalled = false
-        await service.setLevelHandler { level, type in
+        await service.setLevelHandler { _, _ in
             firstHandlerCalled = true
         }
         
         // When: Setting a new level handler
         var secondHandlerCalled = false
-        await service.setLevelHandler { level, type in
+        await service.setLevelHandler { _, _ in
             secondHandlerCalled = true
         }
         
@@ -839,7 +838,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var bufferReceived = false
         var receivedType: AudioCaptureService.AudioType?
         
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { _, type in
             bufferReceived = true
             receivedType = type
         }
@@ -865,7 +864,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         // Given: Service capturing system audio
         var receivedTypes: [AudioCaptureService.AudioType] = []
         
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { _, type in
             receivedTypes.append(type)
         }
         
@@ -890,7 +889,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var receivedTypes: [AudioCaptureService.AudioType] = []
         
         await service.setMicrophoneDevice(nil)  // Use default mic
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { _, type in
             receivedTypes.append(type)
         }
         
@@ -916,7 +915,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var receivedLevel: Float = -1.0
         
         await service.setBufferHandler { _, _ in }
-        await service.setLevelHandler { level, type in
+        await service.setLevelHandler { level, _ in
             levelReceived = true
             receivedLevel = level
         }
@@ -944,7 +943,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var levels: [Float] = []
         
         await service.setBufferHandler { _, _ in }
-        await service.setLevelHandler { level, type in
+        await service.setLevelHandler { level, _ in
             levels.append(level)
         }
         
@@ -971,7 +970,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var interruptedCalled = false
         
         await service.setBufferHandler { _, _ in }
-        await service.setInterruptedHandler { error in
+        await service.setInterruptedHandler { _ in
             interruptedCalled = true
         }
         
@@ -1054,7 +1053,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         // Given: Service that might receive empty buffers
         var receivedInvalidBuffer = false
         
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { buffer, _ in
             // Check if buffer is valid
             if !buffer.isValid {
                 receivedInvalidBuffer = true
@@ -1080,10 +1079,10 @@ final class AudioCaptureServiceTests: XCTestCase {
         // Given: Service with handler that tracks timing
         var processingTimes: [TimeInterval] = []
         
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { buffer, _ in
             let start = Date()
             // Simulate minimal processing
-            let _ = buffer.isValid
+            _ = buffer.isValid
             let duration = Date().timeIntervalSince(start)
             processingTimes.append(duration)
         }
@@ -1172,7 +1171,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var levels: [Float] = []
         
         await service.setBufferHandler { _, _ in }
-        await service.setLevelHandler { level, type in
+        await service.setLevelHandler { level, _ in
             levels.append(level)
         }
         
@@ -1199,7 +1198,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var systemAudioReceived = false
         var microphoneAudioReceived = false
         
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { _, type in
             switch type {
             case .system:
                 systemAudioReceived = true
@@ -1229,10 +1228,10 @@ final class AudioCaptureServiceTests: XCTestCase {
         var buffersReceived = 0
         var levelsReceived = 0
         
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { _, _ in
             buffersReceived += 1
         }
-        await service.setLevelHandler { level, type in
+        await service.setLevelHandler { _, _ in
             levelsReceived += 1
         }
         
@@ -1282,7 +1281,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         var validBufferCount = 0
         var bufferSizes: [Int] = []
         
-        await service.setBufferHandler { buffer, type in
+        await service.setBufferHandler { buffer, _ in
             if buffer.isValid {
                 validBufferCount += 1
                 

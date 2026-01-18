@@ -454,7 +454,6 @@ struct RecordingDetailView: View {
         }
     }
     
-    
     // MARK: - Completed Recording View
     
     private func completedRecordingView(session: RecordingSession) -> some View {
@@ -702,7 +701,6 @@ struct RecordingDetailView: View {
                                     .underline()
                             }
                             .buttonStyle(.plain)
-                            
                         }
                         .padding(.bottom, 8)
                         

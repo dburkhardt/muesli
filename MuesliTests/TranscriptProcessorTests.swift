@@ -1,11 +1,10 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Tests for TranscriptProcessor
 /// Focus: Artifact filtering, block merging logic, and hallucination detection
 @MainActor
 final class TranscriptProcessorTests: XCTestCase {
-    
     var processor: TranscriptProcessor!
     
     override func setUp() {
@@ -509,7 +508,7 @@ final class TranscriptProcessorTests: XCTestCase {
         )
         processor.processSegment(segment)
         
-        XCTAssertTrue(processor.blocks.count > 0)
+        XCTAssertTrue(!processor.blocks.isEmpty)
         
         // Reset
         processor.reset()
@@ -563,7 +562,7 @@ final class TranscriptProcessorTests: XCTestCase {
             TranscriptionService.TranscriptSegment(text: "I wanted to discuss [inaudible] the project", timestamp: 2.0, speaker: .me),
             TranscriptionService.TranscriptSegment(text: "Okay", timestamp: 3.0, speaker: .them), // Brief interjection
             TranscriptionService.TranscriptSegment(text: "and get your feedback", timestamp: 4.0, speaker: .me),
-            TranscriptionService.TranscriptSegment(text: "I think we should ♪ music ♪ proceed carefully", timestamp: 5.0, speaker: .them),
+            TranscriptionService.TranscriptSegment(text: "I think we should ♪ music ♪ proceed carefully", timestamp: 5.0, speaker: .them)
         ]
         
         for segment in segments {

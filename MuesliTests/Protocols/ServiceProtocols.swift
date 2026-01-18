@@ -2,8 +2,8 @@
 // This file is kept for backwards compatibility but simply re-exports from the main target.
 // Mocks in this test target conform to the protocols defined in the main target.
 
-import Foundation
 import CoreMedia
+import Foundation
 @testable import Muesli
 
 // All protocol definitions have been moved to the main target.

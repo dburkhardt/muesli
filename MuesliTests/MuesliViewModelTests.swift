@@ -1,12 +1,11 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Comprehensive test suite for MuesliViewModel
 /// Tests verify behavior through the public API before refactoring begins
 /// These tests serve as regression tests during the refactor to ensure functionality is preserved
 @MainActor
 final class MuesliViewModelTests: XCTestCase {
-    
     // MARK: - Properties
     
     /// UserDefaults suite name for isolated testing

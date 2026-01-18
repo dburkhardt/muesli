@@ -1,14 +1,13 @@
-import XCTest
-@testable import Muesli
-import CoreMedia
 import AVFoundation
+import CoreMedia
+@testable import Muesli
+import XCTest
 
 /// Comprehensive tests for TranscriptionService
 /// Part 1/4: Initialization Tests
 /// Target: 3% → 70%+ coverage for TranscriptionService.swift
 @MainActor
 final class TranscriptionServiceTests: XCTestCase {
-    
     var service: TranscriptionService!
     
     override func setUp() async throws {

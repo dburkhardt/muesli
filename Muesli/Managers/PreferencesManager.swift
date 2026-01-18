@@ -1,6 +1,6 @@
 import Foundation
-import os.log
 import os.lock
+import os.log
 import ServiceManagement
 
 /// Manages app preferences with UserDefaults persistence

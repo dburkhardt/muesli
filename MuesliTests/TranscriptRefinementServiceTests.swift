@@ -1,11 +1,10 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Tests for TranscriptRefinementService
 /// Focus: Speaker thread processing, batching logic, and text splitting WITHOUT actual LLM inference
 @MainActor
 final class TranscriptRefinementServiceTests: XCTestCase {
-    
     var mockLLMManager: MockLLMManager!
     var service: TranscriptRefinementService!
     

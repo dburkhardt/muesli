@@ -1,17 +1,15 @@
-import Foundation
-import os.log
-import SwiftUI
-import ScreenCaptureKit
 import CoreMedia
+import Foundation
 import os.lock
-
+import os.log
+import ScreenCaptureKit
+import SwiftUI
 
 /// Controller responsible for recording lifecycle management
 /// Extracted from MuesliViewModel to improve separation of concerns
 @Observable
 @MainActor
 final class RecordingController {
-    
     // MARK: - Logging
     
     private let logger = Logger(subsystem: "com.muesli.app", category: "RecordingController")
@@ -119,7 +117,6 @@ final class RecordingController {
     /// Ensures audio handlers are configured before starting capture
     /// Must be called (and awaited) before audioCaptureService.startCapture()
     private func ensureAudioHandlersConfigured() async {
-        
         let fileService = self.fileOutputService
         let transcriptService = self.transcriptionService
         let transcriptionCoordinator = self.transcriptionCoordinator
@@ -131,9 +128,7 @@ final class RecordingController {
         let muteLock = self.isMicrophoneMutedLock
         let aecLock = prefs.echoCancellationLock
         
-        
         await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
-                
                 // Wrap entire handler in error handling for graceful degradation
                 do {
                     // NO direct self capture in processing - only use captured locks and services (thread-safe)
@@ -169,7 +164,6 @@ final class RecordingController {
                     Task { @MainActor in
                         self?.audioErrorCounter = 0
                     }
-                    
                 } catch {
                     // Log error but continue processing
                     Task { @MainActor [weak self] in
@@ -203,7 +197,6 @@ final class RecordingController {
                 self?.updateAudioLevel(level, type: type)
             }
         }
-        
     }
     
     // MARK: - Audio Buffer Processing Helpers
@@ -217,7 +210,6 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
-        
         // Store system audio for AEC reference (if AEC enabled)
         if isAECEnabled {
             if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
@@ -251,7 +243,6 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
-        
         // Extract microphone samples at 48kHz
         let micSamples48kHz = EchoCancellationService.extractSamples(from: buffer)
         guard let micSamples48kHz = micSamples48kHz else {
@@ -392,7 +383,6 @@ final class RecordingController {
             
             await ensureAudioHandlersConfigured()
             
-            
             // Start audio capture IMMEDIATELY (before model check)
             if let app = session.selectedApp {
                 try await audioCaptureService.startCapture(forBundleIdentifier: app.bundleIdentifier)
@@ -413,7 +403,6 @@ final class RecordingController {
             Task {
                 await prepareTranscriptionAsync(for: session)
             }
-            
         } catch let error as AudioCaptureService.CaptureError {
             handleCaptureError(error, for: session)
         } catch {
@@ -422,13 +411,11 @@ final class RecordingController {
     }
     
     private func prepareTranscriptionAsync(for session: RecordingSession) async {
-        
         // Set modelLoading indicator
         session.isModelLoading = true
         
         transcriptionCoordinator.resetForNewRecording()
         let modelState = await transcriptionCoordinator.prepareModel()
-        
         
         switch modelState {
         case .notAvailable:
@@ -608,7 +595,6 @@ final class RecordingController {
                 session.showError(.transcriptSaveFailed(underlying: error))
                 // Continue - we have audio files even if transcript save failed
             }
-            
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
         }
@@ -715,7 +701,6 @@ final class RecordingController {
                 session.showError(.transcriptSaveFailed(underlying: error))
                 // Continue - we have audio files even if transcript save failed
             }
-            
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
         }
@@ -803,7 +788,6 @@ final class RecordingController {
             session.startDisplayTimer()
             
             transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
-            
         } catch let error as AudioCaptureService.CaptureError {
             if let session = activeSession {
                 handleCaptureError(error, for: session)
@@ -888,7 +872,6 @@ final class RecordingController {
                 session.showError(.transcriptSaveFailed(underlying: error))
                 // Continue - retranscription succeeded even if save failed
             }
-            
         } catch {
             session.showError(.postProcessingFailed(underlying: error))
         }

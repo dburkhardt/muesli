@@ -1,12 +1,11 @@
-import XCTest
-@testable import Muesli
-import CoreMedia
 import AVFoundation
+import CoreMedia
+@testable import Muesli
+import XCTest
 
 /// Comprehensive tests for FileOutputService
 /// Target: 3% → 70%+ coverage for FileOutputService.swift
 final class FileOutputServiceTests: XCTestCase {
-    
     var service: FileOutputService!
     var testOutputDirectory: URL!
     

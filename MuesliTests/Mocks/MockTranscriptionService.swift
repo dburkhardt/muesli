@@ -3,7 +3,6 @@ import Foundation
 
 /// Mock implementation of TranscriptionService for testing
 final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked Sendable {
-    
     // MARK: - State
     
     var transcriptionMode: TranscriptionService.TranscriptionMode = .live

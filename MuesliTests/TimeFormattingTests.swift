@@ -1,8 +1,7 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 final class TimeFormattingTests: XCTestCase {
-    
     func testStandardStyleUnderOneHour() {
         XCTAssertEqual(TimeFormatting.formatTimestamp(10.5, style: .standard), "00:10")
         XCTAssertEqual(TimeFormatting.formatTimestamp(65.0, style: .standard), "01:05")

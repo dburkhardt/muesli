@@ -1,10 +1,9 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Tests for TranscriptionCoordinator
 /// Focus: Ensuring audio is properly forwarded to TranscriptionService
 final class TranscriptionCoordinatorTests: XCTestCase {
-    
     // MARK: - Regression Test: Audio Forwarding When Model Ready
     
     /// REGRESSION TEST: Verifies that when model is ready, audio is forwarded directly

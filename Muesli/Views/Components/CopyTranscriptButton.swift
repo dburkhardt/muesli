@@ -3,7 +3,6 @@ import SwiftUI
 /// Reusable component for copying transcript content to clipboard
 /// Provides both plain text and markdown export options with visual feedback
 struct CopyTranscriptButton: View {
-    
     /// Closure that returns transcript blocks to copy, or nil if unavailable
     let getBlocks: () -> [TranscriptBlock]?
     

@@ -4,7 +4,6 @@ import Foundation
 /// Mock implementation of MeetingAppDetector for testing
 @MainActor
 final class MockMeetingAppDetector: MeetingAppDetectorProtocol {
-    
     // MARK: - Test Data
     
     /// Apps to return from detectMeetingApps()

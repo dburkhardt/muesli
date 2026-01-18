@@ -4,7 +4,6 @@ import Foundation
 /// Mock implementation of PermissionManager for testing
 @MainActor
 final class MockPermissionManager: PermissionManagerProtocol {
-    
     // MARK: - State
     
     var hasScreenRecordingPermission: Bool = false

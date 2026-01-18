@@ -1,11 +1,10 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Tests for RecordingStateMachine
 /// Focus: Comprehensive state transition testing (all valid and invalid paths)
 @MainActor
 final class RecordingStateMachineTests: XCTestCase {
-    
     // MARK: - Part 1: Valid Transitions
     
     /// Test idle → initializing transition

@@ -11,7 +11,6 @@ import MLXLMCommon
 @Observable
 @MainActor
 final class LLMManager: LLMManagerProtocol {
-    
     // MARK: - Model Options
     
     enum LLMModel: String, CaseIterable, Identifiable, Hashable {

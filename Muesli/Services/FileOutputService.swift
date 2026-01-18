@@ -1,12 +1,11 @@
+@preconcurrency import AVFoundation
 import CoreMedia
 import Foundation
 import os.log
-@preconcurrency import AVFoundation
 
 /// Service responsible for saving audio recordings and transcripts to disk
 /// Uses a combination of actor isolation (for setup/teardown) and manual locking (for real-time buffer writing)
 final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
-    
     // MARK: - Logging
     
     private let logger = Logger(subsystem: "com.muesli.app", category: "FileOutputService")
@@ -193,7 +192,6 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             self._isWriting = true
             
             return directory
-            
         } catch {
             throw OutputError.assetWriterCreationFailed(underlying: error)
         }
@@ -456,7 +454,6 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             self._isWriting = true
             
             return directory
-            
         } catch {
             throw OutputError.assetWriterCreationFailed(underlying: error)
         }

@@ -782,7 +782,7 @@ struct OnboardingView: View {
     /// Start real-time permission monitoring
     private func startPermissionMonitoring() {
         // Set up callback for instant updates
-        viewModel.permissionManager.permissionDidChange = { [weak viewModel] screenRecording, microphone in
+        viewModel.permissionManager.permissionDidChange = { [weak viewModel] _, _ in
             Task { @MainActor in
                 guard let viewModel = viewModel else { return }
                 // Update viewModel state
