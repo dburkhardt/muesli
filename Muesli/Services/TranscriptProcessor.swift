@@ -177,13 +177,20 @@ final class TranscriptProcessor {
     private func isHallucination(_ text: String) -> Bool {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         
+        // Strip punctuation for comparison (but keep spaces between words)
+        let punctuation = CharacterSet.punctuationCharacters
+        let noPunctuation = lower.components(separatedBy: punctuation).joined()
+        let cleanText = noPunctuation.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Split into words (now without punctuation)
+        let words = cleanText.split(separator: " ").map { String($0) }
+        
         // Filter very short segments (< 3 words) - often noise at recording boundaries
-        let words = lower.split(separator: " ")
         if words.count < 3 {
             // Allow short segments that contain actual content words
             // But filter common filler words and noise artifacts
             let fillerWords: Set<String> = ["uh", "um", "hmm", "ah", "eh", "oh", "huh", "mhm", "mmm", "yeah", "yep", "nope", "okay"]
-            let hasOnlyFiller = words.allSatisfy { fillerWords.contains(String($0)) }
+            let hasOnlyFiller = words.allSatisfy { fillerWords.contains($0) }
             if hasOnlyFiller {
                 return true
             }
@@ -216,7 +223,8 @@ final class TranscriptProcessor {
             "a",
         ]
         
-        if hallucinations.contains(lower) {
+        // Check against clean text without punctuation
+        if hallucinations.contains(cleanText) {
             return true
         }
         

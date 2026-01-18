@@ -197,6 +197,77 @@ final class PolishFeaturesTests: XCTestCase {
         XCTAssertEqual(processor.blocks.count, 0, "Hallucinations should be filtered out")
     }
     
+    func testTranscriptProcessorFiltersHallucinationsWithPunctuation() {
+        let processor = TranscriptProcessor()
+        
+        // Test hallucinations with punctuation (the bug we just fixed)
+        let hallucinationsWithPunctuation = [
+            "Thank you.",
+            "Thanks for watching!",
+            "Bye.",
+            "Goodbye!",
+            "Subscribe.",
+            "You.",
+            "Okay.",
+        ]
+        
+        for text in hallucinationsWithPunctuation {
+            processor.reset()
+            let segment = TranscriptionService.TranscriptSegment(
+                text: text,
+                timestamp: 1.0,
+                speaker: .them
+            )
+            
+            processor.processSegment(segment)
+            
+            // Each should be filtered despite having punctuation
+            XCTAssertEqual(processor.blocks.count, 0, "'\(text)' with punctuation should be filtered")
+        }
+    }
+    
+    func testTranscriptProcessorFiltersFillerWordsWithPunctuation() {
+        let processor = TranscriptProcessor()
+        
+        let fillersWithPunctuation = [
+            "Uh.",
+            "Um...",
+            "Hmm?",
+            "Yeah!",
+            "Okay."
+        ]
+        
+        for filler in fillersWithPunctuation {
+            processor.reset()
+            let segment = TranscriptionService.TranscriptSegment(
+                text: filler,
+                timestamp: 1.0,
+                speaker: .me
+            )
+            
+            processor.processSegment(segment)
+            
+            // Filler words with punctuation should still be filtered
+            XCTAssertEqual(processor.blocks.count, 0, "'\(filler)' should be filtered despite punctuation")
+        }
+    }
+    
+    func testTranscriptProcessorFiltersRepetitiveTextWithPunctuation() {
+        let processor = TranscriptProcessor()
+        
+        // Test "Thank you. Thank you. Thank you." pattern
+        let repetitiveWithPunctuation = TranscriptionService.TranscriptSegment(
+            text: "Okay. Okay. Okay.",
+            timestamp: 1.0,
+            speaker: .them
+        )
+        
+        processor.processSegment(repetitiveWithPunctuation)
+        
+        // Should be filtered as repetitive hallucination
+        XCTAssertEqual(processor.blocks.count, 0, "Repetitive text with punctuation should be filtered")
+    }
+    
     func testTranscriptProcessorAllowsValidContent() {
         let processor = TranscriptProcessor()
         
