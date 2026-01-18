@@ -13,9 +13,17 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     // MARK: - Test Control Properties
     
     var shouldFailInitialize: Bool = false
-    var initializeError: Error = NSError(domain: "MockTranscriptionService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Mock initialization error"])
+    var initializeError: Error = NSError(
+        domain: "MockTranscriptionService",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Mock initialization error"]
+    )
     var shouldFailPostProcessing: Bool = false
-    var postProcessingError: Error = NSError(domain: "MockTranscriptionService", code: 2, userInfo: [NSLocalizedDescriptionKey: "Mock post-processing error"])
+    var postProcessingError: Error = NSError(
+        domain: "MockTranscriptionService",
+        code: 2,
+        userInfo: [NSLocalizedDescriptionKey: "Mock post-processing error"]
+    )
     
     // MARK: - Call Tracking
     
@@ -25,6 +33,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     var appendSystemAudioCallCount: Int = 0
     var appendMicrophoneAudioCallCount: Int = 0
     var postProcessingCallCount: Int = 0
+    var setTranscriptHandlerCallCount: Int = 0
     var lastModelPath: URL?
     var lastRecordingStartTime: Date?
     
@@ -50,6 +59,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     }
     
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler) {
+        setTranscriptHandlerCallCount += 1
         transcriptHandler = handler
     }
     
@@ -87,6 +97,12 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         transcriptHandler?(segment)
     }
     
+    /// Simulate a transcript segment being generated with default values
+    func simulateTranscriptSegment() {
+        let segment = TranscriptionService.TranscriptSegment(text: "Test segment", timestamp: 0.0, speaker: .me)
+        transcriptHandler?(segment)
+    }
+    
     /// Simulate a transcript segment with given text and speaker
     func simulateTranscript(text: String, speaker: TranscriptionService.TranscriptSegment.Speaker, timestamp: TimeInterval = 0) {
         let segment = TranscriptionService.TranscriptSegment(text: text, timestamp: timestamp, speaker: speaker)
@@ -106,6 +122,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         appendSystemAudioCallCount = 0
         appendMicrophoneAudioCallCount = 0
         postProcessingCallCount = 0
+        setTranscriptHandlerCallCount = 0
         lastModelPath = nil
         lastRecordingStartTime = nil
         transcriptHandler = nil

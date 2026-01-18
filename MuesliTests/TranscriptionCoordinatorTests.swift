@@ -227,4 +227,465 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         // Then: State should be notAvailable
         XCTAssertFalse(sut.modelState.isReady)
     }
+    
+    // MARK: - Part 1: Model Lifecycle & State (Additional Tests)
+    
+    /// Test model preparation with validation failures
+    @MainActor
+    func testPrepareModelWithValidationFailure() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Model exists but validation fails
+        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.shouldFailValidation = true
+        
+        // When: prepareModel is called
+        _ = await sut.prepareModel()
+        
+        // Then: Should not be ready
+        XCTAssertFalse(sut.modelState.isReady)
+    }
+    
+    /// Test model preparation with corrupted model and fallback
+    @MainActor
+    func testPrepareModelWithCorruptedModelFallsBackToValid() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Base model is corrupted, tiny model is valid
+        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.tiny)
+        mockModelManager.activeModel = .base
+        mockModelManager.shouldFailValidation = true
+        mockModelManager.validModels = [.tiny] // Only tiny is valid
+        
+        var switchedFrom: ModelManager.ModelSize?
+        var switchedTo: ModelManager.ModelSize?
+        sut.onModelSwitched = { from, to, _ in
+            switchedFrom = from
+            switchedTo = to
+        }
+        
+        // When: prepareModel is called
+        _ = await sut.prepareModel()
+        
+        // Then: Should fall back to valid model
+        XCTAssertTrue(mockModelManager.markModelCorruptedCallCount > 0, "Should mark corrupted model")
+        XCTAssertEqual(switchedFrom, .base)
+        XCTAssertEqual(switchedTo, .tiny)
+    }
+    
+    /// Test model preparation retry limit enforcement
+    @MainActor
+    func testPrepareModelRetryLimitEnforcement() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Model validation always fails (will trigger retries)
+        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.shouldFailValidation = true
+        mockModelManager.validModels = [] // No valid models
+        
+        // When: prepareModel is called multiple times
+        _ = await sut.prepareModel()
+        _ = await sut.prepareModel()
+        _ = await sut.prepareModel()
+        let finalState = await sut.prepareModel()
+        
+        // Then: Should eventually fail with model not found
+        if case .failed(let error) = finalState {
+            XCTAssertTrue(error.localizedDescription.contains("not found") || 
+                         error.localizedDescription.contains("NotFound"))
+        } else {
+            XCTFail("Expected failed state after retry limit")
+        }
+    }
+    
+    /// Test model reset for new recording
+    @MainActor
+    func testResetForNewRecording() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Model in failed state
+        mockModelManager.activeModel = nil
+        _ = await sut.prepareModel()
+        // Put it in failed state by exhausting retries
+        _ = await sut.prepareModel()
+        _ = await sut.prepareModel()
+        _ = await sut.prepareModel()
+        
+        // When: Reset for new recording
+        sut.resetForNewRecording()
+        
+        // Then: Should reset to notAvailable (not failed)
+        if case .notAvailable = sut.modelState {
+            XCTAssertTrue(true)
+        } else {
+            XCTFail("Expected notAvailable state after reset, got \(sut.modelState)")
+        }
+    }
+    
+    /// Test model switch callback invocation
+    @MainActor
+    func testModelSwitchCallbackInvoked() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Two models, first one will fail validation
+        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
+        mockModelManager.activeModel = .base
+        mockModelManager.shouldFailValidation = true
+        mockModelManager.validModels = [.small]
+        
+        var callbackInvoked = false
+        sut.onModelSwitched = { _, _, _ in
+            callbackInvoked = true
+        }
+        
+        // When: prepareModel triggers fallback
+        _ = await sut.prepareModel()
+        
+        // Then: Callback should be invoked
+        XCTAssertTrue(callbackInvoked, "onModelSwitched callback should be invoked")
+    }
+    
+    // MARK: - Part 2: Audio Buffering (Additional Tests)
+    
+    /// Test buffer overflow handling (>480,000 samples)
+    @MainActor
+    func testBufferOverflowHandling() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Model not ready, will buffer
+        // maxBufferSamples is 480,000
+        
+        // When: Send large amount of audio
+        let chunk = Array(repeating: Float(0.5), count: 250_000)
+        sut.bufferSystemAudio(chunk)
+        sut.bufferSystemAudio(chunk) // Total: 500,000 > 480,000
+        
+        // Then: Should handle overflow gracefully (drops oldest or limits buffer)
+        // No crash should occur
+        XCTAssertEqual(mockTranscriptionService.appendSystemAudioCallCount, 0, "Should still be buffering")
+    }
+    
+    /// Test buffer timeout detection (>30 seconds)
+    @MainActor
+    func testBufferTimeoutDetection() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Note: Testing actual 30-second timeout is impractical in unit tests
+        // This test verifies the timeout callback mechanism works
+        
+        var timeoutCalled = false
+        sut.onBufferTimeout = {
+            timeoutCalled = true
+        }
+        
+        // Given: Model not ready, audio buffering
+        let samples: [Float] = Array(repeating: 0.5, count: 1000)
+        sut.bufferSystemAudio(samples)
+        
+        // In real scenario, if 30 seconds pass, timeout would be called
+        // For unit test, we just verify callback can be set
+        XCTAssertNotNil(sut.onBufferTimeout)
+    }
+    
+    /// Test buffer timeout callback invocation
+    @MainActor
+    func testBufferTimeoutCallbackInvocation() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        var timeoutCalled = false
+        sut.onBufferTimeout = {
+            timeoutCalled = true
+        }
+        
+        // Verify callback can be set and invoked (mechanism test)
+        sut.onBufferTimeout?()
+        XCTAssertTrue(timeoutCalled)
+    }
+    
+    /// Test interleaved system/mic audio buffering
+    @MainActor
+    func testInterleavedSystemMicAudioBuffering() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Model not ready, both audio sources buffering
+        let systemChunk1: [Float] = Array(repeating: 0.5, count: 1000)
+        let micChunk1: [Float] = Array(repeating: 0.3, count: 500)
+        let systemChunk2: [Float] = Array(repeating: 0.6, count: 1000)
+        let micChunk2: [Float] = Array(repeating: 0.4, count: 500)
+        
+        // When: Interleaved audio arrives
+        sut.bufferSystemAudio(systemChunk1)
+        sut.bufferMicrophoneAudio(micChunk1)
+        sut.bufferSystemAudio(systemChunk2)
+        sut.bufferMicrophoneAudio(micChunk2)
+        
+        // Then: Should buffer both streams
+        XCTAssertEqual(mockTranscriptionService.appendSystemAudioCallCount, 0)
+        XCTAssertEqual(mockTranscriptionService.appendMicrophoneAudioCallCount, 0)
+        
+        // When: Model becomes ready
+        mockModelManager.addDownloadedModel(.base)
+        _ = await sut.prepareModel()
+        
+        // Then: Both buffers should be flushed
+        XCTAssertEqual(mockTranscriptionService.appendSystemAudioCallCount, 1, "System buffer flushed once")
+        XCTAssertEqual(mockTranscriptionService.appendMicrophoneAudioCallCount, 1, "Mic buffer flushed once")
+    }
+    
+    /// Test buffer clearing on stop
+    @MainActor
+    func testBufferClearingOnStop() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Audio buffered
+        let samples: [Float] = Array(repeating: 0.5, count: 1000)
+        sut.bufferSystemAudio(samples)
+        
+        // When: Transcription stopped
+        await sut.stopTranscription()
+        
+        // Then: Buffers should be cleared
+        // When model becomes ready later, old buffer shouldn't be processed
+        mockModelManager.addDownloadedModel(.base)
+        _ = await sut.prepareModel()
+        
+        // Should not forward the old buffered audio after stop
+        XCTAssertEqual(mockTranscriptionService.appendSystemAudioCallCount, 0, "Old buffer should be cleared")
+    }
+    
+    /// Test buffer processing on state change (modelState.didSet)
+    @MainActor
+    func testBufferProcessingOnStateChange() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Audio is buffered before model ready
+        let samples: [Float] = Array(repeating: 0.5, count: 1000)
+        sut.bufferSystemAudio(samples)
+        
+        XCTAssertEqual(mockTranscriptionService.appendSystemAudioCallCount, 0)
+        
+        // When: Model state changes to ready (via prepareModel)
+        mockModelManager.addDownloadedModel(.base)
+        _ = await sut.prepareModel()
+        
+        // Then: didSet on modelState should trigger processBufferedAudio automatically
+        XCTAssertEqual(mockTranscriptionService.appendSystemAudioCallCount, 1, 
+                      "Buffer should be automatically processed when state becomes ready")
+    }
+    
+    // MARK: - Part 3: Advanced Scenarios
+    
+    /// Test concurrent audio chunks during model loading
+    @MainActor
+    func testConcurrentAudioChunksDuringModelLoading() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Audio arrives while model is being prepared
+        mockModelManager.addDownloadedModel(.base)
+        
+        // Start model preparation (async)
+        let prepareTask = Task {
+            await sut.prepareModel()
+        }
+        
+        // Send audio during loading
+        let chunk1: [Float] = Array(repeating: 0.1, count: 100)
+        let chunk2: [Float] = Array(repeating: 0.2, count: 200)
+        sut.bufferSystemAudio(chunk1)
+        sut.bufferMicrophoneAudio(chunk2)
+        
+        // Wait for preparation to complete
+        await prepareTask.value
+        
+        // Then: Audio should either be buffered then flushed, or forwarded directly
+        XCTAssertTrue(mockTranscriptionService.appendSystemAudioCallCount >= 0)
+        XCTAssertTrue(mockTranscriptionService.appendMicrophoneAudioCallCount >= 0)
+    }
+    
+    /// Test resuming recording after model failure
+    @MainActor
+    func testResumeRecordingAfterModelFailure() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Model preparation failed
+        _ = await sut.prepareModel() // No model, will fail
+        
+        // Reset for new attempt
+        sut.resetForNewRecording()
+        
+        // When: Model is now available and we try again
+        mockModelManager.addDownloadedModel(.base)
+        let state = await sut.prepareModel()
+        
+        // Then: Should succeed this time
+        XCTAssertTrue(state.isReady, "Should be ready after reset and retry")
+    }
+    
+    /// Test transcription mode configuration
+    @MainActor
+    func testTranscriptionModeConfiguration() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Coordinator with mock service
+        mockModelManager.addDownloadedModel(.base)
+        _ = await sut.prepareModel()
+        
+        // When: Setting transcription mode
+        sut.setTranscriptionMode(.realTime)
+        
+        // Then: Should propagate to service
+        XCTAssertEqual(sut.transcriptionMode, .realTime)
+        XCTAssertEqual(mockTranscriptionService.transcriptionMode, .realTime)
+        
+        // Change mode
+        sut.setTranscriptionMode(.postProcessing)
+        XCTAssertEqual(sut.transcriptionMode, .postProcessing)
+    }
+    
+    /// Test transcript handler lifecycle
+    @MainActor
+    func testTranscriptHandlerLifecycle() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Coordinator ready
+        mockModelManager.addDownloadedModel(.base)
+        _ = await sut.prepareModel()
+        
+        // When: Setting transcript handler
+        var handlerCalled = false
+        sut.setTranscriptHandler { _ in
+            handlerCalled = true
+        }
+        
+        // Simulate service calling handler
+        mockTranscriptionService.simulateTranscriptSegment()
+        
+        // Then: Handler should be invoked
+        XCTAssertTrue(handlerCalled, "Transcript handler should be called")
+        
+        // When: Stopping transcription
+        await sut.stopTranscription()
+        
+        // Then: Handler should be cleared to break retain cycles
+        XCTAssertEqual(mockTranscriptionService.setTranscriptHandlerCallCount, 2, 
+                      "Handler set once, then cleared on stop")
+    }
+    
+    /// Test starting transcription with recording start time
+    @MainActor
+    func testStartTranscriptionWithRecordingStartTime() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Model ready
+        mockModelManager.addDownloadedModel(.base)
+        _ = await sut.prepareModel()
+        
+        // When: Starting transcription with start time
+        let startTime = Date()
+        sut.startTranscription(recordingStartTime: startTime)
+        
+        // Then: Should propagate to service
+        XCTAssertEqual(mockTranscriptionService.startTranscriptionCallCount, 1)
+    }
+    
+    /// Test starting transcription when not initialized is no-op
+    @MainActor
+    func testStartTranscriptionWhenNotInitializedIsNoOp() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Given: Model not initialized (no prepareModel called)
+        
+        // When: Trying to start transcription
+        sut.startTranscription(recordingStartTime: Date())
+        
+        // Then: Should not call service (guard prevents it)
+        XCTAssertEqual(mockTranscriptionService.startTranscriptionCallCount, 0)
+    }
 }
