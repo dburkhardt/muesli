@@ -3,10 +3,15 @@ import Foundation
 @preconcurrency import AVFoundation
 import CoreMedia
 import os.lock
+import os.log
 
 /// Service for real-time audio transcription using WhisperKit
 /// Handles both system audio ("Them") and microphone audio ("Me")
 final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProtocol {
+    
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "TranscriptionService")
     
     // MARK: - Types
     
@@ -270,28 +275,28 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Log remaining audio for debugging
         if !remainingSystem.isEmpty {
             let durationMs = (Double(remainingSystem.count) / Double(sampleRate)) * 1000
-            print("[TranscriptionService] Remaining system audio: \(remainingSystem.count) samples (\(String(format: "%.1f", durationMs))ms)")
+            logger.debug("Remaining system audio: \(remainingSystem.count) samples (\(String(format: "%.1f", durationMs))ms)")
         }
         if !remainingMic.isEmpty {
             let durationMs = (Double(remainingMic.count) / Double(sampleRate)) * 1000
-            print("[TranscriptionService] Remaining mic audio: \(remainingMic.count) samples (\(String(format: "%.1f", durationMs))ms)")
+            logger.debug("Remaining mic audio: \(remainingMic.count) samples (\(String(format: "%.1f", durationMs))ms)")
         }
         
         // Process remaining system audio ONLY if it passes VAD check
         // This prevents short/noisy trailing audio from generating hallucinations
         if !remainingSystem.isEmpty && hasVoiceActivity(remainingSystem) {
-            print("[TranscriptionService] Processing remaining system audio (passed VAD)")
+            logger.info("Processing remaining system audio (passed VAD)")
             await transcribeChunk(remainingSystem, speaker: .them, whisperKit: whisperKit, startTime: startTime)
         } else if !remainingSystem.isEmpty {
-            print("[TranscriptionService] Skipping remaining system audio (failed VAD)")
+            logger.info("Skipping remaining system audio (failed VAD)")
         }
         
         // Process remaining mic audio ONLY if it passes VAD check
         if !remainingMic.isEmpty && hasVoiceActivity(remainingMic) {
-            print("[TranscriptionService] Processing remaining mic audio (passed VAD)")
+            logger.info("Processing remaining mic audio (passed VAD)")
             await transcribeChunk(remainingMic, speaker: .me, whisperKit: whisperKit, startTime: startTime)
         } else if !remainingMic.isEmpty {
-            print("[TranscriptionService] Skipping remaining mic audio (failed VAD)")
+            logger.info("Skipping remaining mic audio (failed VAD)")
         }
     }
     
@@ -318,7 +323,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             transcriptHandler?(segment)
             
         } catch {
-            print("[TranscriptionService] Transcription error: \(error)")
+            logger.error("Transcription error: \(error.localizedDescription)")
         }
     }
     
@@ -411,7 +416,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
             
             guard let converter = AVAudioConverter(from: file.processingFormat, to: targetFormat) else {
-                print("[TranscriptionService] Failed to create audio converter")
+                logger.error("Failed to create audio converter")
                 return nil
             }
             
@@ -449,7 +454,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             // Bug fix: Previously only checked for .haveData, which incorrectly rejected valid conversions.
             let isValidStatus = (status == .haveData || status == .inputRanDry)
             guard isValidStatus, let floatChannelData = outputBuffer.floatChannelData else {
-                print("[TranscriptionService] Conversion failed: \(error?.localizedDescription ?? "unknown error")")
+                logger.error("Conversion failed: \(error?.localizedDescription ?? "unknown error")")
                 return nil
             }
             
@@ -457,7 +462,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             return Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
             
         } catch {
-            print("[TranscriptionService] Failed to load audio file: \(error)")
+            logger.error("Failed to load audio file: \(error.localizedDescription)")
             return nil
         }
     }

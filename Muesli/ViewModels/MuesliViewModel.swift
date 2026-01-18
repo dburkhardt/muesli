@@ -3,6 +3,7 @@ import SwiftUI
 import ScreenCaptureKit
 import CoreMedia
 import os.lock
+import os.log
 
 /// Main ViewModel for the Muesli app
 /// Owns app-level state (permissions, detected apps) and services
@@ -10,6 +11,10 @@ import os.lock
 @Observable
 @MainActor
 final class MuesliViewModel {
+    
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "MuesliViewModel")
     
     // MARK: - Injected Managers
     
@@ -393,7 +398,7 @@ final class MuesliViewModel {
         preferencesManager.audioChunkDurationDidChange = { [weak self] newDuration in
             guard let self = self else { return }
             // Log the change - it will apply to the next recording
-            print("[MuesliViewModel] Audio chunk duration changed to \(newDuration)s - will apply to next recording")
+            self.logger.info("Audio chunk duration changed to \(newDuration, format: .fixed(precision: 1))s - will apply to next recording")
         }
         
         // Check initial permission status
