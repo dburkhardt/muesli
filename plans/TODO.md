@@ -52,27 +52,6 @@ Each item should include:
 - Description: Implement automatic speaker detection to identify and label different speakers in the transcript
 - Notes: Research speaker diarization techniques compatible with WhisperKit or as post-processing step
 
-**[Feature]** [Medium] Folder-backed integration for external tools (MCP-style)
-- Description: Export/materialize Muesli content (transcripts + metadata) into a structured folder tree that other apps can access
-- Architecture:
-  - Phase 1: Folder Export (Priority: High)
-    - Export transcripts and metadata to a well-structured folder tree
-    - Format: ~/Library/Application Support/Muesli/Exports/ or user-configurable location
-    - Other apps get read-only access to this "working set"
-    - Serves as knowledge source without tight coupling
-    - Other apps write their own artifacts elsewhere (e.g., /cowork/exports/)
-  - Phase 2: Local API (Optional, Future)
-    - Add local HTTP API or plugin for richer queries
-    - Enables search, filters, incremental sync
-    - Folder export remains as "escape hatch" and audit trail
-- Benefits:
-  - Loose coupling - apps treat Muesli as read-only knowledge source
-  - Transparency - user can inspect exported data
-  - No complex MCP server implementation needed initially
-  - Folder serves as durable contract between apps
-- Notes: Prefer folder-backed approach over tight API coupling for initial implementation
-- Related: FileOutputService.swift, MeetingHistoryManager.swift, export formats
-
 **[Feature]** [Low] Database structure for searchable meeting notes (Phase 2)
 - Description: Add optional SQLite database for advanced search and querying capabilities
 - Notes: Build on top of folder export architecture
@@ -244,3 +223,26 @@ Archive completed items here with completion date.
 - Files: .worktree-config.json.template, AGENTS.md, spec/git_workflow.md, scripts/configure-worktree.sh
 - Notes: Optional per-branch configuration for parallel development
 - Branch: release/v0.1.2-polish
+
+**[Feature]** Folder-backed integration for external tools (MCP-style) - Phase 1
+- Completed: Automatic export of transcripts and metadata to structured folder for external tool access
+- Files: ExportService.swift, ExportServiceProtocol (in ServiceProtocols.swift), ExportServiceTests.swift, MockExportService.swift
+- Integration: RecordingController, PreferencesManager, PreferencesView, TranscriptionCoordinator, RefinementCoordinator
+- Features:
+  - Automatic export after recording completes (when enabled in preferences)
+  - Re-export on transcript reprocessing or refinement
+  - Manual "Export All Now" button in preferences
+  - Structured folder hierarchy: ~/Library/Application Support/Muesli/Exports/
+  - Global manifest.json for indexing all meetings
+  - Per-meeting metadata.json with structured data
+  - Markdown transcripts copied for human readability
+  - Version marker file for format compatibility
+- Architecture:
+  - ExportService handles folder creation, file copying, JSON generation
+  - Callbacks in TranscriptionCoordinator and RefinementCoordinator for re-export
+  - Preferences for enable/disable and custom export directory
+  - Graceful error handling (export failures don't affect recording)
+- Testing: Comprehensive test suite with ≥70% coverage
+- Date: 2026-01-18
+- Phase 2 (Future): Local HTTP API, SQLite index, incremental sync, MCP server implementation
+

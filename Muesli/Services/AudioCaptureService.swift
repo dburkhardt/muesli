@@ -60,7 +60,14 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize)
         let deviceCount = Int(propertySize) / MemoryLayout<AudioDeviceID>.size
         var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
-        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize, &deviceIDs)
+        AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &deviceIDs
+        )
         
         for audioDeviceID in deviceIDs {
             // Get device UID
@@ -519,7 +526,10 @@ private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable 
     
     /// Calculate RMS (root mean square) audio level from sample buffer
     /// Returns a value between 0.0 and 1.0
-    private func calculateRMSLevel(from sampleBuffer: CMSampleBuffer, audioType: AudioCaptureService.AudioType) -> Float {
+    private func calculateRMSLevel(
+        from sampleBuffer: CMSampleBuffer,
+        audioType: AudioCaptureService.AudioType
+    ) -> Float {
         guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
             return 0.0
         }

@@ -27,6 +27,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 4. **Native patterns** — Swift 6 concurrency, `@Observable`, one type per file
 5. **UI principle** — "Granola-inspired": minimal, clean, fast
 6. **Track future work** — when asked to "add a todo" or "note this for later", add it to `plans/TODO.md` and continue working without interruption
+7. **Preserve debugging code** — do not remove print statements, Logger calls, or temporary debugging code without asking the user first
 
 ## Commands
 
@@ -414,6 +415,50 @@ Single source of truth. ViewModel accesses via computed property. OnboardingView
 ### Onboarding Window
 Use `NSWindow` + `NSHostingController` in AppDelegate. Don't auto-advance welcome screen. Poll permissions only on permission screens.
 
+## Debugging Guidance
+
+### Before Starting a Debug Session
+
+**Check the debug log knowledge base first**: [`docs/debug-logs/`](docs/debug-logs/)
+
+Search for similar issues before investigating from scratch:
+```bash
+# Search by category
+grep -r "Category: Audio" docs/debug-logs/
+grep -r "Category: Permissions" docs/debug-logs/
+
+# Search by symptom or error
+grep -r "permission.*denied" docs/debug-logs/
+grep -r "CancellationError" docs/debug-logs/
+
+# Search by component
+grep -r "PermissionManager" docs/debug-logs/
+grep -r "TranscriptionService" docs/debug-logs/
+```
+
+The debug logs capture:
+- Known bugs and their fixes
+- Root cause analysis
+- Code changes that resolved issues
+- Regression tests that prevent recurrence
+
+### After Fixing a Bug
+
+**Document the fix in a debug log**: Use the Cursor command or see [`commands/create_debug_log.md`](commands/create_debug_log.md)
+
+1. Create a new debug log file: `docs/debug-logs/YYYY-MM-DD_description.md`
+2. Fill in the template (see [`docs/debug-logs/template.md`](docs/debug-logs/template.md)):
+   - Problem description
+   - Symptoms/error messages
+   - Root cause analysis
+   - Fix description
+   - Affected files
+   - Code snippets (before/after)
+3. Add regression test if applicable
+4. Update index in [`docs/debug-logs/README.md`](docs/debug-logs/README.md)
+
+This builds a searchable knowledge base that helps future debugging sessions.
+
 ## Git Workflow (GitHub Flow)
 
 Simple, agent-friendly branching. All work happens in feature branches merged to `main` via PRs.
@@ -436,5 +481,7 @@ Simple, agent-friendly branching. All work happens in feature branches merged to
 - GitHub CLI (`gh`) — for PR management from command line
 
 **Testing**: Use Zoom/Meet/Teams or QuickTime Player. Verify permissions, recording cycles, transcript accuracy.
+
+**Debugging Knowledge Base**: [`docs/debug-logs/`](docs/debug-logs/) — searchable archive of past debugging sessions, root causes, and fixes. Check here before investigating complex issues.
 
 **Reference projects**: Azayaka (menu bar + SCK), WhisperKit Sample, Apple's ScreenCaptureKit Sample

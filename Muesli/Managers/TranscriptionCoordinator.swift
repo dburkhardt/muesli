@@ -35,6 +35,11 @@ final class TranscriptionCoordinator {
     private let transcriptionService: any TranscriptionServiceProtocol
     private let modelManager: any ModelManagerProtocol
     
+    // MARK: - Callbacks
+    
+    /// Called when a meeting is updated (for export service integration)
+    var onMeetingUpdated: ((MeetingHistoryItem) -> Void)?
+    
     // MARK: - Live Refinement
     
     /// Whether live refinement is enabled (hidden preference for v0.1.2)
@@ -440,6 +445,9 @@ final class TranscriptionCoordinator {
             // Save transcript to disk
             let fileOutput = FileOutputService()
             try fileOutput.saveTranscriptBlocks(blocks, title: meeting.title, date: meeting.date, to: meeting.directory)
+            
+            // Notify that meeting was updated (for export)
+            onMeetingUpdated?(meeting)
         }
         
         progressHandler?(1.0)
@@ -456,7 +464,12 @@ final class TranscriptionCoordinator {
         
         // Check queue depth - skip if falling behind
         guard liveRefinementQueue.count < maxRefinementQueueDepth else {
-            logger.warning("Live refinement queue full (\(self.liveRefinementQueue.count)), skipping segment \(segment.segmentNumber)")
+            logger.warning(
+                """
+                Live refinement queue full (\(self.liveRefinementQueue.count)), \
+                skipping segment \(segment.segmentNumber)
+                """
+            )
             return
         }
         

@@ -58,12 +58,14 @@ struct AboutView: View {
                         .lineLimit(2)
                 }
                 
-                // Check for Updates button
-                Button(action: {
+            // Check for Updates button
+            Button(
+                action: {
                     Task {
                         await updateHelper.checkForUpdates()
                     }
-                }) {
+                },
+                label: {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.down.circle")
                         Text("Check for Updates")
@@ -85,8 +87,9 @@ struct AboutView: View {
                     }() as Color)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                .buttonStyle(.plain)
-                .disabled(isCheckingForUpdates)
+            )
+            .buttonStyle(.plain)
+            .disabled(isCheckingForUpdates)
                 
                 // Last check date
                 if let lastCheck = UpdateChecker.shared.lastCheckDate {

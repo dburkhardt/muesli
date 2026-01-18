@@ -1,5 +1,5 @@
-import XCTest
 @testable import Muesli
+import XCTest
 
 /// Tests for MicrophoneManager
 ///
@@ -8,7 +8,6 @@ import XCTest
 /// or .denied, so device enumeration returns empty arrays.
 @MainActor
 final class MicrophoneManagerTests: XCTestCase {
-    
     var microphoneManager: MicrophoneManager!
     let testDeviceIDKey = "selectedMicrophoneDeviceID"
     

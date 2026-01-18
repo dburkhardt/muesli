@@ -67,16 +67,14 @@ struct OnboardingView: View {
         .onAppear {
             // Initial permission check on appear
             Task {
-                // If we're past the welcome screen, use async permission check
-                // This is reliable and won't trigger a prompt if permission is already granted
-                // Only on welcome screen do we avoid async check to prevent prompts
-                if currentStep != .welcome {
-                    await viewModel.refreshPermissionsAsync()
-                    // Start real-time monitoring on permission screens
+                // Always use synchronous check to avoid triggering permission prompts
+                viewModel.refreshPermissions()
+                
+                // Start monitoring on permission screens
+                if currentStep == .screenRecording || currentStep == .microphone {
                     startPermissionMonitoring()
-                } else {
-                    viewModel.refreshPermissions()
                 }
+                
                 advanceBasedOnPermissions()
             }
         }
@@ -91,14 +89,12 @@ struct OnboardingView: View {
             }
             
             // Check permissions when switching to permission steps
-            // Use async check for reliable detection after granting permission
             if newValue == .screenRecording || newValue == .microphone {
-                Task {
-                    await viewModel.refreshPermissionsAsync()
-                    advanceBasedOnPermissions()
-                    // Start real-time monitoring
-                    startPermissionMonitoring()
-                }
+                // Use synchronous check to avoid triggering prompts
+                viewModel.refreshPermissions()
+                advanceBasedOnPermissions()
+                // Start real-time monitoring
+                startPermissionMonitoring()
             }
         }
         .fileImporter(
@@ -159,7 +155,6 @@ struct OnboardingView: View {
     // MARK: - Screen Recording Screen
     
     @State private var screenRecordingRequested = false
-    @State private var screenRecordingPollingTask: Task<Void, Never>?
     
     private var screenRecordingScreen: some View {
         VStack(spacing: 20) {
@@ -172,7 +167,12 @@ struct OnboardingView: View {
             Text("Screen Recording Access")
                 .font(.system(size: 24, weight: .bold))
             
-            Text("Muesli needs Screen Recording permission to capture audio from meeting apps like Zoom, Teams, and Google Meet.")
+            Text(
+                """
+                Muesli needs Screen Recording permission to capture audio from meeting apps \
+                like Zoom, Teams, and Google Meet.
+                """
+            )
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -196,16 +196,14 @@ struct OnboardingView: View {
                         .multilineTextAlignment(.center)
                     
                     Button("Open System Settings") {
+                        viewModel.markAwaitingScreenRecordingFromSettings()
                         viewModel.openScreenRecordingSettings()
-                        // Start aggressive polling when user clicks to open settings
-                        startScreenRecordingPolling()
                     }
                     .buttonStyle(.bordered)
                     
                     Button("Check Again") {
-                        Task {
-                            await viewModel.refreshPermissionsAsync()
-                        }
+                        // Use synchronous check to avoid triggering prompts
+                        viewModel.refreshPermissions()
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(Color.accentColor)
@@ -215,8 +213,14 @@ struct OnboardingView: View {
                 Button("Grant Screen Recording Access") {
                     viewModel.requestScreenRecordingPermission()
                     screenRecordingRequested = true
-                    // Bring onboarding window back to front after system dialog dismisses
-                    AppDelegate.shared?.bringOnboardingWindowToFront()
+                    // Verify permission after request and auto-advance if granted
+                    Task {
+                        let granted = await viewModel.verifyScreenRecordingAfterRequest()
+                        if granted {
+                            withAnimation { setStep(.microphone) }
+                        }
+                        AppDelegate.shared?.bringOnboardingWindowToFront()
+                    }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -238,22 +242,11 @@ struct OnboardingView: View {
         .padding(.horizontal, 60)
         .padding(.top, 40)
         .padding(.bottom, 24)
-        .onAppear {
-            // Start polling when arriving at screen
-            if screenRecordingRequested && !viewModel.hasScreenRecordingPermission {
-                startScreenRecordingPolling()
-            }
-        }
-        .onDisappear {
-            // Stop polling when leaving screen
-            stopScreenRecordingPolling()
-        }
     }
     
     // MARK: - Microphone Screen
     
     @State private var microphoneRequested = false
-    @State private var microphonePollingTask: Task<Void, Never>?
     
     private var microphoneScreen: some View {
         VStack(spacing: 20) {
@@ -324,17 +317,15 @@ struct OnboardingView: View {
                     }
                     
                     Button("Open System Settings") {
+                        viewModel.markAwaitingMicrophoneFromSettings()
                         viewModel.openMicrophoneSettings()
-                        // Start aggressive polling when user clicks to open settings
-                        startMicrophonePolling()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
                     
                     Button("Check Again") {
-                        Task {
-                            await viewModel.refreshPermissionsAsync()
-                        }
+                        // Use synchronous check to avoid triggering prompts
+                        viewModel.refreshPermissions()
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(Color.accentColor)
@@ -360,8 +351,10 @@ struct OnboardingView: View {
                     microphoneRequested = true
                     Task {
                         await viewModel.requestMicrophonePermission()
-                        // Refresh permission state after request completes
-                        await viewModel.refreshPermissionsAsync()
+                        
+                        // Use synchronous refresh to update cached state
+                        // requestMicrophonePermission() already handles the permission request
+                        viewModel.refreshPermissions()
                         microphoneRequested = false
                         // Bring onboarding window back to front after system dialog dismisses
                         AppDelegate.shared?.bringOnboardingWindowToFront()
@@ -387,16 +380,6 @@ struct OnboardingView: View {
         .padding(.horizontal, 60)
         .padding(.top, 40)
         .padding(.bottom, 24)
-        .onAppear {
-            // Start polling when arriving at screen if waiting for permission
-            if (microphoneRequested || viewModel.isMicrophonePermissionDenied) && !viewModel.hasMicrophonePermission {
-                startMicrophonePolling()
-            }
-        }
-        .onDisappear {
-            // Stop polling when leaving screen
-            stopMicrophonePolling()
-        }
     }
     
     // MARK: - Model Setup Screen
@@ -715,68 +698,6 @@ struct OnboardingView: View {
         .padding(.vertical, 8)
     }
     
-    // MARK: - Permission Polling
-    
-    /// Start aggressive polling for screen recording permission
-    /// Uses 0.2s interval for instant feedback when user grants permission
-    private func startScreenRecordingPolling() {
-        // Cancel existing task if any
-        stopScreenRecordingPolling()
-        
-        screenRecordingPollingTask = Task { @MainActor in
-            while !Task.isCancelled && !viewModel.hasScreenRecordingPermission {
-                await viewModel.refreshPermissionsAsync()
-                
-                // If permission granted, advance to next step automatically
-                if viewModel.hasScreenRecordingPermission {
-                    withAnimation {
-                        setStep(.microphone)
-                    }
-                    break
-                }
-                
-                // Wait 0.2 seconds before next check
-                try? await Task.sleep(for: .milliseconds(200))
-            }
-        }
-    }
-    
-    /// Stop screen recording permission polling
-    private func stopScreenRecordingPolling() {
-        screenRecordingPollingTask?.cancel()
-        screenRecordingPollingTask = nil
-    }
-    
-    /// Start aggressive polling for microphone permission
-    /// Uses 0.2s interval for instant feedback when user grants permission
-    private func startMicrophonePolling() {
-        // Cancel existing task if any
-        stopMicrophonePolling()
-        
-        microphonePollingTask = Task { @MainActor in
-            while !Task.isCancelled && !viewModel.hasMicrophonePermission {
-                await viewModel.refreshPermissionsAsync()
-                
-                // If permission granted, advance to next step automatically
-                if viewModel.hasMicrophonePermission {
-                    withAnimation {
-                        setStep(.modelSetup)
-                    }
-                    break
-                }
-                
-                // Wait 0.2 seconds before next check
-                try? await Task.sleep(for: .milliseconds(200))
-            }
-        }
-    }
-    
-    /// Stop microphone permission polling
-    private func stopMicrophonePolling() {
-        microphonePollingTask?.cancel()
-        microphonePollingTask = nil
-    }
-    
     // MARK: - Permission Monitoring
     
     /// Start real-time permission monitoring
@@ -785,8 +706,11 @@ struct OnboardingView: View {
         viewModel.permissionManager.permissionDidChange = { [weak viewModel] _, _ in
             Task { @MainActor in
                 guard let viewModel = viewModel else { return }
-                // Update viewModel state
-                await viewModel.refreshPermissionsAsync()
+                
+                // Update viewModel state using synchronous refresh
+                // The monitoring mechanism now uses only sync checks to avoid triggering prompts
+                viewModel.refreshPermissions()
+                
                 // Auto-advance if permission granted
                 self.advanceBasedOnPermissions()
             }

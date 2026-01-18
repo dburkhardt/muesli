@@ -113,7 +113,9 @@ struct MenuBarView: View {
             .keyboardShortcut("q", modifiers: .command)
         }
         .sheet(isPresented: $showUpdateSheet) {
-            updateHelper.updateSheet(currentVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
+            updateHelper.updateSheet(
+                currentVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
+            )
         }
         .onAppear {
             // Check for updates on menu bar open if we have a cached status from ViewModel

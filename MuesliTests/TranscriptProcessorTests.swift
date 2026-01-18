@@ -557,12 +557,36 @@ final class TranscriptProcessorTests: XCTestCase {
     func testComplexMixedScenario() {
         // Simulate a complex conversation with artifacts, hallucinations, and speaker changes
         let segments = [
-            TranscriptionService.TranscriptSegment(text: "Let's start the meeting", timestamp: 0.0, speaker: .me),
-            TranscriptionService.TranscriptSegment(text: "(background noise) Sure thing", timestamp: 1.0, speaker: .them),
-            TranscriptionService.TranscriptSegment(text: "I wanted to discuss [inaudible] the project", timestamp: 2.0, speaker: .me),
-            TranscriptionService.TranscriptSegment(text: "Okay", timestamp: 3.0, speaker: .them), // Brief interjection
-            TranscriptionService.TranscriptSegment(text: "and get your feedback", timestamp: 4.0, speaker: .me),
-            TranscriptionService.TranscriptSegment(text: "I think we should ♪ music ♪ proceed carefully", timestamp: 5.0, speaker: .them)
+            TranscriptionService.TranscriptSegment(
+                text: "Let's start the meeting",
+                timestamp: 0.0,
+                speaker: .me
+            ),
+            TranscriptionService.TranscriptSegment(
+                text: "(background noise) Sure thing",
+                timestamp: 1.0,
+                speaker: .them
+            ),
+            TranscriptionService.TranscriptSegment(
+                text: "I wanted to discuss [inaudible] the project",
+                timestamp: 2.0,
+                speaker: .me
+            ),
+            TranscriptionService.TranscriptSegment(
+                text: "Okay",
+                timestamp: 3.0,
+                speaker: .them
+            ), // Brief interjection
+            TranscriptionService.TranscriptSegment(
+                text: "and get your feedback",
+                timestamp: 4.0,
+                speaker: .me
+            ),
+            TranscriptionService.TranscriptSegment(
+                text: "I think we should ♪ music ♪ proceed carefully",
+                timestamp: 5.0,
+                speaker: .them
+            )
         ]
         
         for segment in segments {

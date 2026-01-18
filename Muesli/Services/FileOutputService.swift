@@ -490,7 +490,13 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     ///   - date: Recording date
     ///   - directory: Output directory
     ///   - filename: Optional filename (defaults to "transcript.md" if nil)
-    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String? = nil) throws {
+    func saveTranscriptBlocks(
+        _ blocks: [TranscriptBlock],
+        title: String,
+        date: Date,
+        to directory: URL,
+        filename: String? = nil
+    ) throws {
         let actualFilename = filename ?? "transcript.md"
         let transcriptURL = directory.appendingPathComponent(actualFilename)
         

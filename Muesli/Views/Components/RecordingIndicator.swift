@@ -201,10 +201,12 @@ struct MicrophoneControlWithLevel: View {
     
     var body: some View {
         HStack(spacing: 6) {
-            // Mute toggle button (clickable microphone icon)
-            Button(action: {
+        // Mute toggle button (clickable microphone icon)
+        Button(
+            action: {
                 onToggleMute()
-            }) {
+            },
+            label: {
                 Group {
                     if isMuted {
                         // Show muted icon (no level indicator)
@@ -217,15 +219,18 @@ struct MicrophoneControlWithLevel: View {
                     }
                 }
             }
-            .buttonStyle(.plain)
-            .help(isMuted ? "Unmute microphone" : "Mute microphone")
+        )
+        .buttonStyle(.plain)
+        .help(isMuted ? "Unmute microphone" : "Mute microphone")
             
             // Device picker menu (chevron only)
             Menu {
-                ForEach(availableDevices) { device in
-                    Button(action: {
+            ForEach(availableDevices) { device in
+                Button(
+                    action: {
                         onSelectDevice(device.id)
-                    }) {
+                    },
+                    label: {
                         HStack {
                             Text(device.name)
                             if device.isDefault {
@@ -238,6 +243,7 @@ struct MicrophoneControlWithLevel: View {
                             }
                         }
                     }
+                )
                 }
             } label: {
                 Image(systemName: "chevron.down")

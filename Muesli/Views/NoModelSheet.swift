@@ -31,11 +31,13 @@ struct NoModelSheet: View {
             
             // Action buttons
             VStack(spacing: 12) {
-                // Primary action: Download model
-                Button(action: {
+            // Primary action: Download model
+            Button(
+                action: {
                     isPresented = false
                     onDownload()
-                }) {
+                },
+                label: {
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.down.circle.fill")
                         Text("Download Model")
@@ -47,13 +49,16 @@ struct NoModelSheet: View {
                     .background(Color.accentColor)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .buttonStyle(.plain)
+            )
+            .buttonStyle(.plain)
                 
-                // Secondary action: Record only
-                Button(action: {
+            // Secondary action: Record only
+            Button(
+                action: {
                     isPresented = false
                     onRecordOnly()
-                }) {
+                },
+                label: {
                     HStack(spacing: 8) {
                         Image(systemName: "waveform")
                         Text("Record Audio Only")
@@ -65,7 +70,8 @@ struct NoModelSheet: View {
                     .background(Color.secondary.opacity(0.15))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .buttonStyle(.plain)
+            )
+            .buttonStyle(.plain)
             }
             .frame(maxWidth: 280)
         }

@@ -233,8 +233,8 @@ final class LLMManager: LLMManagerProtocol {
         _downloadedModels.removeAll()
         
         for model in LLMModel.allCases where pathForModel(model) != nil {
-            _downloadedModels.insert(model)
-            downloadStates[model] = .completed
+                _downloadedModels.insert(model)
+                downloadStates[model] = .completed
         }
         
         // Automatically enable LLM stitching if models are found

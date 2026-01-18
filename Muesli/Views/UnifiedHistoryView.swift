@@ -28,7 +28,10 @@ struct UnifiedHistoryView: View {
             // Handle Delete key
             historyManager.requestDeleteSelectedMeetings()
         }
-        .alert("Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?", isPresented: $history.showDeleteConfirmation) {
+        .alert(
+            "Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?",
+            isPresented: $history.showDeleteConfirmation
+        ) {
             Button("Cancel", role: .cancel) {
                 historyManager.cancelDeleteMeetings()
             }
@@ -37,9 +40,19 @@ struct UnifiedHistoryView: View {
             }
         } message: {
             if historyManager.meetingsPendingDeletion.count == 1 {
-                Text("This will permanently delete \"\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")\" and its audio files.")
+                Text(
+                    """
+                    This will permanently delete \
+                    "\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")" and its audio files.
+                    """
+                )
             } else {
-                Text("This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings and their audio files.")
+                Text(
+                    """
+                    This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings \
+                    and their audio files.
+                    """
+                )
             }
         }
     }
@@ -54,10 +67,12 @@ struct UnifiedHistoryView: View {
             
             Spacer()
             
-            Button(action: {
+        Button(
+            action: {
                 // Quick start: immediately begin recording all system audio
                 viewModel.quickStartRecording()
-            }) {
+            },
+            label: {
                 HStack(spacing: 6) {
                     Image(systemName: "plus")
                         .font(.system(size: 14, weight: .semibold))
@@ -70,7 +85,8 @@ struct UnifiedHistoryView: View {
                 .background(Color.accentColor)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
-            .buttonStyle(.plain)
+        )
+        .buttonStyle(.plain)
             .disabled(viewModel.activeSession != nil)
         }
         .padding(.horizontal, 20)
@@ -126,11 +142,12 @@ struct UnifiedHistoryView: View {
                             onDoubleClick: {
                                 handleMeetingDoubleClick(meeting)
                             },
-                            onDelete: {
-                                // If this meeting is part of a multi-selection, delete all selected
-                                if historyManager.selectedMeetingIDs.contains(meeting.id) && historyManager.selectedMeetingIDs.count > 1 {
-                                    historyManager.requestDeleteSelectedMeetings()
-                                } else {
+                        onDelete: {
+                            // If this meeting is part of a multi-selection, delete all selected
+                            if historyManager.selectedMeetingIDs.contains(meeting.id) &&
+                               historyManager.selectedMeetingIDs.count > 1 {
+                                historyManager.requestDeleteSelectedMeetings()
+                            } else {
                                     historyManager.requestDeleteMeeting(meeting)
                                 }
                             },
@@ -242,7 +259,10 @@ struct MeetingListItemView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
-        .background(isSelected ? Color.accentColor.opacity(0.1) : (isHovered ? Color.secondary.opacity(0.05) : Color.clear))
+        .background(
+            isSelected ? Color.accentColor.opacity(0.1) :
+                (isHovered ? Color.secondary.opacity(0.05) : Color.clear)
+        )
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering

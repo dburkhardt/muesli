@@ -106,7 +106,10 @@ struct TranscriptBlockView: View {
     TranscriptBlockView(
         block: TranscriptBlock(
             speaker: .me,
-            text: "Thanks for setting this up. I had a few questions about the timeline and wanted to discuss the resource allocation.",
+            text: """
+                Thanks for setting this up. I had a few questions about the timeline \
+                and wanted to discuss the resource allocation.
+                """,
             startTimestamp: 32
         )
     )

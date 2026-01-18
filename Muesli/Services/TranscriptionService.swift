@@ -35,6 +35,15 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     /// Callback for new transcript segments
     typealias TranscriptHandler = @Sendable (TranscriptSegment) -> Void
     
+    /// Information about audio chunks to process
+    private struct ChunkInfo {
+        let systemChunk: [Float]?
+        let micChunk: [Float]?
+        let startTime: Date
+        let systemOffset: Int
+        let micOffset: Int
+    }
+    
     // MARK: - Properties
     
     private var whisperKit: WhisperKit?
@@ -82,7 +91,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Calculate overlap samples maintaining the standard ratio (1.5s / 5.0s = 30%)
         // This ensures consistent overlap behavior across different chunk durations
-        let overlapRatio = AudioConfiguration.transcriptionOverlapDuration / AudioConfiguration.transcriptionChunkDuration
+        let overlapRatio = AudioConfiguration.transcriptionOverlapDuration /
+            AudioConfiguration.transcriptionChunkDuration
         let overlapDuration = self.chunkDuration * overlapRatio
         overlapSamples = sampleRate * Int(overlapDuration)
     }
@@ -203,13 +213,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         guard transcriptionMode == .live else { return }
         
         // Get chunks to process with overlap
-        typealias ChunkInfo = (
-            systemChunk: [Float]?,
-            micChunk: [Float]?,
-            startTime: Date,
-            systemOffset: Int,
-            micOffset: Int
-        )
         let chunkInfo: ChunkInfo = bufferState.withLock { state -> ChunkInfo in
             var sysChunk: [Float]?
             var micChunk: [Float]?
@@ -220,7 +223,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             // Extract system audio chunk with overlap
             if state.systemAudioBuffer.count >= minSamplesForProcessing {
                 // For first chunk, start at 0. For subsequent chunks, include overlap
-                let startIndex = state.systemProcessedSamples > 0 ? max(0, state.systemProcessedSamples - overlapSamples) : 0
+                let startIndex = state.systemProcessedSamples > 0 ?
+                    max(0, state.systemProcessedSamples - overlapSamples) : 0
                 let endIndex = startIndex + minSamplesForProcessing
                 
                 if endIndex <= state.systemAudioBuffer.count {
@@ -257,7 +261,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 }
             }
             
-            return (sysChunk, micChunk, time, sysOffset, micOffset)
+            return ChunkInfo(
+                systemChunk: sysChunk,
+                micChunk: micChunk,
+                startTime: time,
+                systemOffset: sysOffset,
+                micOffset: micOffset
+            )
         }
         
         // Process system audio ("Them") with VAD check
@@ -298,7 +308,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Log remaining audio for debugging
         if !remainingSystem.isEmpty {
             let durationMs = (Double(remainingSystem.count) / Double(sampleRate)) * 1000
-            logger.debug("Remaining system audio: \(remainingSystem.count) samples (\(String(format: "%.1f", durationMs))ms)")
+            logger.debug(
+                "Remaining system audio: \(remainingSystem.count) samples (\(String(format: "%.1f", durationMs))ms)"
+            )
         }
         if !remainingMic.isEmpty {
             let durationMs = (Double(remainingMic.count) / Double(sampleRate)) * 1000
@@ -335,7 +347,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             let results = try await whisperKit.transcribe(audioArray: samples)
             
             guard let result = results.first,
-                  !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                  !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
                 return
             }
             
@@ -399,8 +412,14 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         micAudioURL: URL?,
         startTime: Date
     ) async throws {
-        guard isInitialized, let whisperKit = whisperKit else {
-            throw NSError(domain: "TranscriptionService", code: 1, userInfo: [NSLocalizedDescriptionKey: "WhisperKit not initialized"])
+        guard isInitialized,
+              let whisperKit = whisperKit
+        else {
+            throw NSError(
+                domain: "TranscriptionService",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "WhisperKit not initialized"]
+            )
         }
         
         // Transcribe system audio if available (with chunking)
@@ -439,37 +458,41 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             }
         }
         
-        // Transcribe mic audio if available (with chunking)
-        if let micURL = micAudioURL {
-            if let samples = await loadAudioFile(url: micURL) {
-                logger.info("Post-processing mic audio: \(samples.count) samples (\(String(format: "%.1f", Double(samples.count) / Double(self.sampleRate)))s)")
+    // Transcribe mic audio if available (with chunking)
+    if let micURL = micAudioURL,
+       let samples = await loadAudioFile(url: micURL) {
+        logger.info(
+                """
+                Post-processing mic audio: \(samples.count) samples \
+                (\(String(format: "%.1f", Double(samples.count) / Double(self.sampleRate)))s)
+                """
+            )
+            
+            // Split into 30-second chunks with 5-second overlap
+            let chunks = splitIntoChunks(
+                samples: samples,
+                chunkDuration: AudioConfiguration.postProcessingChunkDuration,
+                overlap: AudioConfiguration.postProcessingOverlapDuration
+            )
+            
+            logger.info("Split mic audio into \(chunks.count) chunks")
+            
+            // Process each chunk
+            for (index, chunk) in chunks.enumerated() {
+                let results = try await whisperKit.transcribe(audioArray: chunk.samples)
                 
-                // Split into 30-second chunks with 5-second overlap
-                let chunks = splitIntoChunks(
-                    samples: samples,
-                    chunkDuration: AudioConfiguration.postProcessingChunkDuration,
-                    overlap: AudioConfiguration.postProcessingOverlapDuration
-                )
+                for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let segment = TranscriptSegment(
+                        text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                        timestamp: chunk.timestamp,
+                        speaker: .me
+                    )
+                    transcriptHandler?(segment)
+                }
                 
-                logger.info("Split mic audio into \(chunks.count) chunks")
-                
-                // Process each chunk
-                for (index, chunk) in chunks.enumerated() {
-                    let results = try await whisperKit.transcribe(audioArray: chunk.samples)
-                    
-                    for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        let segment = TranscriptSegment(
-                            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                            timestamp: chunk.timestamp,
-                            speaker: .me
-                        )
-                        transcriptHandler?(segment)
-                    }
-                    
-                    // Log progress
-                    if (index + 1) % 5 == 0 || index == chunks.count - 1 {
-                        logger.info("Processed mic audio chunk \(index + 1)/\(chunks.count)")
-                    }
+                // Log progress
+                if (index + 1) % 5 == 0 || index == chunks.count - 1 {
+                    logger.info("Processed mic audio chunk \(index + 1)/\(chunks.count)")
                 }
             }
         }
@@ -525,18 +548,31 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     private func loadAudioFile(url: URL) async -> [Float]? {
         do {
             let file = try AVAudioFile(forReading: url)
-            let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+            let targetFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16000,
+                channels: 1,
+                interleaved: false
+            )!
             
             guard let converter = AVAudioConverter(from: file.processingFormat, to: targetFormat) else {
                 logger.error("Failed to create audio converter")
                 return nil
             }
             
-            let inputBuffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))!
+            let inputBuffer = AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat,
+                frameCapacity: AVAudioFrameCount(file.length)
+            )!
             try file.read(into: inputBuffer)
             
-            let outputFrameCount = Int(Double(inputBuffer.frameLength) * targetFormat.sampleRate / file.processingFormat.sampleRate)
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: AVAudioFrameCount(outputFrameCount)) else {
+            let outputFrameCount = Int(
+                Double(inputBuffer.frameLength) * targetFormat.sampleRate / file.processingFormat.sampleRate
+            )
+            guard let outputBuffer = AVAudioPCMBuffer(
+                pcmFormat: targetFormat,
+                frameCapacity: AVAudioFrameCount(outputFrameCount)
+            ) else {
                 return nil
             }
             
@@ -915,7 +951,12 @@ extension TranscriptionService {
     }
     
     /// Simple linear interpolation resampling (fallback)
-    private static func simpleResample(_ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double) -> [Float] {
+    /// Note: vDSP interpolation is preferred for better quality
+    private static func simpleResample(
+        _ samples: [Float],
+        from sourceSampleRate: Double,
+        to targetSampleRate: Double
+    ) -> [Float] {
         let ratio = sourceSampleRate / targetSampleRate
         let targetCount = Int(Double(samples.count) / ratio)
         

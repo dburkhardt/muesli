@@ -28,7 +28,10 @@ struct MeetingHistorySidebar: View {
             // Handle Delete key
             historyManager.requestDeleteSelectedMeetings()
         }
-        .alert("Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?", isPresented: $history.showDeleteConfirmation) {
+        .alert(
+            "Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?",
+            isPresented: $history.showDeleteConfirmation
+        ) {
             Button("Cancel", role: .cancel) {
                 historyManager.cancelDeleteMeetings()
             }
@@ -37,9 +40,19 @@ struct MeetingHistorySidebar: View {
             }
         } message: {
             if historyManager.meetingsPendingDeletion.count == 1 {
-                Text("This will permanently delete \"\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")\" and its audio files.")
+                Text(
+                    """
+                    This will permanently delete \
+                    "\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")" and its audio files.
+                    """
+                )
             } else {
-                Text("This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings and their audio files.")
+                Text(
+                    """
+                    This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings \
+                    and their audio files.
+                    """
+                )
             }
         }
     }
@@ -55,16 +68,19 @@ struct MeetingHistorySidebar: View {
             
             Spacer()
             
-            Button(action: {
+        Button(
+            action: {
                 // Quick start: immediately begin recording all system audio
                 viewModel.quickStartRecording()
-            }) {
+            },
+            label: {
                 Image(systemName: "plus")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderless)
-            .disabled(viewModel.activeSession != nil)
+        )
+        .buttonStyle(.borderless)
+        .disabled(viewModel.activeSession != nil)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -135,11 +151,12 @@ struct MeetingHistorySidebar: View {
                                 onDoubleClick: {
                                     handleMeetingDoubleClick(meeting)
                                 },
-                                onDelete: {
-                                    // If this meeting is part of a multi-selection, delete all selected
-                                    if historyManager.selectedMeetingIDs.contains(meeting.id) && historyManager.selectedMeetingIDs.count > 1 {
-                                        historyManager.requestDeleteSelectedMeetings()
-                                    } else {
+                            onDelete: {
+                                // If this meeting is part of a multi-selection, delete all selected
+                                if historyManager.selectedMeetingIDs.contains(meeting.id) &&
+                                   historyManager.selectedMeetingIDs.count > 1 {
+                                    historyManager.requestDeleteSelectedMeetings()
+                                } else {
                                         historyManager.requestDeleteMeeting(meeting)
                                     }
                                 },
@@ -269,7 +286,10 @@ struct MeetingSidebarItemView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(isSelected ? Color.accentColor.opacity(0.15) : (isHovered ? Color.secondary.opacity(0.05) : Color.clear))
+        .background(
+            isSelected ? Color.accentColor.opacity(0.15) :
+                (isHovered ? Color.secondary.opacity(0.05) : Color.clear)
+        )
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering

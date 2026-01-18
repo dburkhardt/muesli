@@ -137,7 +137,8 @@ struct CompletedMeetingWindow: View {
         
         // Fallback to transcriptBlocks
         if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
-            let showingOriginal = viewModel.showOriginalTranscript(for: meeting) && meeting.originalTranscriptBlocks != nil
+            let showingOriginal = viewModel.showOriginalTranscript(for: meeting) &&
+                meeting.originalTranscriptBlocks != nil
             return showingOriginal ? meeting.originalTranscriptBlocks : blocks
         }
         
@@ -156,29 +157,35 @@ struct CompletedMeetingWindow: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
             
-            Button(action: {
+        Button(
+            action: {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
-            }) {
+            },
+            label: {
                 Text("Open in Finder")
                     .font(.system(size: 12))
                     .foregroundStyle(.blue)
                     .underline()
             }
-            .buttonStyle(.plain)
+        )
+        .buttonStyle(.plain)
             
             Text("·")
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
             
-            Button(action: {
+        Button(
+            action: {
                 historyManager.requestDeleteMeeting(meeting)
-            }) {
+            },
+            label: {
                 Text("Delete Recording")
                     .font(.system(size: 12))
                     .foregroundStyle(.red)
                     .underline()
             }
-            .buttonStyle(.plain)
+        )
+        .buttonStyle(.plain)
         }
         .padding(.bottom, 8)
     }

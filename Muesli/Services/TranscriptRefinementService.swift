@@ -130,7 +130,11 @@ final class TranscriptRefinementService {
     
     // MARK: - Private Methods
     
-    private func refineBlockText(_ text: String, container: ModelContainer, speaker: TranscriptBlock.Speaker? = nil) async throws -> String {
+    private func refineBlockText(
+        _ text: String,
+        container: ModelContainer,
+        speaker: TranscriptBlock.Speaker? = nil
+    ) async throws -> String {
         let prompt = buildRefinementPrompt(text, speaker: speaker)
         
         let result = try await container.perform { context in
@@ -221,7 +225,9 @@ final class TranscriptRefinementService {
     // MARK: - Speaker Thread Processing
     
     /// Splits blocks into separate speaker threads while preserving original indices
-    private func splitBlocksBySpeaker(_ blocks: [TranscriptBlock]) -> (me: [(Int, TranscriptBlock)], them: [(Int, TranscriptBlock)]) {
+    private func splitBlocksBySpeaker(
+        _ blocks: [TranscriptBlock]
+    ) -> (me: [(Int, TranscriptBlock)], them: [(Int, TranscriptBlock)]) {
         var meBlocks: [(Int, TranscriptBlock)] = []
         var themBlocks: [(Int, TranscriptBlock)] = []
         

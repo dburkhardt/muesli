@@ -26,6 +26,13 @@ final class UpdateChecker {
         }
     }
     
+    /// Version components structure
+    private struct VersionComponents {
+        let major: Int
+        let minor: Int
+        let patch: Int
+    }
+    
     // MARK: - Properties
     
     private let githubAPIURL = "https://api.github.com/repos/dburkhardt/muesli/releases/latest"
@@ -215,7 +222,7 @@ final class UpdateChecker {
     }
     
     /// Parse a version string into major, minor, patch components
-    private func parseVersion(_ version: String) -> (major: Int, minor: Int, patch: Int) {
+    private func parseVersion(_ version: String) -> VersionComponents {
         // Remove 'v' prefix if present
         let cleanVersion = version.hasPrefix("v") ? String(version.dropFirst()) : version
         
@@ -226,6 +233,6 @@ final class UpdateChecker {
         let minor = components.count > 1 ? Int(components[1].prefix(while: { $0.isNumber })) ?? 0 : 0
         let patch = components.count > 2 ? Int(components[2].prefix(while: { $0.isNumber })) ?? 0 : 0
         
-        return (major, minor, patch)
+        return VersionComponents(major: major, minor: minor, patch: patch)
     }
 }

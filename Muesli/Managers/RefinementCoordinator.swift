@@ -16,6 +16,11 @@ final class RefinementCoordinator {
     private let refinementService: TranscriptRefinementService
     private let fileOutputService: FileOutputService
     
+    // MARK: - Callbacks
+    
+    /// Called when a meeting is updated (for export service integration)
+    var onMeetingUpdated: ((MeetingHistoryItem) -> Void)?
+    
     // MARK: - State
     
     /// Whether to show the refinement progress sheet
@@ -76,13 +81,18 @@ final class RefinementCoordinator {
     }
     
     /// Set whether to show original transcript for a meeting
-    func setShowingOriginal(_ showOriginal: Bool, for meeting: MeetingHistoryItem, historyService: MeetingHistoryService) {
+    func setShowingOriginal(
+        _ showOriginal: Bool,
+        for meeting: MeetingHistoryItem,
+        historyService: MeetingHistoryService
+    ) {
         showOriginalTranscriptForMeeting[meeting.id.uuidString] = showOriginal
         
         // Load original transcript if switching to original view and not already loaded
         if showOriginal && meeting.isRefined {
             Task {
-                if meeting.originalTranscriptBlocks == nil, let blocks = historyService.loadOriginalTranscriptBlocks(for: meeting) {
+                if meeting.originalTranscriptBlocks == nil,
+                   let blocks = historyService.loadOriginalTranscriptBlocks(for: meeting) {
                     await MainActor.run {
                         meeting.originalTranscriptBlocks = blocks
                     }
@@ -162,6 +172,9 @@ final class RefinementCoordinator {
                 
                 // Save to disk
                 saveRefinedTranscript(meeting, blocks: refinedBlocks)
+                
+                // Notify that meeting was updated (for export)
+                onMeetingUpdated?(meeting)
             } else if let text = meeting.transcript, !text.isEmpty {
                 logger.info("Refining plain text transcript")
                 // Store original before refining
@@ -179,6 +192,9 @@ final class RefinementCoordinator {
                 // Save to disk
                 saveRefinedTranscript(meeting, text: refinedText)
                 logger.info("Refinement completed successfully")
+                
+                // Notify that meeting was updated (for export)
+                onMeetingUpdated?(meeting)
             } else {
                 logger.warning("No transcript blocks or text available for refinement")
                 meetingBeingRefined = nil
@@ -272,16 +288,24 @@ final class RefinementCoordinator {
             if segment.segmentNumber > 1 {
                 let formatter = DateFormatter()
                 formatter.dateFormat = "h:mm a"
-                transcriptParts.append("\n---\n### Segment \(segment.segmentNumber) (resumed at \(formatter.string(from: segment.startTime)))\n")
+                transcriptParts.append(
+                    """
+                    
+                    ---
+                    ### Segment \(segment.segmentNumber) (resumed at \(formatter.string(from: segment.startTime)))
+                    
+                    """
+                )
             }
             
             // Use refined blocks if available and showing refined, otherwise use original
             let blocksToUse = (meeting.isShowingRefined && segment.isRefined) ?
-                (segment.refinedBlocks ?? segment.originalBlocks) :
-                segment.originalBlocks
+                (segment.refinedBlocks ?? segment.originalBlocks) : segment.originalBlocks
             
             for block in blocksToUse {
-                transcriptParts.append("**\(block.speaker.rawValue.capitalized)** _[\(block.formattedStartTime)]_\n\n\(block.text)")
+                transcriptParts.append(
+                    "**\(block.speaker.rawValue.capitalized)** _[\(block.formattedStartTime)]_\n\n\(block.text)"
+                )
             }
         }
         

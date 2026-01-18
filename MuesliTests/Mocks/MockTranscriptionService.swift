@@ -103,7 +103,11 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     }
     
     /// Simulate a transcript segment with given text and speaker
-    func simulateTranscript(text: String, speaker: TranscriptionService.TranscriptSegment.Speaker, timestamp: TimeInterval = 0) {
+    func simulateTranscript(
+        text: String,
+        speaker: TranscriptionService.TranscriptSegment.Speaker,
+        timestamp: TimeInterval = 0
+    ) {
         let segment = TranscriptionService.TranscriptSegment(text: text, timestamp: timestamp, speaker: speaker)
         transcriptHandler?(segment)
     }

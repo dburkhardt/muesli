@@ -23,6 +23,7 @@ final class RecordingController {
     private let echoCancellationService: EchoCancellationService
     private let preferencesManager: PreferencesManager
     private let microphoneManager: MicrophoneManager
+    private let exportService: ExportService
     
     // MARK: - State
     
@@ -95,7 +96,8 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         echoCancellationService: EchoCancellationService,
         preferencesManager: PreferencesManager,
-        microphoneManager: MicrophoneManager
+        microphoneManager: MicrophoneManager,
+        exportService: ExportService
     ) {
         self.audioCaptureService = audioCaptureService
         self.fileOutputService = fileOutputService
@@ -104,6 +106,7 @@ final class RecordingController {
         self.echoCancellationService = echoCancellationService
         self.preferencesManager = preferencesManager
         self.microphoneManager = microphoneManager
+        self.exportService = exportService
         
         // Note: Audio buffer handler is set up in ensureAudioHandlersConfigured() before each recording
     }
@@ -173,7 +176,9 @@ final class RecordingController {
                         
                         // If too many consecutive errors, stop recording gracefully
                         if self.audioErrorCounter > self.maxConsecutiveAudioErrors {
-                            self.logger.error("Too many consecutive audio errors (\(self.audioErrorCounter)), stopping recording")
+                            self.logger.error(
+                                "Too many consecutive audio errors (\(self.audioErrorCounter)), stopping recording"
+                            )
                             
                             if let session = self.activeSession {
                                 session.interruptionReason = "Audio processing error"
@@ -595,6 +600,9 @@ final class RecordingController {
                 session.showError(.transcriptSaveFailed(underlying: error))
                 // Continue - we have audio files even if transcript save failed
             }
+            
+            // Export meeting to exports directory (if enabled)
+            await exportMeetingIfEnabled(directory: directory)
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
         }
@@ -609,6 +617,90 @@ final class RecordingController {
         
         activeSession = nil
         resetMuteState()
+    }
+    
+    /// Export meeting to exports directory if export is enabled
+    private func exportMeetingIfEnabled(directory: URL) async {
+        // Check if export is enabled in preferences
+        guard preferencesManager.exportEnabled else {
+            logger.debug("Export disabled, skipping export")
+            return
+        }
+        
+        // Load the meeting from history to get full metadata
+        // We need to create a temporary MeetingHistoryItem from the just-saved directory
+        guard let meeting = createMeetingHistoryItem(from: directory) else {
+            logger.error("Failed to create meeting item for export")
+            return
+        }
+        
+        do {
+            try await exportService.exportMeeting(meeting)
+            
+            // Also update the manifest with all meetings
+            // Get all meetings from history
+            let meetingHistoryService = MeetingHistoryService()
+            let allMeetings = meetingHistoryService.discoverMeetings()
+            try exportService.generateManifest(for: allMeetings)
+            
+            logger.info("Successfully exported meeting: \(meeting.title)")
+        } catch {
+            logger.error("Failed to export meeting: \(error.localizedDescription)")
+            // Don't show error to user - export failures are non-critical
+        }
+    }
+    
+    /// Create a MeetingHistoryItem from a directory URL (for immediate export after recording)
+    private func createMeetingHistoryItem(from directory: URL) -> MeetingHistoryItem? {
+        let fileManager = FileManager.default
+        let transcriptURL = directory.appendingPathComponent("transcript.md")
+        
+        guard fileManager.fileExists(atPath: transcriptURL.path) else {
+            return nil
+        }
+        
+        // Parse date from folder name: YYYY-MM-DD_HH-MM_[UUID]
+        let folderName = directory.lastPathComponent
+        let components = folderName.components(separatedBy: "_")
+        var date = Date()
+        
+        if components.count >= 2 {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm"
+            if let parsed = dateFormatter.date(from: "\(components[0])_\(components[1])") {
+                date = parsed
+            }
+        }
+        
+        // Read transcript to get title
+        var title = "Meeting"
+        if let content = try? String(contentsOf: transcriptURL, encoding: .utf8) {
+            let lines = content.components(separatedBy: .newlines)
+            if let firstLine = lines.first, firstLine.hasPrefix("# ") {
+                title = String(firstLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if title.isEmpty {
+                    title = "Meeting"
+                }
+            }
+        }
+        
+        // Check for audio files
+        let audioURL = directory.appendingPathComponent("audio.caf")
+        let micURL = directory.appendingPathComponent("microphone.caf")
+        let hasAudio = fileManager.fileExists(atPath: audioURL.path)
+        let hasMicrophone = fileManager.fileExists(atPath: micURL.path)
+        
+        // Extract UUID from folder name
+        let id = components.count >= 3 ? UUID(uuidString: components[2]) ?? UUID() : UUID()
+        
+        return MeetingHistoryItem(
+            id: id,
+            title: title,
+            date: date,
+            directory: directory,
+            hasAudio: hasAudio,
+            hasMicrophone: hasMicrophone
+        )
     }
     
     private func handlePostProcessingTranscription(for session: RecordingSession, directory: URL) async {
@@ -758,12 +850,12 @@ final class RecordingController {
             onSessionStarted?(session)
             onSplitViewVisibilityChanged?(true)
             
-            transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
-                Task { @MainActor in
-                    guard let session = session else { return }
-                    session.appendTranscriptSegment(segment)
-                }
+        transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
+            Task { @MainActor in
+                guard let session = session else { return }
+                session.appendTranscriptSegment(segment)
             }
+        }
             
             session.outputDirectory = try fileOutputService.resumeWriting(
                 to: meeting.directory,

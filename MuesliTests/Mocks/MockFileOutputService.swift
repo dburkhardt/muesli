@@ -9,7 +9,8 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
     private(set) var isWritingInternal: Bool = false
     var isWriting: Bool { isWritingInternal }
     
-    private var outputDirectory: URL = FileManager.default.temporaryDirectory.appendingPathComponent("MockMeetingTranscripts")
+    private var outputDirectory: URL =
+        FileManager.default.temporaryDirectory.appendingPathComponent("MockMeetingTranscripts")
     private var currentWriteDirectory: URL?
     
     // MARK: - Test Control Properties
@@ -21,7 +22,11 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
     var shouldFailResumeWriting: Bool = false
     var resumeWritingError: Error = FileOutputService.OutputError.directoryCreationFailed
     var shouldFailSaveTranscript: Bool = false
-    var saveTranscriptError: Error = NSError(domain: "MockFileOutputService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Mock save error"])
+    var saveTranscriptError: Error = NSError(
+        domain: "MockFileOutputService",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Mock save error"]
+    )
     
     // MARK: - Call Tracking
     
@@ -113,7 +118,13 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         }
     }
     
-    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String?) throws {
+    func saveTranscriptBlocks(
+        _ blocks: [TranscriptBlock],
+        title: String,
+        date: Date,
+        to directory: URL,
+        filename: String?
+    ) throws {
         saveTranscriptBlocksCallCount += 1
         lastSavedBlocks = blocks
         lastSavedTitle = title

@@ -85,7 +85,11 @@ final class ModelManagerTests: XCTestCase {
         
         for model in ModelManager.ModelSize.allCases {
             XCTAssertEqual(model.sourceURL, expectedURL, "Source URL mismatch for \(model.displayName)")
-            XCTAssertEqual(model.sourceRepo, "argmaxinc/whisperkit-coreml", "Source repo mismatch for \(model.displayName)")
+            XCTAssertEqual(
+                model.sourceRepo,
+                "argmaxinc/whisperkit-coreml",
+                "Source repo mismatch for \(model.displayName)"
+            )
         }
     }
     
@@ -154,7 +158,12 @@ final class ModelManagerTests: XCTestCase {
     /// Test that validateModel checks for weight files
     func testValidateModel_RequiresWeights() async {
         // Create a mock model directory with both mlmodelc but no weights
-        let modelDir = createMockModelDirectory(for: .base, includeAudioEncoder: true, includeTextDecoder: true, includeWeights: false)
+        let modelDir = createMockModelDirectory(
+            for: .base,
+            includeAudioEncoder: true,
+            includeTextDecoder: true,
+            includeWeights: false
+        )
         
         // Verify AudioEncoder exists but without weights
         let audioEncoderPath = modelDir.appendingPathComponent("AudioEncoder.mlmodelc")
@@ -167,7 +176,12 @@ final class ModelManagerTests: XCTestCase {
     /// Test that a complete model passes validation
     func testValidateModel_PassesWithCompleteModel() async {
         // Create a complete mock model directory
-        let modelDir = createMockModelDirectory(for: .base, includeAudioEncoder: true, includeTextDecoder: true, includeWeights: true)
+        let modelDir = createMockModelDirectory(
+            for: .base,
+            includeAudioEncoder: true,
+            includeTextDecoder: true,
+            includeWeights: true
+        )
         
         // Verify all required files exist
         let audioEncoderPath = modelDir.appendingPathComponent("AudioEncoder.mlmodelc")

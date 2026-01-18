@@ -308,27 +308,33 @@ struct RecordingDetailView: View {
         Menu {
             // Submenu 1: Live Transcript
             Menu("Live Transcript") {
-                Button(action: {
-                    viewModel.transcriptionMode = .live
-                }) {
-                    HStack {
-                        Text("Live")
-                        if viewModel.transcriptionMode == .live {
-                            Image(systemName: "checkmark")
+                Button(
+                    action: {
+                        viewModel.transcriptionMode = .live
+                    },
+                    label: {
+                        HStack {
+                            Text("Live")
+                            if viewModel.transcriptionMode == .live {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
-                }
+                )
                 
-                Button(action: {
-                    viewModel.transcriptionMode = .postProcessing
-                }) {
-                    HStack {
-                        Text("Post-processing")
-                        if viewModel.transcriptionMode == .postProcessing {
-                            Image(systemName: "checkmark")
+                Button(
+                    action: {
+                        viewModel.transcriptionMode = .postProcessing
+                    },
+                    label: {
+                        HStack {
+                            Text("Post-processing")
+                            if viewModel.transcriptionMode == .postProcessing {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
-                }
+                )
             }
             
             Divider()
@@ -336,18 +342,21 @@ struct RecordingDetailView: View {
             // Submenu 2: Audio Source (shows current, can change only when not recording)
             Menu("Audio Source") {
                 // "All System Audio" option
-                Button(action: {
-                    if !session.isRecording {
-                        session.selectedApp = nil
-                    }
-                }) {
-                    HStack {
-                        Text("All System Audio")
-                        if session.selectedApp == nil {
-                            Image(systemName: "checkmark")
+                Button(
+                    action: {
+                        if !session.isRecording {
+                            session.selectedApp = nil
+                        }
+                    },
+                    label: {
+                        HStack {
+                            Text("All System Audio")
+                            if session.selectedApp == nil {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
-                }
+                )
                 .disabled(session.isRecording)
                 
                 if !viewModel.availableMeetingApps.isEmpty {
@@ -355,18 +364,21 @@ struct RecordingDetailView: View {
                     
                     // Detected apps
                     ForEach(viewModel.availableMeetingApps) { app in
-                        Button(action: {
-                            if !session.isRecording {
-                                session.selectedApp = app
-                            }
-                        }) {
-                            HStack {
-                                Text(app.name)
-                                if session.selectedApp?.bundleIdentifier == app.bundleIdentifier {
-                                    Image(systemName: "checkmark")
+                        Button(
+                            action: {
+                                if !session.isRecording {
+                                    session.selectedApp = app
+                                }
+                            },
+                            label: {
+                                HStack {
+                                    Text(app.name)
+                                    if session.selectedApp?.bundleIdentifier == app.bundleIdentifier {
+                                        Image(systemName: "checkmark")
+                                    }
                                 }
                             }
-                        }
+                        )
                         .disabled(session.isRecording)
                     }
                 }
@@ -391,15 +403,18 @@ struct RecordingDetailView: View {
     // MARK: - Stop Recording Button
     
     private func stopRecordingButton(session: RecordingSession) -> some View {
-        Button(action: {
-            viewModel.stopRecording(for: session)
-        }) {
-            Image(systemName: "xmark")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(.red))
-        }
+        Button(
+            action: {
+                viewModel.stopRecording(for: session)
+            },
+            label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(.red))
+            }
+        )
         .buttonStyle(.plain)
         .disabled(session.state == .stopping)
     }
@@ -542,10 +557,12 @@ struct RecordingDetailView: View {
             HStack(spacing: 12) {
                 Spacer()
                 
-                if let directory = session.outputDirectory {
-                    Button(action: {
+            if let directory = session.outputDirectory {
+                Button(
+                    action: {
                         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: directory.path)
-                    }) {
+                    },
+                    label: {
                         Text("Open in Finder")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(.white)
@@ -554,13 +571,16 @@ struct RecordingDetailView: View {
                             .background(Color.accentColor)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                    .buttonStyle(.plain)
-                }
-                
-                if session.canRetranscribe && !session.isRetranscribing {
-                    Button(action: {
+                )
+                .buttonStyle(.plain)
+            }
+            
+            if session.canRetranscribe && !session.isRetranscribing {
+                Button(
+                    action: {
                         viewModel.retranscribeWithPostProcessing(for: session)
-                    }) {
+                    },
+                    label: {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.clockwise")
                             Text("Re-transcribe")
@@ -572,8 +592,9 @@ struct RecordingDetailView: View {
                         .background(Color.secondary.opacity(0.1))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
-                    .buttonStyle(.plain)
-                }
+                )
+                .buttonStyle(.plain)
+            }
                 
                 Spacer()
             }
@@ -678,29 +699,35 @@ struct RecordingDetailView: View {
                                 .font(.system(size: 12))
                                 .foregroundStyle(.tertiary)
                             
-                            Button(action: {
+                        Button(
+                            action: {
                                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
-                            }) {
+                            },
+                            label: {
                                 Text("Open in Finder")
                                     .font(.system(size: 12))
                                     .foregroundStyle(.blue)
                                     .underline()
                             }
-                            .buttonStyle(.plain)
-                            
-                            Text("·")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.tertiary)
-                            
-                            Button(action: {
+                        )
+                        .buttonStyle(.plain)
+                        
+                        Text("·")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                        
+                        Button(
+                            action: {
                                 historyManager.requestDeleteMeeting(meeting)
-                            }) {
+                            },
+                            label: {
                                 Text("Delete Recording")
                                     .font(.system(size: 12))
                                     .foregroundStyle(.red)
                                     .underline()
                             }
-                            .buttonStyle(.plain)
+                        )
+                        .buttonStyle(.plain)
                         }
                         .padding(.bottom, 8)
                         
@@ -724,7 +751,9 @@ struct RecordingDetailView: View {
                         if !meeting.transcriptSegments.isEmpty {
                             // Segment-based display with markers
                             LazyVStack(spacing: 8) {
-                                ForEach(meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber })) { segment in
+                                ForEach(
+                                    meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber })
+                                ) { segment in
                                     Group {
                                         // Segment marker (except for first segment)
                                         if segment.segmentNumber > 1 {
@@ -753,13 +782,17 @@ struct RecordingDetailView: View {
                             }
                         } else {
                             // Fallback to block-based or plain text display
-                            let hasOriginal = (meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil)
+                            let hasOriginal = (
+                                meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil
+                            )
                             let showingOriginal = viewModel.showOriginalTranscript(for: meeting) && hasOriginal
                             
                             if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
                                 // Block-based display (new format)
                                 LazyVStack(spacing: 8) {
-                                    ForEach(showingOriginal ? (meeting.originalTranscriptBlocks ?? blocks) : blocks) { block in
+                                    ForEach(
+                                        showingOriginal ? (meeting.originalTranscriptBlocks ?? blocks) : blocks
+                                    ) { block in
                                         TranscriptBlockView(block: block)
                                     }
                                 }
@@ -850,7 +883,8 @@ struct RecordingDetailView: View {
         
         // Fallback to transcriptBlocks
         if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
-            let showingOriginal = viewModel.showOriginalTranscript(for: meeting) && meeting.originalTranscriptBlocks != nil
+            let showingOriginal = viewModel.showOriginalTranscript(for: meeting) &&
+                meeting.originalTranscriptBlocks != nil
             return showingOriginal ? meeting.originalTranscriptBlocks : blocks
         }
         

@@ -70,9 +70,11 @@ struct StartRecordingSheet: View {
                 
                 Spacer()
                 
-                Button(action: {
+            Button(
+                action: {
                     startRecording()
-                }) {
+                },
+                label: {
                     if isStarting {
                         HStack(spacing: 8) {
                             ProgressView()
@@ -83,6 +85,7 @@ struct StartRecordingSheet: View {
                         Text("Start Recording")
                     }
                 }
+            )
                 .buttonStyle(.borderedProminent)
                 .disabled(selectedApp == nil || isStarting)
                 .keyboardShortcut(.defaultAction)

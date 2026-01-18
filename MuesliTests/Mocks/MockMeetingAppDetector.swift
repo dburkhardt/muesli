@@ -43,9 +43,21 @@ final class MockMeetingAppDetector: MeetingAppDetectorProtocol {
     /// Add common mock meeting apps
     func addCommonMeetingApps() {
         mockApps = [
-            MeetingAppDetector.DetectedApp(id: "us.zoom.xos", name: "Zoom", bundleIdentifier: "us.zoom.xos"),
-            MeetingAppDetector.DetectedApp(id: "com.microsoft.teams", name: "Microsoft Teams", bundleIdentifier: "com.microsoft.teams"),
-            MeetingAppDetector.DetectedApp(id: "com.google.Chrome", name: "Google Chrome", bundleIdentifier: "com.google.Chrome")
+            MeetingAppDetector.DetectedApp(
+                id: "us.zoom.xos",
+                name: "Zoom",
+                bundleIdentifier: "us.zoom.xos"
+            ),
+            MeetingAppDetector.DetectedApp(
+                id: "com.microsoft.teams",
+                name: "Microsoft Teams",
+                bundleIdentifier: "com.microsoft.teams"
+            ),
+            MeetingAppDetector.DetectedApp(
+                id: "com.google.Chrome",
+                name: "Google Chrome",
+                bundleIdentifier: "com.google.Chrome"
+            )
         ]
     }
     

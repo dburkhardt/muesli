@@ -304,10 +304,14 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             
             // Check if this is a speaker header line
-            if let match = speakerRegex?.firstMatch(in: trimmed, options: [], range: NSRange(trimmed.startIndex..., in: trimmed)),
-               let speakerRange = Range(match.range(at: 1), in: trimmed) {
-                // Save previous block if any
-                if let speaker = currentSpeaker, !currentTextLines.isEmpty {
+            if let match = speakerRegex?.firstMatch(
+                in: trimmed,
+            options: [],
+            range: NSRange(trimmed.startIndex..., in: trimmed)
+        ),
+           let speakerRange = Range(match.range(at: 1), in: trimmed) {
+            // Save previous block if any
+            if let speaker = currentSpeaker, !currentTextLines.isEmpty {
                     let text = currentTextLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                     if !text.isEmpty {
                         let block = TranscriptBlock(
@@ -415,7 +419,8 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
             }
         }
         
-        return transcriptLines.isEmpty ? nil : transcriptLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return transcriptLines.isEmpty ? nil :
+            transcriptLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     /// Load transcript blocks for a meeting (block format)

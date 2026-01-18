@@ -23,7 +23,8 @@ struct ResumeControlPane: View {
         // Check segment-based refinement
         let hasRefinedSegments = meeting.transcriptSegments.contains(where: { $0.isRefined })
         // Check meeting-level refinement (old format)
-        let hasMeetingLevelRefinement = meeting.isRefined || meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil
+        let hasMeetingLevelRefinement =
+            meeting.isRefined || meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil
         return hasRefinedSegments || hasMeetingLevelRefinement
     }
     
@@ -67,17 +68,20 @@ struct ResumeControlPane: View {
                     .frame(height: 20)
             }
             
-            // Resume button - always visible, flat icon style
-            Button(action: {
+        // Resume button - always visible, flat icon style
+        Button(
+            action: {
                 viewModel.resumeRecording(for: meeting)
-            }) {
+            },
+            label: {
                 Image(systemName: "record.circle")
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(Color.primary.opacity(0.5))
             }
-            .buttonStyle(.plain)
-            .disabled(viewModel.activeRecordingSession != nil)
-            .opacity(viewModel.activeRecordingSession != nil ? 0.3 : 1.0)
+        )
+        .buttonStyle(.plain)
+        .disabled(viewModel.activeRecordingSession != nil)
+        .opacity(viewModel.activeRecordingSession != nil ? 0.3 : 1.0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

@@ -43,9 +43,11 @@ final class TranscriptProcessor {
             "\\(breathing\\)",
             
             // General patterns for Whisper sound descriptions
-            "\\([^)]*\\b\\w+ing\\b[^)]*\\)",  // Any parenthetical with -ing word (cheering, wailing, ringing, etc.)
-            "\\([^)]*\\b(whistle|siren|bell|chime|horn|alarm|beep|buzz|click|bang|crash|thud)\\b[^)]*\\)",  // Sound words
-            "\\([^)]*\\b(audience|crowd|people|someone|something)\\b[^)]*\\)",  // Generic subjects often in annotations
+            "\\([^)]*\\b\\w+ing\\b[^)]*\\)",  // Any parenthetical with -ing word
+            // Sound words (whistle, siren, bell, etc.)
+            "\\([^)]*\\b(whistle|siren|bell|chime|horn|alarm|beep|buzz|click|bang|crash|thud)\\b[^)]*\\)",
+            // Generic subjects often in annotations
+            "\\([^)]*\\b(audience|crowd|people|someone|something)\\b[^)]*\\)",
             
             // Bracketed annotations
             "\\[.*?\\]",  // Any bracketed annotation (non-greedy)
@@ -189,7 +191,9 @@ final class TranscriptProcessor {
         if words.count < 3 {
             // Allow short segments that contain actual content words
             // But filter common filler words and noise artifacts
-            let fillerWords: Set<String> = ["uh", "um", "hmm", "ah", "eh", "oh", "huh", "mhm", "mmm", "yeah", "yep", "nope", "okay"]
+            let fillerWords: Set<String> = [
+                "uh", "um", "hmm", "ah", "eh", "oh", "huh", "mhm", "mmm", "yeah", "yep", "nope", "okay"
+            ]
             let hasOnlyFiller = words.allSatisfy { fillerWords.contains($0) }
             if hasOnlyFiller {
                 return true

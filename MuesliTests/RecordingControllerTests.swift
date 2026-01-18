@@ -34,7 +34,8 @@ final class RecordingControllerTests: XCTestCase {
             transcriptionCoordinator: transcriptionCoordinator,
             echoCancellationService: echoCancellationService,
             preferencesManager: preferencesManager,
-            microphoneManager: microphoneManager
+            microphoneManager: microphoneManager,
+            exportService: ExportService()
         )
     }
     

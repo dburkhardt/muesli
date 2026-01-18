@@ -390,4 +390,373 @@ final class PermissionManagerTests: XCTestCase {
         
         // Then: Should handle correctly (no crash)
     }
+    
+    // MARK: - Awaiting Settings Tests (Jan 18, 2026 Fix)
+    
+    func testMarkAwaitingScreenRecordingFromSettings_SetsFlag() {
+        // Given: Manager with awaiting flag not set
+        XCTAssertFalse(permissionManager.awaitingScreenRecordingFromSettings)
+        
+        // When: Marking as awaiting from settings
+        permissionManager.markAwaitingScreenRecordingFromSettings()
+        
+        // Then: Flag should be set to true
+        XCTAssertTrue(permissionManager.awaitingScreenRecordingFromSettings)
+    }
+    
+    func testMarkAwaitingMicrophoneFromSettings_SetsFlag() {
+        // Given: Manager with awaiting flag not set
+        XCTAssertFalse(permissionManager.awaitingMicrophoneFromSettings)
+        
+        // When: Marking as awaiting from settings
+        permissionManager.markAwaitingMicrophoneFromSettings()
+        
+        // Then: Flag should be set to true
+        XCTAssertTrue(permissionManager.awaitingMicrophoneFromSettings)
+    }
+    
+    func testAwaitingFlags_InitiallyFalse() {
+        // Given: Fresh permission manager
+        let manager = PermissionManager()
+        
+        // Then: Both awaiting flags should be false by default
+        XCTAssertFalse(manager.awaitingScreenRecordingFromSettings)
+        XCTAssertFalse(manager.awaitingMicrophoneFromSettings)
+    }
+    
+    func testAwaitingFlags_AreIndependent() {
+        // Given: Manager
+        
+        // When: Setting only screen recording awaiting flag
+        permissionManager.markAwaitingScreenRecordingFromSettings()
+        
+        // Then: Screen recording flag should be true, microphone should be false
+        XCTAssertTrue(permissionManager.awaitingScreenRecordingFromSettings)
+        XCTAssertFalse(permissionManager.awaitingMicrophoneFromSettings)
+        
+        // When: Also setting microphone awaiting flag
+        permissionManager.markAwaitingMicrophoneFromSettings()
+        
+        // Then: Both should be true
+        XCTAssertTrue(permissionManager.awaitingScreenRecordingFromSettings)
+        XCTAssertTrue(permissionManager.awaitingMicrophoneFromSettings)
+    }
+    
+    func testVerifyScreenRecordingAfterRequest_ReturnsAsyncResult() async {
+        // Given: Test environment (async always returns false)
+        
+        // When: Verifying screen recording after request
+        let result = await permissionManager.verifyScreenRecordingAfterRequest()
+        
+        // Then: Should return false in test environment
+        XCTAssertFalse(result)
+    }
+    
+    func testVerifyScreenRecordingAfterRequest_UpdatesCachedState() async {
+        // Given: Manager with cached value set to true
+        permissionManager.screenRecordingGranted = true
+        
+        // When: Verifying (returns false in test environment)
+        _ = await permissionManager.verifyScreenRecordingAfterRequest()
+        
+        // Then: Cached state should be updated to match result (false)
+        XCTAssertFalse(permissionManager.screenRecordingGranted)
+    }
+    
+    func testVerifyScreenRecordingAfterRequest_DoesNotAffectMicrophoneState() async {
+        // Given: Manager with microphone granted set to true
+        permissionManager.microphoneGranted = true
+        
+        // When: Verifying screen recording
+        _ = await permissionManager.verifyScreenRecordingAfterRequest()
+        
+        // Then: Microphone state should be unchanged
+        XCTAssertTrue(permissionManager.microphoneGranted)
+    }
+    
+    // MARK: - Optimistic OR Pattern Tests (Jan 18, 2026 Fix)
+    
+    func testRefreshPermissions_UsesOptimisticOR_WhenCacheTrue() {
+        // Given: Cache is already true (from a previous async check)
+        permissionManager.screenRecordingGranted = true
+        
+        // When: refreshPermissions() is called
+        // (CGPreflightScreenCaptureAccess may return false - it's unreliable)
+        let (screen, _) = permissionManager.refreshPermissions()
+        
+        // Then: Should remain true (optimistic OR: preflight || cached)
+        // This is the key fix: once true, stays true
+        XCTAssertTrue(screen)
+        XCTAssertTrue(permissionManager.screenRecordingGranted)
+    }
+    
+    func testRefreshPermissions_PreservesCachedTrueValue() {
+        // Given: Cache is true
+        permissionManager.screenRecordingGranted = true
+        
+        // When: Calling refresh multiple times
+        for _ in 0..<5 {
+            _ = permissionManager.refreshPermissions()
+        }
+        
+        // Then: Should still be true (cached value preserved)
+        XCTAssertTrue(permissionManager.screenRecordingGranted)
+    }
+    
+    func testRefreshPermissions_StartsFromFalse_StaysFalse_InTestEnvironment() {
+        // Given: Cache is false initially
+        permissionManager.screenRecordingGranted = false
+        
+        // When: refreshPermissions() is called
+        let (screen, _) = permissionManager.refreshPermissions()
+        
+        // Then: Should remain false (preflight returns false in test, cache is false)
+        // In test environment, CGPreflightScreenCaptureAccess returns false
+        XCTAssertFalse(screen)
+    }
+    
+    func testRefreshPermissions_MicrophoneAlwaysUsesSystemCheck() {
+        // Given: Cache set to true (but system check will return false in tests)
+        permissionManager.microphoneGranted = true
+        
+        // When: refreshPermissions() is called
+        let (_, mic) = permissionManager.refreshPermissions()
+        
+        // Then: Microphone should use system check (always false in test environment)
+        // Unlike screen recording, microphone doesn't use optimistic OR - it's always reliable
+        XCTAssertFalse(mic)
+    }
+    
+    func testRefreshPermissions_ReturnsUpdatedValues() {
+        // Given: Initial state
+        permissionManager.screenRecordingGranted = true
+        permissionManager.microphoneGranted = false
+        
+        // When: refreshPermissions() is called
+        let (screen, mic) = permissionManager.refreshPermissions()
+        
+        // Then: Should return the updated values
+        XCTAssertTrue(screen) // Preserved via optimistic OR
+        XCTAssertFalse(mic) // System check
+    }
+    
+    // MARK: - Bundle ID Logging Test
+    
+    func testInit_LogsBundleID() {
+        // Given/When: Creating a new permission manager
+        // The init() logs the bundle ID via print()
+        let manager = PermissionManager()
+        
+        // Then: Manager should be created successfully (log output verified manually)
+        // This documents that bundle ID is logged for TCC debugging
+        XCTAssertNotNil(manager)
+    }
+    
+    // MARK: - handleDidBecomeActive Tests (Jan 18, 2026 Fix)
+    
+    func testHandleDidBecomeActive_WhenOnboardingComplete_RefreshesAsync() async {
+        // Given: Onboarding completed
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.hasCompletedOnboarding)
+        
+        // When: App becomes active
+        await permissionManager.handleDidBecomeActive()
+        
+        // Then: Should have called async refresh (in test env, returns false)
+        // The method executes the hasCompletedOnboarding branch
+        XCTAssertFalse(permissionManager.screenRecordingGranted)
+        
+        // Cleanup
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
+    }
+    
+    func testHandleDidBecomeActive_WhenWelcomeScreen_UsesSyncCheckOnly() async {
+        // Given: On welcome screen (step 0), onboarding not complete
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.set(0, forKey: AppStorageKeys.onboardingCurrentStep)
+        
+        // When: App becomes active
+        await permissionManager.handleDidBecomeActive()
+        
+        // Then: Should have only used sync check (no async check that triggers dialog)
+        // This verifies the strict guard for welcome screen
+        XCTAssertFalse(permissionManager.screenRecordingGranted)
+        
+        // Cleanup
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
+    }
+    
+    func testHandleDidBecomeActive_WhenAwaitingScreenRecordingFromSettings_ChecksAndNotifies() async {
+        // Given: User clicked "Open Settings" for screen recording
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.set(1, forKey: AppStorageKeys.onboardingCurrentStep) // On screen recording screen
+        permissionManager.awaitingScreenRecordingFromSettings = true
+        
+        var callbackCalled = false
+        permissionManager.permissionDidChange = { _, _ in
+            callbackCalled = true
+        }
+        
+        // When: App becomes active (user returned from Settings)
+        await permissionManager.handleDidBecomeActive()
+        
+        // Then: Should have checked permission and called callback
+        XCTAssertFalse(permissionManager.awaitingScreenRecordingFromSettings, "Flag should be cleared")
+        XCTAssertTrue(callbackCalled, "Callback should have been called")
+        
+        // Cleanup
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
+    }
+    
+    func testHandleDidBecomeActive_WhenAwaitingMicrophoneFromSettings_ChecksAndNotifies() async {
+        // Given: User clicked "Open Settings" for microphone
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.set(2, forKey: AppStorageKeys.onboardingCurrentStep) // On microphone screen
+        permissionManager.awaitingMicrophoneFromSettings = true
+        
+        var callbackCalled = false
+        permissionManager.permissionDidChange = { _, _ in
+            callbackCalled = true
+        }
+        
+        // When: App becomes active (user returned from Settings)
+        await permissionManager.handleDidBecomeActive()
+        
+        // Then: Should have checked permission and called callback
+        XCTAssertFalse(permissionManager.awaitingMicrophoneFromSettings, "Flag should be cleared")
+        XCTAssertTrue(callbackCalled, "Callback should have been called")
+        
+        // Cleanup
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
+    }
+    
+    func testHandleDidBecomeActive_WhenOnPermissionScreenNotAwaiting_UsesSyncCheck() async {
+        // Given: On permission screen but not awaiting (e.g., just navigated there)
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.set(1, forKey: AppStorageKeys.onboardingCurrentStep)
+        permissionManager.awaitingScreenRecordingFromSettings = false
+        permissionManager.awaitingMicrophoneFromSettings = false
+        
+        // When: App becomes active
+        await permissionManager.handleDidBecomeActive()
+        
+        // Then: Should have used sync check only (else branch)
+        XCTAssertFalse(permissionManager.screenRecordingGranted)
+        
+        // Cleanup
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
+    }
+    
+    // MARK: - checkAndNotifyPermissionChangesSynchronously Tests
+    
+    func testCheckAndNotifyPermissionChangesSynchronously_NoChange_NoCallback() {
+        // Given: Permissions unchanged
+        permissionManager.screenRecordingGranted = false
+        permissionManager.microphoneGranted = false
+        
+        var callbackCalled = false
+        permissionManager.permissionDidChange = { _, _ in
+            callbackCalled = true
+        }
+        
+        // When: Checking permissions (in test env, will remain false)
+        permissionManager.checkAndNotifyPermissionChangesSynchronously()
+        
+        // Then: Callback should NOT be called (no change)
+        XCTAssertFalse(callbackCalled)
+    }
+    
+    func testCheckAndNotifyPermissionChangesSynchronously_WithChange_CallsCallback() {
+        // Given: Screen recording was true (cache), will become different after refresh
+        // Note: In test environment, CGPreflightScreenCaptureAccess returns false
+        // But with optimistic OR, if cache is true, it stays true
+        permissionManager.screenRecordingGranted = true
+        permissionManager.microphoneGranted = true // Will change to false (system check)
+        
+        var callbackValues: (Bool, Bool)?
+        permissionManager.permissionDidChange = { screen, mic in
+            callbackValues = (screen, mic)
+        }
+        
+        // When: Checking permissions
+        permissionManager.checkAndNotifyPermissionChangesSynchronously()
+        
+        // Then: Callback should be called if microphone changed
+        // (microphone check always uses system check, not cache)
+        if permissionManager.hasMicrophonePermission != true {
+            XCTAssertNotNil(callbackValues, "Callback should be called when permission changes")
+        }
+    }
+    
+    func testCheckAndNotifyPermissionChangesSynchronously_UpdatesCachedState() {
+        // Given: Initial state
+        permissionManager.screenRecordingGranted = true
+        
+        // When: Checking permissions
+        permissionManager.checkAndNotifyPermissionChangesSynchronously()
+        
+        // Then: Should have updated state
+        // Due to optimistic OR, screen recording stays true
+        XCTAssertTrue(permissionManager.screenRecordingGranted)
+    }
+    
+    // MARK: - Step-Based Guard Comprehensive Tests
+    
+    func testStepBasedGuard_Step0_NeverTriggersAsyncCheck() async {
+        // Given: Welcome screen
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.set(0, forKey: AppStorageKeys.onboardingCurrentStep)
+        
+        // Record initial state
+        let initialScreenRecording = permissionManager.screenRecordingGranted
+        
+        // When: Calling handleDidBecomeActive multiple times
+        for _ in 0..<3 {
+            await permissionManager.handleDidBecomeActive()
+        }
+        
+        // Then: State should be consistent (sync check doesn't change it in test env)
+        XCTAssertEqual(permissionManager.screenRecordingGranted, initialScreenRecording)
+        
+        // Cleanup
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
+    }
+    
+    func testStepBasedGuard_Step1_WithoutAwaiting_UsesSyncCheck() async {
+        // Given: On screen recording permission screen, not awaiting
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.set(1, forKey: AppStorageKeys.onboardingCurrentStep)
+        permissionManager.awaitingScreenRecordingFromSettings = false
+        
+        // When: App becomes active
+        await permissionManager.handleDidBecomeActive()
+        
+        // Then: Should use sync check (else branch)
+        XCTAssertFalse(permissionManager.awaitingScreenRecordingFromSettings)
+        
+        // Cleanup
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
+    }
+    
+    func testStepBasedGuard_Step2_WithoutAwaiting_UsesSyncCheck() async {
+        // Given: On microphone permission screen, not awaiting
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.set(2, forKey: AppStorageKeys.onboardingCurrentStep)
+        permissionManager.awaitingMicrophoneFromSettings = false
+        
+        // When: App becomes active
+        await permissionManager.handleDidBecomeActive()
+        
+        // Then: Should use sync check (else branch)
+        XCTAssertFalse(permissionManager.awaitingMicrophoneFromSettings)
+        
+        // Cleanup
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
+    }
 }

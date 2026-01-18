@@ -28,6 +28,14 @@ enum AppStorageKeys {
     /// Audio chunk duration for transcription (2-10 seconds)
     static let audioChunkDuration = "audioChunkDuration"
     
+    // MARK: - Export
+    
+    /// Whether automatic export is enabled
+    static let exportEnabled = "exportEnabled"
+    
+    /// Custom export directory (if not using default)
+    static let exportDirectory = "exportDirectory"
+    
     // MARK: - WhisperKit Models
     
     /// Active WhisperKit model identifier

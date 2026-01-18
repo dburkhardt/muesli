@@ -137,7 +137,8 @@ final class LLMStitchingService {
     
     private func buildStitchingPrompt(_ chunks: [String]) -> String {
         """
-        Merge these overlapping transcript chunks into coherent text. Remove any duplicated words or phrases at the boundaries:
+        Merge these overlapping transcript chunks into coherent text. \
+        Remove any duplicated words or phrases at the boundaries:
         
         \(chunks.enumerated().map { "Chunk \($0 + 1): \($1)" }.joined(separator: "\n\n"))
         

@@ -132,7 +132,8 @@ final class PreferencesManager {
     var audioChunkDuration: TimeInterval {
         get {
             // Check if key exists to distinguish "not set" from "invalid value"
-            guard let savedObject = UserDefaults.standard.object(forKey: AppStorageKeys.audioChunkDuration) as? Double else {
+            guard let savedObject = UserDefaults.standard.object(forKey: AppStorageKeys.audioChunkDuration) as? Double
+            else {
                 // Key not set, return default
                 return 5.0
             }
@@ -154,6 +155,46 @@ final class PreferencesManager {
     
     /// Callback when audio chunk duration changes
     var audioChunkDurationDidChange: ((TimeInterval) -> Void)?
+    
+    // MARK: - Export Settings
+    
+    /// Whether automatic export is enabled
+    var exportEnabled: Bool {
+        get {
+            // Default to true if not explicitly set
+            if UserDefaults.standard.object(forKey: AppStorageKeys.exportEnabled) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.exportEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.exportEnabled)
+        }
+    }
+    
+    /// Export directory for external tool access
+    var exportDirectory: URL {
+        get {
+            if let savedPath = UserDefaults.standard.string(forKey: AppStorageKeys.exportDirectory) {
+                return URL(fileURLWithPath: savedPath)
+            }
+            return Self.defaultExportDirectory
+        }
+        set {
+            UserDefaults.standard.set(newValue.path, forKey: AppStorageKeys.exportDirectory)
+        }
+    }
+    
+    /// Default export directory: ~/Library/Application Support/Muesli/Exports
+    static var defaultExportDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Muesli/Exports")
+    }
+    
+    /// Reset export directory to default
+    func resetExportDirectory() {
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.exportDirectory)
+    }
     
     // MARK: - Initialization
 
