@@ -80,7 +80,12 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Calculate samples based on chunk duration
         minSamplesForProcessing = sampleRate * Int(self.chunkDuration)
-        overlapSamples = AudioConfiguration.overlapSamples
+        
+        // Calculate overlap samples maintaining the standard ratio (1.5s / 5.0s = 30%)
+        // This ensures consistent overlap behavior across different chunk durations
+        let overlapRatio = AudioConfiguration.transcriptionOverlapDuration / AudioConfiguration.transcriptionChunkDuration
+        let overlapDuration = self.chunkDuration * overlapRatio
+        overlapSamples = sampleRate * Int(overlapDuration)
     }
     
     // MARK: - Setup
