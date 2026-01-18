@@ -268,6 +268,49 @@ final class PolishFeaturesTests: XCTestCase {
         XCTAssertEqual(processor.blocks.count, 0, "Repetitive text with punctuation should be filtered")
     }
     
+    func testTranscriptProcessorFiltersHyphenatedHallucinations() {
+        let processor = TranscriptProcessor()
+        
+        // Test hyphenated hallucinations with and without punctuation
+        let hyphenatedTests = [
+            "bye-bye",
+            "Bye-bye.",
+            "Bye-bye!",
+            "bye-bye?",
+        ]
+        
+        for text in hyphenatedTests {
+            processor.reset()
+            let segment = TranscriptionService.TranscriptSegment(
+                text: text,
+                timestamp: 1.0,
+                speaker: .them
+            )
+            
+            processor.processSegment(segment)
+            
+            // Should be filtered despite having hyphens
+            XCTAssertEqual(processor.blocks.count, 0, "'\(text)' should be filtered (hyphenated hallucination)")
+        }
+    }
+    
+    func testTranscriptProcessorPreservesHyphensInValidContent() {
+        let processor = TranscriptProcessor()
+        
+        // Valid content with hyphens should NOT be filtered
+        let validSegment = TranscriptionService.TranscriptSegment(
+            text: "We need a follow-up meeting for the next quarter.",
+            timestamp: 1.0,
+            speaker: .me
+        )
+        
+        processor.processSegment(validSegment)
+        
+        // Valid content with hyphens should create a block
+        XCTAssertEqual(processor.blocks.count, 1)
+        XCTAssertEqual(processor.blocks.first?.text, "We need a follow-up meeting for the next quarter.")
+    }
+    
     func testTranscriptProcessorAllowsValidContent() {
         let processor = TranscriptProcessor()
         

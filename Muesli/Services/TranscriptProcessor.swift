@@ -177,12 +177,13 @@ final class TranscriptProcessor {
     private func isHallucination(_ text: String) -> Bool {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Strip punctuation for comparison (but keep spaces between words)
-        let punctuation = CharacterSet.punctuationCharacters
-        let noPunctuation = lower.components(separatedBy: punctuation).joined()
-        let cleanText = noPunctuation.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip end-of-sentence punctuation but preserve hyphens (for "bye-bye", etc.)
+        // Only remove: . , ! ? ; : " ' ( ) [ ] { }
+        let endPunctuation = CharacterSet(charactersIn: ".,!?;:\"'()[]{}…")
+        let cleanedComponents = lower.components(separatedBy: endPunctuation)
+        let cleanText = cleanedComponents.joined().trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Split into words (now without punctuation)
+        // Split into words (punctuation removed but hyphens preserved)
         let words = cleanText.split(separator: " ").map { String($0) }
         
         // Filter very short segments (< 3 words) - often noise at recording boundaries
@@ -223,7 +224,7 @@ final class TranscriptProcessor {
             "a",
         ]
         
-        // Check against clean text without punctuation
+        // Check against clean text (hyphens preserved)
         if hallucinations.contains(cleanText) {
             return true
         }
