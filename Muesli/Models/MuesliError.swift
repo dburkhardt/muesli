@@ -130,7 +130,10 @@ enum MuesliError: Error, LocalizedError {
     var recoverySuggestion: String? {
         switch self {
         case .screenRecordingDenied:
-            return "Please grant Screen Recording permission in System Settings > Privacy & Security > Screen & System Audio Recording."
+            return """
+                Please grant Screen Recording permission in System Settings > Privacy & Security > \
+                Screen & System Audio Recording.
+                """
         case .microphoneDenied:
             return "Please grant Microphone permission in System Settings > Privacy & Security > Microphone."
         case .permissionsMissing:

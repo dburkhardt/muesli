@@ -15,7 +15,8 @@ final class MuesliViewModelTests: XCTestCase {
     private var testDefaults: UserDefaults!
     
     /// Test output directory (avoids Documents folder permission prompt)
-    private static let testOutputDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("MuesliTests")
+    private static let testOutputDirectory =
+        FileManager.default.temporaryDirectory.appendingPathComponent("MuesliTests")
     
     /// Keys that need to be cleaned up after tests
     private static let userDefaultsKeysToClean = [

@@ -334,7 +334,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             // Transcribe the audio chunk
             let results = try await whisperKit.transcribe(audioArray: samples)
             
-            guard let result = results.first, !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard let result = results.first,
+                  !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return
             }
             

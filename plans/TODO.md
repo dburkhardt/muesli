@@ -52,11 +52,36 @@ Each item should include:
 - Description: Implement automatic speaker detection to identify and label different speakers in the transcript
 - Notes: Research speaker diarization techniques compatible with WhisperKit or as post-processing step
 
-**[Feature]** [Medium] Add database structure for searchable meeting notes
-- Description: Create a database structure that makes searching meeting notes possible, with MCP server integration
-- Notes: Consider SQLite or other embedded database options for indexing transcripts and metadata
-- MCP Integration: Expose transcript data via Model Context Protocol so other local tools can query and access meeting information
-- Related: Research MCP server implementation patterns for Swift
+**[Feature]** [Medium] Folder-backed integration for external tools (MCP-style)
+- Description: Export/materialize Muesli content (transcripts + metadata) into a structured folder tree that other apps can access
+- Architecture:
+  - Phase 1: Folder Export (Priority: High)
+    - Export transcripts and metadata to a well-structured folder tree
+    - Format: ~/Library/Application Support/Muesli/Exports/ or user-configurable location
+    - Other apps get read-only access to this "working set"
+    - Serves as knowledge source without tight coupling
+    - Other apps write their own artifacts elsewhere (e.g., /cowork/exports/)
+  - Phase 2: Local API (Optional, Future)
+    - Add local HTTP API or plugin for richer queries
+    - Enables search, filters, incremental sync
+    - Folder export remains as "escape hatch" and audit trail
+- Benefits:
+  - Loose coupling - apps treat Muesli as read-only knowledge source
+  - Transparency - user can inspect exported data
+  - No complex MCP server implementation needed initially
+  - Folder serves as durable contract between apps
+- Notes: Prefer folder-backed approach over tight API coupling for initial implementation
+- Related: FileOutputService.swift, MeetingHistoryManager.swift, export formats
+
+**[Feature]** [Low] Database structure for searchable meeting notes (Phase 2)
+- Description: Add optional SQLite database for advanced search and querying capabilities
+- Notes: Build on top of folder export architecture
+  - Primary data source: folder exports (canonical)
+  - Database: derived index for performance (can be rebuilt)
+  - Enables: full-text search, date ranges, speaker filtering, tag-based queries
+  - Consider exposing via local HTTP API for other tools
+- Prerequisites: Folder export integration (above) must be complete first
+- Related: SQLite, FileOutputService.swift, potential future MCP server
 
 **[Feature]** [Low] Create Google Drive integration for cloud syncing
 - Description: Add integration into Google Drive to enable cloud syncing of recordings and transcripts

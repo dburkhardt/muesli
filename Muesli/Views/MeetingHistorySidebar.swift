@@ -99,7 +99,8 @@ struct MeetingHistorySidebar: View {
                     Section {
                         ActiveRecordingItemView(
                             session: activeSession,
-                            isSelected: historyManager.selectedMeeting == nil && viewModel.activeRecordingSession != nil,
+                            isSelected: historyManager.selectedMeeting == nil &&
+                                viewModel.activeRecordingSession != nil,
                             onTap: {
                                 // Clear selected meeting to show live recording
                                 historyManager.clearSelection()

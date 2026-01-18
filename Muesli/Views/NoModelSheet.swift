@@ -19,7 +19,12 @@ struct NoModelSheet: View {
                 .font(.title2.bold())
             
             // Description
-            Text("Muesli needs a transcription model to generate live transcripts. You can download one now or record audio-only.")
+            Text(
+                """
+                Muesli needs a transcription model to generate live transcripts. \
+                You can download one now or record audio-only.
+                """
+            )
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 320)
