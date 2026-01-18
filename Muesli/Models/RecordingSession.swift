@@ -6,7 +6,6 @@ import SwiftUI
 @Observable
 @MainActor
 final class RecordingSession: Identifiable {
-    
     // MARK: - Identity
     
     let id: UUID
@@ -251,7 +250,7 @@ final class RecordingSession: Identifiable {
     /// Also processes the segment into merged blocks for the new display
     func appendTranscriptSegment(_ segment: TranscriptionService.TranscriptSegment) {
         // Append to raw text (for file saving - keeps original format)
-        let timestamp = formatTimestamp(segment.timestamp)
+        let timestamp = TimeFormatting.formatTimestamp(segment.timestamp, style: .shortOnly)
         let line = "[\(timestamp)] **\(segment.speaker.rawValue)**: \(segment.text)\n"
         transcriptText += line
         
@@ -278,13 +277,6 @@ final class RecordingSession: Identifiable {
         transcriptText = ""
         transcriptBlocks = []
         transcriptProcessor.reset()
-    }
-    
-    /// Format a timestamp as MM:SS
-    private func formatTimestamp(_ seconds: TimeInterval) -> String {
-        let mins = Int(seconds) / 60
-        let secs = Int(seconds) % 60
-        return String(format: "%02d:%02d", mins, secs)
     }
     
     // MARK: - Error Handling

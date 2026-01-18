@@ -577,7 +577,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         } else {
             for block in blocks {
                 let speakerLabel = block.speaker == .me ? "**Me**" : "**Them**"
-                let timestamp = formatTimestamp(block.startTimestamp)
+                let timestamp = TimeFormatting.formatTimestamp(block.startTimestamp, style: .compact)
                 
                 markdown += """
                 
@@ -590,20 +590,6 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         }
         
         try markdown.write(to: transcriptURL, atomically: true, encoding: .utf8)
-    }
-    
-    /// Format a timestamp for display (e.g., "2:34" or "1:02:15")
-    private func formatTimestamp(_ seconds: TimeInterval) -> String {
-        let totalSeconds = Int(seconds)
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let secs = totalSeconds % 60
-        
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, secs)
-        } else {
-            return String(format: "%d:%02d", minutes, secs)
-        }
     }
     
     // MARK: - Private Helpers

@@ -1,13 +1,11 @@
 import Foundation
 
-
 /// Coordinates transcription model lifecycle and audio buffering
 /// Decouples transcription from recording - recording can start immediately,
 /// while transcription loads asynchronously
 @Observable
 @MainActor
 final class TranscriptionCoordinator {
-    
     // MARK: - Types
     
     /// Model loading and readiness state
@@ -136,7 +134,6 @@ final class TranscriptionCoordinator {
         // Validate model
         guard modelManager.validateModel(activeModel),
               let modelPath = modelManager.pathForModel(activeModel) else {
-            
             // Only mark corrupted on validation errors
             modelManager.markModelCorrupted(activeModel)
             
@@ -246,7 +243,6 @@ final class TranscriptionCoordinator {
     
     /// Buffer system audio while model loads, or forward directly if model ready
     func bufferSystemAudio(_ samples: [Float]) {
-        
         // If model is ready and initialized, forward directly to TranscriptionService
         if modelState.isReady && isInitialized {
             transcriptionService.appendSystemAudio(samples)
@@ -283,7 +279,6 @@ final class TranscriptionCoordinator {
     
     /// Buffer microphone audio while model loads, or forward directly if model ready
     func bufferMicrophoneAudio(_ samples: [Float]) {
-        
         // If model is ready and initialized, forward directly to TranscriptionService
         if modelState.isReady && isInitialized {
             transcriptionService.appendMicrophoneAudio(samples)
@@ -320,7 +315,6 @@ final class TranscriptionCoordinator {
     
     /// Process buffered audio when model becomes ready
     func processBufferedAudio() {
-        
         guard modelState.isReady, isInitialized else { return }
         
         // Process buffered system audio

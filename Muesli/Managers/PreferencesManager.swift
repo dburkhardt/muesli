@@ -1,13 +1,12 @@
 import Foundation
-import ServiceManagement
 import os.lock
+import ServiceManagement
 
 /// Manages app preferences with UserDefaults persistence
 /// Extracted from MuesliViewModel as part of the god object refactoring
 @Observable
 @MainActor
 final class PreferencesManager {
-    
     // MARK: - Output Directory
     
     /// Output directory for recordings

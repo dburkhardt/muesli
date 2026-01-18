@@ -1,5 +1,5 @@
-import Foundation
 @preconcurrency import AVFoundation
+import Foundation
 @preconcurrency import ScreenCaptureKit
 
 /// Manages app permissions for screen recording and microphone access
@@ -7,7 +7,6 @@ import Foundation
 @Observable
 @MainActor
 final class PermissionManager: PermissionManagerProtocol {
-    
     // MARK: - Observable State
     
     /// Cached screen recording permission state (updated via refresh)

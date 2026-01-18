@@ -1,5 +1,5 @@
-import Foundation
 import AppKit
+import Foundation
 import Hub
 import MLXLLM
 import MLXLMCommon
@@ -277,7 +277,6 @@ final class LLMManager: LLMManagerProtocol {
             }
             
             saveDownloadedModels()
-            
         } catch {
             downloadStates[model] = .failed(error.localizedDescription)
         }
@@ -310,7 +309,6 @@ final class LLMManager: LLMManagerProtocol {
             activeModel = model
             downloadStates[model] = .completed
             UserDefaults.standard.set(model.rawValue, forKey: AppStorageKeys.activeLLMModel)
-            
         } catch {
             downloadStates[model] = .failed("Failed to load model: \(error.localizedDescription)")
             throw error

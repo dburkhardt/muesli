@@ -3,7 +3,6 @@ import Foundation
 
 /// Utility for copying transcript content to system clipboard
 enum ClipboardHelper {
-    
     /// Copy text to clipboard
     /// - Parameter text: The text to copy
     /// - Returns: True if successful
@@ -22,7 +21,7 @@ enum ClipboardHelper {
         
         for block in blocks {
             // Format timestamp as HH:MM:SS or MM:SS
-            let timestamp = formatTimestamp(block.startTimestamp)
+            let timestamp = TimeFormatting.formatTimestamp(block.startTimestamp, style: .standard)
             
             // Format speaker
             let speaker: String
@@ -48,7 +47,7 @@ enum ClipboardHelper {
         
         for block in blocks {
             // Format timestamp as HH:MM:SS or MM:SS
-            let timestamp = formatTimestamp(block.startTimestamp)
+            let timestamp = TimeFormatting.formatTimestamp(block.startTimestamp, style: .standard)
             
             // Format speaker
             let speaker: String
@@ -64,20 +63,6 @@ enum ClipboardHelper {
         }
         
         return output.joined(separator: "\n\n")
-    }
-    
-    /// Format a timestamp as HH:MM:SS or MM:SS
-    private static func formatTimestamp(_ seconds: TimeInterval) -> String {
-        let totalSeconds = Int(seconds)
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let secs = totalSeconds % 60
-        
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, secs)
-        } else {
-            return String(format: "%02d:%02d", minutes, secs)
-        }
     }
     
     /// Copy transcript blocks as plain text

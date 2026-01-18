@@ -1,7 +1,6 @@
+import AppKit
 import Foundation
 import WhisperKit
-import AppKit
-
 
 /// Manages WhisperKit model downloading and storage
 @Observable
@@ -159,7 +158,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             .appendingPathComponent("models/argmaxinc/whisperkit-coreml")
             .appendingPathComponent(model.whisperKitName)
         
-        
         if FileManager.default.fileExists(atPath: modelDir.path) {
             return modelDir
         }
@@ -196,7 +194,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         let textDecoderExists = fm.fileExists(atPath: textDecoderPath.path)
         let textWeightsPath = textDecoderPath.appendingPathComponent("weights/weight.bin")
         let textWeightsExists = fm.fileExists(atPath: textWeightsPath.path)
-        
         
         guard audioEncoderExists else { return false }
         guard audioWeightsExists else { return false }

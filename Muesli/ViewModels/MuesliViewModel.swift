@@ -1,9 +1,9 @@
-import Foundation
-import SwiftUI
-import ScreenCaptureKit
 import CoreMedia
+import Foundation
 import os.lock
 import os.log
+import ScreenCaptureKit
+import SwiftUI
 
 /// Main ViewModel for the Muesli app
 /// Owns app-level state (permissions, detected apps) and services
@@ -11,7 +11,6 @@ import os.log
 @Observable
 @MainActor
 final class MuesliViewModel {
-    
     // MARK: - Logging
     
     private let logger = Logger(subsystem: "com.muesli.app", category: "MuesliViewModel")
@@ -415,7 +414,7 @@ final class MuesliViewModel {
         transcriptionCoordinator.setTranscriptionMode(transcriptionMode)
         
         // Wire up RecordingController callbacks to ViewModel state
-        self.recordingController.onSessionCompleted = { [weak self] session, outputDirectory in
+        self.recordingController.onSessionCompleted = { [weak self] _, outputDirectory in
             guard let self = self else { return }
             
             // Refresh history first to ensure the new meeting is available
@@ -706,7 +705,6 @@ final class MuesliViewModel {
                 
                 // Reload transcript from disk to refresh the UI
                 await loadTranscript(for: meeting)
-                
             } catch {
                 print("[MuesliViewModel] Reprocessing failed: \(error.localizedDescription)")
             }
@@ -747,7 +745,6 @@ final class MuesliViewModel {
             
             // Reload transcript from disk
             await loadTranscript(for: meeting)
-            
         } catch {
             print("[MuesliViewModel] Reprocessing failed: \(error.localizedDescription)")
         }
@@ -827,11 +824,11 @@ final class MuesliViewModel {
                     (segment.refinedBlocks ?? segment.originalBlocks) :
                     segment.originalBlocks
                 
-                for block in blocksToUse {
-                    let speakerLabel = block.speaker == .me ? "**Me**" : "**Them**"
-                    let timestamp = formatTimestamp(block.startTimestamp)
-                    
-                    markdown += """
+            for block in blocksToUse {
+                let speakerLabel = block.speaker == .me ? "**Me**" : "**Them**"
+                let timestamp = TimeFormatting.formatTimestamp(block.startTimestamp, style: .compact)
+                
+                markdown += """
                     
                     \(speakerLabel) _[\(timestamp)]_
                     
@@ -845,19 +842,4 @@ final class MuesliViewModel {
         let transcriptURL = directory.appendingPathComponent("transcript.md")
         try markdown.write(to: transcriptURL, atomically: true, encoding: .utf8)
     }
-    
-    /// Format a timestamp for display (e.g., "2:34" or "1:02:15")
-    private func formatTimestamp(_ seconds: TimeInterval) -> String {
-        let totalSeconds = Int(seconds)
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let secs = totalSeconds % 60
-        
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, secs)
-        } else {
-            return String(format: "%d:%02d", minutes, secs)
-        }
-    }
-    
 }

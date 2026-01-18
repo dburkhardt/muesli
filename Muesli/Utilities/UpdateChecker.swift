@@ -137,7 +137,6 @@ final class UpdateChecker {
             } else {
                 return .upToDate
             }
-            
         } catch let error as NSError {
             if error.domain == NSURLErrorDomain {
                 if error.code == NSURLErrorTimedOut {
@@ -223,7 +222,7 @@ final class UpdateChecker {
         // Split by dots and take first 3 components
         let components = cleanVersion.split(separator: ".").prefix(3)
         
-        let major = components.count > 0 ? Int(components[0].prefix(while: { $0.isNumber })) ?? 0 : 0
+        let major = !components.isEmpty ? Int(components[0].prefix(while: { $0.isNumber })) ?? 0 : 0
         let minor = components.count > 1 ? Int(components[1].prefix(while: { $0.isNumber })) ?? 0 : 0
         let patch = components.count > 2 ? Int(components[2].prefix(while: { $0.isNumber })) ?? 0 : 0
         

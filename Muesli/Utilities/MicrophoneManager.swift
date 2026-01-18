@@ -1,11 +1,10 @@
-import Foundation
 import AVFoundation
+import Foundation
 
 /// Manages microphone device enumeration and selection
 @MainActor
 @Observable
 final class MicrophoneManager: MicrophoneManagerProtocol {
-    
     // MARK: - Types
     
     struct MicrophoneDevice: Identifiable, Hashable {

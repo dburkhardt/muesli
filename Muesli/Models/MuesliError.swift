@@ -3,7 +3,6 @@ import Foundation
 /// Unified error type for the Muesli app
 /// Provides user-friendly error messages and recovery suggestions
 enum MuesliError: Error, LocalizedError {
-    
     // MARK: - Permission Errors
     
     /// Screen recording permission was not granted

@@ -13,7 +13,10 @@ echo ""
 
 # Clean previous coverage data
 rm -rf "${PROJECT_DIR}/DerivedData"
-rm -f "${PROJECT_DIR}/coverage-${TIMESTAMP}.txt"
+rm -f "${PROJECT_DIR}/.logs/coverage-${TIMESTAMP}.txt"
+
+# Ensure .logs directory exists
+mkdir -p "${PROJECT_DIR}/.logs"
 
 # Run tests with coverage enabled
 cd "$PROJECT_DIR"
@@ -24,7 +27,7 @@ xcodebuild \
   -destination 'platform=macOS' \
   -enableCodeCoverage YES \
   -derivedDataPath DerivedData \
-  test 2>&1 | tee "coverage-${TIMESTAMP}.txt"
+  test 2>&1 | tee ".logs/coverage-${TIMESTAMP}.txt"
 
 echo ""
 echo "📊 Generating coverage report..."
@@ -91,7 +94,7 @@ echo ""
 echo "📁 Generated files:"
 echo "  - coverage.json          - Machine-readable coverage data"
 echo "  - coverage-report.txt    - Text coverage report"
-echo "  - coverage-${TIMESTAMP}.txt - Full test output"
+echo "  - .logs/coverage-${TIMESTAMP}.txt - Full test output"
 echo ""
 echo "🔍 To view detailed coverage in Xcode:"
 echo "  1. Open Muesli.xcodeproj in Xcode"

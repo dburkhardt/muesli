@@ -26,7 +26,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 3. **Check in frequently** — confirm approach before significant work; report progress at milestones
 4. **Native patterns** — Swift 6 concurrency, `@Observable`, one type per file
 5. **UI principle** — "Granola-inspired": minimal, clean, fast
-6. **Track future work** — when asked to "add a todo" or "note this for later", add it to `TODO.md` and continue working without interruption
+6. **Track future work** — when asked to "add a todo" or "note this for later", add it to `plans/TODO.md` and continue working without interruption
 
 ## Commands
 
@@ -34,14 +34,14 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 ```bash
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 killall Muesli 2>/dev/null
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee "build-${TIMESTAMP}.txt"
+xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee ".logs/build-${TIMESTAMP}.txt"
 open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
 ```
 
 **For feature branches**, replace `Muesli` with `Muesli-<branch-suffix>` (see Branch Development below).
 
 **Other commands**:
-- Test: `xcodebuild ... test 2>&1 | tee "test-${TIMESTAMP}.txt"`
+- Test: `xcodebuild ... test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"`
 - Test with coverage: `./scripts/generate-coverage.sh`
 - Clean: `xcodebuild ... clean`
 - Reset permissions: `tccutil reset ScreenCapture com.muesli.app && tccutil reset Microphone com.muesli.app`

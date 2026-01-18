@@ -4,7 +4,6 @@ import Foundation
 /// Prevents invalid state transitions and ensures consistency
 @MainActor
 struct RecordingStateMachine {
-    
     // MARK: - State
     
     enum State: Equatable {

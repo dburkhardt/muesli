@@ -5,7 +5,6 @@ import Foundation
 @Observable
 @MainActor
 final class MeetingHistoryManager {
-    
     // MARK: - Dependencies
     
     private let meetingHistoryService: MeetingHistoryService

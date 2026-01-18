@@ -23,11 +23,18 @@ Carthage/Build/
 # Cursor/IDE
 .cursor/
 
-# Build and test logs
+# Build and test logs (stored in .logs/)
+.logs/
 build-*.txt
 test-*.txt
+coverage-*.txt
 *.profraw
 *.profdata
+
+# Coverage reports (generated files)
+coverage.json
+coverage-report.txt
+coverage-summary.md
 
 # Auto-generated website stats
 docs/download-stats.json

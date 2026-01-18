@@ -1,6 +1,6 @@
-import SwiftUI
-import Foundation
 import AppKit
+import Foundation
+import SwiftUI
 
 @main
 struct MuesliApp: App {
@@ -388,4 +388,3 @@ struct MenuBarIconView: View {
         return sourceImage
     }
 }
-

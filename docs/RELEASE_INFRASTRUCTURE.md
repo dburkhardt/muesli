@@ -336,7 +336,7 @@ Copy this to your release PR or issue:
 ### Post-Release
 - [ ] Announce release (if applicable)
 - [ ] Monitor for issues
-- [ ] Update TODO.md with next version plans
+- [ ] Update plans/TODO.md with next version plans
 ```
 
 ## Modern Tooling (2026)

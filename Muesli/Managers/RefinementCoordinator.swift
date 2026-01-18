@@ -5,7 +5,6 @@ import Foundation
 @Observable
 @MainActor
 final class RefinementCoordinator {
-    
     // MARK: - Dependencies
     
     private let llmManager: LLMManager
@@ -157,7 +156,6 @@ final class RefinementCoordinator {
                 
                 // Save to disk
                 saveRefinedTranscript(meeting, blocks: refinedBlocks)
-                
             } else if let text = meeting.transcript, !text.isEmpty {
                 print("[RefinementCoordinator] Refining plain text transcript")
                 // Store original before refining
@@ -183,7 +181,6 @@ final class RefinementCoordinator {
             
             // Clear refinement state
             meetingBeingRefined = nil
-            
         } catch {
             // Error is already set in refinementService
             print("[RefinementCoordinator] Refinement failed: \(error)")
@@ -230,7 +227,6 @@ final class RefinementCoordinator {
             
             // Update meeting transcript display
             updateMeetingTranscriptDisplay(meeting)
-            
         } catch {
             print("[RefinementCoordinator] Segment refinement failed: \(error)")
         }
