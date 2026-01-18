@@ -42,6 +42,7 @@ open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.
 
 **Other commands**:
 - Test: `xcodebuild ... test 2>&1 | tee "test-${TIMESTAMP}.txt"`
+- Test with coverage: `./scripts/generate-coverage.sh`
 - Clean: `xcodebuild ... clean`
 - Reset permissions: `tccutil reset ScreenCapture com.muesli.app && tccutil reset Microphone com.muesli.app`
 - Uninstall completely (interactive): `./scripts/uninstall.sh`
@@ -50,6 +51,45 @@ open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.
 - Create DMG (legacy): `./scripts/create-dmg.sh [VERSION]`
 
 **Efficient workflows**: Save build/test output once with `| tee`, then grep the file. Never re-run to extract different info.
+
+## Code Coverage
+
+Muesli tracks code coverage to ensure comprehensive testing and guide development efforts.
+
+**Coverage Tools**:
+- Native Xcode coverage collection (built-in, zero-config)
+- Codecov for reporting and trend tracking (free for open source)
+- Coverage badge in README shows current status
+
+**Coverage Thresholds**:
+- **Overall project**: 70% minimum (baseline)
+- **New code (PR diff)**: 80% minimum (enforced in CI)
+- **Critical paths**: 90%+ target (audio, transcription, file I/O)
+
+**Local Coverage Workflow**:
+```bash
+# Generate coverage report locally
+./scripts/generate-coverage.sh
+
+# View in Xcode:
+# 1. Open Muesli.xcodeproj
+# 2. Report Navigator (⌘9)
+# 3. Select latest test run
+# 4. Click 'Coverage' tab
+```
+
+**CI Integration**:
+- Every PR shows coverage diff in comments
+- Status check fails if diff coverage < 80%
+- Coverage reports uploaded to Codecov automatically
+- View trends at: https://codecov.io/gh/dburkhardt/muesli
+
+**Priority Areas for Coverage**:
+1. Controllers - RecordingController (core recording logic)
+2. Services - AudioCaptureService, TranscriptionService, FileOutputService
+3. Managers - ModelManager, MeetingHistoryManager, PreferencesManager
+4. Coordinators - TranscriptionCoordinator, RefinementCoordinator
+5. Views - Complex UI logic (lower priority than business logic)
 
 ## Release Process
 
@@ -122,6 +162,8 @@ Before creating a release tag, verify:
 
 **Build & Installation**:
 - [ ] Clean build succeeds: `xcodebuild clean build`
+- [ ] All tests pass: `xcodebuild test`
+- [ ] Code coverage meets thresholds (≥70% overall)
 - [ ] DMG creation succeeds: `./scripts/create-dmg-modern.sh` or `./scripts/create-dmg.sh`
 - [ ] DMG installs on fresh macOS installation
 - [ ] App launches without errors

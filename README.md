@@ -1,5 +1,7 @@
 # Muesli
 
+[![codecov](https://codecov.io/gh/dburkhardt/muesli/branch/main/graph/badge.svg)](https://codecov.io/gh/dburkhardt/muesli)
+
 **Local-first meeting transcription for macOS.** Capture and transcribe Zoom, Teams, and Google Meet meetings with complete privacy. Everything runs on your Mac—no cloud, no subscriptions, no data sharing.
 
 ## Download

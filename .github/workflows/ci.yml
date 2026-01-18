@@ -56,7 +56,7 @@ jobs:
             -destination 'platform=macOS' \
             build | xcpretty || true
       
-      - name: Run tests
+      - name: Run tests with coverage
         run: |
           set -o pipefail
           xcodebuild \
@@ -64,7 +64,60 @@ jobs:
             -scheme Muesli \
             -configuration Debug \
             -destination 'platform=macOS' \
+            -enableCodeCoverage YES \
+            -derivedDataPath DerivedData \
             test | xcpretty || true
+      
+      - name: Generate coverage report
+        run: |
+          # Find the coverage file
+          COVERAGE_FILE=$(find DerivedData -name "*.xcresult" | head -1)
+          
+          if [ -z "$COVERAGE_FILE" ]; then
+            echo "⚠️ No coverage file found"
+            exit 0
+          fi
+          
+          echo "✅ Found coverage file: $COVERAGE_FILE"
+          
+          # Export coverage to LCOV format
+          xcrun xccov view --report --json "$COVERAGE_FILE" > coverage.json
+          
+          # Convert to LCOV format using a simple script
+          python3 -c "
+import json
+import sys
+
+with open('coverage.json', 'r') as f:
+    data = json.load(f)
+
+# Extract coverage data and convert to LCOV
+print('TN:')
+for target in data.get('targets', []):
+    for file_data in target.get('files', []):
+        path = file_data.get('path', '')
+        if not path or 'Test' in path:
+            continue
+        print(f'SF:{path}')
+        for func in file_data.get('functions', []):
+            line = func.get('lineNumber', 0)
+            exec_count = func.get('executionCount', 0)
+            print(f'DA:{line},{exec_count}')
+        print('end_of_record')
+" > coverage.lcov || echo "⚠️ LCOV conversion failed, uploading JSON"
+          
+          echo "✅ Coverage report generated"
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.lcov,./coverage.json
+          flags: unittests
+          name: muesli-coverage
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       
       - name: Check for build warnings
         run: |
