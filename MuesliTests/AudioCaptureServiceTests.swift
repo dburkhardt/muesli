@@ -2,6 +2,7 @@ import XCTest
 @testable import Muesli
 import CoreMedia
 import AVFoundation
+import os.log
 
 /// Comprehensive tests for AudioCaptureService
 /// Part 1/3: Initialization and Configuration Tests
@@ -9,6 +10,7 @@ import AVFoundation
 final class AudioCaptureServiceTests: XCTestCase {
     
     var service: AudioCaptureService!
+    private let logger = LoggerFactory.logger(category: "AudioCaptureServiceTests")
     
     override func setUp() async throws {
         try await super.setUp()
@@ -260,7 +262,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         } catch {
             // If initial start fails (permissions), that's OK for this test environment
             // The test verifies the error handling logic, not actual capture capability
-            print("Note: Initial capture failed (expected in test environment): \(error)")
+            logger.info("Note: Initial capture failed (expected in test environment): \(error.localizedDescription)")
         }
     }
     
@@ -302,7 +304,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             }
         } catch {
             // If capture fails due to permissions, that's OK for test environment
-            print("Note: Capture failed (expected in test environment): \(error)")
+            logger.info("Note: Capture failed (expected in test environment): \(error.localizedDescription)")
         }
     }
     
@@ -416,7 +418,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             try await service.stopCapture()
         } catch {
             // Expected in test environment without screen recording permission
-            print("Note: Capture failed (expected in test environment): \(error)")
+            logger.info("Note: Capture failed (expected in test environment): \(error.localizedDescription)")
         }
     }
     
@@ -438,13 +440,13 @@ final class AudioCaptureServiceTests: XCTestCase {
             // In test environment, we expect permission or content errors
             switch error {
             case .noContentToCapture, .permissionDenied, .streamStartFailed:
-                print("Note: Expected test environment error: \(error)")
+                logger.info("Note: Expected test environment error: \(error.localizedDescription)")
             default:
                 XCTFail("Unexpected error: \(error)")
             }
         } catch {
             // Other errors might occur in CI environment
-            print("Note: Capture error in test environment: \(error)")
+            logger.info("Note: Capture error in test environment: \(error.localizedDescription)")
         }
     }
     
@@ -467,14 +469,14 @@ final class AudioCaptureServiceTests: XCTestCase {
             // Expected: app likely not running in test environment
             switch error {
             case .noContentToCapture:
-                print("Note: Test app not running (expected): \(testBundleID)")
+                logger.info("Note: Test app not running (expected): \(testBundleID)")
             case .streamStartFailed, .permissionDenied:
-                print("Note: Capture failed (expected in test environment): \(error)")
+                logger.info("Note: Capture failed (expected in test environment): \(error.localizedDescription)")
             default:
                 XCTFail("Unexpected error: \(error)")
             }
         } catch {
-            print("Note: Capture error: \(error)")
+            logger.info("Note: Capture error: \(error.localizedDescription)")
         }
     }
     
@@ -512,7 +514,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             let isRecordingAfter = await service.isRecording
             XCTAssertFalse(isRecordingAfter, "Service should not be recording after stop")
         } catch {
-            print("Note: Capture cycle failed in test environment: \(error)")
+            logger.info("Note: Capture cycle failed in test environment: \(error.localizedDescription)")
         }
     }
     
@@ -530,7 +532,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             let isRecording = await service.isRecording
             XCTAssertFalse(isRecording, "Should not be recording after stop")
         } catch {
-            print("Note: Test environment limitation: \(error)")
+            logger.info("Note: Test environment limitation: \(error.localizedDescription)")
         }
     }
     
@@ -551,7 +553,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             // Cleanup
             try await service.stopCapture()
         } catch {
-            print("Note: State transition test limited by environment: \(error)")
+            logger.info("Note: State transition test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -571,7 +573,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             let stoppedState = await service.isRecording
             XCTAssertFalse(stoppedState, "Should be stopped")
         } catch {
-            print("Note: Transition test limited by environment: \(error)")
+            logger.info("Note: Transition test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -592,7 +594,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             try await service.stopCapture()
             XCTAssertFalse(await service.isRecording, "Should be stopped")
         } catch {
-            print("Note: Complete cycle test limited by environment: \(error)")
+            logger.info("Note: Complete cycle test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -616,7 +618,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             // Cleanup
             try await service.stopCapture()
         } catch {
-            print("Note: Cannot test already recording in this environment: \(error)")
+            logger.info("Note: Cannot test already recording in this environment: \(error.localizedDescription)")
         }
     }
     
@@ -653,7 +655,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             // Cleanup
             try await service.stopCapture()
         } catch {
-            print("Note: Restart test limited by environment: \(error)")
+            logger.info("Note: Restart test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -672,7 +674,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                 XCTAssertFalse(await service.isRecording, 
                               "Cycle \(i): Should be stopped")
             } catch {
-                print("Note: Cycle \(i) limited by environment: \(error)")
+                logger.info("Note: Cycle \(i) limited by environment: \(error.localizedDescription)")
                 break
             }
         }
@@ -695,7 +697,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             // Cleanup
             try await service.stopCapture()
         } catch {
-            print("Note: Cleanup test limited by environment: \(error)")
+            logger.info("Note: Cleanup test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -760,7 +762,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                 try? await Task.sleep(for: .milliseconds(50))
                 try await service.stopCapture()
             } catch {
-                print("Note: Cycle \(i) limited by environment: \(error)")
+                logger.info("Note: Cycle \(i) limited by environment: \(error.localizedDescription)")
                 break
             }
         }
@@ -785,7 +787,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             // Cleanup
             try await service.stopCapture()
         } catch {
-            print("Note: Microphone device test limited by environment: \(error)")
+            logger.info("Note: Microphone device test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -826,7 +828,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             // Cleanup
             try await service.stopCapture()
         } catch {
-            print("Note: Interruption test limited by environment: \(error)")
+            logger.info("Note: Interruption test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -855,7 +857,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             // Cleanup
             try await service.stopCapture()
         } catch {
-            print("Note: Buffer callback test limited by environment: \(error)")
+            logger.info("Note: Buffer callback test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -879,7 +881,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                              "Should receive system audio buffers")
             }
         } catch {
-            print("Note: System audio type test limited by environment: \(error)")
+            logger.info("Note: System audio type test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -904,7 +906,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                 XCTAssertTrue(true, "Received microphone audio")
             }
         } catch {
-            print("Note: Microphone audio test limited by environment: \(error)")
+            logger.info("Note: Microphone audio test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -933,7 +935,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                                         "Level should be <= 1.0")
             }
         } catch {
-            print("Note: Level callback test limited by environment: \(error)")
+            logger.info("Note: Level callback test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -960,7 +962,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                                         "Level \(level) should be <= 1.0")
             }
         } catch {
-            print("Note: Level range test limited by environment: \(error)")
+            logger.info("Note: Level range test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -983,7 +985,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             XCTAssertFalse(interruptedCalled, 
                           "Interrupted handler should not be called during normal stop")
         } catch {
-            print("Note: Normal operation test limited by environment: \(error)")
+            logger.info("Note: Normal operation test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1009,7 +1011,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                 XCTAssertFalse(secondCalled, "Second handler should be replaced")
             }
         } catch {
-            print("Note: Multiple handlers test limited by environment: \(error)")
+            logger.info("Note: Multiple handlers test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1044,7 +1046,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             
             XCTAssertGreaterThanOrEqual(finalCount, 0, "Call count should be valid")
         } catch {
-            print("Note: Thread safety test limited by environment: \(error)")
+            logger.info("Note: Thread safety test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1070,7 +1072,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             XCTAssertFalse(receivedInvalidBuffer, 
                           "Should not receive invalid buffers")
         } catch {
-            print("Note: Empty buffer test limited by environment: \(error)")
+            logger.info("Note: Empty buffer test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1098,7 +1100,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                                  "Buffer processing should be fast")
             }
         } catch {
-            print("Note: Performance test limited by environment: \(error)")
+            logger.info("Note: Performance test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1129,7 +1131,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                     XCTAssertLessThanOrEqual(level, 1.0)
                 }
             } catch {
-                print("Note: Float32 RMS test limited by environment: \(error)")
+                logger.info("Note: Float32 RMS test limited by environment: \(error.localizedDescription)")
             }
         }
     }
@@ -1160,7 +1162,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                     XCTAssertLessThanOrEqual(level, 1.0)
                 }
             } catch {
-                print("Note: Int16 RMS test limited by environment: \(error)")
+                logger.info("Note: Int16 RMS test limited by environment: \(error.localizedDescription)")
             }
         }
     }
@@ -1188,7 +1190,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                                         "Normalization should cap at 1.0")
             }
         } catch {
-            print("Note: Normalization test limited by environment: \(error)")
+            logger.info("Note: Normalization test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1216,7 +1218,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             // (StreamOutput determines type from SCStreamOutputType)
             // Note: May not receive buffers in test environment
         } catch {
-            print("Note: Format detection test limited by environment: \(error)")
+            logger.info("Note: Format detection test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1246,9 +1248,9 @@ final class AudioCaptureServiceTests: XCTestCase {
             
             // Then: May have received buffers and levels
             // Note: Actual callbacks depend on permissions and environment
-            print("Integration test: \(buffersReceived) buffers, \(levelsReceived) levels")
+            logger.info("Integration test: \(buffersReceived) buffers, \(levelsReceived) levels")
         } catch {
-            print("Note: Integration test limited by environment: \(error)")
+            logger.info("Note: Integration test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1271,7 +1273,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             // Cleanup
             try await service.stopCapture()
         } catch {
-            print("Note: Device switching test limited by environment: \(error)")
+            logger.info("Note: Device switching test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1306,7 +1308,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                               "Buffers should have size data")
             }
         } catch {
-            print("Note: Real buffer test limited by environment: \(error)")
+            logger.info("Note: Real buffer test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1349,7 +1351,7 @@ final class AudioCaptureServiceTests: XCTestCase {
             XCTAssertTrue(await !service.isRecording, 
                          "Should not be recording after concurrent stops")
         } catch {
-            print("Note: Concurrent stop test limited by environment: \(error)")
+            logger.info("Note: Concurrent stop test limited by environment: \(error.localizedDescription)")
         }
     }
     
@@ -1368,7 +1370,7 @@ final class AudioCaptureServiceTests: XCTestCase {
                 try await service.stopCapture()
                 successfulCycles += 1
             } catch {
-                print("Note: Cycle \(i) failed in test environment: \(error)")
+                logger.info("Note: Cycle \(i) failed in test environment: \(error.localizedDescription)")
                 break
             }
         }

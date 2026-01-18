@@ -2,6 +2,7 @@ import Foundation
 @preconcurrency import ScreenCaptureKit
 @preconcurrency import AVFoundation
 import CoreMedia
+import os.log
 
 
 // MARK: - AVAudioEngine Microphone Capture Helper
@@ -189,9 +190,11 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         
         // Create sample buffer
         var sampleBuffer: CMSampleBuffer?
+        let hostTime = time.audioTimeStamp.mHostTime
+        let timestamp = hostTime > 0 ? Double(hostTime) / 1_000_000_000.0 : CACurrentMediaTime()
         var timing = CMSampleTimingInfo(
             duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
-            presentationTimeStamp: CMTime(seconds: time.audioTimeStamp.mHostTime > 0 ? Double(time.audioTimeStamp.mHostTime) / 1_000_000_000.0 : CACurrentMediaTime(), preferredTimescale: CMTimeScale(sampleRate)),
+            presentationTimeStamp: CMTime(seconds: timestamp, preferredTimescale: CMTimeScale(sampleRate)),
             decodeTimeStamp: .invalid
         )
         
@@ -229,6 +232,8 @@ typealias AudioLevelHandler = @Sendable (Float, AudioCaptureService.AudioType) -
 actor AudioCaptureService: AudioCaptureServiceProtocol {
     
     // MARK: - Types
+    
+    private nonisolated let logger = LoggerFactory.logger(category: "AudioCaptureService")
     
     enum AudioType: Sendable {
         case system  // Audio from the captured application
@@ -325,6 +330,10 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
             throw CaptureError.alreadyRecording
         }
         
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/479643ff-bd3c-4f32-9fd4-c21f7950fef0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AudioCaptureService.swift:328',message:'startCapture() called - about to call SCShareableContent',data:{isRunningTests:NSClassFromString("XCTestCase") != nil,isRecording:isRecording},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        
         // Get available content - this is where TCC permission is checked
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         
@@ -345,6 +354,10 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         guard !isRecording else {
             throw CaptureError.alreadyRecording
         }
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/479643ff-bd3c-4f32-9fd4-c21f7950fef0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AudioCaptureService.swift:349',message:'startCapture(forBundleIdentifier:) called - about to call SCShareableContent',data:{isRunningTests:NSClassFromString("XCTestCase") != nil,bundleIdentifier:bundleIdentifier,isRecording:isRecording},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         
         // Get available content - this is where TCC permission is checked
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -424,7 +437,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
             self.microphoneEngine = micEngine
         } catch {
             // Continue without mic capture - system audio will still work
-            print("[AudioCaptureService] Warning: Microphone capture failed to start: \(error)")
+            logger.warning("Microphone capture failed to start: \(error.localizedDescription)")
         }
         
         // Start the stream

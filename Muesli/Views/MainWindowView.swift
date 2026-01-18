@@ -56,7 +56,12 @@ struct MainWindowView: View {
                 viewModel.cancelRecordingDueToModelError()
             }
         } message: {
-            Text("The transcription model is corrupted or incomplete. You can continue recording audio only (no transcription), or cancel and download a working model in Preferences.")
+            Text(
+                """
+                The transcription model is corrupted or incomplete. You can continue recording audio only \
+                (no transcription), or cancel and download a working model in Preferences.
+                """
+            )
         }
     }
     

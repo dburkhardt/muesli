@@ -19,7 +19,10 @@ final class MuesliViewModelTests: XCTestCase {
     private static let testOutputDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("MuesliTests")
     
     /// Keys that need to be cleaned up after tests
-    private static let userDefaultsKeysToClean = ["outputDirectory", "hasCompletedOnboarding", "transcriptionMode", "echoCancellationEnabled", "launchAtLogin"]
+    private static let userDefaultsKeysToClean = [
+        "outputDirectory", "hasCompletedOnboarding", "transcriptionMode",
+        "echoCancellationEnabled", "launchAtLogin"
+    ]
     
     // MARK: - Setup / Teardown
     
@@ -1417,8 +1420,14 @@ final class MuesliViewModelTests: XCTestCase {
         
         // Default should be in Application Support/Muesli/Recordings (migration won't trigger without old dir)
         XCTAssertTrue(prefs.outputDirectory.path.contains("Muesli"), "Expected path to contain 'Muesli', got: \(prefs.outputDirectory.path)")
-        XCTAssertTrue(prefs.outputDirectory.path.contains("Recordings"), "Expected path to contain 'Recordings', got: \(prefs.outputDirectory.path)")
-        XCTAssertTrue(prefs.outputDirectory.path.contains("Application Support"), "Expected path to contain 'Application Support', got: \(prefs.outputDirectory.path)")
+        XCTAssertTrue(
+            prefs.outputDirectory.path.contains("Recordings"),
+            "Expected path to contain 'Recordings', got: \(prefs.outputDirectory.path)"
+        )
+        XCTAssertTrue(
+            prefs.outputDirectory.path.contains("Application Support"),
+            "Expected path to contain 'Application Support', got: \(prefs.outputDirectory.path)"
+        )
         
         // Set custom directory
         let testDir = FileManager.default.temporaryDirectory.appendingPathComponent("TestOutput")

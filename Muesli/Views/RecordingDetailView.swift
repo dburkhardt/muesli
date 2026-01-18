@@ -626,7 +626,7 @@ struct RecordingDetailView: View {
                     copyTranscriptButton(for: meeting)
                     
                     // Reprocess button with model picker
-                    if viewModel.modelManager.downloadedModels.count > 0 {
+                        if !viewModel.modelManager.downloadedModels.isEmpty {
                         Menu {
                             ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
                                 Button("Reprocess with \(model.displayName)") {

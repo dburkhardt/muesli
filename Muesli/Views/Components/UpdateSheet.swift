@@ -128,15 +128,9 @@ struct UpdateSheet: View {
         - Resolved memory leak in audio processing
         """,
         downloadURL: URL(string: "https://github.com/dburkhardt/muesli/releases/latest")!,
-        onDownload: {
-            print("Download tapped")
-        },
-        onSkip: {
-            print("Skip tapped")
-        },
-        onRemindLater: {
-            print("Remind later tapped")
-        }
+        onDownload: {},
+        onSkip: {},
+        onRemindLater: {}
     )
     .background(.regularMaterial)
 }

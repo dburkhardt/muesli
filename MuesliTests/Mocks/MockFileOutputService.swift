@@ -7,8 +7,8 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
     
     // MARK: - State
     
-    private(set) var _isWriting: Bool = false
-    var isWriting: Bool { _isWriting }
+    private(set) var isWritingInternal: Bool = false
+    var isWriting: Bool { isWritingInternal }
     
     private var outputDirectory: URL = FileManager.default.temporaryDirectory.appendingPathComponent("MockMeetingTranscripts")
     private var currentWriteDirectory: URL?
@@ -71,7 +71,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         
         currentWriteDirectory = directory
-        _isWriting = true
+        isWritingInternal = true
         return directory
     }
     
@@ -87,7 +87,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
             throw stopWritingError
         }
         
-        _isWriting = false
+        isWritingInternal = false
         return currentWriteDirectory ?? outputDirectory
     }
     
@@ -100,7 +100,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         }
         
         currentWriteDirectory = directory
-        _isWriting = true
+        isWritingInternal = true
         return directory
     }
     
@@ -129,7 +129,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
     
     /// Reset all state for next test
     func reset() {
-        _isWriting = false
+        isWritingInternal = false
         currentWriteDirectory = nil
         shouldFailStartWriting = false
         shouldFailStopWriting = false

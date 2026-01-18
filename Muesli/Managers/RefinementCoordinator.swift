@@ -1,10 +1,15 @@
 import Foundation
+import os.log
 
 /// Coordinates transcript refinement using LLM
 /// Extracted from MuesliViewModel as part of the god object refactoring
 @Observable
 @MainActor
 final class RefinementCoordinator {
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "RefinementCoordinator")
+    
     // MARK: - Dependencies
     
     private let llmManager: LLMManager
@@ -60,7 +65,7 @@ final class RefinementCoordinator {
     }
     
     deinit {
-        print("[RefinementCoordinator] Deallocating")
+        logger.debug("Deallocating")
     }
     
     // MARK: - Show Original/Refined Toggle
@@ -95,12 +100,13 @@ final class RefinementCoordinator {
     
     /// Start refining a meeting's transcript
     func refineTranscript(for meeting: MeetingHistoryItem) {
+        // Validate preconditions
         guard canRefineTranscripts else {
-            print("[RefinementCoordinator] Cannot refine: canRefineTranscripts = false")
+            logger.warning("Cannot refine: canRefineTranscripts = false")
             return
         }
         guard !refinementService.isRefining else {
-            print("[RefinementCoordinator] Already refining")
+            logger.warning("Already refining")
             return
         }
         
@@ -119,7 +125,7 @@ final class RefinementCoordinator {
                 try await llmManager.loadModel(activeModel)
             } catch {
                 refinementService.errorMessage = "Failed to load LLM model: \(error.localizedDescription)"
-                print("[RefinementCoordinator] Failed to load LLM model: \(error)")
+                logger.error("Failed to load LLM model: \(error)")
                 meetingBeingRefined = nil
                 return
             }
@@ -128,7 +134,7 @@ final class RefinementCoordinator {
         do {
             // Refine based on available transcript format
             if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
-                print("[RefinementCoordinator] Refining \(blocks.count) transcript blocks")
+                logger.info("Refining \(blocks.count) transcript blocks")
                 // Store original before refining
                 if meeting.originalTranscriptBlocks == nil {
                     meeting.originalTranscriptBlocks = blocks
@@ -157,7 +163,7 @@ final class RefinementCoordinator {
                 // Save to disk
                 saveRefinedTranscript(meeting, blocks: refinedBlocks)
             } else if let text = meeting.transcript, !text.isEmpty {
-                print("[RefinementCoordinator] Refining plain text transcript")
+                logger.info("Refining plain text transcript")
                 // Store original before refining
                 meeting.originalTranscript = text
                 
@@ -172,9 +178,9 @@ final class RefinementCoordinator {
                 
                 // Save to disk
                 saveRefinedTranscript(meeting, text: refinedText)
-                print("[RefinementCoordinator] Refinement completed successfully")
+                logger.info("Refinement completed successfully")
             } else {
-                print("[RefinementCoordinator] No transcript blocks or text available for refinement")
+                logger.warning("No transcript blocks or text available for refinement")
                 meetingBeingRefined = nil
                 return
             }
@@ -183,7 +189,7 @@ final class RefinementCoordinator {
             meetingBeingRefined = nil
         } catch {
             // Error is already set in refinementService
-            print("[RefinementCoordinator] Refinement failed: \(error)")
+            logger.error("Refinement failed: \(error)")
             meetingBeingRefined = nil
         }
     }
@@ -207,7 +213,7 @@ final class RefinementCoordinator {
             do {
                 try await llmManager.loadModel(activeModel)
             } catch {
-                print("[RefinementCoordinator] Failed to load LLM model for segment refinement: \(error)")
+                logger.error("Failed to load LLM model for segment refinement: \(error)")
                 return
             }
         }
@@ -228,7 +234,7 @@ final class RefinementCoordinator {
             // Update meeting transcript display
             updateMeetingTranscriptDisplay(meeting)
         } catch {
-            print("[RefinementCoordinator] Segment refinement failed: \(error)")
+            logger.error("Segment refinement failed: \(error)")
         }
     }
     
@@ -252,7 +258,12 @@ final class RefinementCoordinator {
     }
     
     /// Update segmented meeting transcript display with segment headers
-    func updateSegmentedMeetingTranscriptDisplay(_ meeting: MeetingHistoryItem, with blocks: [TranscriptBlock], segmentNumber: Int, segmentStartTime: Date) {
+    func updateSegmentedMeetingTranscriptDisplay(
+        _ meeting: MeetingHistoryItem,
+        with blocks: [TranscriptBlock],
+        segmentNumber: Int,
+        segmentStartTime: Date
+    ) {
         // Build transcript with segment headers
         var transcriptParts: [String] = []
         
@@ -302,7 +313,7 @@ final class RefinementCoordinator {
                 filename: nil  // Use default "transcript.md"
             )
         } catch {
-            print("[RefinementCoordinator] Failed to save refined transcript: \(error)")
+            logger.error("Failed to save refined transcript: \(error)")
         }
     }
     
@@ -335,7 +346,7 @@ final class RefinementCoordinator {
             """
             try content.write(to: transcriptURL, atomically: true, encoding: .utf8)
         } catch {
-            print("[RefinementCoordinator] Failed to save refined transcript: \(error)")
+            logger.error("Failed to save refined transcript: \(error)")
         }
     }
     

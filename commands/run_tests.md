@@ -6,20 +6,20 @@ Run the test suite for Muesli and present formatted results.
 
 ```bash
 TIMESTAMP=$(date +%Y%m%d-%H%M%S) && \
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt" && \
+xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt" && \
 echo "--- TEST SUMMARY ---" && \
-if grep -q "TEST SUCCEEDED" ".logs/test-${TIMESTAMP}.txt"; then \
+if grep -q "TEST SUCCEEDED" "/tmp/muesli-test-${TIMESTAMP}.txt"; then \
   echo "✅ Status: SUCCEEDED" && \
-  echo "📊 Passed: $(grep 'passed on' .logs/test-${TIMESTAMP}.txt | wc -l | tr -d ' ')" && \
-  echo "⏭️  Skipped: $(grep 'skipped on' .logs/test-${TIMESTAMP}.txt | wc -l | tr -d ' ')" && \
-  echo "❌ Failed: $(grep 'failed on' .logs/test-${TIMESTAMP}.txt | wc -l | tr -d ' ')" && \
-  echo "📁 Output saved to: .logs/test-${TIMESTAMP}.txt"; \
+  echo "📊 Passed: $(grep 'passed on' /tmp/muesli-test-${TIMESTAMP}.txt | wc -l | tr -d ' ')" && \
+  echo "⏭️  Skipped: $(grep 'skipped on' /tmp/muesli-test-${TIMESTAMP}.txt | wc -l | tr -d ' ')" && \
+  echo "❌ Failed: $(grep 'failed on' /tmp/muesli-test-${TIMESTAMP}.txt | wc -l | tr -d ' ')" && \
+  echo "📁 Output saved to: /tmp/muesli-test-${TIMESTAMP}.txt"; \
 else \
   echo "❌ Status: FAILED" && \
-  echo "📁 Output saved to: .logs/test-${TIMESTAMP}.txt" && \
+  echo "📁 Output saved to: /tmp/muesli-test-${TIMESTAMP}.txt" && \
   echo "" && \
   echo "Failed tests:" && \
-  grep 'failed on' ".logs/test-${TIMESTAMP}.txt" | head -10; \
+  grep 'failed on' "/tmp/muesli-test-${TIMESTAMP}.txt" | head -10; \
 fi
 ```
 
@@ -30,7 +30,7 @@ fi
 ```bash
 TIMESTAMP=$(date +%Y%m%d-%H%M%S) && \
 xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test \
-  -only-testing:MuesliTests 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+  -only-testing:MuesliTests 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 ```
 
 ### Run UI Tests Only
@@ -38,7 +38,7 @@ xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test \
 ```bash
 TIMESTAMP=$(date +%Y%m%d-%H%M%S) && \
 xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test \
-  -only-testing:MuesliUITests 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+  -only-testing:MuesliUITests 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 ```
 
 ### Run Specific Test Class
@@ -46,7 +46,7 @@ xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test \
 ```bash
 TIMESTAMP=$(date +%Y%m%d-%H%M%S) && \
 xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test \
-  -only-testing:MuesliTests/MuesliViewModelTests 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+  -only-testing:MuesliTests/MuesliViewModelTests 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 ```
 
 ## Usage
@@ -64,7 +64,7 @@ When a user requests test execution:
 
 1. Run the main command above
 2. Wait for completion (do not interrupt)
-3. Extract results from the generated `.logs/test-{timestamp}.txt` file
+3. Extract results from the generated `/tmp/muesli-test-{timestamp}.txt` file
 4. Format and present results using the template below
 
 ## Result Format Template
@@ -87,7 +87,7 @@ When a user requests test execution:
 ### Failed Tests:
 - `{TestClass.testMethod()}` - {error summary}
 
-The test output has been saved to `.logs/test-{timestamp}.txt` for reference.
+The test output has been saved to `/tmp/muesli-test-{timestamp}.txt` for reference.
 ```
 
 ## Expected Output
@@ -99,14 +99,14 @@ The test output has been saved to `.logs/test-{timestamp}.txt` for reference.
 📊 Passed: 132
 ⏭️  Skipped: 1
 ❌ Failed: 0
-📁 Output saved to: .logs/test-20260117-232334.txt
+📁 Output saved to: /tmp/muesli-test-20260117-232334.txt
 ```
 
 ### Failed Run
 
 ```
 ❌ Status: FAILED
-📁 Output saved to: .logs/test-20260117-232334.txt
+📁 Output saved to: /tmp/muesli-test-20260117-232334.txt
 
 Failed tests:
 Test case 'MuesliViewModelTests.testRecordingPreconditions()' failed on 'My Mac'
@@ -120,7 +120,7 @@ Test case 'RecordingControllerTests.testAudioCallback()' failed on 'My Mac'
 Follow the complete workflow documented in [`spec/local_testing_workflow.md`](../spec/local_testing_workflow.md):
 
 1. **Run** - Execute test command with timestamped output
-2. **Capture** - Save to `.logs/test-{timestamp}.txt` file
+2. **Capture** - Save to `/tmp/muesli-test-{timestamp}.txt` file
 3. **Extract** - Parse results from saved file (do NOT re-run)
 4. **Format** - Use template above for clear presentation
 5. **Present** - Show summary to user with next steps
@@ -196,10 +196,9 @@ Add to `.git/hooks/pre-commit`:
 #!/bin/bash
 echo "Running tests..."
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-mkdir -p .logs
-xcodebuild test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+xcodebuild test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 
-if ! grep -q "TEST SUCCEEDED" ".logs/test-${TIMESTAMP}.txt"; then
+if ! grep -q "TEST SUCCEEDED" "/tmp/muesli-test-${TIMESTAMP}.txt"; then
   echo "❌ Tests failed. Commit aborted."
   exit 1
 fi
@@ -266,7 +265,7 @@ User: "Run all tests"
 Agent:
 1. Execute test command with timestamp
 2. Wait for completion
-3. Extract from .logs/test-{timestamp}.txt:
+3. Extract from /tmp/muesli-test-{timestamp}.txt:
    - grep "TEST SUCCEEDED"
    - Count passed/skipped/failed
 4. Present formatted summary:

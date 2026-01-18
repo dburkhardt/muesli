@@ -84,13 +84,30 @@ final class PermissionManager: PermissionManagerProtocol {
     
     /// Detect if running in test environment
     private static var isRunningTests: Bool {
-        NSClassFromString("XCTestCase") != nil
+        let result = NSClassFromString("XCTestCase") != nil
+        // #region agent log
+        Task { @MainActor in
+            let logData: [String: Any] = ["isRunningTests": result, "className": NSClassFromString("XCTestCase") != nil]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: ["location": "PermissionManager.swift:87", "message": "isRunningTests check", "data": logData, "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "C"], options: []),
+               let jsonString = String(data: jsonData, encoding: .utf8) {
+                let urlString = "http://127.0.0.1:7242/ingest/479643ff-bd3c-4f32-9fd4-c21f7950fef0"
+                guard let url = URL(string: urlString) else { return }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = jsonData
+                URLSession.shared.dataTask(with: request).resume()
+            }
+        }
+        // #endregion
+        return result
     }
     
     deinit {
         // Remove all observers (use MainActor.assumeIsolated since deinit is nonisolated)
         MainActor.assumeIsolated {
-            observers.forEach { NotificationCenter.default.removeObserver($0) }
+            // Remove from DistributedNotificationCenter (where they were registered)
+            observers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
             pollingTimer?.invalidate()
         }
     }
@@ -167,10 +184,42 @@ final class PermissionManager: PermissionManagerProtocol {
     /// TRIGGERS the screen recording permission prompt if permission is not granted.
     /// Do NOT call during onboarding welcome screen - see spec/onboarding_flow.md
     func checkScreenRecordingPermissionAsync() async -> Bool {
+        // #region agent log
+        let isTestEnv = Self.isRunningTests
+        Task { @MainActor in
+            let logData: [String: Any] = ["isRunningTests": isTestEnv, "willSkip": isTestEnv]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: ["location": "PermissionManager.swift:170", "message": "checkScreenRecordingPermissionAsync called", "data": logData, "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "B"], options: []),
+               let jsonString = String(data: jsonData, encoding: .utf8) {
+                let urlString = "http://127.0.0.1:7242/ingest/479643ff-bd3c-4f32-9fd4-c21f7950fef0"
+                guard let url = URL(string: urlString) else { return }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = jsonData
+                URLSession.shared.dataTask(with: request).resume()
+            }
+        }
+        // #endregion
+        
         // Skip permission checks when running tests
         guard !Self.isRunningTests else {
             return false
         }
+        
+        // #region agent log
+        Task { @MainActor in
+            let logData: [String: Any] = ["aboutToCallSCShareableContent": true]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: ["location": "PermissionManager.swift:177", "message": "About to call SCShareableContent - THIS TRIGGERS PROMPT", "data": logData, "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "B"], options: []) {
+                let urlString = "http://127.0.0.1:7242/ingest/479643ff-bd3c-4f32-9fd4-c21f7950fef0"
+                guard let url = URL(string: urlString) else { return }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = jsonData
+                URLSession.shared.dataTask(with: request).resume()
+            }
+        }
+        // #endregion
         
         do {
             // This call will fail with a specific TCC error if permission is not granted

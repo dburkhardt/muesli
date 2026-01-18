@@ -1,4 +1,5 @@
 import Foundation
+import os.log
 import SwiftUI
 import ScreenCaptureKit
 import CoreMedia
@@ -10,6 +11,10 @@ import os.lock
 @Observable
 @MainActor
 final class RecordingController {
+    
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "RecordingController")
     
     // MARK: - Dependencies
     
@@ -106,7 +111,7 @@ final class RecordingController {
     }
     
     deinit {
-        print("[RecordingController] Deallocating")
+        logger.debug("Deallocating")
     }
     
     // MARK: - Audio Buffer Handler Setup
@@ -167,15 +172,14 @@ final class RecordingController {
                     
                 } catch {
                     // Log error but continue processing
-                    print("[RecordingController] Audio buffer processing error: \(error)")
-                    
-                    Task { @MainActor in
+                    Task { @MainActor [weak self] in
                         guard let self = self else { return }
+                        self.logger.error("Audio buffer processing error: \(error)")
                         self.audioErrorCounter += 1
                         
                         // If too many consecutive errors, stop recording gracefully
                         if self.audioErrorCounter > self.maxConsecutiveAudioErrors {
-                            print("[RecordingController] Too many consecutive audio errors (\(self.audioErrorCounter)), stopping recording")
+                            self.logger.error("Too many consecutive audio errors (\(self.audioErrorCounter)), stopping recording")
                             
                             if let session = self.activeSession {
                                 session.interruptionReason = "Audio processing error"
@@ -449,7 +453,7 @@ final class RecordingController {
             session.isModelLoading = false
             session.isRecordingOnly = true
             // Log error but continue recording audio
-            print("[RecordingController] Model loading failed: \(error), continuing audio-only recording")
+            logger.error("Model loading failed: \(error), continuing audio-only recording")
         }
     }
     

@@ -1,10 +1,15 @@
 import Foundation
+import os.log
 
 /// Manages meeting history including discovery, selection, and deletion
 /// Extracted from MuesliViewModel as part of the god object refactoring
 @Observable
 @MainActor
 final class MeetingHistoryManager {
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "MeetingHistoryManager")
+    
     // MARK: - Dependencies
     
     private let meetingHistoryService: MeetingHistoryService
@@ -65,7 +70,7 @@ final class MeetingHistoryManager {
     }
     
     deinit {
-        print("[MeetingHistoryManager] Deallocating")
+        logger.debug("Deallocating")
     }
     
     // MARK: - History Management

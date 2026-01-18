@@ -788,7 +788,7 @@ struct OnboardingView: View {
                 // Update viewModel state
                 await viewModel.refreshPermissionsAsync()
                 // Auto-advance if permission granted
-                advanceBasedOnPermissions()
+                self.advanceBasedOnPermissions()
             }
         }
         

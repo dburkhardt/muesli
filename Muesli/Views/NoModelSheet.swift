@@ -72,12 +72,8 @@ struct NoModelSheet: View {
 #Preview("No Model Sheet") {
     NoModelSheet(
         isPresented: .constant(true),
-        onDownload: {
-            print("Download tapped")
-        },
-        onRecordOnly: {
-            print("Record only tapped")
-        }
+        onDownload: {},
+        onRecordOnly: {}
     )
     .background(.regularMaterial)
 }

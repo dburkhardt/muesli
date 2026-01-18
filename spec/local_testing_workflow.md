@@ -11,7 +11,7 @@
 ```bash
 # Run all tests (unit + UI)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 
 # Run unit tests only
 xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test -only-testing:MuesliTests 2>&1 | tee "test-${TIMESTAMP}.txt"
@@ -33,7 +33,7 @@ xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test -o
 
 ```bash
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 ```
 
 **Why use `tee`?**
@@ -332,10 +332,10 @@ xcodebuild -version
 ```bash
 # Run relevant tests
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-xcodebuild test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+xcodebuild test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 
 # Verify success
-if grep -q "TEST SUCCEEDED" ".logs/test-${TIMESTAMP}.txt"; then
+if grep -q "TEST SUCCEEDED" "/tmp/muesli-test-${TIMESTAMP}.txt"; then
   echo "✅ Tests passed - safe to commit"
 else
   echo "❌ Tests failed - fix before committing"
@@ -350,10 +350,10 @@ fi
 ```bash
 # Full test suite including UI tests
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 
 # Generate test summary for PR description
-grep "passed on\|skipped on\|failed on" ".logs/test-${TIMESTAMP}.txt" | wc -l
+grep "passed on\|skipped on\|failed on" "/tmp/muesli-test-${TIMESTAMP}.txt" | wc -l
 ```
 
 ### Pre-Release Testing
@@ -424,7 +424,7 @@ When user asks to "run tests", follow this workflow:
 **Agent Actions:**
 ```bash
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 ```
 
 **Agent Response:**
@@ -453,7 +453,7 @@ xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test \
   -only-testing:MuesliTests/RecordingControllerTests 2>&1 | tee "test-${TIMESTAMP}.txt"
 
 # Analyze results
-grep "RecordingControllerTests" ".logs/test-${TIMESTAMP}.txt"
+grep "RecordingControllerTests" "/tmp/muesli-test-${TIMESTAMP}.txt"
 ```
 
 **Agent Response:**
@@ -480,10 +480,10 @@ This will help me write a regression test and fix the issue.
 ```bash
 # After making changes
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-xcodebuild test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"
+xcodebuild test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 
 # Verify
-grep "TEST SUCCEEDED" ".logs/test-${TIMESTAMP}.txt"
+grep "TEST SUCCEEDED" "/tmp/muesli-test-${TIMESTAMP}.txt"
 ```
 
 **Agent Response:**

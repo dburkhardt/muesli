@@ -1,4 +1,5 @@
 import Foundation
+import os.log
 
 /// Coordinates transcription model lifecycle and audio buffering
 /// Decouples transcription from recording - recording can start immediately,
@@ -30,6 +31,7 @@ final class TranscriptionCoordinator {
     
     // MARK: - Dependencies
     
+    private let logger = Logger(subsystem: "com.muesli.app", category: "TranscriptionCoordinator")
     private let transcriptionService: any TranscriptionServiceProtocol
     private let modelManager: any ModelManagerProtocol
     
@@ -221,7 +223,7 @@ final class TranscriptionCoordinator {
     }
     
     deinit {
-        print("[TranscriptionCoordinator] Deallocating")
+        logger.debug("Deallocating")
     }
     
     /// Set transcript handler for receiving segments
@@ -454,7 +456,7 @@ final class TranscriptionCoordinator {
         
         // Check queue depth - skip if falling behind
         guard liveRefinementQueue.count < maxRefinementQueueDepth else {
-            print("[TranscriptionCoordinator] Live refinement queue full (\(liveRefinementQueue.count)), skipping segment \(segment.segmentNumber)")
+            logger.warning("Live refinement queue full (\(self.liveRefinementQueue.count)), skipping segment \(segment.segmentNumber)")
             return
         }
         

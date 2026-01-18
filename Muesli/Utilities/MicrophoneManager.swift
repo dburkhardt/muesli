@@ -1,10 +1,15 @@
 import AVFoundation
 import Foundation
+import os.log
 
 /// Manages microphone device enumeration and selection
 @MainActor
 @Observable
 final class MicrophoneManager: MicrophoneManagerProtocol {
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "MicrophoneManager")
+    
     // MARK: - Types
     
     struct MicrophoneDevice: Identifiable, Hashable {
@@ -127,7 +132,7 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         // Check permission before accessing devices
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             // Just store the preference, device validation will happen when permission is granted
-            print("[MicrophoneManager] Selected microphone (pending permission): \(deviceID)")
+            logger.info("Selected microphone (pending permission): \(deviceID)")
             return
         }
         
@@ -140,7 +145,7 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         
         if discoverySession.devices.contains(where: { $0.uniqueID == deviceID }) {
             // Device exists, preference is stored in UserDefaults
-            print("[MicrophoneManager] Selected microphone: \(deviceID)")
+            logger.info("Selected microphone: \(deviceID)")
         }
     }
     

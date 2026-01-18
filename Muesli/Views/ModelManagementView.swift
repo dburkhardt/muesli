@@ -425,7 +425,7 @@ struct ModelManagementView: View {
                 .foregroundStyle(.secondary)
             
             Picker("", selection: Binding(
-                get: { llmManager.activeModel ?? .llama3_2_3b },
+                get: { llmManager.activeModel ?? .llama323B },
                 set: { llmManager.setActiveModel($0) }
             )) {
                 ForEach(LLMManager.LLMModel.allCases.filter { llmManager.downloadedModels.contains($0) }) { model in

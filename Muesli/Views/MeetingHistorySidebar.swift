@@ -308,7 +308,7 @@ struct MeetingSidebarItemView: View {
                     onDoubleClick()
                 }
                 
-                if let viewModel = viewModel, viewModel.modelManager.downloadedModels.count > 0 {
+                if let viewModel = viewModel, !viewModel.modelManager.downloadedModels.isEmpty {
                     Divider()
                     Menu("Reprocess Transcript") {
                         ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in

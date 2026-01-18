@@ -28,7 +28,7 @@ cd muesli
 # Build and launch
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 killall Muesli 2>/dev/null
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee ".logs/build-${TIMESTAMP}.txt"
+xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee "/tmp/muesli-build-${TIMESTAMP}.txt"
 open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
 ```
 

@@ -171,10 +171,10 @@ struct MicrophoneLevelIndicator: View {
                 // Apply VU-meter ballistics: fast attack, slow release
                 if targetLevel > displayLevel {
                     // Attack: rising - use fast coefficient
-                    displayLevel = displayLevel + (targetLevel - displayLevel) * attackCoeff
+                    displayLevel += (targetLevel - displayLevel) * attackCoeff
                 } else {
                     // Release: falling - use slow coefficient
-                    displayLevel = displayLevel + (targetLevel - displayLevel) * releaseCoeff
+                    displayLevel += (targetLevel - displayLevel) * releaseCoeff
                 }
             }
             .onChange(of: isActive) { _, active in

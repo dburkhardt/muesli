@@ -1,4 +1,5 @@
 import Foundation
+import os.log
 import os.lock
 import ServiceManagement
 
@@ -7,6 +8,10 @@ import ServiceManagement
 @Observable
 @MainActor
 final class PreferencesManager {
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "PreferencesManager")
+    
     // MARK: - Output Directory
     
     /// Output directory for recordings
@@ -62,7 +67,7 @@ final class PreferencesManager {
                         try SMAppService.mainApp.unregister()
                     }
                 } catch {
-                    print("[PreferencesManager] Failed to set launch at login: \(error)")
+                    logger.error("Failed to set launch at login: \(error)")
                 }
             }
             UserDefaults.standard.set(newValue, forKey: AppStorageKeys.launchAtLogin)
@@ -162,7 +167,7 @@ final class PreferencesManager {
     }
 
     deinit {
-        print("[PreferencesManager] Deallocating")
+        logger.debug("Deallocating")
     }
 
     // MARK: - Storage Migration
@@ -175,7 +180,7 @@ final class PreferencesManager {
     private func migrateStorageLocationIfNeeded() {
         // Skip if migration was already checked (prevents Documents prompt on SwiftUI App recreation)
         guard !UserDefaults.standard.bool(forKey: Self.migrationCheckedKey) else {
-            print("[PreferencesManager] Migration already checked, skipping")
+            logger.info("Migration already checked, skipping")
             return
         }
         
@@ -184,7 +189,7 @@ final class PreferencesManager {
         
         // Only migrate if user hasn't set a custom output directory
         guard UserDefaults.standard.string(forKey: AppStorageKeys.outputDirectory) == nil else {
-            print("[PreferencesManager] Custom output directory set, skipping migration")
+            logger.info("Custom output directory set, skipping migration")
             return
         }
 
@@ -198,19 +203,19 @@ final class PreferencesManager {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: oldDefaultDirectory.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            print("[PreferencesManager] Old directory doesn't exist, no migration needed")
+            logger.info("Old directory doesn't exist, no migration needed")
             return
         }
 
         // Check if old directory has any meeting folders
         guard let contents = try? fileManager.contentsOfDirectory(atPath: oldDefaultDirectory.path),
               !contents.isEmpty else {
-            print("[PreferencesManager] Old directory is empty, no migration needed")
+            logger.info("Old directory is empty, no migration needed")
             return
         }
 
-        print("[PreferencesManager] Found existing recordings in old location (\(contents.count) items)")
-        print("[PreferencesManager] Setting output directory to old location to preserve access")
+        logger.info("Found existing recordings in old location (\(contents.count) items)")
+        logger.info("Setting output directory to old location to preserve access")
 
         // Set user preference to old location to preserve existing recordings
         // This is safer than moving files and respects user's existing data

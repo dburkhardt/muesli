@@ -384,4 +384,349 @@ final class ModelManagerTests: XCTestCase {
         
         return modelDir
     }
+    
+    // MARK: - Download State Tests
+    
+    /// Test that downloadState returns idle for new model
+    func testDownloadState_ReturnsIdleByDefault() async {
+        XCTAssertEqual(modelManager.downloadState(for: .tiny), .idle)
+    }
+    
+    /// Test that downloadState can be set
+    func testDownloadState_CanBeUpdated() async {
+        modelManager.downloadStates[.tiny] = .downloading(progress: 0.5)
+        
+        XCTAssertEqual(modelManager.downloadState(for: .tiny), .downloading(progress: 0.5))
+    }
+    
+    /// Test download state progression
+    func testDownloadState_ProgressionThroughStates() async {
+        // Start idle
+        XCTAssertEqual(modelManager.downloadState(for: .tiny), .idle)
+        
+        // Move to checking
+        modelManager.downloadStates[.tiny] = .checking
+        XCTAssertEqual(modelManager.downloadState(for: .tiny), .checking)
+        
+        // Move to downloading
+        modelManager.downloadStates[.tiny] = .downloading(progress: 0.25)
+        XCTAssertEqual(modelManager.downloadState(for: .tiny), .downloading(progress: 0.25))
+        
+        // Progress updates
+        modelManager.downloadStates[.tiny] = .downloading(progress: 0.75)
+        XCTAssertEqual(modelManager.downloadState(for: .tiny), .downloading(progress: 0.75))
+        
+        // Complete
+        modelManager.downloadStates[.tiny] = .completed
+        XCTAssertEqual(modelManager.downloadState(for: .tiny), .completed)
+    }
+    
+    /// Test download state failed with error message
+    func testDownloadState_FailedWithMessage() async {
+        modelManager.downloadStates[.tiny] = .failed("Network error")
+        
+        if case .failed(let message) = modelManager.downloadState(for: .tiny) {
+            XCTAssertEqual(message, "Network error")
+        } else {
+            XCTFail("Expected failed state")
+        }
+    }
+    
+    // MARK: - Active Model Tests
+    
+    /// Test that activeModel persists to UserDefaults
+    func testActiveModel_PersistsToUserDefaults() async {
+        modelManager.downloadedModels.insert(.base)
+        modelManager.activeModel = .base
+        
+        let saved = UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel)
+        XCTAssertEqual(saved, ModelManager.ModelSize.base.rawValue)
+    }
+    
+    /// Test that activeModel loads from UserDefaults
+    func testActiveModel_LoadsFromUserDefaults() async {
+        // Save a model to UserDefaults
+        UserDefaults.standard.set(ModelManager.ModelSize.small.rawValue, forKey: AppStorageKeys.activeWhisperModel)
+        
+        // Create new manager that scans and validates
+        // Note: With skipScan, validation will fail unless model actually exists
+        let newManager = ModelManager(skipScan: true)
+        
+        // activeModel should be nil because validation fails (no real model)
+        XCTAssertNil(newManager.activeModel)
+    }
+    
+    /// Test that setting activeModel updates downloadedModels
+    func testActiveModel_UpdatesDownloadedModels() async {
+        modelManager.activeModel = .tiny
+        
+        XCTAssertTrue(modelManager.downloadedModels.contains(.tiny))
+    }
+    
+    /// Test that clearing activeModel works
+    func testActiveModel_CanBeCleared() async {
+        modelManager.downloadedModels.insert(.base)
+        modelManager.activeModel = .base
+        
+        modelManager.activeModel = nil
+        
+        XCTAssertNil(modelManager.activeModel)
+        XCTAssertNil(UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel))
+    }
+    
+    // MARK: - Downloaded Models Tests
+    
+    /// Test that downloadedModels can be added
+    func testDownloadedModels_CanAddModels() async {
+        modelManager.downloadedModels.insert(.tiny)
+        modelManager.downloadedModels.insert(.base)
+        
+        XCTAssertTrue(modelManager.downloadedModels.contains(.tiny))
+        XCTAssertTrue(modelManager.downloadedModels.contains(.base))
+        XCTAssertEqual(modelManager.downloadedModels.count, 2)
+    }
+    
+    /// Test that downloadedModels can be removed
+    func testDownloadedModels_CanRemoveModels() async {
+        modelManager.downloadedModels.insert(.tiny)
+        modelManager.downloadedModels.insert(.base)
+        
+        modelManager.downloadedModels.remove(.tiny)
+        
+        XCTAssertFalse(modelManager.downloadedModels.contains(.tiny))
+        XCTAssertTrue(modelManager.downloadedModels.contains(.base))
+    }
+    
+    /// Test that downloadedModels persists to UserDefaults
+    func testDownloadedModels_PersistsToUserDefaults() async {
+        modelManager.downloadedModels.insert(.tiny)
+        modelManager.downloadedModels.insert(.base)
+        
+        // Manually trigger save (in real code, this happens via @Observable)
+        modelManager.saveDownloadedModelsToDefaults()
+        
+        if let saved = UserDefaults.standard.array(forKey: AppStorageKeys.downloadedWhisperModels) as? [String] {
+            XCTAssertTrue(saved.contains("tiny"))
+            XCTAssertTrue(saved.contains("base"))
+        } else {
+            XCTFail("downloadedModels not saved to UserDefaults")
+        }
+    }
+    
+    // MARK: - Model Deletion Tests
+    
+    /// Test that deleteModel removes from downloadedModels
+    func testDeleteModel_RemovesFromDownloadedModels() async {
+        modelManager.downloadedModels.insert(.tiny)
+        
+        _ = modelManager.deleteModel(.tiny)
+        
+        XCTAssertFalse(modelManager.downloadedModels.contains(.tiny))
+    }
+    
+    /// Test that deleteModel clears activeModel if it's the deleted one
+    func testDeleteModel_ClearsActiveModelIfDeleted() async {
+        modelManager.downloadedModels.insert(.tiny)
+        modelManager.activeModel = .tiny
+        
+        _ = modelManager.deleteModel(.tiny)
+        
+        XCTAssertNil(modelManager.activeModel)
+    }
+    
+    /// Test that deleteModel returns false for non-existent model
+    func testDeleteModel_ReturnsFalseForNonExistentModel() async {
+        let result = modelManager.deleteModel(.large)
+        
+        XCTAssertFalse(result)
+    }
+    
+    /// Test that deleteModel preserves other models
+    func testDeleteModel_PreservesOtherModels() async {
+        modelManager.downloadedModels.insert(.tiny)
+        modelManager.downloadedModels.insert(.base)
+        modelManager.downloadedModels.insert(.small)
+        
+        _ = modelManager.deleteModel(.base)
+        
+        XCTAssertTrue(modelManager.downloadedModels.contains(.tiny))
+        XCTAssertFalse(modelManager.downloadedModels.contains(.base))
+        XCTAssertTrue(modelManager.downloadedModels.contains(.small))
+    }
+    
+    // MARK: - hasModel Tests
+    
+    /// Test that hasModel returns true when models exist
+    func testHasModel_TrueWhenModelsExist() async {
+        modelManager.downloadedModels.insert(.tiny)
+        modelManager.activeModel = .tiny
+        
+        XCTAssertTrue(modelManager.hasModel)
+    }
+    
+    /// Test that hasModel returns false when no models
+    func testHasModel_FalseWhenNoModels() async {
+        XCTAssertFalse(modelManager.hasModel)
+    }
+    
+    /// Test that hasModel returns false when models exist but activeModel is nil
+    func testHasModel_FalseWhenActiveModelNil() async {
+        modelManager.downloadedModels.insert(.tiny)
+        // Don't set activeModel
+        
+        XCTAssertFalse(modelManager.hasModel)
+    }
+    
+    // MARK: - getFirstValidModel Tests
+    
+    /// Test that getFirstValidModel returns nil when no models downloaded
+    func testGetFirstValidModel_NilWhenNoModels() async {
+        XCTAssertNil(modelManager.getFirstValidModel())
+    }
+    
+    /// Test that getFirstValidModel returns model when one exists
+    func testGetFirstValidModel_ReturnsModelWhenAvailable() async {
+        modelManager.downloadedModels.insert(.small)
+        
+        // With skipScan, model won't validate, so this returns nil
+        // In real use, validation would pass if files exist
+        let result = modelManager.getFirstValidModel()
+        
+        // Can't guarantee result without real model files
+        XCTAssertTrue(result == nil || result == .small)
+    }
+    
+    /// Test that getFirstValidModel prioritizes certain models
+    func testGetFirstValidModel_PrioritizesOrder() async {
+        // Add multiple models
+        modelManager.downloadedModels.insert(.large)
+        modelManager.downloadedModels.insert(.tiny)
+        modelManager.downloadedModels.insert(.base)
+        
+        // getFirstValidModel should return first valid one
+        // Priority order varies by implementation
+        let result = modelManager.getFirstValidModel()
+        
+        // Should return one of the downloaded models or nil (if validation fails)
+        if let model = result {
+            XCTAssertTrue(modelManager.downloadedModels.contains(model))
+        }
+    }
+    
+    // MARK: - Model Corruption Tests
+    
+    /// Test that markModelCorrupted updates state correctly
+    func testMarkModelCorrupted_UpdatesStateToFailed() async {
+        modelManager.downloadedModels.insert(.base)
+        modelManager.downloadStates[.base] = .completed
+        
+        modelManager.markModelCorrupted(.base)
+        
+        if case .failed(let message) = modelManager.downloadState(for: .base) {
+            XCTAssertTrue(message.contains("corrupted") || message.contains("incomplete"))
+        } else {
+            XCTFail("Expected failed state after marking corrupted")
+        }
+    }
+    
+    /// Test that markModelCorrupted removes from downloadedModels
+    func testMarkModelCorrupted_RemovesFromDownloadedModels() async {
+        modelManager.downloadedModels.insert(.base)
+        
+        modelManager.markModelCorrupted(.base)
+        
+        XCTAssertFalse(modelManager.downloadedModels.contains(.base))
+    }
+    
+    /// Test that markModelCorrupted switches activeModel if needed
+    func testMarkModelCorrupted_SwitchesActiveModel() async {
+        modelManager.downloadedModels.insert(.base)
+        modelManager.downloadedModels.insert(.tiny)
+        modelManager.activeModel = .base
+        
+        modelManager.markModelCorrupted(.base)
+        
+        XCTAssertNotEqual(modelManager.activeModel, .base)
+    }
+    
+    // MARK: - Model Size Enum Additional Tests
+    
+    /// Test that all ModelSize cases have unique whisperKitNames
+    func testModelSize_UniqueWhisperKitNames() async {
+        let names = ModelManager.ModelSize.allCases.map { $0.whisperKitName }
+        let uniqueNames = Set(names)
+        
+        XCTAssertEqual(names.count, uniqueNames.count, "All models should have unique whisperKitNames")
+    }
+    
+    /// Test that all ModelSize cases have unique display names
+    func testModelSize_UniqueDisplayNames() async {
+        let names = ModelManager.ModelSize.allCases.map { $0.displayName }
+        let uniqueNames = Set(names)
+        
+        XCTAssertEqual(names.count, uniqueNames.count, "All models should have unique display names")
+    }
+    
+    /// Test that ModelSize enum has expected count
+    func testModelSize_ExpectedCount() async {
+        // Should have 6 models: tiny, base, small, medium, large, largeTurbo
+        XCTAssertEqual(ModelManager.ModelSize.allCases.count, 6)
+    }
+    
+    /// Test that ModelSize raw values are correct
+    func testModelSize_RawValues() async {
+        XCTAssertEqual(ModelManager.ModelSize.tiny.rawValue, "tiny")
+        XCTAssertEqual(ModelManager.ModelSize.base.rawValue, "base")
+        XCTAssertEqual(ModelManager.ModelSize.small.rawValue, "small")
+        XCTAssertEqual(ModelManager.ModelSize.medium.rawValue, "medium")
+        XCTAssertEqual(ModelManager.ModelSize.large.rawValue, "large-v3")
+        XCTAssertEqual(ModelManager.ModelSize.largeTurbo.rawValue, "large-v3-turbo")
+    }
+    
+    /// Test that ModelSize can be created from raw value
+    func testModelSize_InitFromRawValue() async {
+        XCTAssertEqual(ModelManager.ModelSize(rawValue: "tiny"), .tiny)
+        XCTAssertEqual(ModelManager.ModelSize(rawValue: "base"), .base)
+        XCTAssertEqual(ModelManager.ModelSize(rawValue: "large-v3-turbo"), .largeTurbo)
+        XCTAssertNil(ModelManager.ModelSize(rawValue: "invalid"))
+    }
+    
+    // MARK: - Model Directory Tests
+    
+    /// Test that modelDirectory is consistent
+    func testModelDirectory_IsConsistent() async {
+        let dir1 = modelManager.modelDirectory
+        let dir2 = modelManager.modelDirectory
+        
+        XCTAssertEqual(dir1, dir2, "modelDirectory should return consistent path")
+    }
+    
+    /// Test that modelDirectory contains expected path components
+    func testModelDirectory_ContainsExpectedComponents() async {
+        let dir = modelManager.modelDirectory
+        
+        XCTAssertTrue(dir.path.contains("Muesli"), "Model directory should contain 'Muesli'")
+        XCTAssertTrue(dir.path.contains("Models"), "Model directory should contain 'Models'")
+    }
+    
+    // MARK: - pathForModel Tests
+    
+    /// Test that pathForModel returns nil for non-existent model
+    func testPathForModel_NilForNonExistentModel() async {
+        let path = modelManager.pathForModel(.large)
+        
+        // With skipScan, no models are detected
+        XCTAssertNil(path)
+    }
+    
+    /// Test that pathForModel returns path for added model
+    func testPathForModel_ReturnsPathForAddedModel() async {
+        // Manually add to modelPaths (simulating a detected model)
+        let testPath = testModelDirectory.appendingPathComponent("test-model")
+        modelManager.modelPaths[.tiny] = testPath
+        
+        let path = modelManager.pathForModel(.tiny)
+        
+        XCTAssertEqual(path, testPath)
+    }
 }

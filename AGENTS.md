@@ -34,14 +34,14 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 ```bash
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 killall Muesli 2>/dev/null
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee ".logs/build-${TIMESTAMP}.txt"
+xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee "/tmp/muesli-build-${TIMESTAMP}.txt"
 open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
 ```
 
 **For feature branches**, replace `Muesli` with `Muesli-<branch-suffix>` (see Branch Development below).
 
 **Other commands**:
-- Test: `xcodebuild ... test 2>&1 | tee ".logs/test-${TIMESTAMP}.txt"`
+- Test: `xcodebuild ... test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"`
 - Test with coverage: `./scripts/generate-coverage.sh`
 - Clean: `xcodebuild ... clean`
 - Reset permissions: `tccutil reset ScreenCapture com.muesli.app && tccutil reset Microphone com.muesli.app`
@@ -50,7 +50,7 @@ open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.
 - Create DMG (modern): `./scripts/create-dmg-modern.sh [VERSION]`
 - Create DMG (legacy): `./scripts/create-dmg.sh [VERSION]`
 
-**Efficient workflows**: Save build/test output once with `| tee`, then grep the file. Never re-run to extract different info.
+**Efficient workflows**: Save build/test output once with `| tee` to `/tmp/`, then grep the file. Never re-run to extract different info.
 
 ## Code Coverage
 

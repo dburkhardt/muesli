@@ -1,10 +1,13 @@
-import SwiftUI
+import os.log
 import ServiceManagement
+import SwiftUI
 
 /// Main Preferences view with tabbed sections for Models, Output, and General settings
 struct PreferencesView: View {
     @Bindable var viewModel: MuesliViewModel
     @Environment(PreferencesManager.self) private var preferencesManager
+    
+    private static let logger = Logger(subsystem: "com.muesli.app", category: "PreferencesView")
     
     var body: some View {
         TabView {
@@ -46,6 +49,8 @@ struct ModelsPreferencesTab: View {
 struct OutputPreferencesTab: View {
     @Environment(PreferencesManager.self) private var preferencesManager
     @State private var showDirectoryPicker = false
+    
+    private static let logger = Logger(subsystem: "com.muesli.app", category: "PreferencesView")
     
     var body: some View {
         @Bindable var prefs = preferencesManager
@@ -97,7 +102,7 @@ struct OutputPreferencesTab: View {
                     preferencesManager.setOutputDirectory(url)
                 }
             case .failure(let error):
-                print("Failed to select directory: \(error)")
+                Self.logger.error("Failed to select directory: \(error)")
             }
         }
     }
@@ -183,7 +188,13 @@ struct GeneralPreferencesTab: View {
                         
                         Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
                         
-                        Text("Shorter chunks provide faster transcription but may reduce accuracy. Longer chunks improve accuracy but increase latency. Changes apply to new recordings only.")
+                        Text(
+                            """
+                            Shorter chunks provide faster transcription but may reduce accuracy. \
+                            Longer chunks improve accuracy but increase latency. \
+                            Changes apply to new recordings only.
+                            """
+                        )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

@@ -204,7 +204,14 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         guard transcriptionMode == .live else { return }
         
         // Get chunks to process with overlap
-        let (systemChunk, micChunk, startTime, systemOffset, micOffset) = bufferState.withLock { state -> ([Float]?, [Float]?, Date, Int, Int) in
+        typealias ChunkInfo = (
+            systemChunk: [Float]?,
+            micChunk: [Float]?,
+            startTime: Date,
+            systemOffset: Int,
+            micOffset: Int
+        )
+        let chunkInfo: ChunkInfo = bufferState.withLock { state -> ChunkInfo in
             var sysChunk: [Float]?
             var micChunk: [Float]?
             let time = state.recordingStartTime ?? Date()
@@ -255,13 +262,25 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         }
         
         // Process system audio ("Them") with VAD check
-        if let chunk = systemChunk, hasVoiceActivity(chunk) {
-            await transcribeChunk(chunk, speaker: .them, whisperKit: whisperKit, startTime: startTime, offset: systemOffset)
+        if let chunk = chunkInfo.systemChunk, hasVoiceActivity(chunk) {
+            await transcribeChunk(
+                chunk,
+                speaker: .them,
+                whisperKit: whisperKit,
+                startTime: chunkInfo.startTime,
+                offset: chunkInfo.systemOffset
+            )
         }
         
         // Process mic audio ("Me") with VAD check
-        if let chunk = micChunk, hasVoiceActivity(chunk) {
-            await transcribeChunk(chunk, speaker: .me, whisperKit: whisperKit, startTime: startTime, offset: micOffset)
+        if let chunk = chunkInfo.micChunk, hasVoiceActivity(chunk) {
+            await transcribeChunk(
+                chunk,
+                speaker: .me,
+                whisperKit: whisperKit,
+                startTime: chunkInfo.startTime,
+                offset: chunkInfo.micOffset
+            )
         }
     }
     
@@ -305,7 +324,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         }
     }
     
-    private func transcribeChunk(_ samples: [Float], speaker: TranscriptSegment.Speaker, whisperKit: WhisperKit, startTime: Date, offset: Int = 0) async {
+    private func transcribeChunk(
+        _ samples: [Float],
+        speaker: TranscriptSegment.Speaker,
+        whisperKit: WhisperKit,
+        startTime: Date,
+        offset: Int = 0
+    ) async {
         do {
             // Transcribe the audio chunk
             let results = try await whisperKit.transcribe(audioArray: samples)
@@ -370,7 +395,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     ///   - systemAudioURL: URL to system audio file
     ///   - micAudioURL: URL to microphone audio file
     ///   - startTime: Recording start time for timestamp calculation
-    func transcribePostProcessing(systemAudioURL: URL?, micAudioURL: URL?, startTime: Date) async throws {
+    func transcribePostProcessing(
+        systemAudioURL: URL?,
+        micAudioURL: URL?,
+        startTime: Date
+    ) async throws {
         guard isInitialized, let whisperKit = whisperKit else {
             throw NSError(domain: "TranscriptionService", code: 1, userInfo: [NSLocalizedDescriptionKey: "WhisperKit not initialized"])
         }
@@ -378,7 +407,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Transcribe system audio if available (with chunking)
         if let systemURL = systemAudioURL {
             if let samples = await loadAudioFile(url: systemURL) {
-                logger.info("Post-processing system audio: \(samples.count) samples (\(String(format: "%.1f", Double(samples.count) / Double(self.sampleRate)))s)")
+                let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
+                logger.info("Post-processing system audio: \(samples.count) samples (\(duration)s)")
                 
                 // Split into 30-second chunks with 5-second overlap
                 let chunks = splitIntoChunks(
@@ -726,7 +756,13 @@ extension TranscriptionService {
             channels: AVAudioChannelCount(sourceChannels),
             interleaved: false
         ) else {
-            return fallbackResample(samples: samples, sourceSampleRate: sourceSampleRate, sourceChannels: sourceChannels, targetSampleRate: targetSampleRate, targetChannels: targetChannels)
+            return fallbackResample(
+                samples: samples,
+                sourceSampleRate: sourceSampleRate,
+                sourceChannels: sourceChannels,
+                targetSampleRate: targetSampleRate,
+                targetChannels: targetChannels
+            )
         }
         
         // Create target format
@@ -736,25 +772,52 @@ extension TranscriptionService {
             channels: AVAudioChannelCount(targetChannels),
             interleaved: false
         ) else {
-            return fallbackResample(samples: samples, sourceSampleRate: sourceSampleRate, sourceChannels: sourceChannels, targetSampleRate: targetSampleRate, targetChannels: targetChannels)
+            return fallbackResample(
+                samples: samples,
+                sourceSampleRate: sourceSampleRate,
+                sourceChannels: sourceChannels,
+                targetSampleRate: targetSampleRate,
+                targetChannels: targetChannels
+            )
         }
         
         // Create converter
         guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
-            return fallbackResample(samples: samples, sourceSampleRate: sourceSampleRate, sourceChannels: sourceChannels, targetSampleRate: targetSampleRate, targetChannels: targetChannels)
+            return fallbackResample(
+                samples: samples,
+                sourceSampleRate: sourceSampleRate,
+                sourceChannels: sourceChannels,
+                targetSampleRate: targetSampleRate,
+                targetChannels: targetChannels
+            )
         }
         
         // Create input buffer
         let frameCount = samples.count / sourceChannels
-        guard let inputBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frameCount)) else {
-            return fallbackResample(samples: samples, sourceSampleRate: sourceSampleRate, sourceChannels: sourceChannels, targetSampleRate: targetSampleRate, targetChannels: targetChannels)
+        guard let inputBuffer = AVAudioPCMBuffer(
+            pcmFormat: sourceFormat,
+            frameCapacity: AVAudioFrameCount(frameCount)
+        ) else {
+            return fallbackResample(
+                samples: samples,
+                sourceSampleRate: sourceSampleRate,
+                sourceChannels: sourceChannels,
+                targetSampleRate: targetSampleRate,
+                targetChannels: targetChannels
+            )
         }
         
         inputBuffer.frameLength = AVAudioFrameCount(frameCount)
         
         // Copy samples to input buffer (deinterleave if needed)
         guard let channelData = inputBuffer.floatChannelData else {
-            return fallbackResample(samples: samples, sourceSampleRate: sourceSampleRate, sourceChannels: sourceChannels, targetSampleRate: targetSampleRate, targetChannels: targetChannels)
+            return fallbackResample(
+                samples: samples,
+                sourceSampleRate: sourceSampleRate,
+                sourceChannels: sourceChannels,
+                targetSampleRate: targetSampleRate,
+                targetChannels: targetChannels
+            )
         }
         
         if sourceChannels == 1 {
@@ -783,8 +846,17 @@ extension TranscriptionService {
         
         // Calculate output buffer size
         let outputFrameCount = Int(Double(frameCount) * targetSampleRate / sourceSampleRate)
-        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: AVAudioFrameCount(outputFrameCount)) else {
-            return fallbackResample(samples: samples, sourceSampleRate: sourceSampleRate, sourceChannels: sourceChannels, targetSampleRate: targetSampleRate, targetChannels: targetChannels)
+        guard let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: targetFormat,
+            frameCapacity: AVAudioFrameCount(outputFrameCount)
+        ) else {
+            return fallbackResample(
+                samples: samples,
+                sourceSampleRate: sourceSampleRate,
+                sourceChannels: sourceChannels,
+                targetSampleRate: targetSampleRate,
+                targetChannels: targetChannels
+            )
         }
         
         // Convert
@@ -795,7 +867,13 @@ extension TranscriptionService {
         }
         
         guard status == .haveData, let outputChannelData = outputBuffer.floatChannelData else {
-            return fallbackResample(samples: samples, sourceSampleRate: sourceSampleRate, sourceChannels: sourceChannels, targetSampleRate: targetSampleRate, targetChannels: targetChannels)
+            return fallbackResample(
+                samples: samples,
+                sourceSampleRate: sourceSampleRate,
+                sourceChannels: sourceChannels,
+                targetSampleRate: targetSampleRate,
+                targetChannels: targetChannels
+            )
         }
         
         // Extract mono output

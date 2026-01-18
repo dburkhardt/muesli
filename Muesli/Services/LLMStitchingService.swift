@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
+import os.log
 
 /// Service for intelligent transcript chunk stitching
 /// Uses local LLM when available, falls back to heuristics otherwise
@@ -16,6 +17,7 @@ final class LLMStitchingService {
     // MARK: - Dependencies
     
     private let llmManager: LLMManager
+    private let logger = LoggerFactory.logger(category: "LLMStitchingService")
     
     // MARK: - Configuration
     
@@ -48,7 +50,7 @@ final class LLMStitchingService {
             do {
                 return try await stitchWithLLM(chunks)
             } catch {
-                print("LLM stitching failed, falling back to heuristics: \(error)")
+                logger.warning("LLM stitching failed, falling back to heuristics: \(error.localizedDescription)")
                 return stitchWithHeuristics(chunks)
             }
         } else {
@@ -82,8 +84,13 @@ final class LLMStitchingService {
         // Generate using the model container
         let result = try await container.perform { context in
             // Prepare input messages
+            let systemMessage = """
+                You are a transcript cleaner. Your job is to merge overlapping transcript chunks into \
+                coherent text. Remove duplicated words/phrases at boundaries. Do not add or change content. \
+                Output only the cleaned text, nothing else.
+                """
             let messages: [Chat.Message] = [
-                .system("You are a transcript cleaner. Your job is to merge overlapping transcript chunks into coherent text. Remove duplicated words/phrases at boundaries. Do not add or change content. Output only the cleaned text, nothing else."),
+                .system(systemMessage),
                 .user(prompt)
             ]
             

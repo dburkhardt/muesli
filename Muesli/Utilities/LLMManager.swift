@@ -15,42 +15,42 @@ final class LLMManager: LLMManagerProtocol {
     // MARK: - Model Options
     
     enum LLMModel: String, CaseIterable, Identifiable, Hashable {
-        case llama3_2_3b = "Llama-3.2-3B-Instruct-4bit"
-        case phi3_mini = "Phi-3-mini-4k-instruct-4bit"
-        case gemma2_2b = "gemma-2-2b-it-4bit"
+        case llama323B = "Llama-3.2-3B-Instruct-4bit"
+        case phi3Mini = "Phi-3-mini-4k-instruct-4bit"
+        case gemma22b = "gemma-2-2b-it-4bit"
         
         var id: String { rawValue }
         
         var displayName: String {
             switch self {
-            case .llama3_2_3b: return "Llama 3.2 3B (Recommended)"
-            case .phi3_mini: return "Phi-3 Mini"
-            case .gemma2_2b: return "Gemma 2 2B"
+            case .llama323B: return "Llama 3.2 3B (Recommended)"
+            case .phi3Mini: return "Phi-3 Mini"
+            case .gemma22b: return "Gemma 2 2B"
             }
         }
         
         var sizeDescription: String {
             switch self {
-            case .llama3_2_3b: return "~2GB"
-            case .phi3_mini: return "~2.3GB"
-            case .gemma2_2b: return "~1.5GB"
+            case .llama323B: return "~2GB"
+            case .phi3Mini: return "~2.3GB"
+            case .gemma22b: return "~1.5GB"
             }
         }
         
         var description: String {
             switch self {
-            case .llama3_2_3b: return "Best balance of quality and speed"
-            case .phi3_mini: return "Good for longer context"
-            case .gemma2_2b: return "Smaller, faster"
+            case .llama323B: return "Best balance of quality and speed"
+            case .phi3Mini: return "Good for longer context"
+            case .gemma22b: return "Smaller, faster"
             }
         }
         
         /// Hugging Face model identifier
         var huggingFaceRepo: String {
             switch self {
-            case .llama3_2_3b: return "mlx-community/Llama-3.2-3B-Instruct-4bit"
-            case .phi3_mini: return "mlx-community/Phi-3-mini-4k-instruct-4bit"
-            case .gemma2_2b: return "mlx-community/gemma-2-2b-it-4bit"
+            case .llama323B: return "mlx-community/Llama-3.2-3B-Instruct-4bit"
+            case .phi3Mini: return "mlx-community/Phi-3-mini-4k-instruct-4bit"
+            case .gemma22b: return "mlx-community/gemma-2-2b-it-4bit"
             }
         }
         

@@ -1,9 +1,15 @@
 import AppKit
 import Foundation
 import SwiftUI
+import os.log
 
 @main
 struct MuesliApp: App {
+    // MARK: - Logging
+    
+    // Use nonisolated logger since it's accessed from App Delegate
+    nonisolated(unsafe) static let logger = Logger(subsystem: "com.muesli.app", category: "MuesliApp")
+    
     @State private var viewModel: MuesliViewModel
     @State private var preferencesManager: PreferencesManager
     @State private var meetingHistoryManager: MeetingHistoryManager
@@ -221,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showOnboardingWindow() {
         // Use the shared ViewModel from MuesliApp to ensure state synchronization
         guard let viewModel = MuesliApp.sharedViewModel else {
-            print("[AppDelegate] Error: Shared ViewModel not available")
+            MuesliApp.logger.error("Shared ViewModel not available")
             return
         }
         
@@ -344,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 callback()
             } else {
                 // Last resort: log error
-                print("[AppDelegate] Warning: Main window not found and no callback available.")
+                MuesliApp.logger.warning("Main window not found and no callback available.")
             }
         }
     }
