@@ -81,6 +81,7 @@
 		B1000023241D1A1D00000042 /* TranscriptionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */; };
 		B0613F64BBAA48E09FA64C49 /* TimeFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0613F64BBAA48E09FA64C49A /* TimeFormattingTests.swift */; };
 		B1000025241D1A1D00000043 /* PreferencesManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000026241D1A1D00000043 /* PreferencesManagerTests.swift */; };
+		B1000027241D1A1D00000044 /* PermissionManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000028241D1A1D00000044 /* PermissionManagerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -157,6 +158,7 @@
 		B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionCoordinatorTests.swift; sourceTree = "<group>"; };
 		B0613F64BBAA48E09FA64C49A /* TimeFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeFormattingTests.swift; sourceTree = "<group>"; };
 		B1000026241D1A1D00000043 /* PreferencesManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManagerTests.swift; sourceTree = "<group>"; };
+		B1000028241D1A1D00000044 /* PermissionManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManagerTests.swift; sourceTree = "<group>"; };
 		C1000002241D1A1D00000050 /* PreferencesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManager.swift; sourceTree = "<group>"; };
 		C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryManager.swift; sourceTree = "<group>"; };
 		C1000006241D1A1D00000052 /* RefinementCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementCoordinator.swift; sourceTree = "<group>"; };
@@ -361,6 +363,7 @@
 				B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */,
 				B0613F64BBAA48E09FA64C49A /* TimeFormattingTests.swift */,
 				B1000026241D1A1D00000043 /* PreferencesManagerTests.swift */,
+				B1000028241D1A1D00000044 /* PermissionManagerTests.swift */,
 				B100001D241D1A1D00000040 /* Protocols */,
 				B100001E241D1A1D00000040 /* Mocks */,
 			);
@@ -623,6 +626,7 @@
 				B1000023241D1A1D00000042 /* TranscriptionCoordinatorTests.swift in Sources */,
 				B0613F64BBAA48E09FA64C49 /* TimeFormattingTests.swift in Sources */,
 				B1000025241D1A1D00000043 /* PreferencesManagerTests.swift in Sources */,
+				B1000027241D1A1D00000044 /* PermissionManagerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

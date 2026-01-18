@@ -16,8 +16,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Transcription mode: live (real-time) or post-processing (after recording)
     enum TranscriptionMode: String, Sendable {
-        case live = "live"
-        case postProcessing = "postProcessing"
+        case live
+        case postProcessing
     }
     
     /// Represents a transcribed segment with speaker info

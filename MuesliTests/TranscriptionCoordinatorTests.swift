@@ -613,8 +613,8 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertEqual(sut.transcriptionMode, .postProcessing)
     }
     
-    /// Test transcript handler lifecycle
     // TEMPORARILY DISABLED: Concurrency issue with captured var
+    // Test transcript handler lifecycle
     /*
     @MainActor
     func testTranscriptHandlerLifecycle() async {
