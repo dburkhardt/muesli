@@ -134,6 +134,11 @@ final class MuesliViewModel {
         recordingController.activeSession
     }
     
+    /// Warning manager for non-blocking service warnings (delegates to RecordingController)
+    var warningManager: WarningManager {
+        recordingController.warningManager
+    }
+    
     // MARK: - Meeting History (delegating to MeetingHistoryManager)
     
     /// All discovered meeting recordings (delegates to historyManager)
@@ -474,6 +479,12 @@ final class MuesliViewModel {
                     self.logger.error("Failed to re-export meeting: \(error.localizedDescription)")
                 }
             }
+        }
+        
+        // Set up callback for refinement warnings
+        self.refinementCoordinator.onWarning = { [weak self] message, details, canRetry in
+            guard let self = self else { return }
+            self.warningManager.addWarning(.llmRefinement, message: message, details: details, canRetry: canRetry)
         }
         
         // Set up callback for chunk duration changes

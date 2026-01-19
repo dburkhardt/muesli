@@ -25,6 +25,9 @@ final class RecordingController {
     private let microphoneManager: MicrophoneManager
     private let exportService: ExportService
     
+    /// Warning manager for propagating non-fatal errors to UI
+    let warningManager: WarningManager
+    
     // MARK: - State
     
     /// The currently recording session (only one can record at a time)
@@ -97,7 +100,8 @@ final class RecordingController {
         echoCancellationService: EchoCancellationService,
         preferencesManager: PreferencesManager,
         microphoneManager: MicrophoneManager,
-        exportService: ExportService
+        exportService: ExportService,
+        warningManager: WarningManager = WarningManager()
     ) {
         self.audioCaptureService = audioCaptureService
         self.fileOutputService = fileOutputService
@@ -107,8 +111,43 @@ final class RecordingController {
         self.preferencesManager = preferencesManager
         self.microphoneManager = microphoneManager
         self.exportService = exportService
+        self.warningManager = warningManager
+        
+        // Wire up service warning callbacks
+        wireWarningCallbacks()
         
         // Note: Audio buffer handler is set up in ensureAudioHandlersConfigured() before each recording
+    }
+    
+    /// Wire up warning callbacks from all services to the warning manager
+    private func wireWarningCallbacks() {
+        // FileOutputService warnings
+        fileOutputService.onWarning = { [weak self] message, details in
+            Task { @MainActor in
+                self?.warningManager.addWarning(.fileOutput, message: message, details: details, canRetry: false)
+            }
+        }
+        
+        // TranscriptionCoordinator warnings
+        transcriptionCoordinator.onWarning = { [weak self] category, message, details, canRetry in
+            Task { @MainActor in
+                self?.warningManager.addWarning(category, message: message, details: details, canRetry: canRetry)
+            }
+        }
+        
+        // ExportService warnings
+        exportService.onWarning = { [weak self] message, details in
+            Task { @MainActor in
+                self?.warningManager.addWarning(.export, message: message, details: details, canRetry: false)
+            }
+        }
+        
+        // TranscriptionService warnings (wired at start of recording)
+        transcriptionService.setWarningHandler { [weak self] message, details in
+            Task { @MainActor in
+                self?.warningManager.addWarning(.transcription, message: message, details: details, canRetry: false)
+            }
+        }
     }
     
     deinit {
@@ -202,6 +241,13 @@ final class RecordingController {
                 self?.updateAudioLevel(level, type: type)
             }
         }
+        
+        // Set up audio warning handler (for mic failures, etc.)
+        await audioCaptureServiceRef.setWarningHandler { [weak self] message, details, canRetry in
+            Task { @MainActor in
+                self?.warningManager.addWarning(.microphone, message: message, details: details, canRetry: canRetry)
+            }
+        }
     }
     
     // MARK: - Audio Buffer Processing Helpers
@@ -215,6 +261,34 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
+        // #region agent log
+        struct SysLogCounter { nonisolated(unsafe) static var count = 0 }
+        SysLogCounter.count += 1
+        if SysLogCounter.count <= 3 || SysLogCounter.count % 100 == 0 {
+            var maxSample: Float = 0.0
+            var bufferLength = 0
+            if let dataBuffer = CMSampleBufferGetDataBuffer(buffer) {
+                var length = 0
+                var dataPointer: UnsafeMutablePointer<Int8>?
+                let status = CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &dataPointer)
+                bufferLength = length
+                if status == noErr, let data = dataPointer {
+                    let floatPointer = UnsafeRawPointer(data).assumingMemoryBound(to: Float.self)
+                    for i in 0..<min(length/4, 100) {
+                        let absVal = abs(floatPointer[i])
+                        if absVal > maxSample { maxSample = absVal }
+                    }
+                }
+            }
+            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+            let logEntry = "{\"hypothesisId\":\"G\",\"location\":\"RecordingController.handleSystemAudioBuffer\",\"message\":\"System buffer received\",\"data\":{\"maxSample\":\(maxSample),\"bufferLength\":\(bufferLength),\"bufferNum\":\(SysLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
+            if let data = logEntry.data(using: .utf8) {
+                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
+                if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
+            }
+        }
+        // #endregion
+        
         // Store system audio for AEC reference (if AEC enabled)
         if isAECEnabled {
             if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
@@ -248,33 +322,84 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
-        // Extract microphone samples at 48kHz
-        let micSamples48kHz = EchoCancellationService.extractSamples(from: buffer)
-        guard let micSamples48kHz = micSamples48kHz else {
+        // #region agent log
+        struct MicLogCounter { nonisolated(unsafe) static var count = 0 }
+        MicLogCounter.count += 1
+        let shouldLog = MicLogCounter.count <= 3 || MicLogCounter.count % 100 == 0
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        // #endregion
+        
+        // Get the actual sample rate from the incoming buffer (may be 44100Hz, 48000Hz, etc.)
+        var sourceSampleRate: Int = 48000  // default
+        if let formatDesc = CMSampleBufferGetFormatDescription(buffer),
+           let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) {
+            sourceSampleRate = Int(asbd.pointee.mSampleRate)
+        }
+        
+        // Extract microphone samples at native rate (NOT necessarily 48kHz!)
+        let micSamplesNative = EchoCancellationService.extractSamples(from: buffer)
+        guard let micSamplesNative = micSamplesNative else {
+            // #region agent log
+            if shouldLog {
+                let logEntry = "{\"hypothesisId\":\"F\",\"location\":\"RecordingController.handleMicrophoneAudioBuffer\",\"message\":\"extractSamples returned nil - using fallback\",\"data\":{\"bufferNum\":\(MicLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
+                if let data = logEntry.data(using: .utf8) {
+                    if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
+                    if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
+                }
+            }
+            // #endregion
             // Fallback: save original buffer
             fileService.appendAudioBuffer(buffer, type: .microphone)
             return
         }
         
-        // Apply AEC if enabled
-        let processedSamples48kHz: [Float]
+        // #region agent log
+        if shouldLog {
+            let maxExtracted = micSamplesNative.prefix(100).map { abs($0) }.max() ?? 0
+            let logEntry = "{\"hypothesisId\":\"F\",\"location\":\"RecordingController.handleMicrophoneAudioBuffer\",\"message\":\"Samples extracted\",\"data\":{\"sampleCount\":\(micSamplesNative.count),\"sourceSampleRate\":\(sourceSampleRate),\"maxExtracted\":\(maxExtracted),\"isAECEnabled\":\(isAECEnabled),\"bufferNum\":\(MicLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
+            if let data = logEntry.data(using: .utf8) {
+                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
+                if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
+            }
+        }
+        // #endregion
+        
+        // Apply AEC if enabled (operates at native sample rate)
+        let processedSamplesNative: [Float]
         if isAECEnabled {
-            processedSamples48kHz = aecService.processMicrophoneAudio(
-                microphoneSamples: micSamples48kHz,
+            processedSamplesNative = aecService.processMicrophoneAudio(
+                microphoneSamples: micSamplesNative,
                 micTimestamp: timestamp
             )
         } else {
-            processedSamples48kHz = micSamples48kHz
+            processedSamplesNative = micSamplesNative
         }
         
-        // Convert to stereo CMSampleBuffer for file output (FileOutputService expects stereo)
-        // This ensures format consistency regardless of AEC state
+        // #region agent log
+        if shouldLog {
+            let maxProcessed = processedSamplesNative.prefix(100).map { abs($0) }.max() ?? 0
+            let logEntry = "{\"hypothesisId\":\"F\",\"location\":\"RecordingController.handleMicrophoneAudioBuffer\",\"message\":\"After AEC processing\",\"data\":{\"sampleCount\":\(processedSamplesNative.count),\"maxProcessed\":\(maxProcessed),\"bufferNum\":\(MicLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
+            if let data = logEntry.data(using: .utf8), let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
+        }
+        // #endregion
+        
+        // Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
+        // CRITICAL: Pass the actual source sample rate so resampling works correctly
+        // This fixes the pitch issue when mic is at 44100Hz but file expects 48000Hz
         if let processedBuffer = EchoCancellationService.createSampleBuffer(
-            from: processedSamples48kHz,
-            timestamp: timestamp
+            from: processedSamplesNative,
+            timestamp: timestamp,
+            sourceSampleRate: sourceSampleRate,
+            targetSampleRate: 48000
         ) {
             fileService.appendAudioBuffer(processedBuffer, type: .microphone)
         } else {
+            // #region agent log
+            if shouldLog {
+                let logEntry = "{\"hypothesisId\":\"F\",\"location\":\"RecordingController.handleMicrophoneAudioBuffer\",\"message\":\"createSampleBuffer returned nil - using fallback\",\"data\":{\"bufferNum\":\(MicLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
+                if let data = logEntry.data(using: .utf8), let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
+            }
+            // #endregion
             // Fallback: save original if conversion fails
             fileService.appendAudioBuffer(buffer, type: .microphone)
         }
@@ -285,10 +410,10 @@ final class RecordingController {
         }
         
         // Feed to transcription coordinator (handles buffering during model load)
-        // Use high-quality AVAudioConverter resampling (same as system audio) instead of linear interpolation
+        // Use high-quality AVAudioConverter resampling with the actual source sample rate
         let resampled = TranscriptionService.resampleSamples(
-            samples: processedSamples48kHz,
-            sourceSampleRate: 48000,
+            samples: processedSamplesNative,
+            sourceSampleRate: Double(sourceSampleRate),  // Use actual mic sample rate (may be 44100Hz)
             sourceChannels: 1,  // Mic is mono
             targetSampleRate: 16000,
             targetChannels: 1,
@@ -337,9 +462,11 @@ final class RecordingController {
         let session = createSession()
         session.selectedApp = nil  // All system audio
         
-        // Use default microphone
-        if let defaultMic = microphoneManager.currentDefaultDevice {
-            microphoneManager.setSelectedDeviceID(defaultMic.id)
+        // Use saved microphone preference, or fall back to default if none set
+        if microphoneManager.selectedDeviceID == nil {
+            if let defaultMic = microphoneManager.currentDefaultDevice {
+                microphoneManager.setSelectedDeviceID(defaultMic.id)
+            }
         }
         
         // Ensure live transcription mode
@@ -374,6 +501,9 @@ final class RecordingController {
     }
     
     private func startRecordingAsync(for session: RecordingSession) async {
+        // Clear any previous warnings at start of new recording
+        warningManager.clearAll()
+        
         do {
             // Start file output FIRST
             session.outputDirectory = try fileOutputService.startWriting()
@@ -446,6 +576,16 @@ final class RecordingController {
             session.isRecordingOnly = true
             // Log error but continue recording audio
             logger.error("Model loading failed: \(error), continuing audio-only recording")
+            
+            // Propagate warning to UI
+            let details = """
+                Transcription model failed to load.
+                Error: \(error.localizedDescription)
+                
+                Recording will continue without transcription.
+                You can re-transcribe later from the saved audio files.
+                """
+            warningManager.addWarning(.modelLoading, message: "Transcription unavailable", details: details, canRetry: false)
         }
     }
     

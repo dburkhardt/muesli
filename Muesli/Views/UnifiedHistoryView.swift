@@ -10,6 +10,19 @@ struct UnifiedHistoryView: View {
         @Bindable var history = historyManager
         
         VStack(spacing: 0) {
+            // Warning banners (if any active warnings)
+            if viewModel.warningManager.hasActiveWarnings {
+                WarningBannerStack(
+                    warnings: viewModel.warningManager.activeWarnings,
+                    onDismiss: { id in
+                        viewModel.warningManager.dismissWarning(id)
+                    },
+                    onCopy: { id in
+                        viewModel.warningManager.copyWarningDetails(id)
+                    }
+                )
+            }
+            
             // Header with title and start button
             headerView
             
@@ -67,26 +80,26 @@ struct UnifiedHistoryView: View {
             
             Spacer()
             
-        Button(
-            action: {
-                // Quick start: immediately begin recording all system audio
-                viewModel.quickStartRecording()
-            },
-            label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("Start Recording")
-                        .font(.system(size: 14, weight: .medium))
+            Button(
+                action: {
+                    // Quick start: immediately begin recording all system audio
+                    viewModel.quickStartRecording()
+                },
+                label: {
+                    HStack(spacing: 4) {
+                        Text("New")
+                            .font(.system(size: 13, weight: .medium))
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Color.accentColor)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-        )
-        .buttonStyle(.plain)
+            )
+            .buttonStyle(.plain)
             .disabled(viewModel.activeSession != nil)
         }
         .padding(.horizontal, 20)

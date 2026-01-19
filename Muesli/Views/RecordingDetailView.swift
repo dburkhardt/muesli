@@ -90,6 +90,19 @@ struct RecordingDetailView: View {
     private func activeRecordingView(session: RecordingSession) -> some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
+                // Warning banners (if any active warnings)
+                if viewModel.warningManager.hasActiveWarnings {
+                    WarningBannerStack(
+                        warnings: viewModel.warningManager.activeWarnings,
+                        onDismiss: { id in
+                            viewModel.warningManager.dismissWarning(id)
+                        },
+                        onCopy: { id in
+                            viewModel.warningManager.copyWarningDetails(id)
+                        }
+                    )
+                }
+                
                 // Header with title and recording indicator
                 headerView(session: session)
                 

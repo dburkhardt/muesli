@@ -21,6 +21,9 @@ final class RefinementCoordinator {
     /// Called when a meeting is updated (for export service integration)
     var onMeetingUpdated: ((MeetingHistoryItem) -> Void)?
     
+    /// Callback for refinement warnings (message, details, canRetry)
+    var onWarning: ((String, String, Bool) -> Void)?
+    
     // MARK: - State
     
     /// Whether to show the refinement progress sheet
@@ -134,8 +137,20 @@ final class RefinementCoordinator {
             do {
                 try await llmManager.loadModel(activeModel)
             } catch {
-                refinementService.errorMessage = "Failed to load LLM model: \(error.localizedDescription)"
+                let errorMsg = "Failed to load LLM model: \(error.localizedDescription)"
+                refinementService.errorMessage = errorMsg
                 logger.error("Failed to load LLM model: \(error)")
+                
+                // Propagate warning to UI
+                let details = """
+                    LLM model failed to load for refinement.
+                    Error: \(error.localizedDescription)
+                    Meeting: \(meeting.title)
+                    
+                    You can try again later or re-download the model.
+                    """
+                onWarning?("Refinement unavailable", details, true)
+                
                 meetingBeingRefined = nil
                 return
             }
@@ -206,6 +221,19 @@ final class RefinementCoordinator {
         } catch {
             // Error is already set in refinementService
             logger.error("Refinement failed: \(error)")
+            
+            // Propagate warning to UI (unless cancelled)
+            if !(error is CancellationError) {
+                let details = """
+                    LLM refinement failed for: \(meeting.title)
+                    Error: \(error.localizedDescription)
+                    
+                    The original transcript is still available.
+                    You can try refinement again later.
+                    """
+                onWarning?("Refinement failed", details, true)
+            }
+            
             meetingBeingRefined = nil
         }
     }

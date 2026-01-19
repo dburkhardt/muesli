@@ -14,6 +14,9 @@ final class ExportService: ExportServiceProtocol {
     private let fileManager = FileManager.default
     private var customExportPath: URL?
     
+    /// Callback for export warnings (message, details)
+    var onWarning: ((String, String) -> Void)?
+    
     /// Default export path (Application Support - no special permissions required)
     private static let defaultExportPath: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -96,6 +99,15 @@ final class ExportService: ExportServiceProtocol {
         
         if !errors.isEmpty {
             logger.warning("Exported \(successCount)/\(meetings.count) meetings with \(errors.count) errors")
+            
+            // Propagate warning to UI
+            let details = """
+                Exported \(successCount) of \(meetings.count) meetings.
+                \(errors.count) export(s) failed:
+                
+                \(errors.joined(separator: "\n"))
+                """
+            onWarning?("Some exports failed", details)
         } else {
             logger.info("Successfully exported all \(successCount) meetings")
         }

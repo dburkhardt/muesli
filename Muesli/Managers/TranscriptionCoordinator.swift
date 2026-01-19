@@ -104,6 +104,9 @@ final class TranscriptionCoordinator {
     /// Callback when model switches due to fallback (from, to, reason)
     var onModelSwitched: ((ModelManager.ModelSize, ModelManager.ModelSize, Error) -> Void)?
     
+    /// Callback for transcription warnings (category, message, details, canRetry)
+    var onWarning: ((ServiceWarning.WarningCategory, String, String, Bool) -> Void)?
+    
     // MARK: - Initialization
     
     init(transcriptionService: any TranscriptionServiceProtocol, modelManager: any ModelManagerProtocol) {
@@ -265,6 +268,12 @@ final class TranscriptionCoordinator {
         if let startTime = bufferStartTime,
            Date().timeIntervalSince(startTime) > maxBufferDuration {
             // Model loading timeout - clear buffers and notify
+            let details = """
+                Model loading timed out after \(Int(maxBufferDuration)) seconds.
+                Audio was buffered but may be incomplete.
+                Recording will continue without transcription.
+                """
+            onWarning?(.modelLoading, "Model loading timeout", details, false)
             clearBuffers()
             onBufferTimeout?()
             return
@@ -301,6 +310,7 @@ final class TranscriptionCoordinator {
         if let startTime = bufferStartTime,
            Date().timeIntervalSince(startTime) > maxBufferDuration {
             // Model loading timeout - clear buffers and notify
+            // Note: Warning is only sent once (from system audio path)
             clearBuffers()
             onBufferTimeout?()
             return
@@ -405,37 +415,14 @@ final class TranscriptionCoordinator {
             startTime: meeting.date
         )
         
-        // Convert segments to TranscriptBlocks with ~50 word limit per block
-        // This ensures readable chunk sizes in the UI
-        let maxWordsPerBlock = 50
-        var blocks: [TranscriptBlock] = []
-        
+        // Use TranscriptProcessor to filter artifacts (e.g., [BLANK_AUDIO], hallucinations)
+        // and merge segments into blocks with word limits
+        let processor = TranscriptProcessor()
         for segment in segments {
-            let speaker: TranscriptBlock.Speaker = segment.speaker == .me ? .me : .them
-            let words = segment.text.split(separator: " ")
-            
-            // Split into chunks of maxWordsPerBlock
-            var wordIndex = 0
-            while wordIndex < words.count {
-                let endIndex = min(wordIndex + maxWordsPerBlock, words.count)
-                let chunkWords = words[wordIndex..<endIndex]
-                let chunkText = chunkWords.joined(separator: " ")
-                
-                // Calculate approximate timestamp offset within segment
-                let progressInSegment = Double(wordIndex) / Double(max(words.count, 1))
-                let chunkTimestamp = segment.timestamp + (progressInSegment * 5.0) // Approximate 5 sec per segment
-                
-                let block = TranscriptBlock(
-                    speaker: speaker,
-                    text: chunkText,
-                    startTimestamp: chunkTimestamp,
-                    endTimestamp: chunkTimestamp + 5.0
-                )
-                blocks.append(block)
-                
-                wordIndex = endIndex
-            }
+            processor.processSegment(segment)
         }
+        processor.finalize()
+        let blocks = processor.blocks
         
         // IMPORTANT: Update meeting AND save to disk - both are required for UI to reflect changes
         if !blocks.isEmpty {

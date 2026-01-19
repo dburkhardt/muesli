@@ -35,6 +35,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     /// Callback for new transcript segments
     typealias TranscriptHandler = @Sendable (TranscriptSegment) -> Void
     
+    /// Callback for transcription warnings (message, details)
+    typealias TranscriptionWarningHandler = @Sendable (String, String) -> Void
+    
     /// Information about audio chunks to process
     private struct ChunkInfo {
         let systemChunk: [Float]?
@@ -49,6 +52,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     private var whisperKit: WhisperKit?
     private var isInitialized = false
     private var transcriptHandler: TranscriptHandler?
+    private var warningHandler: TranscriptionWarningHandler?
     
     /// Current transcription mode
     var transcriptionMode: TranscriptionMode = .live
@@ -132,6 +136,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     /// Set the handler for new transcript segments
     func setTranscriptHandler(_ handler: @escaping TranscriptHandler) {
         transcriptHandler = handler
+    }
+    
+    /// Set the handler for transcription warnings
+    func setWarningHandler(_ handler: @escaping TranscriptionWarningHandler) {
+        warningHandler = handler
     }
     
     // MARK: - Recording Control
@@ -366,6 +375,17 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             transcriptHandler?(segment)
         } catch {
             logger.error("Transcription error: \(error.localizedDescription)")
+            
+            // Propagate warning to UI
+            let details = """
+                Transcription chunk failed.
+                Error: \(error.localizedDescription)
+                Speaker: \(speaker.rawValue)
+                Samples: \(samples.count)
+                
+                Transcription will continue with subsequent audio chunks.
+                """
+            warningHandler?("Transcription error", details)
         }
     }
     
