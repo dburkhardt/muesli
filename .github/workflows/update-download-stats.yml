@@ -58,14 +58,14 @@ jobs:
           cat stats/download-stats.json
       
       - name: Upload stats as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: download-stats-${{ github.run_id }}
           path: stats/download-stats.json
           retention-days: 90
       
       - name: Upload latest stats
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: download-stats-latest
           path: stats/download-stats.json
