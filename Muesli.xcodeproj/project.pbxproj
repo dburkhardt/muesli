@@ -813,8 +813,8 @@
 			/* IMPORTANT: LSUIElement = NO shows app in Dock (see AGENTS.md). DO NOT change to YES - was accidentally reverted in commit e823aac */
 			INFOPLIST_KEY_LSUIElement = NO;
 			INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
-				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+			INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
+			INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -842,8 +842,8 @@
 			/* IMPORTANT: LSUIElement = NO shows app in Dock (see AGENTS.md). DO NOT change to YES - was accidentally reverted in commit e823aac */
 			INFOPLIST_KEY_LSUIElement = NO;
 			INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
-				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+			INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.";
+			INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
