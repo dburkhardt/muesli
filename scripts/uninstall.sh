@@ -26,6 +26,10 @@ RECORDINGS_COUNT=0
 RECORDING_ACTION=""
 RECORDING_DESTINATION=""
 
+# Variables for application support
+APP_SUPPORT_DIR="$HOME/Library/Application Support/Muesli"
+APP_SUPPORT_ACTION=""
+
 # Exit codes
 EXIT_SUCCESS=0
 EXIT_CANCELLED=1
@@ -311,6 +315,55 @@ prompt_recording_action() {
     done
 }
 
+prompt_app_support_action() {
+    # Skip if we already chose to keep recordings (which means keeping App Support)
+    if [ "$RECORDING_ACTION" = "keep" ]; then
+        APP_SUPPORT_ACTION="keep"
+        return
+    fi
+    
+    # Skip if Application Support folder doesn't exist
+    if [ ! -d "$APP_SUPPORT_DIR" ]; then
+        APP_SUPPORT_ACTION="none"
+        return
+    fi
+    
+    print_header "APPLICATION SUPPORT FILES"
+    
+    echo "The Application Support folder may contain:"
+    echo "  - Settings and preferences"
+    echo "  - Cached data"
+    echo "  - Downloaded models"
+    echo ""
+    echo "Location: ~/Library/Application Support/Muesli/"
+    echo ""
+    echo "Would you like to remove application support files?"
+    echo ""
+    echo "  1. Yes, remove all application support files"
+    echo "  2. No, keep application support files (preserves settings for reinstall)"
+    echo ""
+    
+    while true; do
+        read -p "Choice (1-2): " choice
+        
+        case "$choice" in
+            1)
+                APP_SUPPORT_ACTION="delete"
+                print_warning "Application support files will be DELETED"
+                break
+                ;;
+            2)
+                APP_SUPPORT_ACTION="keep"
+                print_info "Application support files will be kept"
+                break
+                ;;
+            *)
+                print_error "Invalid choice. Please enter 1 or 2."
+                ;;
+        esac
+    done
+}
+
 # ============================================================================
 # SUMMARY AND CONFIRMATION
 # ============================================================================
@@ -391,17 +444,20 @@ show_summary() {
     fi
     
     # Application Support
-    if [ "$RECORDING_ACTION" != "keep" ]; then
+    if [ "$APP_SUPPORT_ACTION" = "delete" ]; then
         has_items=1
-        if [ "$RECORDING_ACTION" != "delete" ]; then
-            echo "Will DELETE:"
-        fi
+        echo "Will DELETE:"
         echo "  Application Support:"
         if [ "$RECORDING_ACTION" = "move" ]; then
             echo "    - ~/Library/Application Support/Muesli/ (after moving recordings)"
         else
             echo "    - ~/Library/Application Support/Muesli/"
         fi
+        echo ""
+    elif [ "$APP_SUPPORT_ACTION" = "keep" ]; then
+        echo "Will KEEP:"
+        echo "  Application Support:"
+        echo "    - ~/Library/Application Support/Muesli/"
         echo ""
     fi
     
@@ -596,21 +652,19 @@ delete_user_defaults() {
 }
 
 delete_application_support() {
-    if [ "$RECORDING_ACTION" = "keep" ]; then
-        print_info "Skipping Application Support (keeping recordings)"
+    if [ "$APP_SUPPORT_ACTION" = "keep" ]; then
+        print_info "Skipping Application Support (user chose to keep)"
         return 0
     fi
     
-    local app_support_dir="$HOME/Library/Application Support/Muesli"
-    
-    if [ ! -d "$app_support_dir" ]; then
+    if [ ! -d "$APP_SUPPORT_DIR" ]; then
         print_info "Application Support folder not found"
         return 0
     fi
     
     print_info "Deleting Application Support folder..."
     
-    if rm -rf "$app_support_dir" 2>/dev/null; then
+    if rm -rf "$APP_SUPPORT_DIR" 2>/dev/null; then
         print_success "Deleted: ~/Library/Application Support/Muesli"
     else
         print_error "Failed to delete Application Support folder"
@@ -701,6 +755,9 @@ main() {
     else
         RECORDING_ACTION="none"
     fi
+    
+    # Application Support handling (separate from recordings)
+    prompt_app_support_action
     
     # Show summary and confirm
     if ! show_summary; then

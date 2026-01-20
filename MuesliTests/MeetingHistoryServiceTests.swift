@@ -83,7 +83,7 @@ final class MeetingHistoryServiceTests: XCTestCase {
         XCTAssertEqual(meetings.count, 1)
         let meeting = try XCTUnwrap(meetings.first)
         XCTAssertEqual(meeting.title, "Team Standup")
-        XCTAssertEqual(meeting.directory, meetingDir)
+        XCTAssertEqual(meeting.directory.standardizedFileURL, meetingDir.standardizedFileURL)
     }
     
     func testDiscoverMeetings_WithMultipleMeetings_SortsNewestFirst() throws {

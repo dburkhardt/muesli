@@ -652,7 +652,7 @@ dependencies: [
 
 The MVP is complete when:
 
-1. ✓ App installs and launches on macOS 14+ with M-series chip
+1. ✓ App installs and launches on macOS 26+ with M-series chip
 2. ✓ First-run onboarding guides user through permissions and model setup
 3. ✓ Can detect and select from running meeting apps
 4. ✓ Records audio from meeting app + microphone simultaneously

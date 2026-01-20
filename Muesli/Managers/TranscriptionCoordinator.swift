@@ -107,11 +107,35 @@ final class TranscriptionCoordinator {
     /// Callback for transcription warnings (category, message, details, canRetry)
     var onWarning: ((ServiceWarning.WarningCategory, String, String, Bool) -> Void)?
     
+    // MARK: - Model Load Timing
+    
+    /// When model loading started (for detecting slow loads)
+    var modelLoadStartTime: Date?
+    
+    /// Whether model load is taking longer than expected (indicates first-time compilation)
+    /// STORED property (not computed) so SwiftUI observes changes when Task sets it
+    var isSlowModelLoad: Bool = false
+    
+    /// Threshold for "slow" load (indicates first-time compilation)
+    /// Injectable for testing (default 10.0 seconds)
+    private let slowLoadThreshold: TimeInterval
+    
+    /// Whether we've already shown the slow-load warning (to avoid repeated notifications)
+    private var hasShownSlowLoadWarning: Bool = false
+    
+    /// Task for slow-load detection (stored for cancellation)
+    private var slowLoadCheckTask: Task<Void, Never>?
+    
     // MARK: - Initialization
     
-    init(transcriptionService: any TranscriptionServiceProtocol, modelManager: any ModelManagerProtocol) {
+    init(
+        transcriptionService: any TranscriptionServiceProtocol,
+        modelManager: any ModelManagerProtocol,
+        slowLoadThreshold: TimeInterval = 10.0
+    ) {
         self.transcriptionService = transcriptionService
         self.modelManager = modelManager
+        self.slowLoadThreshold = slowLoadThreshold
     }
     
     // MARK: - Model Lifecycle
@@ -123,11 +147,31 @@ final class TranscriptionCoordinator {
             modelState = .notAvailable
         }
         clearBuffers()
+        
+        // Reset slow-load detection state
+        slowLoadCheckTask?.cancel()
+        slowLoadCheckTask = nil
+        modelLoadStartTime = nil
+        isSlowModelLoad = false
+        hasShownSlowLoadWarning = false
     }
     
     /// Check model availability and prepare for transcription
     /// Returns immediately with current state, loads async if needed
     func prepareModel() async -> ModelState {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        func writeLog(_ msg: String, _ data: [String: Any]) {
+            let dataStr = data.map { "\"\($0.key)\":\"\($0.value)\"" }.joined(separator: ",")
+            let entry = "{\"hypothesisId\":\"B\",\"location\":\"TranscriptionCoordinator.prepareModel\",\"message\":\"\(msg)\",\"data\":{\(dataStr)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
+            if let d = entry.data(using: .utf8) {
+                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
+                if let h = FileHandle(forWritingAtPath: logPath) { h.seekToEndOfFile(); h.write(d); h.closeFile() }
+            }
+        }
+        writeLog("prepareModel called", ["retriesRemaining": String(retriesRemaining), "isInitialized": String(isInitialized)])
+        // #endregion
+        
         // Check retry limit to prevent infinite recursion
         guard retriesRemaining > 0 else {
             modelState = .failed(MuesliError.modelNotFound)
@@ -137,13 +181,23 @@ final class TranscriptionCoordinator {
         
         // Check if model is available
         guard let activeModel = modelManager.activeModel else {
+            // #region agent log
+            writeLog("no activeModel", [:])
+            // #endregion
             modelState = .notAvailable
             return .notAvailable
         }
         
+        // #region agent log
+        writeLog("activeModel found", ["model": activeModel.displayName])
+        // #endregion
+        
         // Validate model
         guard modelManager.validateModel(activeModel),
               let modelPath = modelManager.pathForModel(activeModel) else {
+            // #region agent log
+            writeLog("model validation failed", ["model": activeModel.displayName])
+            // #endregion
             // Only mark corrupted on validation errors
             modelManager.markModelCorrupted(activeModel)
             
@@ -162,8 +216,15 @@ final class TranscriptionCoordinator {
             return .notAvailable
         }
         
+        // #region agent log
+        writeLog("model validated", ["modelPath": modelPath.path])
+        // #endregion
+        
         // If already initialized, return ready
         if isInitialized {
+            // #region agent log
+            writeLog("already initialized, returning ready", [:])
+            // #endregion
             modelState = .ready
             // Flush any buffered audio in case we resumed
             processBufferedAudio()
@@ -174,17 +235,72 @@ final class TranscriptionCoordinator {
         
         // Start loading
         modelState = .loading
+        modelLoadStartTime = Date()
+        isSlowModelLoad = false
+        hasShownSlowLoadWarning = false
+        
+        // Cancel any previous slow-load check task
+        slowLoadCheckTask?.cancel()
+        
+        // Capture threshold before Task (defensive - avoids nil self issues)
+        let threshold = slowLoadThreshold
+        
+        // Start a managed task to detect slow loading and warn user
+        slowLoadCheckTask = Task { @MainActor [weak self] in
+            // Wait for threshold period
+            try? await Task.sleep(for: .seconds(threshold))
+            
+            // Check if cancelled
+            guard !Task.isCancelled else { return }
+            guard let self = self else { return }
+            
+            // If still loading and haven't warned yet, notify user
+            if self.modelState.isLoading && !self.hasShownSlowLoadWarning {
+                self.isSlowModelLoad = true  // STORED - triggers SwiftUI observation
+                self.hasShownSlowLoadWarning = true
+                self.onWarning?(
+                    .modelLoading,
+                    "Model preparing for first use",
+                    """
+                    It looks like you're using this model for the first time. \
+                    Transcription may be slow to start, but don't worry - your \
+                    recording is active and audio is being captured.
+                    
+                    This is a one-time setup that may take a few minutes.
+                    """,
+                    false  // canRetry = false
+                )
+            }
+        }
+        
+        // #region agent log
+        writeLog("starting model load", ["modelState": "loading"])
+        let loadStart = Date()
+        // #endregion
         
         do {
             try await transcriptionService.initialize(modelPath: modelPath)
             isInitialized = true
             modelState = .ready
+            
+            // Clean up slow-load detection (model loaded successfully)
+            isSlowModelLoad = false
+            slowLoadCheckTask?.cancel()
+            slowLoadCheckTask = nil
+            
+            // #region agent log
+            let loadDuration = Date().timeIntervalSince(loadStart)
+            writeLog("model load completed", ["durationSeconds": String(format: "%.2f", loadDuration), "modelState": "ready", "isInitialized": "true"])
+            // #endregion
             // Flush any buffered audio collected during loading
             processBufferedAudio()
             // Reset retry count on success
             retriesRemaining = maxModelRetries
             return .ready
         } catch {
+            // #region agent log
+            writeLog("model load failed", ["error": error.localizedDescription])
+            // #endregion
             modelState = .failed(error)
             
             // Only mark corrupted on specific initialization errors, not temporary failures
@@ -356,6 +472,40 @@ final class TranscriptionCoordinator {
         bufferStartTime = nil
     }
     
+    // MARK: - Auto-Reprocessing (for empty transcripts)
+    
+    /// Auto-reprocess a meeting once the model becomes ready
+    /// Used when recording stopped with empty transcript (model wasn't ready in time)
+    func autoReprocessWhenReady(meeting: MeetingHistoryItem) {
+        guard let activeModel = modelManager.activeModel else {
+            logger.warning("Cannot auto-reprocess: no active model")
+            return
+        }
+        
+        logger.info("Auto-reprocessing meeting '\(meeting.title)' when model becomes ready")
+        
+        // Mark as reprocessing immediately (shows spinner in UI)
+        meeting.isReprocessing = true
+        
+        Task { @MainActor in
+            // Wait for model to be ready (may already be ready)
+            let modelStateResult = await prepareModel()
+            
+            if modelStateResult.isReady {
+                do {
+                    try await reprocessTranscript(for: meeting, using: activeModel)
+                    logger.info("Auto-reprocess completed for '\(meeting.title)'")
+                } catch {
+                    logger.error("Auto-reprocess failed: \(error.localizedDescription)")
+                }
+            } else {
+                logger.warning("Auto-reprocess cancelled: model not ready")
+            }
+            
+            meeting.isReprocessing = false
+        }
+    }
+    
     // MARK: - Reprocessing (for completed meetings)
     
     /// Reprocess a completed meeting's audio with a different model
@@ -380,11 +530,29 @@ final class TranscriptionCoordinator {
         using modelSize: ModelManager.ModelSize,
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
+        // #region agent log
+        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+        func writeLog(_ msg: String, _ data: [String: Any]) {
+            let dataStr = data.map { "\"\($0.key)\":\"\($0.value)\"" }.joined(separator: ",")
+            let entry = "{\"hypothesisId\":\"C\",\"location\":\"TranscriptionCoordinator.reprocessTranscript\",\"message\":\"\(msg)\",\"data\":{\(dataStr)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
+            if let d = entry.data(using: .utf8) {
+                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
+                if let h = FileHandle(forWritingAtPath: logPath) { h.seekToEndOfFile(); h.write(d); h.closeFile() }
+            }
+        }
+        writeLog("reprocessTranscript called", ["modelSize": modelSize.displayName, "meetingTitle": meeting.title])
+        let reprocessStart = Date()
+        // #endregion
+        
         // Get model path
         guard let modelPath = modelManager.pathForModel(modelSize) else {
             throw NSError(domain: "TranscriptionCoordinator", code: 1,
                          userInfo: [NSLocalizedDescriptionKey: "Model not found: \(modelSize.rawValue)"])
         }
+        
+        // #region agent log
+        writeLog("model path found", ["modelPath": modelPath.path])
+        // #endregion
         
         // Validate model
         guard modelManager.validateModel(modelSize) else {
@@ -392,10 +560,19 @@ final class TranscriptionCoordinator {
                          userInfo: [NSLocalizedDescriptionKey: "Model is corrupted: \(modelSize.rawValue)"])
         }
         
+        // #region agent log
+        writeLog("model validated, creating temp service", [:])
+        let initStart = Date()
+        // #endregion
+        
         // Initialize transcription service with selected model
         let tempService = TranscriptionService()
         try await tempService.initialize(modelPath: modelPath)
         tempService.setTranscriptionMode(.postProcessing)
+        
+        // #region agent log
+        let initDuration = Date().timeIntervalSince(initStart)
+        writeLog("temp service initialized", ["initDurationSeconds": String(format: "%.2f", initDuration)])
         
         // Get audio file URLs
         let systemAudioURL = meeting.directory.appendingPathComponent("audio.caf")
@@ -436,6 +613,11 @@ final class TranscriptionCoordinator {
             // Notify that meeting was updated (for export)
             onMeetingUpdated?(meeting)
         }
+        
+        // #region agent log
+        let totalDuration = Date().timeIntervalSince(reprocessStart)
+        writeLog("reprocessTranscript completed", ["totalDurationSeconds": String(format: "%.2f", totalDuration), "blocksCount": String(blocks.count)])
+        // #endregion
         
         progressHandler?(1.0)
     }

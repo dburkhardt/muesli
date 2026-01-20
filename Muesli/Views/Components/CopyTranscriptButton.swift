@@ -33,22 +33,17 @@ struct CopyTranscriptButton: View {
                 }
             }
         } label: {
-            HStack(spacing: 6) {
+            Group {
                 if showConfirmation {
                     Image(systemName: "checkmark")
                         .font(.system(size: 12))
-                    Text("Copied!")
-                        .font(.system(size: 11, weight: .medium))
                 } else {
                     Image(systemName: "doc.on.doc")
                         .font(.system(size: 12))
-                    Text("Copy")
-                        .font(.system(size: 11, weight: .medium))
                 }
             }
             .foregroundStyle(.blue)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(8)
             .background(Color.blue.opacity(0.1))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }

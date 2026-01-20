@@ -68,19 +68,27 @@ struct MeetingHistorySidebar: View {
             
             Spacer()
             
-        Button(
-            action: {
-                // Quick start: immediately begin recording all system audio
-                viewModel.quickStartRecording()
-            },
-            label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-        )
-        .buttonStyle(.borderless)
-        .disabled(viewModel.activeSession != nil)
+            Button(
+                action: {
+                    // Quick start: immediately begin recording all system audio
+                    viewModel.quickStartRecording()
+                },
+                label: {
+                    HStack(spacing: 4) {
+                        Text("New")
+                            .font(.system(size: 13, weight: .medium))
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+            )
+            .buttonStyle(.plain)
+            .disabled(viewModel.activeSession != nil)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

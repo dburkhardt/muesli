@@ -225,7 +225,8 @@ final class LLMManager: LLMManagerProtocol {
     }
     
     func downloadState(for model: LLMModel) -> DownloadState {
-        downloadStates[model] ?? .idle
+        ensureScanned()
+        return downloadStates[model] ?? .idle
     }
     
     /// Scan the models directory to detect previously downloaded models

@@ -44,6 +44,9 @@ enum AppStorageKeys {
     /// Set of downloaded WhisperKit model identifiers (stored as JSON array)
     static let downloadedWhisperModels = "downloadedWhisperModels"
     
+    /// Dictionary of model paths (stored as [String: String] - model rawValue to path)
+    static let whisperModelPaths = "whisperModelPaths"
+    
     // MARK: - LLM Models
     
     /// Active LLM model identifier

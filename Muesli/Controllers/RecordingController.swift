@@ -741,6 +741,19 @@ final class RecordingController {
                 // Continue - we have audio files even if transcript save failed
             }
             
+            // Check if we have audio but no transcript (model wasn't ready during recording)
+            // If so, auto-trigger reprocessing once the model becomes ready
+            let hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
+                                FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
+            let hasEmptyTranscript = session.transcriptBlocks.isEmpty
+            
+            if hasAudioFiles && hasEmptyTranscript {
+                if let meeting = createMeetingHistoryItem(from: directory) {
+                    logger.info("Recording has audio but empty transcript, auto-triggering reprocessing")
+                    transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)
+                }
+            }
+            
             // Export meeting to exports directory (if enabled)
             await exportMeetingIfEnabled(directory: directory)
         } catch {
@@ -969,7 +982,23 @@ final class RecordingController {
             let modelState = await transcriptionCoordinator.prepareModel()
             
             switch modelState {
-            case .notAvailable, .failed:
+            case .notAvailable:
+                logger.error("Cannot resume: No transcription model available")
+                warningManager.addWarning(
+                    .modelLoading,
+                    message: "No transcription model available",
+                    details: "Please download a transcription model from Preferences before resuming recording.",
+                    canRetry: false
+                )
+                return
+            case .failed(let error):
+                logger.error("Cannot resume: Model failed to load: \(error)")
+                warningManager.addWarning(
+                    .modelLoading,
+                    message: "Model failed to load",
+                    details: "Error: \(error.localizedDescription)\n\nPlease try restarting the app or re-downloading the model from Preferences.",
+                    canRetry: false
+                )
                 return
             case .loading, .ready:
                 break

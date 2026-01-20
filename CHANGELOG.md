@@ -60,13 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Technical
 - Swift 6 with strict concurrency checking
 - SwiftUI with `@Observable` architecture
-- Native macOS 14+ (Sonoma and later)
+- Native macOS 26+
 - Apple Silicon optimized (M1/M2/M3)
 - Minimal dependencies (WhisperKit only)
 - Complete test coverage for core components
 
 ### Known Limitations
-- Requires macOS 14.0 (Sonoma) or later
+- Requires macOS 26 or later
 - Apple Silicon only (Intel Macs not supported)
 - App is unsigned (requires Gatekeeper bypass)
 - No speaker diarization in v0.1.0 (planned for future release)

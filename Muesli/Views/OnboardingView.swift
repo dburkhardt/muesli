@@ -60,9 +60,10 @@ struct OnboardingView: View {
             
             // Progress indicator - always at bottom
             progressIndicator
-                .padding(.vertical, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 24) // Increased bottom padding to prevent dots from being cut off
         }
-        .frame(width: 520, height: 580) // Larger window to fit all content
+        .frame(width: 520, height: 600) // Slightly taller to accommodate padding
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             // Initial permission check on appear
@@ -385,28 +386,27 @@ struct OnboardingView: View {
     // MARK: - Model Setup Screen
     
     private var modelSetupScreen: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Image(systemName: "brain.head.profile")
-                .font(.system(size: 50))
+                .font(.system(size: 44))
                 .foregroundStyle(Color.accentColor)
             
             Text("Transcription Models")
-                .font(.system(size: 24, weight: .bold))
+                .font(.system(size: 22, weight: .bold))
             
-            Text("Download one or more models for transcription.\nLarger models are more accurate but slower.")
+            Text("Download one or more models for transcription....")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .lineSpacing(2)
             
             // Model list
             modelListView
-                .padding(.top, 8)
+                .padding(.top, 4)
             
             // Active model picker (only if models are downloaded)
             if !modelManager.downloadedModels.isEmpty {
                 activeModelPicker
-                    .padding(.top, 8)
+                    .padding(.top, 4)
             }
             
             Spacer()
@@ -421,8 +421,8 @@ struct OnboardingView: View {
             .disabled(!modelManager.hasModel)
         }
         .padding(.horizontal, 40)
-        .padding(.top, 40)
-        .padding(.bottom, 24)
+        .padding(.top, 24)
+        .padding(.bottom, 8) // Reduced since progress indicator now has more bottom padding
     }
     
     // MARK: - LLM Setup Screen

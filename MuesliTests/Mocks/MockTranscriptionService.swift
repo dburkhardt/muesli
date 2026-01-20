@@ -24,6 +24,9 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         userInfo: [NSLocalizedDescriptionKey: "Mock post-processing error"]
     )
     
+    /// Simulated delay during initialization (for testing slow model loading)
+    var initializationDelay: TimeInterval = 0
+    
     // MARK: - Call Tracking
     
     var initializeCallCount: Int = 0
@@ -45,6 +48,11 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     func initialize(modelPath: URL) async throws {
         initializeCallCount += 1
         lastModelPath = modelPath
+        
+        // Simulate initialization delay (for testing slow model loading)
+        if initializationDelay > 0 {
+            try await Task.sleep(for: .seconds(initializationDelay))
+        }
         
         if shouldFailInitialize {
             throw initializeError
@@ -119,6 +127,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         isTranscribing = false
         shouldFailInitialize = false
         shouldFailPostProcessing = false
+        initializationDelay = 0
         initializeCallCount = 0
         startTranscriptionCallCount = 0
         stopTranscriptionCallCount = 0

@@ -35,11 +35,12 @@ struct ResumeControlPane: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            // Show refinement loading indicator OR toggle (mutually exclusive)
+            // Show refinement controls based on state
             if isRefiningOrPending {
+                // Currently refining - show loading indicator
                 RefinementLoadingIndicator()
             } else if hasRefinedContent {
-                // Original/Refined toggle - works for both segment-based and meeting-level refinement
+                // Already refined - show toggle between original/refined
                 if usesSegments {
                     // Segment-based toggle
                     RefinementToggleControl(
@@ -60,10 +61,24 @@ struct ResumeControlPane: View {
                         )
                     )
                 }
+            } else if viewModel.canRefineTranscripts {
+                // Model available but not refined yet - show "Refine" button
+                Button(
+                    action: {
+                        viewModel.refineTranscript(for: meeting)
+                    },
+                    label: {
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(Color.purple.opacity(0.7))
+                    }
+                )
+                .buttonStyle(.plain)
+                .help("Refine transcript with AI")
             }
             
-            // Always show divider and resume button (even during refining)
-            if isRefiningOrPending || hasRefinedContent {
+            // Show divider and resume button when refinement controls are visible
+            if isRefiningOrPending || hasRefinedContent || viewModel.canRefineTranscripts {
                 Divider()
                     .frame(height: 20)
             }
@@ -82,6 +97,7 @@ struct ResumeControlPane: View {
         .buttonStyle(.plain)
         .disabled(viewModel.activeRecordingSession != nil)
         .opacity(viewModel.activeRecordingSession != nil ? 0.3 : 1.0)
+        .help("Resume recording for this meeting")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

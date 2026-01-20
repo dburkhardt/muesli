@@ -13,7 +13,7 @@ The latest release is available as a DMG installer from our [GitHub releases pag
 **Note:** Muesli is currently unsigned. When you first open it, macOS will show a security warning. Right-click the app in your Applications folder and choose "Open" to bypass Gatekeeper. See our [installation guide](https://dburkhardt.github.io/muesli/download.html) for detailed instructions.
 
 **Requirements:**
-- macOS 14.0+ (Sonoma)
+- macOS 26 or newer
 - Apple Silicon Mac (M1/M2/M3/M4)
 
 ## Building from Source
@@ -26,15 +26,14 @@ git clone https://github.com/dburkhardt/muesli.git
 cd muesli
 
 # Build and launch
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-killall Muesli 2>/dev/null
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee "/tmp/muesli-build-${TIMESTAMP}.txt"
-open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
+./scripts/build-and-launch.sh
 ```
 
+The build script handles all complexity automatically: deterministic build paths, stale build detection, and process verification. Use `--clean` for a fresh build or `--help` for all options.
+
 **Requirements:**
-- macOS 14.0+ (Sonoma)
-- Xcode 15.0+
+- macOS 26 or newer
+- Xcode 16.0+
 - Apple Silicon Mac (M1/M2/M3/M4)
 
 **Architecture and Technical Details:**

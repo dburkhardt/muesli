@@ -42,6 +42,7 @@ final class ModelManagerTests: XCTestCase {
         // Clean up any UserDefaults keys used in tests
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.downloadedWhisperModels)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.whisperModelPaths)
         
         try await super.tearDown()
     }
@@ -49,14 +50,16 @@ final class ModelManagerTests: XCTestCase {
     // MARK: - Model Size Enum Tests
     
     /// Test that all ModelSize cases have the correct whisperKitName
+    /// whisperKitName returns the variant name passed to WhisperKit.download()
+    /// The full folder name (openai_whisper-{variant}) is constructed by WhisperKit
     func testModelSizeWhisperKitNames() async {
-        XCTAssertEqual(ModelManager.ModelSize.tiny.whisperKitName, "openai_whisper-tiny")
-        XCTAssertEqual(ModelManager.ModelSize.base.whisperKitName, "openai_whisper-base")
-        XCTAssertEqual(ModelManager.ModelSize.small.whisperKitName, "openai_whisper-small")
-        XCTAssertEqual(ModelManager.ModelSize.medium.whisperKitName, "openai_whisper-medium")
-        XCTAssertEqual(ModelManager.ModelSize.large.whisperKitName, "openai_whisper-large-v3")
-        // Note: underscore before "turbo", verified from HuggingFace argmaxinc/whisperkit-coreml
-        XCTAssertEqual(ModelManager.ModelSize.largeTurbo.whisperKitName, "openai_whisper-large-v3_turbo")
+        // whisperKitName returns the rawValue which is the variant name
+        XCTAssertEqual(ModelManager.ModelSize.tiny.whisperKitName, "tiny")
+        XCTAssertEqual(ModelManager.ModelSize.base.whisperKitName, "base")
+        XCTAssertEqual(ModelManager.ModelSize.small.whisperKitName, "small")
+        XCTAssertEqual(ModelManager.ModelSize.medium.whisperKitName, "medium")
+        XCTAssertEqual(ModelManager.ModelSize.large.whisperKitName, "large-v3-v20240930")
+        XCTAssertEqual(ModelManager.ModelSize.largeTurbo.whisperKitName, "large-v3-v20240930_turbo")
     }
     
     /// Test that all ModelSize cases have display names
@@ -337,18 +340,20 @@ final class ModelManagerTests: XCTestCase {
     /// Regression test: Large v3 Turbo model name must match HuggingFace repo
     func testLargeTurboModelName_MatchesHuggingFace() async {
         // Verified from: https://huggingface.co/argmaxinc/whisperkit-coreml
-        // The folder is named "openai_whisper-large-v3_turbo" (underscore, not hyphen)
+        // The folder is named "openai_whisper-large-v3-v20240930_turbo"
+        // WhisperKit prepends "openai_whisper-" to the variant name we provide
         
         let turboModel = ModelManager.ModelSize.largeTurbo
         
-        XCTAssertEqual(turboModel.whisperKitName, "openai_whisper-large-v3_turbo",
-                      "Large v3 Turbo model name must match HuggingFace repo exactly")
+        // whisperKitName is the variant passed to WhisperKit.download()
+        XCTAssertEqual(turboModel.whisperKitName, "large-v3-v20240930_turbo",
+                      "Large v3 Turbo variant name must match what WhisperKit expects")
         
         // Verify it's different from regular large-v3
         XCTAssertNotEqual(turboModel.whisperKitName, ModelManager.ModelSize.large.whisperKitName)
         
-        // Verify the raw value used for UserDefaults
-        XCTAssertEqual(turboModel.rawValue, "large-v3-turbo")
+        // Verify the raw value used for UserDefaults (same as whisperKitName in current impl)
+        XCTAssertEqual(turboModel.rawValue, "large-v3-v20240930_turbo")
     }
     
     // MARK: - Helper Methods
@@ -361,9 +366,10 @@ final class ModelManagerTests: XCTestCase {
         includeTextDecoder: Bool = true,
         includeWeights: Bool = true
     ) -> URL {
+        // WhisperKit creates folders with "openai_whisper-" prefix + variant name
         let modelDir = testModelDirectory
             .appendingPathComponent("models/argmaxinc/whisperkit-coreml")
-            .appendingPathComponent(model.whisperKitName)
+            .appendingPathComponent("openai_whisper-\(model.whisperKitName)")
         
         try? FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
         

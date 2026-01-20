@@ -65,7 +65,13 @@ struct MainWindow: View {
             
             // Recording indicator
             if session.isRecording {
-                RecordingIndicator(elapsedTime: session.elapsedTimeString)
+                RecordingIndicator(
+                    elapsedTime: session.elapsedTimeString,
+                    isInitializing: session.isInitializing,
+                    isModelLoading: session.isModelLoading,
+                    isSlowModelLoad: viewModel.isSlowModelLoad,
+                    isRecordingOnly: session.isRecordingOnly
+                )
             } else if session.isCompleted {
                 CompletedIndicator()
             }

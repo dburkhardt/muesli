@@ -7,6 +7,7 @@ struct RecordingIndicator: View {
     let elapsedTime: String
     var isInitializing: Bool = false
     var isModelLoading: Bool = false
+    var isSlowModelLoad: Bool = false
     var isRecordingOnly: Bool = false
     @State private var isPulsing = false
     
@@ -47,7 +48,9 @@ struct RecordingIndicator: View {
                     ProgressView()
                         .scaleEffect(0.6)
                         .frame(width: 12, height: 12)
-                        .help("Transcription model loading...")
+                        .help(isSlowModelLoad 
+                            ? "Model preparing for first use (one-time setup)..." 
+                            : "Transcription model loading...")
                 } else if isRecordingOnly {
                     Image(systemName: "waveform.slash")
                         .font(.system(size: 11))

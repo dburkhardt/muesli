@@ -11,7 +11,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 
 | Aspect | Value |
 |--------|-------|
-| Platform | macOS 14+ (Sonoma) |
+| Platform | macOS 26+ |
 | Language | Swift 6 |
 | UI | SwiftUI with `@Observable` |
 | Architecture | `MuesliViewModel` (app state) + `RecordingSession` (per-recording) |
@@ -31,15 +31,47 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 
 ## Commands
 
-**Build & Launch** (main branch):
+**Build & Launch** (recommended):
+
+The build takes 5-8 minutes. **Run with `nohup`** and monitor via log file:
+
 ```bash
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-killall Muesli 2>/dev/null
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee "/tmp/muesli-build-${TIMESTAMP}.txt"
-open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
+# Step 1: Start the build with nohup (REQUIRED for long builds)
+nohup ./scripts/build-and-launch.sh > /dev/null 2>&1 &
+
+# Step 2: Check if build is still running
+cat /tmp/muesli-build.lock  # Shows PID if running, missing if done
+
+# Step 3: Find and monitor the log file
+ls -t /tmp/muesli-build-*.log | head -1                          # Find latest log
+tail -30 "$(ls -t /tmp/muesli-build-*.log | head -1)"            # View recent output
+grep "Build & Launch Complete" /tmp/muesli-build-*.log           # Check if finished
+grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)"       # Check for errors
 ```
 
-**For feature branches**, replace `Muesli` with `Muesli-<branch-suffix>` (see Branch Development below).
+**Build completion indicators** in log file:
+- `"Build & Launch Complete"` — Success, app is running
+- `"Build Complete (--build-only)"` — Success, app not launched
+- `"BUILD SUCCEEDED"` — xcodebuild finished successfully
+- `"error:"` — Build failed, check log for details
+
+**Build & Launch options**:
+```bash
+./scripts/build-and-launch.sh              # Deep clean + build (DEFAULT - always use this)
+./scripts/build-and-launch.sh --build-only # Build without launching
+./scripts/build-and-launch.sh --no-log     # Disable logging to file
+./scripts/build-and-launch.sh --dry-run    # Show what would happen
+```
+
+**What the script does** (deep clean + logging by default):
+- Logs all output to `/tmp/muesli-build-TIMESTAMP.log` (strips ANSI colors)
+- Uses lock file `/tmp/muesli-build.lock` to prevent parallel builds
+- Removes DerivedData, Launch Services cache, Swift PM cache, and module caches
+- Runs `xcodebuild clean build` to ensure all code changes are compiled
+
+**Advanced options** (rarely needed):
+- `--preserve-caches` — Skip cache clearing (NOT recommended; stale caches cause confusing issues)
+- `--incremental` — Use cached build (NOT recommended; may miss code changes)
 
 **Other commands**:
 - Test: `xcodebuild ... test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"`

@@ -1084,7 +1084,7 @@ final class MuesliViewModelTests: XCTestCase {
     
     // MARK: - Resume Recording Precondition Tests
     
-    func testMeetingCanResumeInitiallyFalse() async {
+    func testMeetingCanResumeWithoutAudio() async {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         
@@ -1092,31 +1092,50 @@ final class MuesliViewModelTests: XCTestCase {
             title: "Test Meeting",
             date: Date(),
             directory: tempDir,
-            hasAudio: true,
-            hasMicrophone: true
+            hasAudio: false,
+            hasMicrophone: false
         )
         
-        // New meetings start with canResume = false
+        // Meetings without audio cannot be resumed
         XCTAssertFalse(meeting.canResume)
         
         // Clean up
         try? FileManager.default.removeItem(at: tempDir)
     }
     
-    func testMeetingCanResumeAfterSetting() async {
+    func testMeetingCanResumeWithAudio() async {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         
-        let meeting = MeetingHistoryItem(
+        // Meeting with system audio only
+        let meetingWithAudio = MeetingHistoryItem(
             title: "Test Meeting",
+            date: Date(),
+            directory: tempDir,
+            hasAudio: true,
+            hasMicrophone: false
+        )
+        XCTAssertTrue(meetingWithAudio.canResume)
+        
+        // Meeting with microphone only
+        let meetingWithMic = MeetingHistoryItem(
+            title: "Test Meeting 2",
+            date: Date(),
+            directory: tempDir,
+            hasAudio: false,
+            hasMicrophone: true
+        )
+        XCTAssertTrue(meetingWithMic.canResume)
+        
+        // Meeting with both
+        let meetingWithBoth = MeetingHistoryItem(
+            title: "Test Meeting 3",
             date: Date(),
             directory: tempDir,
             hasAudio: true,
             hasMicrophone: true
         )
-        
-        meeting.canResume = true
-        XCTAssertTrue(meeting.canResume)
+        XCTAssertTrue(meetingWithBoth.canResume)
         
         // Clean up
         try? FileManager.default.removeItem(at: tempDir)

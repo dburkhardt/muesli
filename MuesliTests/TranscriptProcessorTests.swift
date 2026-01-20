@@ -132,6 +132,30 @@ final class TranscriptProcessorTests: XCTestCase {
         XCTAssertEqual(processor.blocks[0].text, "This is some text here")
     }
     
+    /// Test filtering [BLANK_AUDIO] annotation from WhisperKit
+    /// This is a common artifact when transcribing silent audio sections
+    func testFilterBlankAudioAnnotation() {
+        // Test standalone [BLANK_AUDIO]
+        let segment1 = TranscriptionService.TranscriptSegment(
+            text: "[BLANK_AUDIO]",
+            timestamp: 0.0,
+            speaker: .them
+        )
+        processor.processSegment(segment1)
+        XCTAssertEqual(processor.blocks.count, 0, "Should filter standalone [BLANK_AUDIO]")
+        
+        // Test [BLANK_AUDIO] mixed with real content
+        processor.reset()
+        let segment2 = TranscriptionService.TranscriptSegment(
+            text: "Hello there [BLANK_AUDIO] how are you",
+            timestamp: 0.0,
+            speaker: .me
+        )
+        processor.processSegment(segment2)
+        XCTAssertEqual(processor.blocks.count, 1)
+        XCTAssertEqual(processor.blocks[0].text, "Hello there how are you", "Should remove [BLANK_AUDIO] from text")
+    }
+    
     /// Test filtering music notes
     func testFilterMusicNotes() {
         let segment = TranscriptionService.TranscriptSegment(

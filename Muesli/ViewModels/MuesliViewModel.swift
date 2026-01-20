@@ -121,6 +121,12 @@ final class MuesliViewModel {
         }
     }
     
+    /// Whether model is in slow-loading state (first-time compilation)
+    /// Delegates to TranscriptionCoordinator
+    var isSlowModelLoad: Bool {
+        transcriptionCoordinator.isSlowModelLoad
+    }
+    
     // MARK: - Active Session Tracking
     // NOTE: Delegates to RecordingController - do not manage session state here
     

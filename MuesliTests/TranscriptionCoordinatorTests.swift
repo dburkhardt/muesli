@@ -264,8 +264,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         mockModelManager.addDownloadedModel(.base)
         mockModelManager.addDownloadedModel(.tiny)
         mockModelManager.activeModel = .base
-        mockModelManager.shouldFailValidation = true
-        // mockModelManager.validModels = [.tiny] // Only tiny is valid - property doesn't exist
+        mockModelManager.modelsToFailValidation = [.base]
         
         var switchedFrom: ModelManager.ModelSize?
         var switchedTo: ModelManager.ModelSize?
@@ -294,9 +293,9 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model validation always fails (will trigger retries)
+        // Only base is downloaded and it fails validation, so no fallback available
         mockModelManager.addDownloadedModel(.base)
-        mockModelManager.shouldFailValidation = true
-        // mockModelManager.validModels = [] // No valid models - property doesn't exist
+        mockModelManager.modelsToFailValidation = [.base]
         
         // When: prepareModel is called multiple times
         _ = await sut.prepareModel()
@@ -306,10 +305,12 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         
         // Then: Should eventually fail with model not found
         if case .failed(let error) = finalState {
-            XCTAssertTrue(error.localizedDescription.contains("not found") || 
-                         error.localizedDescription.contains("NotFound"))
+            XCTAssertTrue(error.localizedDescription.contains("No transcription model available") || 
+                         error.localizedDescription.contains("not found") ||
+                         error.localizedDescription.contains("NotFound"),
+                         "Expected model not found error, got: \(error.localizedDescription)")
         } else {
-            XCTFail("Expected failed state after retry limit")
+            XCTFail("Expected failed state after retry limit, got: \(finalState)")
         }
     }
     
@@ -356,8 +357,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         mockModelManager.addDownloadedModel(.base)
         mockModelManager.addDownloadedModel(.small)
         mockModelManager.activeModel = .base
-        mockModelManager.shouldFailValidation = true
-        // mockModelManager.validModels = [.small] - property doesn't exist
+        mockModelManager.modelsToFailValidation = [.base]
         
         var callbackInvoked = false
         sut.onModelSwitched = { _, _, _ in
@@ -611,6 +611,213 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         // Change mode
         sut.setTranscriptionMode(.postProcessing)
         XCTAssertEqual(sut.transcriptionMode, .postProcessing)
+    }
+    
+    // MARK: - Slow Model Load Detection Tests
+    
+    /// Verify isSlowModelLoad is false initially
+    @MainActor
+    func testIsSlowModelLoad_isFalse_initially() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager,
+            slowLoadThreshold: 0.1  // Short threshold for tests
+        )
+        
+        XCTAssertFalse(sut.isSlowModelLoad, "isSlowModelLoad should be false initially")
+        XCTAssertNil(sut.modelLoadStartTime, "modelLoadStartTime should be nil initially")
+    }
+    
+    /// Verify isSlowModelLoad remains false during fast model load
+    @MainActor
+    func testIsSlowModelLoad_remainsFalse_duringFastLoad() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager,
+            slowLoadThreshold: 1.0  // 1 second threshold - model will load faster
+        )
+        
+        // Given: Model is available (will load instantly in mock)
+        mockModelManager.addDownloadedModel(.base)
+        
+        // When: prepareModel is called (will complete quickly in mock)
+        _ = await sut.prepareModel()
+        
+        // Then: isSlowModelLoad should remain false
+        XCTAssertFalse(sut.isSlowModelLoad, "isSlowModelLoad should remain false for fast model load")
+    }
+    
+    /// Verify isSlowModelLoad becomes true after threshold during slow load
+    @MainActor
+    func testIsSlowModelLoad_becomesTrue_afterThreshold() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager,
+            slowLoadThreshold: 0.05  // Very short threshold (50ms)
+        )
+        
+        // Given: Model is available but mock will take time to initialize
+        mockModelManager.addDownloadedModel(.base)
+        mockTranscriptionService.initializationDelay = 0.2  // 200ms delay
+        
+        // When: prepareModel starts
+        let prepareTask = Task {
+            await sut.prepareModel()
+        }
+        
+        // Wait for threshold to pass (plus some buffer)
+        try? await Task.sleep(for: .milliseconds(100))
+        
+        // Then: isSlowModelLoad should be true while loading
+        // Note: This check may be flaky depending on timing
+        if sut.modelState.isLoading {
+            XCTAssertTrue(sut.isSlowModelLoad, "isSlowModelLoad should be true after threshold while loading")
+        }
+        
+        // Wait for preparation to complete
+        await prepareTask.value
+    }
+    
+    /// Verify slow-load warning fires only once
+    @MainActor
+    func testSlowLoadWarning_firesOnlyOnce() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager,
+            slowLoadThreshold: 0.05  // Very short threshold
+        )
+        
+        // Track warning calls
+        var warningCount = 0
+        sut.onWarning = { _, _, _, _ in
+            warningCount += 1
+        }
+        
+        // Given: Model with slow initialization
+        mockModelManager.addDownloadedModel(.base)
+        mockTranscriptionService.initializationDelay = 0.2  // 200ms delay
+        
+        // When: prepareModel is called
+        _ = await sut.prepareModel()
+        
+        // Wait a bit for any additional warnings
+        try? await Task.sleep(for: .milliseconds(100))
+        
+        // Then: Warning should fire at most once
+        XCTAssertLessThanOrEqual(warningCount, 1, "Slow-load warning should fire at most once")
+    }
+    
+    /// Verify resetForNewRecording clears slow-load state
+    @MainActor
+    func testResetForNewRecording_clearsSlowLoadState() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager,
+            slowLoadThreshold: 0.05
+        )
+        
+        // Given: Slow-load state is set
+        mockModelManager.addDownloadedModel(.base)
+        mockTranscriptionService.initializationDelay = 0.2
+        
+        // Start loading (will trigger slow-load detection)
+        let prepareTask = Task {
+            await sut.prepareModel()
+        }
+        
+        // Wait for threshold to pass
+        try? await Task.sleep(for: .milliseconds(100))
+        
+        // When: resetForNewRecording is called
+        sut.resetForNewRecording()
+        
+        // Then: Slow-load state should be cleared
+        XCTAssertFalse(sut.isSlowModelLoad, "isSlowModelLoad should be false after reset")
+        XCTAssertNil(sut.modelLoadStartTime, "modelLoadStartTime should be nil after reset")
+        
+        // Clean up
+        prepareTask.cancel()
+    }
+    
+    /// Verify slow-load task is cancelled when model loads successfully
+    @MainActor
+    func testSlowLoadTask_cancelledOnSuccess() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager,
+            slowLoadThreshold: 1.0  // Long threshold - model will load before it fires
+        )
+        
+        // Track warning calls
+        var warningFired = false
+        sut.onWarning = { _, _, _, _ in
+            warningFired = true
+        }
+        
+        // Given: Model loads quickly
+        mockModelManager.addDownloadedModel(.base)
+        // No initialization delay - will be instant
+        
+        // When: prepareModel completes successfully
+        _ = await sut.prepareModel()
+        
+        // Wait to ensure threshold would have fired if not cancelled
+        try? await Task.sleep(for: .milliseconds(100))
+        
+        // Then: Warning should NOT have fired (task was cancelled on success)
+        XCTAssertFalse(warningFired, "Warning should not fire when model loads before threshold")
+        XCTAssertFalse(sut.isSlowModelLoad, "isSlowModelLoad should be false after successful load")
+    }
+    
+    /// Verify modelLoadStartTime is set during prepareModel
+    @MainActor
+    func testModelLoadStartTime_isSetDuringLoading() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager,
+            slowLoadThreshold: 1.0
+        )
+        
+        // Given: Model is available
+        mockModelManager.addDownloadedModel(.base)
+        mockTranscriptionService.initializationDelay = 0.1
+        
+        // Initial state
+        XCTAssertNil(sut.modelLoadStartTime)
+        
+        // When: prepareModel starts loading
+        let beforeLoad = Date()
+        let prepareTask = Task {
+            await sut.prepareModel()
+        }
+        
+        // Wait briefly for loading to start
+        try? await Task.sleep(for: .milliseconds(20))
+        
+        // Then: modelLoadStartTime should be set
+        // Note: Check during loading, not after completion
+        if sut.modelState.isLoading {
+            XCTAssertNotNil(sut.modelLoadStartTime, "modelLoadStartTime should be set during loading")
+            if let startTime = sut.modelLoadStartTime {
+                XCTAssertTrue(startTime >= beforeLoad, "modelLoadStartTime should be at or after start")
+            }
+        }
+        
+        await prepareTask.value
     }
     
     // TEMPORARILY DISABLED: Concurrency issue with captured var

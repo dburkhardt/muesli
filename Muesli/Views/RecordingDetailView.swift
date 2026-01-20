@@ -196,13 +196,33 @@ struct RecordingDetailView: View {
                     // Live transcript blocks from current session
                     if session.transcriptBlocks.isEmpty {
                         VStack(spacing: 16) {
-                            Image(systemName: "waveform")
-                                .font(.system(size: 32))
-                                .foregroundStyle(.tertiary)
-                            
-                            Text("Listening...")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                            if session.isModelLoading && viewModel.isSlowModelLoad {
+                                // First-time compilation - show detailed message
+                                ProgressView()
+                                    .scaleEffect(1.2)
+                                Text("Preparing transcription model...")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                Text("This is a one-time setup that may take a few minutes.")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .multilineTextAlignment(.center)
+                            } else if session.isModelLoading {
+                                // Normal loading - brief spinner
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                Text("Loading model...")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                // Model ready, waiting for speech
+                                Image(systemName: "waveform")
+                                    .font(.system(size: 32))
+                                    .foregroundStyle(.tertiary)
+                                Text("Listening...")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 24)
@@ -268,6 +288,7 @@ struct RecordingDetailView: View {
                 elapsedTime: session.elapsedTimeString,
                 isInitializing: session.isInitializing,
                 isModelLoading: session.isModelLoading,
+                isSlowModelLoad: viewModel.isSlowModelLoad,
                 isRecordingOnly: session.isRecordingOnly
             )
         }
@@ -441,17 +462,39 @@ struct RecordingDetailView: View {
                     VStack(spacing: 16) {
                         Spacer()
                         
-                        Image(systemName: "waveform")
-                            .font(.system(size: 48))
-                            .foregroundStyle(.tertiary)
-                        
-                        Text("Listening...")
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                        
-                        Text("Transcript will appear here as you speak")
-                            .font(.subheadline)
-                            .foregroundStyle(.tertiary)
+                        if session.isModelLoading && viewModel.isSlowModelLoad {
+                            // First-time compilation - show detailed message
+                            ProgressView()
+                                .scaleEffect(1.5)
+                            Text("Preparing transcription model...")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                            Text("This is a one-time setup that may take a few minutes.\nYour recording is active and audio is being captured.")
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                        } else if session.isModelLoading {
+                            // Normal loading - brief spinner
+                            ProgressView()
+                                .scaleEffect(1.2)
+                            Text("Loading model...")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                            Text("Transcript will appear shortly")
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            // Model ready, waiting for speech
+                            Image(systemName: "waveform")
+                                .font(.system(size: 48))
+                                .foregroundStyle(.tertiary)
+                            Text("Listening...")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                            Text("Transcript will appear here as you speak")
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                        }
                         
                         Spacer()
                     }
@@ -628,6 +671,7 @@ struct RecordingDetailView: View {
                     elapsedTime: activeSession.elapsedTimeString,
                     isInitializing: activeSession.isInitializing,
                     isModelLoading: activeSession.isModelLoading,
+                    isSlowModelLoad: viewModel.isSlowModelLoad,
                     isRecordingOnly: activeSession.isRecordingOnly,
                     onTap: {
                         viewModel.returnToLiveRecording()
@@ -920,6 +964,7 @@ struct FloatingRecordingIndicator: View {
     let elapsedTime: String
     var isInitializing: Bool = false
     var isModelLoading: Bool = false
+    var isSlowModelLoad: Bool = false
     var isRecordingOnly: Bool = false
     let onTap: () -> Void
     
@@ -964,6 +1009,9 @@ struct FloatingRecordingIndicator: View {
                         ProgressView()
                             .scaleEffect(0.5)
                             .frame(width: 10, height: 10)
+                            .help(isSlowModelLoad 
+                                ? "Model preparing for first use (one-time setup)..." 
+                                : "Transcription model loading...")
                     } else if isRecordingOnly {
                         Image(systemName: "waveform.slash")
                             .font(.system(size: 10))

@@ -78,6 +78,30 @@ Each item should include:
 
 ### Enhancements
 
+**[Enhancement]** [High] Improve New Recording and Copy button UI
+- Description: Make primary actions more visually prominent and intuitive
+- Changes needed:
+  - New Recording button: Replace simple "+" icon with blue button containing "New +" text
+    - Style: Blue background (accent color), white text
+    - Makes primary action more obvious and discoverable
+  - Copy Transcript button: Simplify to just copy icon (standard document copy icon)
+    - Remove text label, just show icon like typical markdown file viewers
+    - More compact, cleaner appearance
+- Related: UnifiedHistoryView.swift, RecordingDetailView.swift, CompletedMeetingWindow.swift
+- Priority: High - affects primary user actions and first impressions
+
+**[Enhancement]** [Medium] Improve LLM model download progress bar accuracy
+- Description: The Llama 3.2 3B download progress jumps quickly from 0-85% then slows dramatically from 85-100%
+- Notes: Observed during onboarding flow. Progress reporting doesn't accurately reflect actual work.
+- Potential improvements:
+  - Investigate what causes the 85-100% slowdown (extraction? verification? loading?)
+  - Show download size in MB/GB alongside percentage
+  - Add status text explaining current phase (downloading, extracting, verifying, loading)
+  - Even out progress reporting to better match perceived time
+  - Consider indeterminate progress for non-download phases
+- Related: LLMManager.swift, OnboardingView.swift, ModelManager.swift (if shared pattern)
+- Observed: v0.1.2-polish UAT, January 2026
+
 **[Enhancement]** [Medium] Add visuals to website
 - Description: Add screenshots, GIFs, or videos demonstrating the app in action to the website
 - Notes: Show key features like onboarding, recording in progress, transcript view, meeting history
@@ -93,8 +117,6 @@ Each item should include:
 - Related: PreferencesView.swift, PreferencesManager.swift, RecordingDetailView.swift, CompletedMeetingWindow.swift
 
 ### Bugs
-
-*No items - All high-priority bugs fixed in v0.1.2*
 
 ### Refactoring
 
@@ -171,6 +193,14 @@ Each item should include:
 ## Completed
 
 Archive completed items here with completion date.
+
+### v0.1.2 - 2026-01-19
+
+**[Bug]** Onboarding doesn't detect already-downloaded refinement model
+- Fixed: Added `ensureScanned()` call to `downloadState(for:)` method
+- Root cause: Lazy scanning wasn't triggered when UI queried download state
+- File: LLMManager.swift
+- Branch: release/v0.1.2-polish
 
 ### v0.1.2 - 2026-01-18
 
