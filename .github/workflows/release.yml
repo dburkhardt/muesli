@@ -18,6 +18,11 @@ on:
         required: false
         default: '60'
         type: string
+      skip_notarization:
+        description: 'Skip code signing and notarization (creates unsigned build)'
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: write  # Required for creating releases and pushing commits
@@ -88,6 +93,12 @@ jobs:
             exit 1
           fi
           
+          # Add -unsigned suffix for skip_notarization builds
+          if [ "${{ github.event.inputs.skip_notarization }}" == "true" ]; then
+            VERSION="${VERSION}-unsigned"
+            echo "Adding -unsigned suffix for unsigned build"
+          fi
+          
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
           echo "✅ Version: ${VERSION}"
@@ -110,7 +121,7 @@ jobs:
           fi
       
       - name: Setup code signing certificates
-        if: ${{ env.P12_BASE64 != '' }}
+        if: ${{ env.P12_BASE64 != '' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
         env:
           P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
           P12_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
@@ -185,7 +196,7 @@ jobs:
           echo "size=${DMG_SIZE}" >> $GITHUB_OUTPUT
       
       - name: Sign and notarize DMG
-        if: ${{ env.APPLE_ID != '' && env.P12_BASE64 != '' }}
+        if: ${{ env.APPLE_ID != '' && env.P12_BASE64 != '' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
         env:
           P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -271,9 +282,17 @@ jobs:
           # Create release notes
           NOTES_FILE="release_notes.md"
           
+          # Add warning for unsigned builds
+          if [ "${{ github.event.inputs.skip_notarization }}" == "true" ]; then
+            echo "> **Warning:** This is an unsigned development build. See installation instructions below for how to open it." > "${NOTES_FILE}"
+            echo "" >> "${NOTES_FILE}"
+          else
+            echo "" > "${NOTES_FILE}"
+          fi
+          
           # Use git-cliff generated changelog if available
           if [ -f "cliff-changelog.md" ] && [ -s "cliff-changelog.md" ]; then
-            echo "## What's Changed" > "${NOTES_FILE}"
+            echo "## What's Changed" >> "${NOTES_FILE}"
             echo "" >> "${NOTES_FILE}"
             cat cliff-changelog.md >> "${NOTES_FILE}"
             echo "" >> "${NOTES_FILE}"
@@ -319,7 +338,15 @@ jobs:
           echo "" >> "${NOTES_FILE}"
           echo "1. Download \`${{ steps.build.outputs.dmg_file }}\` from the assets below" >> "${NOTES_FILE}"
           echo "2. Open the DMG and drag Muesli to your Applications folder" >> "${NOTES_FILE}"
-          echo "3. **Double-click** to open (signed and notarized - no warnings!)" >> "${NOTES_FILE}"
+          
+          # Conditional installation step 3
+          if [ "${{ github.event.inputs.skip_notarization }}" == "true" ]; then
+            echo "3. Before opening, run: \`xattr -d com.apple.quarantine /Applications/Muesli.app\`" >> "${NOTES_FILE}"
+            echo "   Or: System Settings → Privacy & Security → Open Anyway" >> "${NOTES_FILE}"
+          else
+            echo "3. **Double-click** to open (signed and notarized - no warnings!)" >> "${NOTES_FILE}"
+          fi
+          
           echo "4. Follow the onboarding wizard to grant permissions" >> "${NOTES_FILE}"
           echo "" >> "${NOTES_FILE}"
           echo "📖 [Detailed installation instructions](https://dburkhardt.github.io/muesli/download.html)" >> "${NOTES_FILE}"
@@ -361,7 +388,7 @@ jobs:
           name: Muesli ${{ steps.version.outputs.version }}
           body: ${{ steps.release_notes.outputs.notes }}
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          prerelease: ${{ contains(steps.version.outputs.version, '-') || github.event.inputs.skip_notarization == 'true' }}
           files: ${{ steps.build.outputs.dmg_file }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
