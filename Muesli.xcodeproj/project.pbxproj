@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DL00001241D1A1D00000100 /* DiagnosticLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = DL00002241D1A1D00000100 /* DiagnosticLogger.swift */; };
+		DI00001241D1A1D00000101 /* DebugInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DI00002241D1A1D00000101 /* DebugInfoView.swift */; };
+		HL00001241D1A1D00000102 /* HoverableLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = HL00002241D1A1D00000102 /* HoverableLink.swift */; };
 		A1000001241D1A1D00000001 /* MuesliApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002241D1A1D00000001 /* MuesliApp.swift */; };
 		A1000005241D1A1D00000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000006241D1A1D00000001 /* Assets.xcassets */; };
 		A1000007241D1A1D00000001 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1000008241D1A1D00000001 /* WhisperKit */; };
@@ -114,10 +117,12 @@
 		A100002E241D1A1D00000002 /* MeetingAppDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAppDetector.swift; sourceTree = "<group>"; };
 		A100002F241D1A1D00000003 /* ExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportService.swift; sourceTree = "<group>"; };
 	A1000030241D1A1D00000002 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
+	DL00002241D1A1D00000100 /* DiagnosticLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLogger.swift; sourceTree = "<group>"; };
 	UC00002241D1A1D00000099 /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateChecker.swift; sourceTree = "<group>"; };
 	US00002241D1A1D00000098 /* UpdateSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateSheet.swift; sourceTree = "<group>"; };
 	UH00002241D1A1D00000097A /* UpdateCheckHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckHelper.swift; sourceTree = "<group>"; };
 	AV00002241D1A1D00000097 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
+	DI00002241D1A1D00000101 /* DebugInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugInfoView.swift; sourceTree = "<group>"; };
 	NM00002241D1A1D00000096 /* NoModelSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoModelSheet.swift; sourceTree = "<group>"; };
 	A1000033241D1A1D00000003 /* RecordingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSession.swift; sourceTree = "<group>"; };
 		A1000033241D1A1D00000003A /* RecordingStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingStateMachine.swift; sourceTree = "<group>"; };
@@ -139,6 +144,7 @@
 		A1000073241D1A1D00000011 /* PreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesView.swift; sourceTree = "<group>"; };
 	A1000075241D1A1D00000012 /* RecordingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIndicator.swift; sourceTree = "<group>"; };
 	CT00002241D1A1D00000013 /* CopyTranscriptButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyTranscriptButton.swift; sourceTree = "<group>"; };
+	HL00002241D1A1D00000102 /* HoverableLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverableLink.swift; sourceTree = "<group>"; };
 	A1000080241D1A1D00000020 /* TranscriptBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlock.swift; sourceTree = "<group>"; };
 		A1000082241D1A1D00000021 /* TranscriptProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptProcessor.swift; sourceTree = "<group>"; };
 		A1000084241D1A1D00000022 /* LLMStitchingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMStitchingService.swift; sourceTree = "<group>"; };
@@ -308,6 +314,7 @@
 			A100003D241D1A1D00000006 /* ModelManagementView.swift */,
 			A1000073241D1A1D00000011 /* PreferencesView.swift */,
 			AV00002241D1A1D00000097 /* AboutView.swift */,
+			DI00002241D1A1D00000101 /* DebugInfoView.swift */,
 			NM00002241D1A1D00000096 /* NoModelSheet.swift */,
 			A1000015241D1A1D00000001 /* Components */,
 		);
@@ -320,6 +327,7 @@
 			A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */,
 			A1000075241D1A1D00000012 /* RecordingIndicator.swift */,
 			CT00002241D1A1D00000013 /* CopyTranscriptButton.swift */,
+			HL00002241D1A1D00000102 /* HoverableLink.swift */,
 			A1000088241D1A1D00000024 /* TranscriptBlockView.swift */,
 				A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */,
 				A1000095241D1A1D00000027 /* ResumeControlPane.swift */,
@@ -356,6 +364,7 @@
 				A1000086241D1A1D00000023 /* LLMManager.swift */,
 				E1000004241D1A1D00000071 /* AppStorageKeys.swift */,
 				LF00002241D1A1D00000096A /* LoggerFactory.swift */,
+				DL00002241D1A1D00000100 /* DiagnosticLogger.swift */,
 				F1000002241D1A1D00000080 /* AudioConfiguration.swift */,
 				114BBE69396045369DA85098 /* ClipboardHelper.swift */,
 				3BB14EFAA1A14BA98612D5ACA /* TimeFormatting.swift */,
@@ -581,6 +590,9 @@
 			A100002E241D1A1D00000003 /* ExportService.swift in Sources */,
 			A100002D241D1A1D00000002 /* MeetingAppDetector.swift in Sources */,
 			A100002F241D1A1D00000002 /* PermissionManager.swift in Sources */,
+			DL00001241D1A1D00000100 /* DiagnosticLogger.swift in Sources */,
+			DI00001241D1A1D00000101 /* DebugInfoView.swift in Sources */,
+			HL00001241D1A1D00000102 /* HoverableLink.swift in Sources */,
 			UC00001241D1A1D00000099 /* UpdateChecker.swift in Sources */,
 			US00001241D1A1D00000098 /* UpdateSheet.swift in Sources */,
 			UH00001241D1A1D00000097A /* UpdateCheckHelper.swift in Sources */,

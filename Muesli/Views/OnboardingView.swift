@@ -64,7 +64,7 @@ struct OnboardingView: View {
                 .padding(.bottom, 24) // Increased bottom padding to prevent dots from being cut off
         }
         .frame(width: 520, height: 600) // Slightly taller to accommodate padding
-        .background(Color(NSColor.windowBackgroundColor))
+        .background(Color("OnboardingBackground"))
         .onAppear {
             // Initial permission check on appear
             Task {
@@ -202,21 +202,27 @@ struct OnboardingView: View {
                     }
                     .buttonStyle(.bordered)
                     
-                    Button("Check Again") {
+                    HoverableLink(title: "Check Again") {
+                        Task {
+                            await DiagnosticLogger.shared.log(.onboarding, "Check Again tapped (screen recording)")
+                        }
                         // Use synchronous check to avoid triggering prompts
                         viewModel.refreshPermissions()
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(Color.accentColor)
                 }
             } else {
                 // Initial state - request permission
                 Button("Grant Screen Recording Access") {
+                    Task {
+                        await DiagnosticLogger.shared.log(.onboarding, "Grant Screen Recording Access button tapped")
+                    }
                     viewModel.requestScreenRecordingPermission()
                     screenRecordingRequested = true
                     // Verify permission after request and auto-advance if granted
                     Task {
+                        await DiagnosticLogger.shared.log(.onboarding, "Calling verifyScreenRecordingAfterRequest()")
                         let granted = await viewModel.verifyScreenRecordingAfterRequest()
+                        await DiagnosticLogger.shared.log(.onboarding, "verifyScreenRecordingAfterRequest() returned: \(granted)")
                         if granted {
                             withAnimation { setStep(.microphone) }
                         }
@@ -324,12 +330,13 @@ struct OnboardingView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.large)
                     
-                    Button("Check Again") {
+                    HoverableLink(title: "Check Again") {
+                        Task {
+                            await DiagnosticLogger.shared.log(.onboarding, "Check Again tapped (microphone)")
+                        }
                         // Use synchronous check to avoid triggering prompts
                         viewModel.refreshPermissions()
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(Color.accentColor)
                     
                     Text("Don't see \(appName) in the list? Restart the app and grant permission when prompted.")
                         .font(.system(size: 10))
@@ -349,9 +356,14 @@ struct OnboardingView: View {
             } else {
                 // Initial state - request permission
                 Button("Grant Microphone Access") {
+                    Task {
+                        await DiagnosticLogger.shared.log(.onboarding, "Grant Microphone Access button tapped")
+                    }
                     microphoneRequested = true
                     Task {
+                        await DiagnosticLogger.shared.log(.onboarding, "Calling requestMicrophonePermission()")
                         await viewModel.requestMicrophonePermission()
+                        await DiagnosticLogger.shared.log(.onboarding, "requestMicrophonePermission() returned")
                         
                         // Use synchronous refresh to update cached state
                         // requestMicrophonePermission() already handles the permission request
@@ -742,6 +754,9 @@ struct OnboardingView: View {
     // MARK: - Step Management
     
     private func setStep(_ step: OnboardingStep) {
+        Task {
+            await DiagnosticLogger.shared.log(.onboarding, "Step transition: \(currentStep.rawValue) → \(step.rawValue)")
+        }
         currentStep = step
         UserDefaults.standard.set(step.rawValue, forKey: AppStorageKeys.onboardingCurrentStep)
     }

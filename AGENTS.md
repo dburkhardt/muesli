@@ -449,6 +449,38 @@ Use `NSWindow` + `NSHostingController` in AppDelegate. Don't auto-advance welcom
 
 ## Debugging Guidance
 
+### Runtime Diagnostic Logs
+
+Muesli includes a `DiagnosticLogger` that writes structured logs to disk for debugging release build issues.
+
+**Log Location**: `~/Library/Application Support/Muesli/Logs/`
+
+**File Format**: `muesli-YYYY-MM-DD.log` (one file per day, auto-rotates)
+
+**Log Categories**:
+- `BUILD` — Bundle ID, version, Info.plist keys (logged on app launch)
+- `PERMISSION` — Permission checks/requests with status values
+- `ONBOARDING` — Step transitions and button tap events
+- `APP` — General app events
+
+**Accessing Logs**:
+```bash
+# View today's log
+cat ~/Library/Application\ Support/Muesli/Logs/muesli-$(date +%Y-%m-%d).log
+
+# Search for permission-related entries
+grep PERMISSION ~/Library/Application\ Support/Muesli/Logs/*.log
+
+# Watch log in real-time
+tail -f ~/Library/Application\ Support/Muesli/Logs/muesli-$(date +%Y-%m-%d).log
+```
+
+**In-App Access**: Menu Bar → Debug Info... (available during both onboarding and normal operation)
+
+**Log Retention**: 7 days (auto-cleanup on app launch)
+
+**Privacy Policy**: Logs contain only build/permission metadata. NO user content (transcripts, meeting titles, file paths).
+
 ### Before Starting a Debug Session
 
 **Check the debug log knowledge base first**: [`docs/debug-logs/`](docs/debug-logs/)

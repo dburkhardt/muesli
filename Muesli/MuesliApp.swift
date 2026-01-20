@@ -142,6 +142,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
             AppDelegate.shared = self
+            
+            // Log build information for diagnostics
+            await DiagnosticLogger.shared.logBuildInfo()
         }
         
         // Check for UI testing mode

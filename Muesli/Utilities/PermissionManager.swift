@@ -239,17 +239,22 @@ final class PermissionManager: PermissionManagerProtocol {
     /// TRIGGERS the screen recording permission prompt if permission is not granted.
     /// Do NOT call during onboarding welcome screen - see spec/onboarding_flow.md
     func checkScreenRecordingPermissionAsync() async -> Bool {
+        await DiagnosticLogger.shared.log(.permission, "checkScreenRecordingPermissionAsync called")
+        
         // Skip permission checks when running tests
         guard !Self.isRunningTests else {
+            await DiagnosticLogger.shared.log(.permission, "EARLY RETURN: isRunningTests=true")
             return false
         }
         
         do {
             // This call will fail with a specific TCC error if permission is not granted
             _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            await DiagnosticLogger.shared.log(.permission, "Screen recording permission granted (SCShareableContent succeeded)")
             screenRecordingGranted = true
             return true
         } catch {
+            await DiagnosticLogger.shared.log(.permission, "Screen recording permission denied (SCShareableContent error: \(error.localizedDescription))")
             return false
         }
     }
@@ -257,13 +262,23 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Request screen recording permission
     /// Note: This will trigger the system permission dialog
     func requestScreenRecordingPermission() {
+        Task {
+            await DiagnosticLogger.shared.log(.permission, "requestScreenRecordingPermission called")
+        }
+        
         // Skip permission requests when running tests
         guard !Self.isRunningTests else {
+            Task {
+                await DiagnosticLogger.shared.log(.permission, "EARLY RETURN: isRunningTests=true")
+            }
             return
         }
         
         // This will trigger the permission prompt
-        _ = CGRequestScreenCaptureAccess()
+        let result = CGRequestScreenCaptureAccess()
+        Task {
+            await DiagnosticLogger.shared.log(.permission, "CGRequestScreenCaptureAccess returned: \(result)")
+        }
     }
     
     /// Open System Settings to the Screen Recording pane
@@ -288,22 +303,50 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Request microphone permission
     /// - Returns: Whether permission was granted
     func requestMicrophonePermission() async -> Bool {
+        let bundleID = Bundle.main.bundleIdentifier ?? "unknown"
+        let plistDesc = Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") as? String
+        
+        await DiagnosticLogger.shared.log(.permission,
+            "requestMicrophonePermission called. Bundle: \(bundleID)")
+        await DiagnosticLogger.shared.log(.permission,
+            "NSMicrophoneUsageDescription: \(plistDesc ?? "MISSING")")
+        
         // Skip permission requests when running tests
-        guard !Self.isRunningTests else {
+        if Self.isRunningTests {
+            await DiagnosticLogger.shared.log(.permission, "EARLY RETURN: isRunningTests=true")
             return false
         }
         
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        await DiagnosticLogger.shared.log(.permission,
+            "authorizationStatus(for: .audio) = \(status.rawValue) (\(statusName(status)))")
         
         switch status {
         case .authorized:
+            await DiagnosticLogger.shared.log(.permission, "Already authorized, returning true")
             return true
         case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .audio)
+            await DiagnosticLogger.shared.log(.permission, "Status is notDetermined, calling requestAccess...")
+            let result = await AVCaptureDevice.requestAccess(for: .audio)
+            await DiagnosticLogger.shared.log(.permission, "requestAccess returned: \(result)")
+            return result
         case .denied, .restricted:
+            await DiagnosticLogger.shared.log(.permission, "Status is denied/restricted, returning false (no prompt possible)")
             return false
         @unknown default:
+            await DiagnosticLogger.shared.log(.permission, "Unknown status, returning false")
             return false
+        }
+    }
+    
+    /// Helper to convert AVAuthorizationStatus to string
+    private func statusName(_ status: AVAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "notDetermined"
+        case .restricted: return "restricted"
+        case .denied: return "denied"
+        case .authorized: return "authorized"
+        @unknown default: return "unknown"
         }
     }
     
