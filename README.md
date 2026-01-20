@@ -33,7 +33,7 @@ The build script handles all complexity automatically: deterministic build paths
 
 **Requirements:**
 - macOS 26 or newer
-- Xcode 16.0+
+- Xcode 26.0+
 - Apple Silicon Mac (M1/M2/M3/M4)
 
 **Architecture and Technical Details:**

@@ -19,12 +19,12 @@ on:
   workflow_dispatch:
 
 env:
-  XCODE_VERSION: '15.2'
+  XCODE_VERSION: '26.2'
 
 jobs:
   test:
     name: Build and Test
-    runs-on: macos-14
+    runs-on: macos-26
     
     steps:
       - name: Checkout code
@@ -130,7 +130,7 @@ for target in data.get('targets', []):
   
   lint:
     name: Swift Lint
-    runs-on: macos-14
+    runs-on: macos-26
     
     steps:
       - name: Checkout code
@@ -151,7 +151,7 @@ for target in data.get('targets', []):
   
   build-release:
     name: Build Release Configuration
-    runs-on: macos-14
+    runs-on: macos-26
     
     steps:
       - name: Checkout code

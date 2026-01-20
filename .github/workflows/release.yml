@@ -32,7 +32,8 @@ permissions:
 jobs:
   release:
     name: Build and Release Muesli
-    runs-on: macos-14
+    # Use macos-26 (Tahoe) to get macOS 26 SDK for liquid glass button styling
+    runs-on: macos-26
     
     steps:
       - name: Checkout code
@@ -353,7 +354,7 @@ jobs:
           echo "" >> "${NOTES_FILE}"
           echo "## System Requirements" >> "${NOTES_FILE}"
           echo "" >> "${NOTES_FILE}"
-          echo "- macOS 14.0 (Sonoma) or later" >> "${NOTES_FILE}"
+          echo "- macOS 26 (Tahoe) or later" >> "${NOTES_FILE}"
           echo "- Apple Silicon (M1, M2, M3, or newer)" >> "${NOTES_FILE}"
           echo "- 8 GB RAM minimum (16 GB recommended)" >> "${NOTES_FILE}"
           echo "" >> "${NOTES_FILE}"

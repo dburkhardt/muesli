@@ -299,7 +299,7 @@ xcodebuild test
 # Check Xcode version
 xcodebuild -version
 
-# Expected: Xcode 15.2 or later
+# Expected: Xcode 26.0 or later
 # Update Xcode if needed
 ```
 

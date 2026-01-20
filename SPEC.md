@@ -546,12 +546,84 @@ User preferences are stored in standard UserDefaults:
 - Transcription mode (live vs post-processing)
 - Echo cancellation setting
 
+### Diagnostic Logs
+
+Diagnostic logs are stored for debugging release build issues:
+- Location: `~/Library/Application Support/Muesli/Logs/`
+- File naming: `muesli-YYYY-MM-DD.log` (one per day)
+- Retention: 7 days (auto-cleanup on launch)
+- See [spec/diagnostic_logging.md](spec/diagnostic_logging.md) for full specification
+
 ### Why Application Support?
 
 1. **No permission prompts** - Application Support doesn't require user authorization
 2. **Appropriate for app data** - Documents is for user-created files, not app-generated data
 3. **Standard macOS convention** - Follows Apple's Human Interface Guidelines
 4. **Clean separation** - App data stays organized and doesn't clutter user folders
+
+---
+
+## Diagnostic Logging (Required)
+
+Muesli includes a **required** diagnostic logging system that ships with all builds (Debug and Release). This infrastructure is essential for debugging issues that only appear in production builds.
+
+### Purpose
+
+Some bugs only manifest in release builds due to:
+- Code signing and notarization differences
+- Optimizations affecting dynamic color resolution
+- Info.plist embedding differences
+- TCC (Transparency, Consent, and Control) behavior with different bundle IDs
+
+The 30+ minute DMG build cycle makes iteration slow. Diagnostic logs persist across reinstalls and can be easily shared for bug reports.
+
+### Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| DiagnosticLogger | `Muesli/Utilities/DiagnosticLogger.swift` | Thread-safe actor for file-based logging |
+| DebugInfoView | `Muesli/Views/DebugInfoView.swift` | UI panel showing permission states, build info |
+| Menu Item | Menu Bar → "Debug Info..." | Access point (available in idle AND onboarding) |
+
+### Log Categories
+
+| Category | What Gets Logged |
+|----------|------------------|
+| `BUILD` | Bundle ID, version, Info.plist keys (on app launch) |
+| `PERMISSION` | Permission checks with raw status values, request outcomes |
+| `ONBOARDING` | Step transitions, button tap events |
+| `APP` | General app lifecycle events |
+
+### Privacy Policy
+
+Logs contain **only** build/permission metadata. **Never** log:
+- Transcript content
+- Meeting titles or file names
+- User file paths outside Application Support
+- Any personally identifiable information
+
+### Accessing Logs
+
+```bash
+# View today's log
+cat ~/Library/Application\ Support/Muesli/Logs/muesli-$(date +%Y-%m-%d).log
+
+# Search for permission issues
+grep PERMISSION ~/Library/Application\ Support/Muesli/Logs/*.log
+
+# Watch in real-time
+tail -f ~/Library/Application\ Support/Muesli/Logs/muesli-$(date +%Y-%m-%d).log
+```
+
+Or use: Menu Bar → "Debug Info..." → "Open in Finder"
+
+### Full Specification
+
+See [spec/diagnostic_logging.md](spec/diagnostic_logging.md) for complete details including:
+- Log format and file management
+- Integration points (PermissionManager, OnboardingView)
+- Expected log output examples
+- Testing procedures
 
 ---
 
@@ -572,6 +644,7 @@ The MVP is complete. All core features are implemented and functional.
 | Transcript reprocessing | ✅ | Re-transcribe with different models |
 | Audio-only recording | ✅ | Record when no model available |
 | LLM refinement | ✅ | Polish transcripts with local LLM |
+| Diagnostic logging | ✅ | File-based logs for debugging release builds |
 
 ### Model Support
 
@@ -588,6 +661,7 @@ For detailed behavior specifications, see the `spec/` folder:
 | [spec/onboarding_flow.md](spec/onboarding_flow.md) | Permission handling, auto-advance behavior |
 | [spec/window_management.md](spec/window_management.md) | SwiftUI window lifecycle, onboarding window |
 | [spec/export_system.md](spec/export_system.md) | Export architecture, external tool integration, data formats |
+| [spec/diagnostic_logging.md](spec/diagnostic_logging.md) | Diagnostic logging system, debug info panel |
 
 ---
 

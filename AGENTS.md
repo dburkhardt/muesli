@@ -264,7 +264,7 @@ Each release produces:
 
 **Build fails in CI**:
 - Check build logs in GitHub Actions
-- Verify Xcode version matches (15.2 on macos-14)
+- Verify Xcode version matches (26.x on macos-26)
 - Ensure all dependencies resolve correctly
 - Test build locally first: `./scripts/create-dmg.sh`
 

@@ -297,6 +297,35 @@ _ = await self?.refreshPermissionsAsync()
 
 ## Debugging Onboarding Issues
 
+Muesli includes a diagnostic logging system specifically designed to debug onboarding issues in release builds. See [spec/diagnostic_logging.md](diagnostic_logging.md) for the full specification.
+
+### Using Diagnostic Logs
+
+1. **Access Debug Info Panel**: Menu Bar → "Debug Info..." (available during onboarding)
+2. **View permission states**: Panel shows raw `authorizationStatus` values
+3. **Open logs**: Click "Open in Finder" to access log files
+4. **Search for issues**:
+   ```bash
+   grep PERMISSION ~/Library/Application\ Support/Muesli/Logs/*.log
+   grep ONBOARDING ~/Library/Application\ Support/Muesli/Logs/*.log
+   ```
+
+### Expected Log Output
+
+When permission is requested successfully:
+```
+[PERMISSION] requestMicrophonePermission called. Bundle: com.muesli.app
+[PERMISSION] NSMicrophoneUsageDescription: Muesli needs Microphone access...
+[PERMISSION] authorizationStatus(for: .audio) = 0 (notDetermined)
+[PERMISSION] Status is notDetermined, calling requestAccess...
+[PERMISSION] requestAccess returned: true
+```
+
+When there's a problem:
+- `NSMicrophoneUsageDescription: MISSING` → Info.plist not embedded correctly
+- `authorizationStatus = 2 (denied)` → Permission previously denied
+- No log entries after button tap → Button handler not executing
+
 ### Common Issue: Running Wrong Binary
 
 **Symptom**: Permission detection appears broken after code changes, but you're certain the fix should work.
@@ -393,7 +422,7 @@ This allows detection of newly-granted permissions while preserving the cached t
 
 ### Bundle ID Logging
 
-The `PermissionManager` logs the bundle ID on init for debugging TCC issues:
+The `PermissionManager` logs the bundle ID on init for debugging TCC issues. This is captured in both console output and the diagnostic log files:
 
 ```swift
 init() {
@@ -404,7 +433,20 @@ init() {
 }
 ```
 
+Additionally, the `DiagnosticLogger` captures:
+- Bundle ID on every permission request
+- Info.plist permission description keys (or "MISSING" if absent)
+- Raw `authorizationStatus` values with human-readable names
+
 This helps identify issues where TCC permissions are granted to a different bundle ID (e.g., when running debug vs release builds, or different bundle IDs on feature branches).
+
+### Diagnostic Log Location
+
+```
+~/Library/Application Support/Muesli/Logs/muesli-YYYY-MM-DD.log
+```
+
+See [spec/diagnostic_logging.md](diagnostic_logging.md) for complete logging specification.
 
 ## Manual Testing Checklist
 
@@ -493,3 +535,4 @@ If you see a different bundle ID, TCC permissions may not work correctly.
 | 2026-01-18 | Add verify after request pattern | Immediately detect permission grant without polling |
 | 2026-01-18 | Add optimistic OR for sync checks | Allows sync check to detect newly-granted permissions |
 | 2026-01-18 | Add bundle ID logging | Aids TCC debugging with different bundle IDs |
+| 2026-01-20 | Add diagnostic logging integration | File-based logs for debugging release build issues |
