@@ -1,10 +1,9 @@
-import Foundation
 import CoreMedia
+import Foundation
 @testable import Muesli
 
 /// Mock implementation of AudioCaptureService for testing
 actor MockAudioCaptureService: AudioCaptureServiceProtocol {
-    
     // MARK: - State
     
     private(set) var isRecording: Bool = false

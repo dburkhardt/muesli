@@ -60,32 +60,42 @@ struct OnboardingView: View {
             
             // Progress indicator - always at bottom
             progressIndicator
-                .padding(.vertical, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 24) // Increased bottom padding to prevent dots from being cut off
         }
-        .frame(width: 520, height: 580) // Larger window to fit all content
-        .background(Color(NSColor.windowBackgroundColor))
+        .frame(width: 520, height: 600) // Slightly taller to accommodate padding
+        .background(Color("OnboardingBackground"))
         .onAppear {
             // Initial permission check on appear
             Task {
-                // If we're past the welcome screen, use async permission check
-                // This is reliable and won't trigger a prompt if permission is already granted
-                // Only on welcome screen do we avoid async check to prevent prompts
-                if currentStep != .welcome {
-                    await viewModel.refreshPermissionsAsync()
-                } else {
-                    viewModel.refreshPermissions()
+                // Always use synchronous check to avoid triggering permission prompts
+                viewModel.refreshPermissions()
+                
+                // Start monitoring on permission screens
+                if currentStep == .screenRecording || currentStep == .microphone {
+                    startPermissionMonitoring()
                 }
+                
                 advanceBasedOnPermissions()
             }
         }
+        .onDisappear {
+            // Stop monitoring when view disappears
+            stopPermissionMonitoring()
+        }
         .onChange(of: currentStep) { oldValue, newValue in
+            // Stop monitoring when leaving permission screens
+            if oldValue == .screenRecording || oldValue == .microphone {
+                stopPermissionMonitoring()
+            }
+            
             // Check permissions when switching to permission steps
-            // Use async check for reliable detection after granting permission
             if newValue == .screenRecording || newValue == .microphone {
-                Task {
-                    await viewModel.refreshPermissionsAsync()
-                    advanceBasedOnPermissions()
-                }
+                // Use synchronous check to avoid triggering prompts
+                viewModel.refreshPermissions()
+                advanceBasedOnPermissions()
+                // Start real-time monitoring
+                startPermissionMonitoring()
             }
         }
         .fileImporter(
@@ -158,7 +168,12 @@ struct OnboardingView: View {
             Text("Screen Recording Access")
                 .font(.system(size: 24, weight: .bold))
             
-            Text("Muesli needs Screen Recording permission to capture audio from meeting apps like Zoom, Teams, and Google Meet.")
+            Text(
+                """
+                Muesli needs Screen Recording permission to capture audio from meeting apps \
+                like Zoom, Teams, and Google Meet.
+                """
+            )
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -182,25 +197,37 @@ struct OnboardingView: View {
                         .multilineTextAlignment(.center)
                     
                     Button("Open System Settings") {
+                        viewModel.markAwaitingScreenRecordingFromSettings()
                         viewModel.openScreenRecordingSettings()
                     }
                     .buttonStyle(.bordered)
                     
-                    Button("Check Again") {
+                    HoverableLink(title: "Check Again") {
                         Task {
-                            await viewModel.refreshPermissionsAsync()
+                            await DiagnosticLogger.shared.log(.onboarding, "Check Again tapped (screen recording)")
                         }
+                        // Use synchronous check to avoid triggering prompts
+                        viewModel.refreshPermissions()
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(Color.accentColor)
                 }
             } else {
                 // Initial state - request permission
                 Button("Grant Screen Recording Access") {
+                    Task {
+                        await DiagnosticLogger.shared.log(.onboarding, "Grant Screen Recording Access button tapped")
+                    }
                     viewModel.requestScreenRecordingPermission()
                     screenRecordingRequested = true
-                    // Bring onboarding window back to front after system dialog dismisses
-                    AppDelegate.shared?.bringOnboardingWindowToFront()
+                    // Verify permission after request and auto-advance if granted
+                    Task {
+                        await DiagnosticLogger.shared.log(.onboarding, "Calling verifyScreenRecordingAfterRequest()")
+                        let granted = await viewModel.verifyScreenRecordingAfterRequest()
+                        await DiagnosticLogger.shared.log(.onboarding, "verifyScreenRecordingAfterRequest() returned: \(granted)")
+                        if granted {
+                            withAnimation { setStep(.microphone) }
+                        }
+                        AppDelegate.shared?.bringOnboardingWindowToFront()
+                    }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -297,18 +324,19 @@ struct OnboardingView: View {
                     }
                     
                     Button("Open System Settings") {
+                        viewModel.markAwaitingMicrophoneFromSettings()
                         viewModel.openMicrophoneSettings()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
                     
-                    Button("Check Again") {
+                    HoverableLink(title: "Check Again") {
                         Task {
-                            await viewModel.refreshPermissionsAsync()
+                            await DiagnosticLogger.shared.log(.onboarding, "Check Again tapped (microphone)")
                         }
+                        // Use synchronous check to avoid triggering prompts
+                        viewModel.refreshPermissions()
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(Color.accentColor)
                     
                     Text("Don't see \(appName) in the list? Restart the app and grant permission when prompted.")
                         .font(.system(size: 10))
@@ -328,11 +356,18 @@ struct OnboardingView: View {
             } else {
                 // Initial state - request permission
                 Button("Grant Microphone Access") {
+                    Task {
+                        await DiagnosticLogger.shared.log(.onboarding, "Grant Microphone Access button tapped")
+                    }
                     microphoneRequested = true
                     Task {
+                        await DiagnosticLogger.shared.log(.onboarding, "Calling requestMicrophonePermission()")
                         await viewModel.requestMicrophonePermission()
-                        // Refresh permission state after request completes
-                        await viewModel.refreshPermissionsAsync()
+                        await DiagnosticLogger.shared.log(.onboarding, "requestMicrophonePermission() returned")
+                        
+                        // Use synchronous refresh to update cached state
+                        // requestMicrophonePermission() already handles the permission request
+                        viewModel.refreshPermissions()
                         microphoneRequested = false
                         // Bring onboarding window back to front after system dialog dismisses
                         AppDelegate.shared?.bringOnboardingWindowToFront()
@@ -363,28 +398,27 @@ struct OnboardingView: View {
     // MARK: - Model Setup Screen
     
     private var modelSetupScreen: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Image(systemName: "brain.head.profile")
-                .font(.system(size: 50))
+                .font(.system(size: 44))
                 .foregroundStyle(Color.accentColor)
             
             Text("Transcription Models")
-                .font(.system(size: 24, weight: .bold))
+                .font(.system(size: 22, weight: .bold))
             
-            Text("Download one or more models for transcription.\nLarger models are more accurate but slower.")
+            Text("Download one or more models for transcription....")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .lineSpacing(2)
             
             // Model list
             modelListView
-                .padding(.top, 8)
+                .padding(.top, 4)
             
             // Active model picker (only if models are downloaded)
             if !modelManager.downloadedModels.isEmpty {
                 activeModelPicker
-                    .padding(.top, 8)
+                    .padding(.top, 4)
             }
             
             Spacer()
@@ -399,8 +433,8 @@ struct OnboardingView: View {
             .disabled(!modelManager.hasModel)
         }
         .padding(.horizontal, 40)
-        .padding(.top, 40)
-        .padding(.bottom, 24)
+        .padding(.top, 24)
+        .padding(.bottom, 8) // Reduced since progress indicator now has more bottom padding
     }
     
     // MARK: - LLM Setup Screen
@@ -676,7 +710,33 @@ struct OnboardingView: View {
         .padding(.vertical, 8)
     }
     
-    // MARK: - Permission Polling
+    // MARK: - Permission Monitoring
+    
+    /// Start real-time permission monitoring
+    private func startPermissionMonitoring() {
+        // Set up callback for instant updates
+        viewModel.permissionManager.permissionDidChange = { [weak viewModel] _, _ in
+            Task { @MainActor in
+                guard let viewModel = viewModel else { return }
+                
+                // Update viewModel state using synchronous refresh
+                // The monitoring mechanism now uses only sync checks to avoid triggering prompts
+                viewModel.refreshPermissions()
+                
+                // Auto-advance if permission granted
+                self.advanceBasedOnPermissions()
+            }
+        }
+        
+        // Start monitoring
+        viewModel.permissionManager.startMonitoringPermissions()
+    }
+    
+    /// Stop permission monitoring
+    private func stopPermissionMonitoring() {
+        viewModel.permissionManager.stopMonitoringPermissions()
+        viewModel.permissionManager.permissionDidChange = nil
+    }
     
     // MARK: - File Selection
     
@@ -694,6 +754,9 @@ struct OnboardingView: View {
     // MARK: - Step Management
     
     private func setStep(_ step: OnboardingStep) {
+        Task {
+            await DiagnosticLogger.shared.log(.onboarding, "Step transition: \(currentStep.rawValue) → \(step.rawValue)")
+        }
         currentStep = step
         UserDefaults.standard.set(step.rawValue, forKey: AppStorageKeys.onboardingCurrentStep)
     }

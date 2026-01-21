@@ -39,6 +39,9 @@ struct MenuBarView: View {
         }
     }
     
+    /// State for showing debug info sheet
+    @State private var showDebugInfo = false
+    
     // MARK: - Onboarding State Menu
     
     private var onboardingMenuContent: some View {
@@ -49,10 +52,19 @@ struct MenuBarView: View {
             
             Divider()
             
+            Button("Debug Info...") {
+                showDebugInfo = true
+            }
+            
+            Divider()
+            
             Button("Quit \(appName)") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q", modifiers: .command)
+        }
+        .sheet(isPresented: $showDebugInfo) {
+            DebugInfoView()
         }
     }
     
@@ -84,6 +96,10 @@ struct MenuBarView: View {
             }
             .keyboardShortcut(",", modifiers: .command)
             
+            Button("Debug Info...") {
+                showDebugInfo = true
+            }
+            
             // Check for Updates menu item with indicator
             if let status = updateStatus, case .updateAvailable = status {
                 Button {
@@ -113,13 +129,18 @@ struct MenuBarView: View {
             .keyboardShortcut("q", modifiers: .command)
         }
         .sheet(isPresented: $showUpdateSheet) {
-            updateHelper.updateSheet(currentVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
+            updateHelper.updateSheet(
+                currentVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
+            )
         }
         .onAppear {
             // Check for updates on menu bar open if we have a cached status from ViewModel
             if let vmStatus = viewModel.latestUpdateStatus {
                 updateStatus = vmStatus
             }
+        }
+        .sheet(isPresented: $showDebugInfo) {
+            DebugInfoView()
         }
     }
     

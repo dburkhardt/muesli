@@ -65,7 +65,13 @@ struct MainWindow: View {
             
             // Recording indicator
             if session.isRecording {
-                RecordingIndicator(elapsedTime: session.elapsedTimeString)
+                RecordingIndicator(
+                    elapsedTime: session.elapsedTimeString,
+                    isInitializing: session.isInitializing,
+                    isModelLoading: session.isModelLoading,
+                    isSlowModelLoad: viewModel.isSlowModelLoad,
+                    isRecordingOnly: session.isRecordingOnly
+                )
             } else if session.isCompleted {
                 CompletedIndicator()
             }
@@ -104,15 +110,18 @@ struct MainWindow: View {
                     .pickerStyle(.menu)
                     .frame(width: 200)
                     
-                    Button(action: {
+                Button(
+                    action: {
                         Task {
                             await viewModel.refreshMeetingApps()
                         }
-                    }) {
+                    },
+                    label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .buttonStyle(.borderless)
-                    .help("Refresh app list")
+                )
+                .buttonStyle(.borderless)
+                .help("Refresh app list")
                 }
                 
                 if viewModel.availableMeetingApps.isEmpty {
@@ -175,13 +184,16 @@ struct MainWindow: View {
                     .pickerStyle(.menu)
                     .frame(width: 200)
                     
-                    Button(action: {
+                Button(
+                    action: {
                         viewModel.microphoneManager.refreshDevices()
-                    }) {
+                    },
+                    label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .buttonStyle(.borderless)
-                    .help("Refresh microphone list")
+                )
+                .buttonStyle(.borderless)
+                .help("Refresh microphone list")
                 }
                 
                 if viewModel.microphoneManager.availableDevices.isEmpty {
@@ -306,20 +318,23 @@ struct MainWindow: View {
             
             // Re-transcribe button (shown if audio files exist and not currently retranscribing)
             if session.canRetranscribe && !session.isRetranscribing {
-                Button(action: {
-                    viewModel.retranscribeWithPostProcessing(for: session)
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Re-transcribe with Post-Processing")
+                Button(
+                    action: {
+                        viewModel.retranscribeWithPostProcessing(for: session)
+                    },
+                    label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Re-transcribe with Post-Processing")
+                        }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.secondary.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.secondary.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
+                )
                 .buttonStyle(.plain)
                 .padding(.bottom, 12)
             }
@@ -335,9 +350,11 @@ struct MainWindow: View {
             case .idle:
                 Spacer()
                 
-                Button(action: {
+            Button(
+                action: {
                     viewModel.startRecording(for: session)
-                }) {
+                },
+                label: {
                     Text("Start Recording")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.white)
@@ -346,17 +363,20 @@ struct MainWindow: View {
                         .background(session.selectedApp != nil ? Color.accentColor : Color.gray)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .buttonStyle(.plain)
-                .disabled(session.selectedApp == nil)
+            )
+            .buttonStyle(.plain)
+            .disabled(session.selectedApp == nil)
                 
                 Spacer()
                 
             case .recording, .stopping:
                 Spacer()
                 
-                Button(action: {
+            Button(
+                action: {
                     viewModel.stopRecording(for: session)
-                }) {
+                },
+                label: {
                     Text(session.state == .stopping ? "Stopping..." : "Stop Recording")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.white)
@@ -365,17 +385,20 @@ struct MainWindow: View {
                         .background(.red)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .buttonStyle(.plain)
-                .disabled(session.state == .stopping)
+            )
+            .buttonStyle(.plain)
+            .disabled(session.state == .stopping)
                 
                 Spacer()
                 
             case .completed:
                 Spacer()
                 
-                Button(action: {
+            Button(
+                action: {
                     session.openOutputFolder()
-                }) {
+                },
+                label: {
                     Text("Open in Finder")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.white)
@@ -384,11 +407,14 @@ struct MainWindow: View {
                         .background(Color.accentColor)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .buttonStyle(.plain)
+            )
+            .buttonStyle(.plain)
                 
-                Button(action: {
+            Button(
+                action: {
                     openWindow(id: "session")
-                }) {
+                },
+                label: {
                     Text("New Recording")
                         .font(.system(size: 14, weight: .medium))
                         .padding(.horizontal, 20)
@@ -396,7 +422,8 @@ struct MainWindow: View {
                         .background(Color.secondary.opacity(0.2))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .buttonStyle(.plain)
+            )
+            .buttonStyle(.plain)
                 
                 Spacer()
             }
@@ -426,7 +453,9 @@ struct MainWindow: View {
     let session = RecordingSession()
     session.state = .completed
     session.meetingTitle = "Team Standup"
-    session.outputDirectory = URL(fileURLWithPath: "/Users/test/Library/Application Support/Muesli/Recordings/2026-01-05_14-00_Team-Standup")
+    session.outputDirectory = URL(
+        fileURLWithPath: "/Users/test/Library/Application Support/Muesli/Recordings/2026-01-05_14-00_Team-Standup"
+    )
     return MainWindow(viewModel: vm, session: session)
         .frame(width: 500, height: 600)
 }

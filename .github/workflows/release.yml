@@ -18,6 +18,11 @@ on:
         required: false
         default: '60'
         type: string
+      skip_notarization:
+        description: 'Skip code signing and notarization (creates unsigned build)'
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: write  # Required for creating releases and pushing commits
@@ -27,7 +32,8 @@ permissions:
 jobs:
   release:
     name: Build and Release Muesli
-    runs-on: macos-14
+    # Use macos-26 (Tahoe) to get macOS 26 SDK for liquid glass button styling
+    runs-on: macos-26
     
     steps:
       - name: Checkout code
@@ -47,6 +53,7 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             /usr/local/Cellar/create-dmg
+            /usr/local/Cellar/fileicon
           key: ${{ runner.os }}-homebrew-${{ hashFiles('.github/workflows/release.yml') }}
           restore-keys: |
             ${{ runner.os }}-homebrew-
@@ -61,13 +68,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
       
-      - name: Install create-dmg
+      - name: Install create-dmg and fileicon
         run: |
           if ! command -v create-dmg &> /dev/null; then
             echo "Installing create-dmg..."
             brew install create-dmg
           else
             echo "create-dmg already installed"
+          fi
+          
+          if ! command -v fileicon &> /dev/null; then
+            echo "Installing fileicon..."
+            brew install fileicon
+          else
+            echo "fileicon already installed"
           fi
       
       - name: Extract version from tag or input
@@ -86,6 +100,12 @@ jobs:
             echo "Error: Invalid version format: ${VERSION}"
             echo "Expected format: X.Y.Z or X.Y.Z-prerelease"
             exit 1
+          fi
+          
+          # Add -unsigned suffix for skip_notarization builds
+          if [ "${{ github.event.inputs.skip_notarization }}" == "true" ]; then
+            VERSION="${VERSION}-unsigned"
+            echo "Adding -unsigned suffix for unsigned build"
           fi
           
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
@@ -110,7 +130,7 @@ jobs:
           fi
       
       - name: Setup code signing certificates
-        if: ${{ env.P12_BASE64 != '' }}
+        if: ${{ env.P12_BASE64 != '' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
         env:
           P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
           P12_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
@@ -185,7 +205,7 @@ jobs:
           echo "size=${DMG_SIZE}" >> $GITHUB_OUTPUT
       
       - name: Sign and notarize DMG
-        if: ${{ env.APPLE_ID != '' && env.P12_BASE64 != '' }}
+        if: ${{ env.APPLE_ID != '' && env.P12_BASE64 != '' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
         env:
           P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -271,9 +291,17 @@ jobs:
           # Create release notes
           NOTES_FILE="release_notes.md"
           
+          # Add warning for unsigned builds
+          if [ "${{ github.event.inputs.skip_notarization }}" == "true" ]; then
+            echo "> **Warning:** This is an unsigned development build. See installation instructions below for how to open it." > "${NOTES_FILE}"
+            echo "" >> "${NOTES_FILE}"
+          else
+            echo "" > "${NOTES_FILE}"
+          fi
+          
           # Use git-cliff generated changelog if available
           if [ -f "cliff-changelog.md" ] && [ -s "cliff-changelog.md" ]; then
-            echo "## What's Changed" > "${NOTES_FILE}"
+            echo "## What's Changed" >> "${NOTES_FILE}"
             echo "" >> "${NOTES_FILE}"
             cat cliff-changelog.md >> "${NOTES_FILE}"
             echo "" >> "${NOTES_FILE}"
@@ -319,14 +347,22 @@ jobs:
           echo "" >> "${NOTES_FILE}"
           echo "1. Download \`${{ steps.build.outputs.dmg_file }}\` from the assets below" >> "${NOTES_FILE}"
           echo "2. Open the DMG and drag Muesli to your Applications folder" >> "${NOTES_FILE}"
-          echo "3. **Double-click** to open (signed and notarized - no warnings!)" >> "${NOTES_FILE}"
+          
+          # Conditional installation step 3
+          if [ "${{ github.event.inputs.skip_notarization }}" == "true" ]; then
+            echo "3. Before opening, run: \`xattr -d com.apple.quarantine /Applications/Muesli.app\`" >> "${NOTES_FILE}"
+            echo "   Or: System Settings → Privacy & Security → Open Anyway" >> "${NOTES_FILE}"
+          else
+            echo "3. **Double-click** to open (signed and notarized - no warnings!)" >> "${NOTES_FILE}"
+          fi
+          
           echo "4. Follow the onboarding wizard to grant permissions" >> "${NOTES_FILE}"
           echo "" >> "${NOTES_FILE}"
           echo "📖 [Detailed installation instructions](https://dburkhardt.github.io/muesli/download.html)" >> "${NOTES_FILE}"
           echo "" >> "${NOTES_FILE}"
           echo "## System Requirements" >> "${NOTES_FILE}"
           echo "" >> "${NOTES_FILE}"
-          echo "- macOS 14.0 (Sonoma) or later" >> "${NOTES_FILE}"
+          echo "- macOS 26 (Tahoe) or later" >> "${NOTES_FILE}"
           echo "- Apple Silicon (M1, M2, M3, or newer)" >> "${NOTES_FILE}"
           echo "- 8 GB RAM minimum (16 GB recommended)" >> "${NOTES_FILE}"
           echo "" >> "${NOTES_FILE}"
@@ -361,7 +397,7 @@ jobs:
           name: Muesli ${{ steps.version.outputs.version }}
           body: ${{ steps.release_notes.outputs.notes }}
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          prerelease: ${{ contains(steps.version.outputs.version, '-') || github.event.inputs.skip_notarization == 'true' }}
           files: ${{ steps.build.outputs.dmg_file }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

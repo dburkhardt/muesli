@@ -3,7 +3,6 @@ import Foundation
 /// Unified error type for the Muesli app
 /// Provides user-friendly error messages and recovery suggestions
 enum MuesliError: Error, LocalizedError {
-    
     // MARK: - Permission Errors
     
     /// Screen recording permission was not granted
@@ -131,7 +130,10 @@ enum MuesliError: Error, LocalizedError {
     var recoverySuggestion: String? {
         switch self {
         case .screenRecordingDenied:
-            return "Please grant Screen Recording permission in System Settings > Privacy & Security > Screen & System Audio Recording."
+            return """
+                Please grant Screen Recording permission in System Settings > Privacy & Security > \
+                Screen & System Audio Recording.
+                """
         case .microphoneDenied:
             return "Please grant Microphone permission in System Settings > Privacy & Security > Microphone."
         case .permissionsMissing:

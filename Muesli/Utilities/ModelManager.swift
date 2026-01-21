@@ -1,12 +1,12 @@
-import Foundation
-import WhisperKit
 import AppKit
-
+import Foundation
+import os.log
+import WhisperKit
 
 /// Manages WhisperKit model downloading and storage
 @Observable
 final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
-    
+    private static let logger = Logger(subsystem: "com.muesli.app", category: "ModelManager")
     // MARK: - Model Options
     
     enum ModelSize: String, CaseIterable, Identifiable, Hashable {
@@ -14,8 +14,8 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         case base = "base"
         case small = "small"
         case medium = "medium"
-        case large = "large-v3"
-        case largeTurbo = "large-v3-turbo"
+        case large = "large-v3-v20240930"
+        case largeTurbo = "large-v3-v20240930_turbo"
         
         var id: String { rawValue }
         
@@ -23,10 +23,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             switch self {
             case .tiny: return "Tiny"
             case .base: return "Base"
-            case .small: return "Small"
+            case .small: return "Small (Recommended)"
             case .medium: return "Medium"
             case .large: return "Large v3"
-            case .largeTurbo: return "Large v3 Turbo"
+            case .largeTurbo: return "Large v3 Turbo (Best Performance)"
             }
         }
         
@@ -42,15 +42,11 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         }
         
         /// WhisperKit model name format
+        /// Note: WhisperKit automatically prepends "openai_whisper-" so we just use the suffix
+        /// Model names from: https://huggingface.co/argmaxinc/whisperkit-coreml
         var whisperKitName: String {
-            switch self {
-            case .large:
-                return "openai_whisper-large-v3"
-            case .largeTurbo:
-                return "openai_whisper-large-v3-turbo"
-            default:
-                return "openai_whisper-\(rawValue)"
-            }
+            // All models now use rawValue directly since enum values match WhisperKit naming
+            return rawValue
         }
         
         /// Source repository for model downloads
@@ -81,6 +77,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     
     /// Set of downloaded models
     var downloadedModels: Set<ModelSize> = []
+    
+    /// Stored paths for downloaded models (persisted to UserDefaults)
+    /// Key: model rawValue, Value: actual path returned by WhisperKit.download()
+    var modelPaths: [ModelSize: URL] = [:]
     
     /// Downloaded models sorted in canonical order (matching allCases)
     var downloadedModelsOrdered: [ModelSize] {
@@ -116,6 +116,9 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             downloadStates[model] = .idle
         }
         
+        // Load stored model paths from UserDefaults
+        loadModelPaths()
+        
         // Scan for existing downloaded models (skip during tests)
         if !skipScan {
             scanForDownloadedModels()
@@ -137,6 +140,28 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         }
     }
     
+    /// Load stored model paths from UserDefaults
+    private func loadModelPaths() {
+        guard let pathsDict = UserDefaults.standard.dictionary(forKey: AppStorageKeys.whisperModelPaths) as? [String: String] else {
+            return
+        }
+        
+        for (rawValue, pathString) in pathsDict {
+            if let model = ModelSize(rawValue: rawValue) {
+                modelPaths[model] = URL(fileURLWithPath: pathString)
+            }
+        }
+    }
+    
+    /// Save model paths to UserDefaults
+    private func saveModelPaths() {
+        var pathsDict: [String: String] = [:]
+        for (model, url) in modelPaths {
+            pathsDict[model.rawValue] = url.path
+        }
+        UserDefaults.standard.set(pathsDict, forKey: AppStorageKeys.whisperModelPaths)
+    }
+    
     // MARK: - Model Directory
     
     /// Returns the Application Support directory for storing models
@@ -153,16 +178,63 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     }
     
     /// Get the path for a specific model
+    /// First checks stored paths, then falls back to filesystem scan
     func pathForModel(_ model: ModelSize) -> URL? {
-        // WhisperKit downloads to: modelDirectory/models/argmaxinc/whisperkit-coreml/openai_whisper-{size}/
-        let modelDir = modelDirectory
-            .appendingPathComponent("models/argmaxinc/whisperkit-coreml")
-            .appendingPathComponent(model.whisperKitName)
-        
-        
-        if FileManager.default.fileExists(atPath: modelDir.path) {
-            return modelDir
+        // First, check stored paths (most reliable - comes from actual download)
+        if let storedPath = modelPaths[model] {
+            if FileManager.default.fileExists(atPath: storedPath.path) {
+                return storedPath
+            } else {
+                // Path was stored but no longer exists - clean up
+                Self.logger.warning("Stored path for \(model.displayName) no longer exists: \(storedPath.path)")
+                modelPaths.removeValue(forKey: model)
+                saveModelPaths()
+            }
         }
+        
+        // Fall back to scanning the filesystem for this model
+        return scanForModelPath(model)
+    }
+    
+    /// Scan filesystem to find a model's path
+    /// Searches the whisperkit-coreml directory for folders that match the model
+    private func scanForModelPath(_ model: ModelSize) -> URL? {
+        let whisperKitDir = modelDirectory.appendingPathComponent("models/argmaxinc/whisperkit-coreml")
+        
+        guard FileManager.default.fileExists(atPath: whisperKitDir.path) else {
+            return nil
+        }
+        
+        // Get all directories in the whisperkit-coreml folder
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: whisperKitDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+        
+        // Look for a folder that matches this model
+        // WhisperKit creates folders like "openai_whisper-base", "openai_whisper-large-v3-v20240930_turbo"
+        for folderURL in contents {
+            let folderName = folderURL.lastPathComponent
+            
+            // Check if this folder matches our model
+            // Match by rawValue (e.g., "base" matches "openai_whisper-base")
+            // or by the full expected pattern
+            if folderName.contains(model.rawValue) || 
+               folderName == "openai_whisper-\(model.whisperKitName)" {
+                // Verify it's actually a valid model directory
+                if FileManager.default.fileExists(atPath: folderURL.path) {
+                    // Store this path for future use
+                    modelPaths[model] = folderURL
+                    saveModelPaths()
+                    Self.logger.info("Found model \(model.displayName) at: \(folderURL.path)")
+                    return folderURL
+                }
+            }
+        }
+        
         return nil
     }
     
@@ -176,7 +248,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     /// Validate that a model has all required files (not just config.json)
     /// Returns true if the model is complete and usable
     func validateModel(_ model: ModelSize) -> Bool {
-        
         guard let modelPath = pathForModel(model) else {
             return false
         }
@@ -196,7 +267,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         let textDecoderExists = fm.fileExists(atPath: textDecoderPath.path)
         let textWeightsPath = textDecoderPath.appendingPathComponent("weights/weight.bin")
         let textWeightsExists = fm.fileExists(atPath: textWeightsPath.path)
-        
         
         guard audioEncoderExists else { return false }
         guard audioWeightsExists else { return false }
@@ -252,6 +322,39 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     func scanForDownloadedModels() {
         downloadedModels.removeAll()
         
+        // First, scan the whisperkit-coreml directory to discover all model folders
+        let whisperKitDir = modelDirectory.appendingPathComponent("models/argmaxinc/whisperkit-coreml")
+        
+        if FileManager.default.fileExists(atPath: whisperKitDir.path),
+           let contents = try? FileManager.default.contentsOfDirectory(
+               at: whisperKitDir,
+               includingPropertiesForKeys: [.isDirectoryKey],
+               options: [.skipsHiddenFiles]
+           ) {
+            // Match discovered folders to ModelSize cases
+            for folderURL in contents {
+                let folderName = folderURL.lastPathComponent
+                
+                // Skip non-model directories (like .cache)
+                guard folderName.hasPrefix("openai_whisper-") else { continue }
+                
+                // Try to match this folder to a ModelSize
+                for model in ModelSize.allCases {
+                    // Match by checking if the folder contains the model's rawValue
+                    if folderName.contains(model.rawValue) {
+                        // Store the discovered path
+                        modelPaths[model] = folderURL
+                        Self.logger.debug("Discovered model folder: \(folderName) -> \(model.displayName)")
+                        break
+                    }
+                }
+            }
+            
+            // Persist discovered paths
+            saveModelPaths()
+        }
+        
+        // Now validate each known model (stored paths + any remaining cases)
         for model in ModelSize.allCases {
             // Use validateModel() to ensure the model is actually complete and usable
             // This checks for AudioEncoder.mlmodelc and TextDecoder.mlmodelc with weights
@@ -270,12 +373,16 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     /// Download a specific model
     @MainActor
     func downloadModel(_ model: ModelSize) async {
+        Self.logger.info("Starting download for model: \(model.displayName) (\(model.whisperKitName))")
         downloadStates[model] = .checking
         
         let targetDir = modelDirectory
+        Self.logger.info("Target directory: \(targetDir.path)")
         
         do {
             downloadStates[model] = .downloading(progress: 0)
+            
+            Self.logger.info("Calling WhisperKit.download with variant=\(model.whisperKitName), downloadBase=\(targetDir.path)")
             
             // Use WhisperKit's built-in download functionality with progress tracking
             let folder = try await WhisperKit.download(
@@ -286,9 +393,16 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
                     // Update progress on main thread
                     Task { @MainActor [weak self] in
                         self?.downloadStates[model] = .downloading(progress: progress.fractionCompleted)
+                        Self.logger.debug("Download progress for \(model.displayName): \(progress.fractionCompleted * 100, format: .fixed(precision: 1))%")
                     }
                 }
             )
+            
+            Self.logger.info("Download completed successfully for \(model.displayName). Folder: \(folder)")
+            
+            // Store the actual path returned by WhisperKit (it's already a URL)
+            modelPaths[model] = folder
+            Self.logger.info("Stored model path: \(folder.path)")
             
             // Mark as downloaded
             downloadedModels.insert(model)
@@ -299,10 +413,19 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
                 setActiveModel(model)
             }
             
-            // Persist
+            // Persist both downloaded models and paths
             saveDownloadedModels()
-            
+            saveModelPaths()
         } catch {
+            Self.logger.error("Download failed for \(model.displayName): \(error.localizedDescription)")
+            Self.logger.error("Error details: \(String(describing: error))")
+            
+            // Log NSError details if available
+            if let nsError = error as NSError? {
+                Self.logger.error("NSError domain: \(nsError.domain), code: \(nsError.code)")
+                Self.logger.error("NSError userInfo: \(nsError.userInfo)")
+            }
+            
             downloadStates[model] = .failed(error.localizedDescription)
         }
     }
@@ -363,8 +486,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         guard let modelPath = pathForModel(model) else {
             // Model path doesn't exist, but it's in our set - clean up state
             downloadedModels.remove(model)
+            modelPaths.removeValue(forKey: model)
             downloadStates[model] = .idle
             saveDownloadedModels()
+            saveModelPaths()
             return true
         }
         
@@ -378,6 +503,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         
         // Update state
         downloadedModels.remove(model)
+        modelPaths.removeValue(forKey: model)
         downloadStates[model] = .idle
         
         // If this was the active model, switch to another one
@@ -395,6 +521,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         
         // Persist changes
         saveDownloadedModels()
+        saveModelPaths()
         
         return true
     }
@@ -413,8 +540,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             downloadStates[model] = .idle
         }
         downloadedModels.removeAll()
+        modelPaths.removeAll()
         activeModel = nil
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.downloadedWhisperModels)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.whisperModelPaths)
     }
 }

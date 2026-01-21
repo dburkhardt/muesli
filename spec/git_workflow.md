@@ -8,7 +8,10 @@ When the user asks you to work on features or fixes, follow this pattern:
 
 ### Start new work
 - User says: *"Create a feature branch for X"*
-- You: Create branch `feature/descriptive-name` from `main`, configure bundle ID if needed
+- You: Prompt user: "Should this branch need worktree isolation for parallel development? (yes/no)"
+  - If **yes**: Create `.worktree-config.json` indicator file, then apply bundle ID configuration
+  - If **no**: Create standard branch, work normally in main workspace
+- Then: Create branch `feature/descriptive-name` from `main`
 
 ### Work in progress
 - User says: *"Commit this work"*
@@ -97,12 +100,58 @@ When a critical bug is found in production:
 
 ## Bundle ID Management for Feature Branches
 
-When using git worktrees for parallel development, each branch needs a unique bundle ID (see [AGENTS.md](../AGENTS.md#branch-development) for details).
+Most branches work fine in the standard workspace. **Worktree isolation is optional** and only needed for parallel development.
 
-**Quick reference**:
+### Worktree Indicator File
+
+Branches that need worktree isolation include a `.worktree-config.json` file in the branch root:
+
+```json
+{
+  "needsWorktree": true,
+  "suffix": "xxx",
+  "bundleId": "com.muesli.app.xxx",
+  "productName": "Muesli-xxx",
+  "reason": "parallel development with main branch"
+}
+```
+
+### When to Use Worktree Isolation
+
+**Use when**:
+- Testing multiple branches simultaneously
+- Long-lived feature branches
+- Side-by-side comparison with main
+- Need TCC permission isolation
+
+**Skip when**:
+- Short-lived branches
+- Quick fixes or hotfixes
+- Single-branch workflow
+
+### Configuration Flow
+
+```mermaid
+flowchart TD
+    Start[Create new branch] --> Prompt[Ask: Need worktree isolation?]
+    Prompt --> Decision{User response}
+    Decision -->|Yes| CreateFile[Create .worktree-config.json]
+    Decision -->|No| StandardBranch[Standard branch]
+    CreateFile --> GenSuffix[Generate 3-letter suffix]
+    GenSuffix --> UpdateProject[Update project.pbxproj with bundle ID]
+    UpdateProject --> Commit[Commit indicator + config]
+    StandardBranch --> Work[Work in main workspace]
+    Commit --> Parallel[Can test in parallel]
+```
+
+### Quick Reference
+
 - Main branch: `com.muesli.app` (no suffix)
-- Feature branches: `com.muesli.app.<branch-suffix>`
+- Feature branches with worktree: `com.muesli.app.<suffix>`
 - Update both Debug and Release configurations in `project.pbxproj`
+- Auto-configure: `./scripts/configure-worktree.sh`
+
+For full details, see [AGENTS.md](../AGENTS.md#branch-development).
 
 ## Tools
 

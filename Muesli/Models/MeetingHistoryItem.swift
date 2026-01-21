@@ -49,8 +49,10 @@ final class MeetingHistoryItem: Identifiable, Hashable {
     
     // MARK: - Resume State
     
-    /// Whether this meeting can be resumed (completed recordings that haven't been finalized)
-    var canResume: Bool = false
+    /// Whether this meeting can be resumed (has audio files to continue from)
+    var canResume: Bool {
+        hasAudio || hasMicrophone
+    }
     
     /// Number of recording segments (1 = single recording, 2+ = resumed)
     var segmentCount: Int = 1
@@ -76,7 +78,6 @@ final class MeetingHistoryItem: Identifiable, Hashable {
         originalTranscript: String? = nil,
         originalTranscriptBlocks: [TranscriptBlock]? = nil,
         isRefined: Bool = false,
-        canResume: Bool = false,
         segmentCount: Int = 1,
         transcriptSegments: [TranscriptSegment] = [],
         hasAudio: Bool,
@@ -93,7 +94,6 @@ final class MeetingHistoryItem: Identifiable, Hashable {
         self.originalTranscript = originalTranscript
         self.originalTranscriptBlocks = originalTranscriptBlocks
         self.isRefined = isRefined
-        self.canResume = canResume
         self.segmentCount = segmentCount
         self.transcriptSegments = transcriptSegments
         self.hasAudio = hasAudio

@@ -90,6 +90,19 @@ struct RecordingDetailView: View {
     private func activeRecordingView(session: RecordingSession) -> some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
+                // Warning banners (if any active warnings)
+                if viewModel.warningManager.hasActiveWarnings {
+                    WarningBannerStack(
+                        warnings: viewModel.warningManager.activeWarnings,
+                        onDismiss: { id in
+                            viewModel.warningManager.dismissWarning(id)
+                        },
+                        onCopy: { id in
+                            viewModel.warningManager.copyWarningDetails(id)
+                        }
+                    )
+                }
+                
                 // Header with title and recording indicator
                 headerView(session: session)
                 
@@ -121,9 +134,9 @@ struct RecordingDetailView: View {
                         HStack {
                             Spacer()
                             let formatter: DateFormatter = {
-                                let f = DateFormatter()
-                                f.dateFormat = "MMMM d, yyyy 'at' h:mm a"
-                                return f
+                                let dateFormatter = DateFormatter()
+                                dateFormatter.dateFormat = "MMMM d, yyyy 'at' h:mm a"
+                                return dateFormatter
                             }()
                             Text("Recording started: \(formatter.string(from: firstSegment.startTime))")
                                 .font(.system(size: 12))
@@ -140,10 +153,10 @@ struct RecordingDetailView: View {
                             HStack {
                                 Spacer()
                                 let formatter: DateFormatter = {
-                                    let f = DateFormatter()
-                                    f.dateStyle = .none
-                                    f.timeStyle = .short
-                                    return f
+                                    let dateFormatter = DateFormatter()
+                                    dateFormatter.dateStyle = .none
+                                    dateFormatter.timeStyle = .short
+                                    return dateFormatter
                                 }()
                                 Text("Recording resumed at \(formatter.string(from: segment.startTime))")
                                     .font(.system(size: 12))
@@ -167,10 +180,10 @@ struct RecordingDetailView: View {
                     HStack {
                         Spacer()
                         let formatter: DateFormatter = {
-                            let f = DateFormatter()
-                            f.dateStyle = .none
-                            f.timeStyle = .short
-                            return f
+                            let dateFormatter = DateFormatter()
+                            dateFormatter.dateStyle = .none
+                            dateFormatter.timeStyle = .short
+                            return dateFormatter
                         }()
                         Text("Recording resumed at \(formatter.string(from: session.recordingStartTime ?? Date()))")
                             .font(.system(size: 12))
@@ -183,13 +196,33 @@ struct RecordingDetailView: View {
                     // Live transcript blocks from current session
                     if session.transcriptBlocks.isEmpty {
                         VStack(spacing: 16) {
-                            Image(systemName: "waveform")
-                                .font(.system(size: 32))
-                                .foregroundStyle(.tertiary)
-                            
-                            Text("Listening...")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                            if session.isModelLoading && viewModel.isSlowModelLoad {
+                                // First-time compilation - show detailed message
+                                ProgressView()
+                                    .scaleEffect(1.2)
+                                Text("Preparing transcription model...")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                Text("This is a one-time setup that may take a few minutes.")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .multilineTextAlignment(.center)
+                            } else if session.isModelLoading {
+                                // Normal loading - brief spinner
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                Text("Loading model...")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                // Model ready, waiting for speech
+                                Image(systemName: "waveform")
+                                    .font(.system(size: 32))
+                                    .foregroundStyle(.tertiary)
+                                Text("Listening...")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 24)
@@ -255,6 +288,7 @@ struct RecordingDetailView: View {
                 elapsedTime: session.elapsedTimeString,
                 isInitializing: session.isInitializing,
                 isModelLoading: session.isModelLoading,
+                isSlowModelLoad: viewModel.isSlowModelLoad,
                 isRecordingOnly: session.isRecordingOnly
             )
         }
@@ -308,27 +342,33 @@ struct RecordingDetailView: View {
         Menu {
             // Submenu 1: Live Transcript
             Menu("Live Transcript") {
-                Button(action: {
-                    viewModel.transcriptionMode = .live
-                }) {
-                    HStack {
-                        Text("Live")
-                        if viewModel.transcriptionMode == .live {
-                            Image(systemName: "checkmark")
+                Button(
+                    action: {
+                        viewModel.transcriptionMode = .live
+                    },
+                    label: {
+                        HStack {
+                            Text("Live")
+                            if viewModel.transcriptionMode == .live {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
-                }
+                )
                 
-                Button(action: {
-                    viewModel.transcriptionMode = .postProcessing
-                }) {
-                    HStack {
-                        Text("Post-processing")
-                        if viewModel.transcriptionMode == .postProcessing {
-                            Image(systemName: "checkmark")
+                Button(
+                    action: {
+                        viewModel.transcriptionMode = .postProcessing
+                    },
+                    label: {
+                        HStack {
+                            Text("Post-processing")
+                            if viewModel.transcriptionMode == .postProcessing {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
-                }
+                )
             }
             
             Divider()
@@ -336,18 +376,21 @@ struct RecordingDetailView: View {
             // Submenu 2: Audio Source (shows current, can change only when not recording)
             Menu("Audio Source") {
                 // "All System Audio" option
-                Button(action: {
-                    if !session.isRecording {
-                        session.selectedApp = nil
-                    }
-                }) {
-                    HStack {
-                        Text("All System Audio")
-                        if session.selectedApp == nil {
-                            Image(systemName: "checkmark")
+                Button(
+                    action: {
+                        if !session.isRecording {
+                            session.selectedApp = nil
+                        }
+                    },
+                    label: {
+                        HStack {
+                            Text("All System Audio")
+                            if session.selectedApp == nil {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
-                }
+                )
                 .disabled(session.isRecording)
                 
                 if !viewModel.availableMeetingApps.isEmpty {
@@ -355,18 +398,21 @@ struct RecordingDetailView: View {
                     
                     // Detected apps
                     ForEach(viewModel.availableMeetingApps) { app in
-                        Button(action: {
-                            if !session.isRecording {
-                                session.selectedApp = app
-                            }
-                        }) {
-                            HStack {
-                                Text(app.name)
-                                if session.selectedApp?.bundleIdentifier == app.bundleIdentifier {
-                                    Image(systemName: "checkmark")
+                        Button(
+                            action: {
+                                if !session.isRecording {
+                                    session.selectedApp = app
+                                }
+                            },
+                            label: {
+                                HStack {
+                                    Text(app.name)
+                                    if session.selectedApp?.bundleIdentifier == app.bundleIdentifier {
+                                        Image(systemName: "checkmark")
+                                    }
                                 }
                             }
-                        }
+                        )
                         .disabled(session.isRecording)
                     }
                 }
@@ -391,15 +437,18 @@ struct RecordingDetailView: View {
     // MARK: - Stop Recording Button
     
     private func stopRecordingButton(session: RecordingSession) -> some View {
-        Button(action: {
-            viewModel.stopRecording(for: session)
-        }) {
-            Image(systemName: "xmark")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(.red))
-        }
+        Button(
+            action: {
+                viewModel.stopRecording(for: session)
+            },
+            label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(.red))
+            }
+        )
         .buttonStyle(.plain)
         .disabled(session.state == .stopping)
     }
@@ -413,17 +462,39 @@ struct RecordingDetailView: View {
                     VStack(spacing: 16) {
                         Spacer()
                         
-                        Image(systemName: "waveform")
-                            .font(.system(size: 48))
-                            .foregroundStyle(.tertiary)
-                        
-                        Text("Listening...")
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                        
-                        Text("Transcript will appear here as you speak")
-                            .font(.subheadline)
-                            .foregroundStyle(.tertiary)
+                        if session.isModelLoading && viewModel.isSlowModelLoad {
+                            // First-time compilation - show detailed message
+                            ProgressView()
+                                .scaleEffect(1.5)
+                            Text("Preparing transcription model...")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                            Text("This is a one-time setup that may take a few minutes.\nYour recording is active and audio is being captured.")
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                        } else if session.isModelLoading {
+                            // Normal loading - brief spinner
+                            ProgressView()
+                                .scaleEffect(1.2)
+                            Text("Loading model...")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                            Text("Transcript will appear shortly")
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            // Model ready, waiting for speech
+                            Image(systemName: "waveform")
+                                .font(.system(size: 48))
+                                .foregroundStyle(.tertiary)
+                            Text("Listening...")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                            Text("Transcript will appear here as you speak")
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                        }
                         
                         Spacer()
                     }
@@ -453,7 +524,6 @@ struct RecordingDetailView: View {
             }
         }
     }
-    
     
     // MARK: - Completed Recording View
     
@@ -543,10 +613,12 @@ struct RecordingDetailView: View {
             HStack(spacing: 12) {
                 Spacer()
                 
-                if let directory = session.outputDirectory {
-                    Button(action: {
+            if let directory = session.outputDirectory {
+                Button(
+                    action: {
                         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: directory.path)
-                    }) {
+                    },
+                    label: {
                         Text("Open in Finder")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(.white)
@@ -555,13 +627,16 @@ struct RecordingDetailView: View {
                             .background(Color.accentColor)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                    .buttonStyle(.plain)
-                }
-                
-                if session.canRetranscribe && !session.isRetranscribing {
-                    Button(action: {
+                )
+                .buttonStyle(.plain)
+            }
+            
+            if session.canRetranscribe && !session.isRetranscribing {
+                Button(
+                    action: {
                         viewModel.retranscribeWithPostProcessing(for: session)
-                    }) {
+                    },
+                    label: {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.clockwise")
                             Text("Re-transcribe")
@@ -573,8 +648,9 @@ struct RecordingDetailView: View {
                         .background(Color.secondary.opacity(0.1))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
-                    .buttonStyle(.plain)
-                }
+                )
+                .buttonStyle(.plain)
+            }
                 
                 Spacer()
             }
@@ -595,6 +671,7 @@ struct RecordingDetailView: View {
                     elapsedTime: activeSession.elapsedTimeString,
                     isInitializing: activeSession.isInitializing,
                     isModelLoading: activeSession.isModelLoading,
+                    isSlowModelLoad: viewModel.isSlowModelLoad,
                     isRecordingOnly: activeSession.isRecordingOnly,
                     onTap: {
                         viewModel.returnToLiveRecording()
@@ -622,8 +699,11 @@ struct RecordingDetailView: View {
                     
                     Spacer()
                     
+                    // Copy transcript button
+                    copyTranscriptButton(for: meeting)
+                    
                     // Reprocess button with model picker
-                    if viewModel.modelManager.downloadedModels.count > 0 {
+                        if !viewModel.modelManager.downloadedModels.isEmpty {
                         Menu {
                             ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
                                 Button("Reprocess with \(model.displayName)") {
@@ -676,30 +756,35 @@ struct RecordingDetailView: View {
                                 .font(.system(size: 12))
                                 .foregroundStyle(.tertiary)
                             
-                            Button(action: {
+                        Button(
+                            action: {
                                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
-                            }) {
+                            },
+                            label: {
                                 Text("Open in Finder")
                                     .font(.system(size: 12))
                                     .foregroundStyle(.blue)
                                     .underline()
                             }
-                            .buttonStyle(.plain)
-                            
-                            Text("·")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.tertiary)
-                            
-                            Button(action: {
+                        )
+                        .buttonStyle(.plain)
+                        
+                        Text("·")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                        
+                        Button(
+                            action: {
                                 historyManager.requestDeleteMeeting(meeting)
-                            }) {
+                            },
+                            label: {
                                 Text("Delete Recording")
                                     .font(.system(size: 12))
                                     .foregroundStyle(.red)
                                     .underline()
                             }
-                            .buttonStyle(.plain)
-                            
+                        )
+                        .buttonStyle(.plain)
                         }
                         .padding(.bottom, 8)
                         
@@ -707,10 +792,10 @@ struct RecordingDetailView: View {
                         if meeting.canResume, let firstSegment = meeting.transcriptSegments.first {
                             Group {
                                 let formatter: DateFormatter = {
-                                    let f = DateFormatter()
-                                    f.dateStyle = .medium
-                                    f.timeStyle = .short
-                                    return f
+                                    let dateFormatter = DateFormatter()
+                                    dateFormatter.dateStyle = .medium
+                                    dateFormatter.timeStyle = .short
+                                    return dateFormatter
                                 }()
                                 Text("Recording started: \(formatter.string(from: firstSegment.startTime))")
                                     .font(.system(size: 12))
@@ -723,15 +808,17 @@ struct RecordingDetailView: View {
                         if !meeting.transcriptSegments.isEmpty {
                             // Segment-based display with markers
                             LazyVStack(spacing: 8) {
-                                ForEach(meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber })) { segment in
+                                ForEach(
+                                    meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber })
+                                ) { segment in
                                     Group {
                                         // Segment marker (except for first segment)
                                         if segment.segmentNumber > 1 {
                                             let formatter: DateFormatter = {
-                                                let f = DateFormatter()
-                                                f.dateStyle = .none
-                                                f.timeStyle = .short
-                                                return f
+                                                let dateFormatter = DateFormatter()
+                                                dateFormatter.dateStyle = .none
+                                                dateFormatter.timeStyle = .short
+                                                return dateFormatter
                                             }()
                                             Text("Recording resumed at \(formatter.string(from: segment.startTime))")
                                                 .font(.system(size: 12))
@@ -752,13 +839,17 @@ struct RecordingDetailView: View {
                             }
                         } else {
                             // Fallback to block-based or plain text display
-                            let hasOriginal = (meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil)
+                            let hasOriginal = (
+                                meeting.originalTranscriptBlocks != nil || meeting.originalTranscript != nil
+                            )
                             let showingOriginal = viewModel.showOriginalTranscript(for: meeting) && hasOriginal
                             
                             if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
                                 // Block-based display (new format)
                                 LazyVStack(spacing: 8) {
-                                    ForEach(showingOriginal ? (meeting.originalTranscriptBlocks ?? blocks) : blocks) { block in
+                                    ForEach(
+                                        showingOriginal ? (meeting.originalTranscriptBlocks ?? blocks) : blocks
+                                    ) { block in
                                         TranscriptBlockView(block: block)
                                     }
                                 }
@@ -828,6 +919,35 @@ struct RecordingDetailView: View {
     
     // MARK: - Helpers
     
+    /// Copy transcript button for historical meeting view
+    private func copyTranscriptButton(for meeting: MeetingHistoryItem) -> some View {
+        CopyTranscriptButton(getBlocks: { getTranscriptBlocks(for: meeting) })
+    }
+    
+    /// Get transcript blocks from the meeting
+    private func getTranscriptBlocks(for meeting: MeetingHistoryItem) -> [TranscriptBlock]? {
+        // Try segments first (preferred)
+        if !meeting.transcriptSegments.isEmpty {
+            var allBlocks: [TranscriptBlock] = []
+            for segment in meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber }) {
+                let blocksToUse = (meeting.isShowingRefined && segment.isRefined) ?
+                    (segment.refinedBlocks ?? segment.originalBlocks) :
+                    segment.originalBlocks
+                allBlocks.append(contentsOf: blocksToUse)
+            }
+            return allBlocks.isEmpty ? nil : allBlocks
+        }
+        
+        // Fallback to transcriptBlocks
+        if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
+            let showingOriginal = viewModel.showOriginalTranscript(for: meeting) &&
+                meeting.originalTranscriptBlocks != nil
+            return showingOriginal ? meeting.originalTranscriptBlocks : blocks
+        }
+        
+        return nil
+    }
+    
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -844,6 +964,7 @@ struct FloatingRecordingIndicator: View {
     let elapsedTime: String
     var isInitializing: Bool = false
     var isModelLoading: Bool = false
+    var isSlowModelLoad: Bool = false
     var isRecordingOnly: Bool = false
     let onTap: () -> Void
     
@@ -888,6 +1009,9 @@ struct FloatingRecordingIndicator: View {
                         ProgressView()
                             .scaleEffect(0.5)
                             .frame(width: 10, height: 10)
+                            .help(isSlowModelLoad 
+                                ? "Model preparing for first use (one-time setup)..." 
+                                : "Transcription model loading...")
                     } else if isRecordingOnly {
                         Image(systemName: "waveform.slash")
                             .font(.system(size: 10))

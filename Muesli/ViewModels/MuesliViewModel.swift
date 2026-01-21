@@ -1,8 +1,9 @@
-import Foundation
-import SwiftUI
-import ScreenCaptureKit
 import CoreMedia
+import Foundation
 import os.lock
+import os.log
+import ScreenCaptureKit
+import SwiftUI
 
 /// Main ViewModel for the Muesli app
 /// Owns app-level state (permissions, detected apps) and services
@@ -10,6 +11,9 @@ import os.lock
 @Observable
 @MainActor
 final class MuesliViewModel {
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "MuesliViewModel")
     
     // MARK: - Injected Managers
     
@@ -72,9 +76,11 @@ final class MuesliViewModel {
     private let fileOutputService: FileOutputService
     private let transcriptionService: TranscriptionService
     private let meetingAppDetector: MeetingAppDetector
-    private let permissionManager: PermissionManager
+    /// Permission manager (exposed for onboarding view)
+    let permissionManager: PermissionManager
     let microphoneManager: MicrophoneManager
     private let meetingHistoryService: MeetingHistoryService
+    private let exportService: ExportService
     
     // Echo cancellation service (optional - can be enabled/disabled)
     private let echoCancellationService: EchoCancellationService
@@ -115,6 +121,12 @@ final class MuesliViewModel {
         }
     }
     
+    /// Whether model is in slow-loading state (first-time compilation)
+    /// Delegates to TranscriptionCoordinator
+    var isSlowModelLoad: Bool {
+        transcriptionCoordinator.isSlowModelLoad
+    }
+    
     // MARK: - Active Session Tracking
     // NOTE: Delegates to RecordingController - do not manage session state here
     
@@ -126,6 +138,11 @@ final class MuesliViewModel {
     /// Alias for activeSession (for clarity in new UI)
     var activeRecordingSession: RecordingSession? {
         recordingController.activeSession
+    }
+    
+    /// Warning manager for non-blocking service warnings (delegates to RecordingController)
+    var warningManager: WarningManager {
+        recordingController.warningManager
     }
     
     // MARK: - Meeting History (delegating to MeetingHistoryManager)
@@ -267,6 +284,48 @@ final class MuesliViewModel {
         fileOutputService.setOutputDirectory(Self.defaultOutputDirectory)
     }
     
+    /// Whether automatic export is enabled (delegates to PreferencesManager)
+    var exportEnabled: Bool {
+        get {
+            preferencesManager.exportEnabled
+        }
+        set {
+            preferencesManager.exportEnabled = newValue
+        }
+    }
+    
+    /// Export directory for external tool access (delegates to PreferencesManager)
+    var exportDirectory: URL {
+        get {
+            preferencesManager.exportDirectory
+        }
+        set {
+            preferencesManager.exportDirectory = newValue
+            exportService.setExportDirectory(newValue)
+        }
+    }
+    
+    /// Default export directory: ~/Library/Application Support/Muesli/Exports
+    static var defaultExportDirectory: URL {
+        PreferencesManager.defaultExportDirectory
+    }
+    
+    /// Reset export directory to default
+    func resetExportDirectory() {
+        preferencesManager.resetExportDirectory()
+        exportService.resetToDefaultExportDirectory()
+    }
+    
+    /// Export all meetings to the export directory
+    func exportAllMeetings() async -> Int {
+        do {
+            return try await exportService.exportAllMeetings(meetingHistory)
+        } catch {
+            logger.error("Failed to export meetings: \(error.localizedDescription)")
+            return 0
+        }
+    }
+    
     /// Whether to launch at login (delegates to PreferencesManager)
     var launchAtLogin: Bool {
         get {
@@ -332,16 +391,23 @@ final class MuesliViewModel {
         meetingHistoryService: MeetingHistoryService? = nil,
         echoCancellationService: EchoCancellationService? = nil,
         llmManager: LLMManager? = nil,
+        exportService: ExportService? = nil,
         skipInitialLoad: Bool = false
     ) {
         // Initialize services (use provided or create defaults)
         self.audioCaptureService = audioCaptureService ?? AudioCaptureService()
         self.fileOutputService = fileOutputService ?? FileOutputService()
-        self.transcriptionService = transcriptionService ?? TranscriptionService()
+        
+        // Initialize transcription service with chunk duration from preferences
+        self.transcriptionService = transcriptionService ?? TranscriptionService(
+            chunkDuration: preferencesManager.audioChunkDuration
+        )
+        
         self.meetingAppDetector = meetingAppDetector ?? MeetingAppDetector()
         self.permissionManager = permissionManager ?? PermissionManager()
         self.microphoneManager = microphoneManager ?? MicrophoneManager()
         self.meetingHistoryService = meetingHistoryService ?? MeetingHistoryService()
+        self.exportService = exportService ?? ExportService()
         self.echoCancellationService = echoCancellationService ?? EchoCancellationService(
             filterLength: 256,
             learningRate: 0.3,
@@ -379,8 +445,67 @@ final class MuesliViewModel {
             transcriptionCoordinator: self.transcriptionCoordinator,
             echoCancellationService: self.echoCancellationService,
             preferencesManager: preferencesManager,
-            microphoneManager: self.microphoneManager
+            microphoneManager: self.microphoneManager,
+            exportService: self.exportService
         )
+        
+        // Set up callback for transcript updates (for export)
+        // NOTE: Must be set AFTER recordingController is initialized
+        self.transcriptionCoordinator.onMeetingUpdated = { [weak self] meeting in
+            guard let self = self else { return }
+            guard self.exportEnabled else { return }
+            
+            Task { @MainActor in
+                do {
+                    try await self.exportService.exportMeeting(meeting)
+                    // Also update manifest
+                    let allMeetings = self.meetingHistory
+                    try self.exportService.generateManifest(for: allMeetings)
+                    self.logger.info("Re-exported updated meeting: \(meeting.title)")
+                } catch {
+                    self.logger.error("Failed to re-export meeting: \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        // Set up callback for refinement updates (for export)
+        // NOTE: Must be set AFTER recordingController is initialized
+        self.refinementCoordinator.onMeetingUpdated = { [weak self] meeting in
+            guard let self = self else { return }
+            guard self.exportEnabled else { return }
+            
+            Task { @MainActor in
+                do {
+                    try await self.exportService.exportMeeting(meeting)
+                    // Also update manifest
+                    let allMeetings = self.meetingHistory
+                    try self.exportService.generateManifest(for: allMeetings)
+                    self.logger.info("Re-exported refined meeting: \(meeting.title)")
+                } catch {
+                    self.logger.error("Failed to re-export meeting: \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        // Set up callback for refinement warnings
+        self.refinementCoordinator.onWarning = { [weak self] message, details, canRetry in
+            guard let self = self else { return }
+            self.warningManager.addWarning(.llmRefinement, message: message, details: details, canRetry: canRetry)
+        }
+        
+        // Set up callback for chunk duration changes
+        // Note: Changing chunk duration during an active recording would require recreating
+        // the TranscriptionService, which is complex. For now, changes will apply to new recordings.
+        preferencesManager.audioChunkDurationDidChange = { [weak self] newDuration in
+            guard let self = self else { return }
+            // Log the change - it will apply to the next recording
+            self.logger.info(
+                """
+                Audio chunk duration changed to \(newDuration, format: .fixed(precision: 1))s \
+                - will apply to next recording
+                """
+            )
+        }
         
         // Check initial permission status
         refreshPermissions()
@@ -395,7 +520,7 @@ final class MuesliViewModel {
         transcriptionCoordinator.setTranscriptionMode(transcriptionMode)
         
         // Wire up RecordingController callbacks to ViewModel state
-        self.recordingController.onSessionCompleted = { [weak self] session, outputDirectory in
+        self.recordingController.onSessionCompleted = { [weak self] _, outputDirectory in
             guard let self = self else { return }
             
             // Refresh history first to ensure the new meeting is available
@@ -475,6 +600,23 @@ final class MuesliViewModel {
     
     func openMicrophoneSettings() {
         permissionManager.openMicrophoneSettings()
+    }
+    
+    /// Mark that user clicked "Open System Settings" for screen recording
+    func markAwaitingScreenRecordingFromSettings() {
+        permissionManager.markAwaitingScreenRecordingFromSettings()
+    }
+    
+    /// Mark that user clicked "Open System Settings" for microphone
+    func markAwaitingMicrophoneFromSettings() {
+        permissionManager.markAwaitingMicrophoneFromSettings()
+    }
+    
+    /// Verify screen recording permission after user clicks "Grant Permission"
+    func verifyScreenRecordingAfterRequest() async -> Bool {
+        let granted = await permissionManager.verifyScreenRecordingAfterRequest()
+        hasScreenRecordingPermission = granted
+        return granted
     }
     
     // MARK: - Onboarding
@@ -686,9 +828,8 @@ final class MuesliViewModel {
                 
                 // Reload transcript from disk to refresh the UI
                 await loadTranscript(for: meeting)
-                
             } catch {
-                print("[MuesliViewModel] Reprocessing failed: \(error.localizedDescription)")
+                logger.error("Reprocessing failed: \(error.localizedDescription)")
             }
             
             meeting.isReprocessing = false
@@ -727,9 +868,8 @@ final class MuesliViewModel {
             
             // Reload transcript from disk
             await loadTranscript(for: meeting)
-            
         } catch {
-            print("[MuesliViewModel] Reprocessing failed: \(error.localizedDescription)")
+            logger.error("Reprocessing failed: \(error.localizedDescription)")
         }
         
         meeting.isReprocessing = false
@@ -807,11 +947,11 @@ final class MuesliViewModel {
                     (segment.refinedBlocks ?? segment.originalBlocks) :
                     segment.originalBlocks
                 
-                for block in blocksToUse {
-                    let speakerLabel = block.speaker == .me ? "**Me**" : "**Them**"
-                    let timestamp = formatTimestamp(block.startTimestamp)
-                    
-                    markdown += """
+            for block in blocksToUse {
+                let speakerLabel = block.speaker == .me ? "**Me**" : "**Them**"
+                let timestamp = TimeFormatting.formatTimestamp(block.startTimestamp, style: .compact)
+                
+                markdown += """
                     
                     \(speakerLabel) _[\(timestamp)]_
                     
@@ -825,19 +965,4 @@ final class MuesliViewModel {
         let transcriptURL = directory.appendingPathComponent("transcript.md")
         try markdown.write(to: transcriptURL, atomically: true, encoding: .utf8)
     }
-    
-    /// Format a timestamp for display (e.g., "2:34" or "1:02:15")
-    private func formatTimestamp(_ seconds: TimeInterval) -> String {
-        let totalSeconds = Int(seconds)
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let secs = totalSeconds % 60
-        
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, secs)
-        } else {
-            return String(format: "%d:%02d", minutes, secs)
-        }
-    }
-    
 }

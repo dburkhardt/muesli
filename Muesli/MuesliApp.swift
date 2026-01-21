@@ -1,9 +1,15 @@
-import SwiftUI
-import Foundation
 import AppKit
+import Foundation
+import os.log
+import SwiftUI
 
 @main
 struct MuesliApp: App {
+    // MARK: - Logging
+    
+    // Use nonisolated logger since it's accessed from App Delegate
+    nonisolated(unsafe) static let logger = Logger(subsystem: "com.muesli.app", category: "MuesliApp")
+    
     @State private var viewModel: MuesliViewModel
     @State private var preferencesManager: PreferencesManager
     @State private var meetingHistoryManager: MeetingHistoryManager
@@ -136,6 +142,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
             AppDelegate.shared = self
+            
+            // Log build information for diagnostics
+            await DiagnosticLogger.shared.logBuildInfo()
+        }
+        
+        // Check for UI testing mode
+        let commandLineArgs = ProcessInfo.processInfo.arguments
+        let isUITesting = commandLineArgs.contains("-UITestingSkipOnboarding") ||
+                         commandLineArgs.contains("-UITestingMockPermissions") ||
+                         commandLineArgs.contains("-UITestingUseFixtures") ||
+                         commandLineArgs.contains("-UITestingMockModels")
+        
+        if isUITesting {
+            // UI testing mode - handle launch arguments
+            Task { @MainActor in
+                self.configureUITestingEnvironment()
+                
+                // Open main window for UI testing
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
+            return
         }
         
         // Check if onboarding is needed
@@ -160,10 +191,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    /// Configure app for UI testing based on launch arguments
+    private func configureUITestingEnvironment() {
+        let commandLineArgs = ProcessInfo.processInfo.arguments
+        
+        // Skip onboarding
+        if commandLineArgs.contains("-UITestingSkipOnboarding") {
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.hasCompletedOnboarding)
+        }
+        
+        // Mock permissions as granted
+        if commandLineArgs.contains("-UITestingMockPermissions") {
+            // Note: Actual permission mocking would require modifying PermissionManager
+            // For now, we mark onboarding as complete
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.hasCompletedOnboarding)
+        }
+        
+        // Mock models as available
+        if commandLineArgs.contains("-UITestingMockModels") {
+            // Set a dummy model path to simulate having models
+            UserDefaults.standard.set("tiny", forKey: AppStorageKeys.activeWhisperModel)
+        }
+        
+        // Use fixture data
+        if commandLineArgs.contains("-UITestingUseFixtures") {
+            // Flag that can be checked by services to return fixture data
+            UserDefaults.standard.set(true, forKey: "UITestingUseFixtures")
+        }
+        
+        // Set appearance mode
+        if commandLineArgs.contains("-UITestingLightAppearance") {
+            NSApp.appearance = NSAppearance(named: .aqua)
+        } else if commandLineArgs.contains("-UITestingDarkAppearance") {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+    
     private func showOnboardingWindow() {
         // Use the shared ViewModel from MuesliApp to ensure state synchronization
         guard let viewModel = MuesliApp.sharedViewModel else {
-            print("[AppDelegate] Error: Shared ViewModel not available")
+            MuesliApp.logger.error("Shared ViewModel not available")
             return
         }
         
@@ -286,7 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 callback()
             } else {
                 // Last resort: log error
-                print("[AppDelegate] Warning: Main window not found and no callback available.")
+                MuesliApp.logger.warning("Main window not found and no callback available.")
             }
         }
     }
@@ -330,4 +397,3 @@ struct MenuBarIconView: View {
         return sourceImage
     }
 }
-

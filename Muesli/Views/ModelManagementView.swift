@@ -246,26 +246,34 @@ struct ModelManagementView: View {
             }
             
         case .failed(let error):
-            HStack(spacing: 8) {
-                Button("Retry") {
-                    Task {
-                        await modelManager.downloadModel(model)
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack(spacing: 8) {
+                    Button("Retry") {
+                        Task {
+                            await modelManager.downloadModel(model)
+                        }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    
+                    Button {
+                        modelToDelete = model
+                        showDeleteConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
                 
-                Button {
-                    modelToDelete = model
-                    showDeleteConfirmation = true
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red)
-                .controlSize(.small)
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 200)
             }
-            .help(error)
         }
     }
     
@@ -393,26 +401,34 @@ struct ModelManagementView: View {
             }
             
         case .failed(let error):
-            HStack(spacing: 8) {
-                Button("Retry") {
-                    Task {
-                        await llmManager.downloadModel(model)
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack(spacing: 8) {
+                    Button("Retry") {
+                        Task {
+                            await llmManager.downloadModel(model)
+                        }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    
+                    Button {
+                        llmModelToDelete = model
+                        showLLMDeleteConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
                 
-                Button {
-                    llmModelToDelete = model
-                    showLLMDeleteConfirmation = true
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red)
-                .controlSize(.small)
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 200)
             }
-            .help(error)
         }
     }
     
@@ -425,7 +441,7 @@ struct ModelManagementView: View {
                 .foregroundStyle(.secondary)
             
             Picker("", selection: Binding(
-                get: { llmManager.activeModel ?? .llama3_2_3b },
+                get: { llmManager.activeModel ?? .llama323B },
                 set: { llmManager.setActiveModel($0) }
             )) {
                 ForEach(LLMManager.LLMModel.allCases.filter { llmManager.downloadedModels.contains($0) }) { model in

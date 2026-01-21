@@ -100,7 +100,7 @@ For testing or special cases:
 ### Workflow Steps
 
 1. **Checkout code**: Full git history for changelog generation
-2. **Set up Xcode**: Uses latest stable Xcode on macOS 14
+2. **Set up Xcode**: Uses latest stable Xcode on macOS 26
 3. **Cache dependencies**: 
    - Homebrew packages (create-dmg)
    - Swift Package Manager dependencies
@@ -336,7 +336,7 @@ Copy this to your release PR or issue:
 ### Post-Release
 - [ ] Announce release (if applicable)
 - [ ] Monitor for issues
-- [ ] Update TODO.md with next version plans
+- [ ] Create GitHub Issues for next version plans
 ```
 
 ## Modern Tooling (2026)

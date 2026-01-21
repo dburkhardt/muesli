@@ -1,5 +1,5 @@
-import Foundation
 import CoreMedia
+import Foundation
 
 // MARK: - AudioCaptureServiceProtocol
 
@@ -45,7 +45,13 @@ protocol FileOutputServiceProtocol: Sendable {
     func stopWriting() async throws -> URL
     func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL
     func saveTranscript(_ transcript: String, title: String, date: Date, to directory: URL) throws
-    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String?) throws
+    func saveTranscriptBlocks(
+        _ blocks: [TranscriptBlock],
+        title: String,
+        date: Date,
+        to directory: URL,
+        filename: String?
+    ) throws
 }
 
 // MARK: - MeetingHistoryServiceProtocol
@@ -85,6 +91,11 @@ protocol PermissionManagerProtocol {
     func requestMicrophonePermission() async -> Bool
     func openMicrophoneSettings()
     func refreshPermissions() -> (screenRecording: Bool, microphone: Bool)
+    
+    // Event-driven permission detection methods
+    func markAwaitingScreenRecordingFromSettings()
+    func markAwaitingMicrophoneFromSettings()
+    func verifyScreenRecordingAfterRequest() async -> Bool
 }
 
 // MARK: - MicrophoneManagerProtocol
@@ -161,4 +172,19 @@ protocol EchoCancellationServiceProtocol: Sendable {
     func storeSystemAudio(samples: [Float], timestamp: CMTime)
     func processMicrophoneAudio(microphoneSamples: [Float], micTimestamp: CMTime) -> [Float]
     func reset()
+}
+
+// MARK: - ExportServiceProtocol
+
+/// Protocol for ExportService to enable mocking in tests
+@MainActor
+protocol ExportServiceProtocol {
+    var exportDirectory: URL { get }
+    
+    func setExportDirectory(_ url: URL)
+    func resetToDefaultExportDirectory()
+    func exportMeeting(_ meeting: MeetingHistoryItem) async throws
+    func exportAllMeetings(_ meetings: [MeetingHistoryItem]) async throws -> Int
+    func generateManifest(for meetings: [MeetingHistoryItem]) throws
+    func createVersionMarker() throws
 }

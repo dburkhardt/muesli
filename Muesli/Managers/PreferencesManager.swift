@@ -1,12 +1,16 @@
 import Foundation
-import ServiceManagement
 import os.lock
+import os.log
+import ServiceManagement
 
 /// Manages app preferences with UserDefaults persistence
 /// Extracted from MuesliViewModel as part of the god object refactoring
 @Observable
 @MainActor
 final class PreferencesManager {
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "PreferencesManager")
     
     // MARK: - Output Directory
     
@@ -63,7 +67,7 @@ final class PreferencesManager {
                         try SMAppService.mainApp.unregister()
                     }
                 } catch {
-                    print("[PreferencesManager] Failed to set launch at login: \(error)")
+                    logger.error("Failed to set launch at login: \(error)")
                 }
             }
             UserDefaults.standard.set(newValue, forKey: AppStorageKeys.launchAtLogin)
@@ -122,6 +126,76 @@ final class PreferencesManager {
         echoCancellationLock.withLock { $0 }
     }
     
+    // MARK: - Audio Chunk Duration
+    
+    /// Audio chunk duration for transcription (2-10 seconds)
+    var audioChunkDuration: TimeInterval {
+        get {
+            // Check if key exists to distinguish "not set" from "invalid value"
+            guard let savedObject = UserDefaults.standard.object(forKey: AppStorageKeys.audioChunkDuration) as? Double
+            else {
+                // Key not set, return default
+                return 5.0
+            }
+            
+            // Key exists, validate range
+            if savedObject < 2.0 || savedObject > 10.0 {
+                // Invalid value, return default
+                return 5.0
+            }
+            return savedObject
+        }
+        set {
+            // Clamp to valid range
+            let clamped = min(max(newValue, 2.0), 10.0)
+            UserDefaults.standard.set(clamped, forKey: AppStorageKeys.audioChunkDuration)
+            audioChunkDurationDidChange?(clamped)
+        }
+    }
+    
+    /// Callback when audio chunk duration changes
+    var audioChunkDurationDidChange: ((TimeInterval) -> Void)?
+    
+    // MARK: - Export Settings
+    
+    /// Whether automatic export is enabled
+    var exportEnabled: Bool {
+        get {
+            // Default to true if not explicitly set
+            if UserDefaults.standard.object(forKey: AppStorageKeys.exportEnabled) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.exportEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.exportEnabled)
+        }
+    }
+    
+    /// Export directory for external tool access
+    var exportDirectory: URL {
+        get {
+            if let savedPath = UserDefaults.standard.string(forKey: AppStorageKeys.exportDirectory) {
+                return URL(fileURLWithPath: savedPath)
+            }
+            return Self.defaultExportDirectory
+        }
+        set {
+            UserDefaults.standard.set(newValue.path, forKey: AppStorageKeys.exportDirectory)
+        }
+    }
+    
+    /// Default export directory: ~/Library/Application Support/Muesli/Exports
+    static var defaultExportDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Muesli/Exports")
+    }
+    
+    /// Reset export directory to default
+    func resetExportDirectory() {
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.exportDirectory)
+    }
+    
     // MARK: - Initialization
 
     init() {
@@ -134,7 +208,7 @@ final class PreferencesManager {
     }
 
     deinit {
-        print("[PreferencesManager] Deallocating")
+        logger.debug("Deallocating")
     }
 
     // MARK: - Storage Migration
@@ -147,7 +221,7 @@ final class PreferencesManager {
     private func migrateStorageLocationIfNeeded() {
         // Skip if migration was already checked (prevents Documents prompt on SwiftUI App recreation)
         guard !UserDefaults.standard.bool(forKey: Self.migrationCheckedKey) else {
-            print("[PreferencesManager] Migration already checked, skipping")
+            logger.info("Migration already checked, skipping")
             return
         }
         
@@ -156,7 +230,7 @@ final class PreferencesManager {
         
         // Only migrate if user hasn't set a custom output directory
         guard UserDefaults.standard.string(forKey: AppStorageKeys.outputDirectory) == nil else {
-            print("[PreferencesManager] Custom output directory set, skipping migration")
+            logger.info("Custom output directory set, skipping migration")
             return
         }
 
@@ -170,19 +244,19 @@ final class PreferencesManager {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: oldDefaultDirectory.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            print("[PreferencesManager] Old directory doesn't exist, no migration needed")
+            logger.info("Old directory doesn't exist, no migration needed")
             return
         }
 
         // Check if old directory has any meeting folders
         guard let contents = try? fileManager.contentsOfDirectory(atPath: oldDefaultDirectory.path),
               !contents.isEmpty else {
-            print("[PreferencesManager] Old directory is empty, no migration needed")
+            logger.info("Old directory is empty, no migration needed")
             return
         }
 
-        print("[PreferencesManager] Found existing recordings in old location (\(contents.count) items)")
-        print("[PreferencesManager] Setting output directory to old location to preserve access")
+        logger.info("Found existing recordings in old location (\(contents.count) items)")
+        logger.info("Setting output directory to old location to preserve access")
 
         // Set user preference to old location to preserve existing recordings
         // This is safer than moving files and respects user's existing data

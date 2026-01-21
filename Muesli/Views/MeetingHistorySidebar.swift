@@ -28,7 +28,10 @@ struct MeetingHistorySidebar: View {
             // Handle Delete key
             historyManager.requestDeleteSelectedMeetings()
         }
-        .alert("Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?", isPresented: $history.showDeleteConfirmation) {
+        .alert(
+            "Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?",
+            isPresented: $history.showDeleteConfirmation
+        ) {
             Button("Cancel", role: .cancel) {
                 historyManager.cancelDeleteMeetings()
             }
@@ -37,9 +40,19 @@ struct MeetingHistorySidebar: View {
             }
         } message: {
             if historyManager.meetingsPendingDeletion.count == 1 {
-                Text("This will permanently delete \"\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")\" and its audio files.")
+                Text(
+                    """
+                    This will permanently delete \
+                    "\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")" and its audio files.
+                    """
+                )
             } else {
-                Text("This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings and their audio files.")
+                Text(
+                    """
+                    This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings \
+                    and their audio files.
+                    """
+                )
             }
         }
     }
@@ -55,15 +68,26 @@ struct MeetingHistorySidebar: View {
             
             Spacer()
             
-            Button(action: {
-                // Quick start: immediately begin recording all system audio
-                viewModel.quickStartRecording()
-            }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
+            Button(
+                action: {
+                    // Quick start: immediately begin recording all system audio
+                    viewModel.quickStartRecording()
+                },
+                label: {
+                    HStack(spacing: 4) {
+                        Text("New")
+                            .font(.system(size: 13, weight: .medium))
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+            )
+            .buttonStyle(.plain)
             .disabled(viewModel.activeSession != nil)
         }
         .padding(.horizontal, 12)
@@ -99,7 +123,8 @@ struct MeetingHistorySidebar: View {
                     Section {
                         ActiveRecordingItemView(
                             session: activeSession,
-                            isSelected: historyManager.selectedMeeting == nil && viewModel.activeRecordingSession != nil,
+                            isSelected: historyManager.selectedMeeting == nil &&
+                                viewModel.activeRecordingSession != nil,
                             onTap: {
                                 // Clear selected meeting to show live recording
                                 historyManager.clearSelection()
@@ -134,11 +159,12 @@ struct MeetingHistorySidebar: View {
                                 onDoubleClick: {
                                     handleMeetingDoubleClick(meeting)
                                 },
-                                onDelete: {
-                                    // If this meeting is part of a multi-selection, delete all selected
-                                    if historyManager.selectedMeetingIDs.contains(meeting.id) && historyManager.selectedMeetingIDs.count > 1 {
-                                        historyManager.requestDeleteSelectedMeetings()
-                                    } else {
+                            onDelete: {
+                                // If this meeting is part of a multi-selection, delete all selected
+                                if historyManager.selectedMeetingIDs.contains(meeting.id) &&
+                                   historyManager.selectedMeetingIDs.count > 1 {
+                                    historyManager.requestDeleteSelectedMeetings()
+                                } else {
                                         historyManager.requestDeleteMeeting(meeting)
                                     }
                                 },
@@ -268,7 +294,10 @@ struct MeetingSidebarItemView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(isSelected ? Color.accentColor.opacity(0.15) : (isHovered ? Color.secondary.opacity(0.05) : Color.clear))
+        .background(
+            isSelected ? Color.accentColor.opacity(0.15) :
+                (isHovered ? Color.secondary.opacity(0.05) : Color.clear)
+        )
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering
@@ -308,7 +337,7 @@ struct MeetingSidebarItemView: View {
                     onDoubleClick()
                 }
                 
-                if let viewModel = viewModel, viewModel.modelManager.downloadedModels.count > 0 {
+                if let viewModel = viewModel, !viewModel.modelManager.downloadedModels.isEmpty {
                     Divider()
                     Menu("Reprocess Transcript") {
                         ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in

@@ -91,7 +91,10 @@ struct TranscriptBlockView: View {
     TranscriptBlockView(
         block: TranscriptBlock(
             speaker: .them,
-            text: "Good morning everyone, let's get started with the quarterly review. I wanted to go over the main highlights from last quarter and discuss our plans for the upcoming sprint.",
+            text: """
+                Good morning everyone, let's get started with the quarterly review. \
+                I wanted to go over the main highlights from last quarter and discuss our plans for the upcoming sprint.
+                """,
             startTimestamp: 5
         )
     )
@@ -103,7 +106,10 @@ struct TranscriptBlockView: View {
     TranscriptBlockView(
         block: TranscriptBlock(
             speaker: .me,
-            text: "Thanks for setting this up. I had a few questions about the timeline and wanted to discuss the resource allocation.",
+            text: """
+                Thanks for setting this up. I had a few questions about the timeline \
+                and wanted to discuss the resource allocation.
+                """,
             startTimestamp: 32
         )
     )
@@ -130,7 +136,10 @@ struct TranscriptBlockView: View {
         TranscriptBlockView(
             block: TranscriptBlock(
                 speaker: .them,
-                text: "Sure thing. So first item on the agenda is the product roadmap. We've made good progress on the main features and I think we're on track for the release.",
+                text: """
+                    Sure thing. So first item on the agenda is the product roadmap. \
+                    We've made good progress on the main features and I think we're on track for the release.
+                    """,
                 startTimestamp: 45
             )
         )

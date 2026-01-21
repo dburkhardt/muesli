@@ -4,7 +4,6 @@ import Foundation
 /// Mock implementation of MicrophoneManager for testing
 @MainActor
 final class MockMicrophoneManager: MicrophoneManagerProtocol {
-    
     // MARK: - State
     
     var availableDevices: [MicrophoneManager.MicrophoneDevice] = []

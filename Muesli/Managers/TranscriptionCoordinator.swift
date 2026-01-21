@@ -1,5 +1,5 @@
 import Foundation
-
+import os.log
 
 /// Coordinates transcription model lifecycle and audio buffering
 /// Decouples transcription from recording - recording can start immediately,
@@ -7,7 +7,6 @@ import Foundation
 @Observable
 @MainActor
 final class TranscriptionCoordinator {
-    
     // MARK: - Types
     
     /// Model loading and readiness state
@@ -32,8 +31,31 @@ final class TranscriptionCoordinator {
     
     // MARK: - Dependencies
     
+    private let logger = Logger(subsystem: "com.muesli.app", category: "TranscriptionCoordinator")
     private let transcriptionService: any TranscriptionServiceProtocol
     private let modelManager: any ModelManagerProtocol
+    
+    // MARK: - Callbacks
+    
+    /// Called when a meeting is updated (for export service integration)
+    var onMeetingUpdated: ((MeetingHistoryItem) -> Void)?
+    
+    // MARK: - Live Refinement
+    
+    /// Whether live refinement is enabled (hidden preference for v0.1.2)
+    var liveRefinementEnabled: Bool = false
+    
+    /// Queue of segments awaiting refinement
+    private var liveRefinementQueue: [TranscriptSegment] = []
+    
+    /// Current segment being refined
+    private var currentRefinementTask: Task<Void, Never>?
+    
+    /// Reference to refinement coordinator (set externally)
+    weak var refinementCoordinator: RefinementCoordinator?
+    
+    /// Maximum queue depth before skipping refinement (avoid falling behind)
+    private let maxRefinementQueueDepth = 5
     
     // MARK: - State
     
@@ -82,11 +104,38 @@ final class TranscriptionCoordinator {
     /// Callback when model switches due to fallback (from, to, reason)
     var onModelSwitched: ((ModelManager.ModelSize, ModelManager.ModelSize, Error) -> Void)?
     
+    /// Callback for transcription warnings (category, message, details, canRetry)
+    var onWarning: ((ServiceWarning.WarningCategory, String, String, Bool) -> Void)?
+    
+    // MARK: - Model Load Timing
+    
+    /// When model loading started (for detecting slow loads)
+    var modelLoadStartTime: Date?
+    
+    /// Whether model load is taking longer than expected (indicates first-time compilation)
+    /// STORED property (not computed) so SwiftUI observes changes when Task sets it
+    var isSlowModelLoad: Bool = false
+    
+    /// Threshold for "slow" load (indicates first-time compilation)
+    /// Injectable for testing (default 10.0 seconds)
+    private let slowLoadThreshold: TimeInterval
+    
+    /// Whether we've already shown the slow-load warning (to avoid repeated notifications)
+    private var hasShownSlowLoadWarning: Bool = false
+    
+    /// Task for slow-load detection (stored for cancellation)
+    private var slowLoadCheckTask: Task<Void, Never>?
+    
     // MARK: - Initialization
     
-    init(transcriptionService: any TranscriptionServiceProtocol, modelManager: any ModelManagerProtocol) {
+    init(
+        transcriptionService: any TranscriptionServiceProtocol,
+        modelManager: any ModelManagerProtocol,
+        slowLoadThreshold: TimeInterval = 10.0
+    ) {
         self.transcriptionService = transcriptionService
         self.modelManager = modelManager
+        self.slowLoadThreshold = slowLoadThreshold
     }
     
     // MARK: - Model Lifecycle
@@ -98,6 +147,13 @@ final class TranscriptionCoordinator {
             modelState = .notAvailable
         }
         clearBuffers()
+        
+        // Reset slow-load detection state
+        slowLoadCheckTask?.cancel()
+        slowLoadCheckTask = nil
+        modelLoadStartTime = nil
+        isSlowModelLoad = false
+        hasShownSlowLoadWarning = false
     }
     
     /// Check model availability and prepare for transcription
@@ -119,7 +175,6 @@ final class TranscriptionCoordinator {
         // Validate model
         guard modelManager.validateModel(activeModel),
               let modelPath = modelManager.pathForModel(activeModel) else {
-            
             // Only mark corrupted on validation errors
             modelManager.markModelCorrupted(activeModel)
             
@@ -150,11 +205,54 @@ final class TranscriptionCoordinator {
         
         // Start loading
         modelState = .loading
+        modelLoadStartTime = Date()
+        isSlowModelLoad = false
+        hasShownSlowLoadWarning = false
+        
+        // Cancel any previous slow-load check task
+        slowLoadCheckTask?.cancel()
+        
+        // Capture threshold before Task (defensive - avoids nil self issues)
+        let threshold = slowLoadThreshold
+        
+        // Start a managed task to detect slow loading and warn user
+        slowLoadCheckTask = Task { @MainActor [weak self] in
+            // Wait for threshold period
+            try? await Task.sleep(for: .seconds(threshold))
+            
+            // Check if cancelled
+            guard !Task.isCancelled else { return }
+            guard let self = self else { return }
+            
+            // If still loading and haven't warned yet, notify user
+            if self.modelState.isLoading && !self.hasShownSlowLoadWarning {
+                self.isSlowModelLoad = true  // STORED - triggers SwiftUI observation
+                self.hasShownSlowLoadWarning = true
+                self.onWarning?(
+                    .modelLoading,
+                    "Model preparing for first use",
+                    """
+                    It looks like you're using this model for the first time. \
+                    Transcription may be slow to start, but don't worry - your \
+                    recording is active and audio is being captured.
+                    
+                    This is a one-time setup that may take a few minutes.
+                    """,
+                    false  // canRetry = false
+                )
+            }
+        }
         
         do {
             try await transcriptionService.initialize(modelPath: modelPath)
             isInitialized = true
             modelState = .ready
+            
+            // Clean up slow-load detection (model loaded successfully)
+            isSlowModelLoad = false
+            slowLoadCheckTask?.cancel()
+            slowLoadCheckTask = nil
+            
             // Flush any buffered audio collected during loading
             processBufferedAudio()
             // Reset retry count on success
@@ -207,7 +305,7 @@ final class TranscriptionCoordinator {
     }
     
     deinit {
-        print("[TranscriptionCoordinator] Deallocating")
+        logger.debug("Deallocating")
     }
     
     /// Set transcript handler for receiving segments
@@ -229,7 +327,6 @@ final class TranscriptionCoordinator {
     
     /// Buffer system audio while model loads, or forward directly if model ready
     func bufferSystemAudio(_ samples: [Float]) {
-        
         // If model is ready and initialized, forward directly to TranscriptionService
         if modelState.isReady && isInitialized {
             transcriptionService.appendSystemAudio(samples)
@@ -245,6 +342,12 @@ final class TranscriptionCoordinator {
         if let startTime = bufferStartTime,
            Date().timeIntervalSince(startTime) > maxBufferDuration {
             // Model loading timeout - clear buffers and notify
+            let details = """
+                Model loading timed out after \(Int(maxBufferDuration)) seconds.
+                Audio was buffered but may be incomplete.
+                Recording will continue without transcription.
+                """
+            onWarning?(.modelLoading, "Model loading timeout", details, false)
             clearBuffers()
             onBufferTimeout?()
             return
@@ -266,7 +369,6 @@ final class TranscriptionCoordinator {
     
     /// Buffer microphone audio while model loads, or forward directly if model ready
     func bufferMicrophoneAudio(_ samples: [Float]) {
-        
         // If model is ready and initialized, forward directly to TranscriptionService
         if modelState.isReady && isInitialized {
             transcriptionService.appendMicrophoneAudio(samples)
@@ -282,6 +384,7 @@ final class TranscriptionCoordinator {
         if let startTime = bufferStartTime,
            Date().timeIntervalSince(startTime) > maxBufferDuration {
             // Model loading timeout - clear buffers and notify
+            // Note: Warning is only sent once (from system audio path)
             clearBuffers()
             onBufferTimeout?()
             return
@@ -303,7 +406,6 @@ final class TranscriptionCoordinator {
     
     /// Process buffered audio when model becomes ready
     func processBufferedAudio() {
-        
         guard modelState.isReady, isInitialized else { return }
         
         // Process buffered system audio
@@ -326,6 +428,40 @@ final class TranscriptionCoordinator {
         pendingSystemAudio.removeAll()
         pendingMicAudio.removeAll()
         bufferStartTime = nil
+    }
+    
+    // MARK: - Auto-Reprocessing (for empty transcripts)
+    
+    /// Auto-reprocess a meeting once the model becomes ready
+    /// Used when recording stopped with empty transcript (model wasn't ready in time)
+    func autoReprocessWhenReady(meeting: MeetingHistoryItem) {
+        guard let activeModel = modelManager.activeModel else {
+            logger.warning("Cannot auto-reprocess: no active model")
+            return
+        }
+        
+        logger.info("Auto-reprocessing meeting '\(meeting.title)' when model becomes ready")
+        
+        // Mark as reprocessing immediately (shows spinner in UI)
+        meeting.isReprocessing = true
+        
+        Task { @MainActor in
+            // Wait for model to be ready (may already be ready)
+            let modelStateResult = await prepareModel()
+            
+            if modelStateResult.isReady {
+                do {
+                    try await reprocessTranscript(for: meeting, using: activeModel)
+                    logger.info("Auto-reprocess completed for '\(meeting.title)'")
+                } catch {
+                    logger.error("Auto-reprocess failed: \(error.localizedDescription)")
+                }
+            } else {
+                logger.warning("Auto-reprocess cancelled: model not ready")
+            }
+            
+            meeting.isReprocessing = false
+        }
     }
     
     // MARK: - Reprocessing (for completed meetings)
@@ -387,37 +523,14 @@ final class TranscriptionCoordinator {
             startTime: meeting.date
         )
         
-        // Convert segments to TranscriptBlocks with ~50 word limit per block
-        // This ensures readable chunk sizes in the UI
-        let maxWordsPerBlock = 50
-        var blocks: [TranscriptBlock] = []
-        
+        // Use TranscriptProcessor to filter artifacts (e.g., [BLANK_AUDIO], hallucinations)
+        // and merge segments into blocks with word limits
+        let processor = TranscriptProcessor()
         for segment in segments {
-            let speaker: TranscriptBlock.Speaker = segment.speaker == .me ? .me : .them
-            let words = segment.text.split(separator: " ")
-            
-            // Split into chunks of maxWordsPerBlock
-            var wordIndex = 0
-            while wordIndex < words.count {
-                let endIndex = min(wordIndex + maxWordsPerBlock, words.count)
-                let chunkWords = words[wordIndex..<endIndex]
-                let chunkText = chunkWords.joined(separator: " ")
-                
-                // Calculate approximate timestamp offset within segment
-                let progressInSegment = Double(wordIndex) / Double(max(words.count, 1))
-                let chunkTimestamp = segment.timestamp + (progressInSegment * 5.0) // Approximate 5 sec per segment
-                
-                let block = TranscriptBlock(
-                    speaker: speaker,
-                    text: chunkText,
-                    startTimestamp: chunkTimestamp,
-                    endTimestamp: chunkTimestamp + 5.0
-                )
-                blocks.append(block)
-                
-                wordIndex = endIndex
-            }
+            processor.processSegment(segment)
         }
+        processor.finalize()
+        let blocks = processor.blocks
         
         // IMPORTANT: Update meeting AND save to disk - both are required for UI to reflect changes
         if !blocks.isEmpty {
@@ -427,8 +540,69 @@ final class TranscriptionCoordinator {
             // Save transcript to disk
             let fileOutput = FileOutputService()
             try fileOutput.saveTranscriptBlocks(blocks, title: meeting.title, date: meeting.date, to: meeting.directory)
+            
+            // Notify that meeting was updated (for export)
+            onMeetingUpdated?(meeting)
         }
         
         progressHandler?(1.0)
+    }
+    
+    // MARK: - Live Refinement
+    
+    /// Queue a segment for live refinement
+    /// Called after a segment is created during recording
+    func queueSegmentForLiveRefinement(_ segment: TranscriptSegment, in meeting: MeetingHistoryItem) {
+        guard liveRefinementEnabled else { return }
+        guard let coordinator = refinementCoordinator else { return }
+        guard coordinator.canRefineTranscripts else { return }
+        
+        // Check queue depth - skip if falling behind
+        guard liveRefinementQueue.count < maxRefinementQueueDepth else {
+            logger.warning(
+                """
+                Live refinement queue full (\(self.liveRefinementQueue.count)), \
+                skipping segment \(segment.segmentNumber)
+                """
+            )
+            return
+        }
+        
+        // Add to queue
+        liveRefinementQueue.append(segment)
+        
+        // Start processing if not already running
+        if currentRefinementTask == nil {
+            currentRefinementTask = Task { @MainActor in
+                await processLiveRefinementQueue(meeting: meeting)
+            }
+        }
+    }
+    
+    /// Process the live refinement queue in the background
+    private func processLiveRefinementQueue(meeting: MeetingHistoryItem) async {
+        while !liveRefinementQueue.isEmpty {
+            // Get next segment to refine
+            let segment = liveRefinementQueue.removeFirst()
+            
+            // Refine with background priority (detached to actually run in background)
+            guard let coordinator = refinementCoordinator else { continue }
+            
+            // Use Task.detached to ensure background priority is respected
+            // Don't await here to allow concurrent processing
+            Task.detached(priority: .background) {
+                await coordinator.refineSegment(segment, in: meeting)
+            }
+        }
+        
+        // Clear task reference when done
+        currentRefinementTask = nil
+    }
+    
+    /// Stop live refinement processing (when recording stops)
+    func stopLiveRefinement() {
+        currentRefinementTask?.cancel()
+        currentRefinementTask = nil
+        liveRefinementQueue.removeAll()
     }
 }

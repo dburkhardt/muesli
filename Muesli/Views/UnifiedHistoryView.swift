@@ -10,6 +10,19 @@ struct UnifiedHistoryView: View {
         @Bindable var history = historyManager
         
         VStack(spacing: 0) {
+            // Warning banners (if any active warnings)
+            if viewModel.warningManager.hasActiveWarnings {
+                WarningBannerStack(
+                    warnings: viewModel.warningManager.activeWarnings,
+                    onDismiss: { id in
+                        viewModel.warningManager.dismissWarning(id)
+                    },
+                    onCopy: { id in
+                        viewModel.warningManager.copyWarningDetails(id)
+                    }
+                )
+            }
+            
             // Header with title and start button
             headerView
             
@@ -28,7 +41,10 @@ struct UnifiedHistoryView: View {
             // Handle Delete key
             historyManager.requestDeleteSelectedMeetings()
         }
-        .alert("Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?", isPresented: $history.showDeleteConfirmation) {
+        .alert(
+            "Delete Meeting\(historyManager.meetingsPendingDeletion.count > 1 ? "s" : "")?",
+            isPresented: $history.showDeleteConfirmation
+        ) {
             Button("Cancel", role: .cancel) {
                 historyManager.cancelDeleteMeetings()
             }
@@ -37,9 +53,19 @@ struct UnifiedHistoryView: View {
             }
         } message: {
             if historyManager.meetingsPendingDeletion.count == 1 {
-                Text("This will permanently delete \"\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")\" and its audio files.")
+                Text(
+                    """
+                    This will permanently delete \
+                    "\(historyManager.meetingsPendingDeletion.first?.title ?? "Meeting")" and its audio files.
+                    """
+                )
             } else {
-                Text("This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings and their audio files.")
+                Text(
+                    """
+                    This will permanently delete \(historyManager.meetingsPendingDeletion.count) meetings \
+                    and their audio files.
+                    """
+                )
             }
         }
     }
@@ -54,22 +80,25 @@ struct UnifiedHistoryView: View {
             
             Spacer()
             
-            Button(action: {
-                // Quick start: immediately begin recording all system audio
-                viewModel.quickStartRecording()
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("Start Recording")
-                        .font(.system(size: 14, weight: .medium))
+            Button(
+                action: {
+                    // Quick start: immediately begin recording all system audio
+                    viewModel.quickStartRecording()
+                },
+                label: {
+                    HStack(spacing: 4) {
+                        Text("New")
+                            .font(.system(size: 13, weight: .medium))
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Color.accentColor)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
+            )
             .buttonStyle(.plain)
             .disabled(viewModel.activeSession != nil)
         }
@@ -126,11 +155,12 @@ struct UnifiedHistoryView: View {
                             onDoubleClick: {
                                 handleMeetingDoubleClick(meeting)
                             },
-                            onDelete: {
-                                // If this meeting is part of a multi-selection, delete all selected
-                                if historyManager.selectedMeetingIDs.contains(meeting.id) && historyManager.selectedMeetingIDs.count > 1 {
-                                    historyManager.requestDeleteSelectedMeetings()
-                                } else {
+                        onDelete: {
+                            // If this meeting is part of a multi-selection, delete all selected
+                            if historyManager.selectedMeetingIDs.contains(meeting.id) &&
+                               historyManager.selectedMeetingIDs.count > 1 {
+                                historyManager.requestDeleteSelectedMeetings()
+                            } else {
                                     historyManager.requestDeleteMeeting(meeting)
                                 }
                             },
@@ -242,7 +272,10 @@ struct MeetingListItemView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
-        .background(isSelected ? Color.accentColor.opacity(0.1) : (isHovered ? Color.secondary.opacity(0.05) : Color.clear))
+        .background(
+            isSelected ? Color.accentColor.opacity(0.1) :
+                (isHovered ? Color.secondary.opacity(0.05) : Color.clear)
+        )
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering

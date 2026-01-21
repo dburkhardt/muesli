@@ -1,10 +1,14 @@
-import Foundation
 @preconcurrency import AVFoundation
 import CoreMedia
+import Foundation
+import os.log
 
 /// Service responsible for saving audio recordings and transcripts to disk
 /// Uses a combination of actor isolation (for setup/teardown) and manual locking (for real-time buffer writing)
 final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "FileOutputService")
     
     // MARK: - Types
     
@@ -61,6 +65,9 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     private var systemBufferQueue: [CMSampleBuffer] = []
     private var micBufferQueue: [CMSampleBuffer] = []
     private let maxQueuedBuffers = 10  // ~200ms of audio at typical buffer sizes
+    
+    /// Callback for file output warnings (message, details)
+    var onWarning: ((String, String) -> Void)?
     
     // Configurable base output path
     private var customOutputPath: URL?
@@ -188,7 +195,6 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             self._isWriting = true
             
             return directory
-            
         } catch {
             throw OutputError.assetWriterCreationFailed(underlying: error)
         }
@@ -220,46 +226,12 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             // Add new buffer to queue
             systemBufferQueue.append(buffer)
             
-            // #region agent log
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let queueSizeBefore = systemBufferQueue.count
-            let isReady = input.isReadyForMoreMediaData
-            // #endregion
-            
             // Drain queue while writer is ready
             drainBufferQueue(&systemBufferQueue, to: input)
-            
-            // #region agent log
-            let queueSizeAfter = systemBufferQueue.count
-            let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H3","location":"FileOutputService:appendAudioBuffer:system","message":"System buffer queue state","data":["queueBefore":queueSizeBefore,"queueAfter":queueSizeAfter,"wasReady":isReady],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logData, let json = String(data: data, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: logPath) {
-                    handle.seekToEndOfFile()
-                    handle.write((json + "\n").data(using: .utf8)!)
-                    handle.closeFile()
-                }
-            }
-            // #endregion
             
         case .microphone:
             guard let writer = micWriter, let input = microphoneInput else { return }
             guard writer.status == .writing else { return }
-            
-            // #region agent log
-            let isBufferValid = buffer.isValid
-            let bufferSamples = CMSampleBufferGetNumSamples(buffer)
-            if !isBufferValid || bufferSamples == 0 {
-                let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-                let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H6","location":"FileOutputService:appendAudioBuffer:mic:entry","message":"Invalid mic buffer at entry","data":["isValid":isBufferValid,"numSamples":bufferSamples],"timestamp":Date().timeIntervalSince1970*1000])
-                if let data = logData, let json = String(data: data, encoding: .utf8) {
-                    if let handle = FileHandle(forWritingAtPath: logPath) {
-                        handle.seekToEndOfFile()
-                        handle.write((json + "\n").data(using: .utf8)!)
-                        handle.closeFile()
-                    }
-                }
-            }
-            // #endregion
             
             if !micSessionStarted {
                 writer.startSession(atSourceTime: presentationTime)
@@ -269,26 +241,8 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             // Add new buffer to queue
             micBufferQueue.append(buffer)
             
-            // #region agent log
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let queueSizeBefore = micBufferQueue.count
-            let isReady = input.isReadyForMoreMediaData
-            // #endregion
-            
             // Drain queue while writer is ready
             drainBufferQueue(&micBufferQueue, to: input)
-            
-            // #region agent log
-            let queueSizeAfter = micBufferQueue.count
-            let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H3","location":"FileOutputService:appendAudioBuffer:mic","message":"Mic buffer queue state","data":["queueBefore":queueSizeBefore,"queueAfter":queueSizeAfter,"wasReady":isReady],"timestamp":Date().timeIntervalSince1970*1000])
-            if let data = logData, let json = String(data: data, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: logPath) {
-                    handle.seekToEndOfFile()
-                    handle.write((json + "\n").data(using: .utf8)!)
-                    handle.closeFile()
-                }
-            }
-            // #endregion
         }
     }
     
@@ -299,23 +253,6 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         while !queue.isEmpty && input.isReadyForMoreMediaData {
             let buffer = queue.removeFirst()
             let success = input.append(buffer)
-            
-            // #region agent log
-            if !success {
-                let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-                let isValid = buffer.isValid
-                let numSamples = CMSampleBufferGetNumSamples(buffer)
-                let logData = try? JSONSerialization.data(withJSONObject: ["sessionId":"debug-session","runId":"mic-gap-debug","hypothesisId":"H6","location":"FileOutputService:drainBufferQueue","message":"APPEND FAILED","data":["isValid":isValid,"numSamples":numSamples],"timestamp":Date().timeIntervalSince1970*1000])
-                if let data = logData, let json = String(data: data, encoding: .utf8) {
-                    if let handle = FileHandle(forWritingAtPath: logPath) {
-                        handle.seekToEndOfFile()
-                        handle.write((json + "\n").data(using: .utf8)!)
-                        handle.closeFile()
-                    }
-                }
-                print("[FileOutputService] APPEND FAILED: buffer valid=\(isValid), samples=\(numSamples)")
-            }
-            // #endregion
             
             // If append failed, the writer can no longer accept input
             // Re-queue the buffer and break to avoid dropping subsequent buffers
@@ -329,7 +266,19 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         // This is a last resort - means we're falling seriously behind
         if queue.count > maxQueuedBuffers {
             let dropCount = queue.count - maxQueuedBuffers
-            print("[FileOutputService] WARNING: Dropping \(dropCount) audio buffers due to write backpressure")
+            logger.warning("Dropping \(dropCount) audio buffers due to write backpressure")
+            
+            // Propagate warning to UI
+            let details = """
+                Audio buffer overflow - dropping oldest buffers.
+                Dropped: \(dropCount) buffers
+                Queue size: \(maxQueuedBuffers)
+                
+                This may indicate disk write speed issues or high system load.
+                Some audio data may be lost.
+                """
+            onWarning?("Audio buffers dropped", details)
+            
             queue.removeFirst(dropCount)
         }
     }
@@ -354,14 +303,28 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         // Final drain of any remaining queued buffers
         if let input = systemAudioInput {
             drainBufferQueue(&systemBufferQueue, to: input)
-            if !systemBufferQueue.isEmpty {
-                print("[FileOutputService] WARNING: \(systemBufferQueue.count) system audio buffers lost on stop")
+            if !self.systemBufferQueue.isEmpty {
+                let count = self.systemBufferQueue.count
+                logger.warning("\(count) system audio buffers lost on stop")
+                
+                let details = """
+                    \(count) system audio buffers could not be written.
+                    Some audio data at the end of the recording may be lost.
+                    """
+                onWarning?("Audio data lost on stop", details)
             }
         }
         if let input = microphoneInput {
             drainBufferQueue(&micBufferQueue, to: input)
-            if !micBufferQueue.isEmpty {
-                print("[FileOutputService] WARNING: \(micBufferQueue.count) microphone audio buffers lost on stop")
+            if !self.micBufferQueue.isEmpty {
+                let count = self.micBufferQueue.count
+                logger.warning("\(count) microphone audio buffers lost on stop")
+                
+                let details = """
+                    \(count) microphone audio buffers could not be written.
+                    Some audio data at the end of the recording may be lost.
+                    """
+                onWarning?("Audio data lost on stop", details)
             }
         }
         
@@ -520,7 +483,6 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             self._isWriting = true
             
             return directory
-            
         } catch {
             throw OutputError.assetWriterCreationFailed(underlying: error)
         }
@@ -557,7 +519,13 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     ///   - date: Recording date
     ///   - directory: Output directory
     ///   - filename: Optional filename (defaults to "transcript.md" if nil)
-    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String? = nil) throws {
+    func saveTranscriptBlocks(
+        _ blocks: [TranscriptBlock],
+        title: String,
+        date: Date,
+        to directory: URL,
+        filename: String? = nil
+    ) throws {
         let actualFilename = filename ?? "transcript.md"
         let transcriptURL = directory.appendingPathComponent(actualFilename)
         
@@ -577,7 +545,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         } else {
             for block in blocks {
                 let speakerLabel = block.speaker == .me ? "**Me**" : "**Them**"
-                let timestamp = formatTimestamp(block.startTimestamp)
+                let timestamp = TimeFormatting.formatTimestamp(block.startTimestamp, style: .compact)
                 
                 markdown += """
                 
@@ -590,20 +558,6 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         }
         
         try markdown.write(to: transcriptURL, atomically: true, encoding: .utf8)
-    }
-    
-    /// Format a timestamp for display (e.g., "2:34" or "1:02:15")
-    private func formatTimestamp(_ seconds: TimeInterval) -> String {
-        let totalSeconds = Int(seconds)
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let secs = totalSeconds % 60
-        
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, secs)
-        } else {
-            return String(format: "%d:%02d", minutes, secs)
-        }
     }
     
     // MARK: - Private Helpers

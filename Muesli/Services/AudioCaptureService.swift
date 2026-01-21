@@ -1,8 +1,8 @@
-import Foundation
-@preconcurrency import ScreenCaptureKit
 @preconcurrency import AVFoundation
 import CoreMedia
-
+import Foundation
+import os.log
+@preconcurrency import ScreenCaptureKit
 
 // MARK: - AVAudioEngine Microphone Capture Helper
 
@@ -20,6 +20,8 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         self.levelHandler = levelHandler
     }
     
+    private let logger = LoggerFactory.logger(category: "MicrophoneCaptureEngine")
+    
     func start(deviceID: String?) throws {
         guard !isRunning else { return }
         
@@ -27,19 +29,48 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         
         // Try to set the preferred device if specified
         if let deviceID = deviceID {
-            setInputDevice(deviceID: deviceID)
+            // CRITICAL: Skip aggregate devices - they don't deliver real audio
+            // ScreenCaptureKit creates these and they cause first-recording failures
+            if deviceID.contains("Aggregate") {
+                logger.warning("Skipping aggregate device, using system default real microphone")
+                // Don't call setInputDevice - let AVAudioEngine find a real device
+                selectFirstRealMicrophone()
+            } else {
+                setInputDevice(deviceID: deviceID)
+            }
+        } else {
+            // No device specified - try to select a real microphone explicitly
+            selectFirstRealMicrophone()
         }
         
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        // Get both input and output formats for diagnostics
+        let inputFormat = inputNode.inputFormat(forBus: 0)
+        let outputFormat = inputNode.outputFormat(forBus: 0)
         
+        // Use the output format but check if it's valid
+        // If sampleRate is 0 or invalid, the tap won't receive callbacks
+        var recordingFormat = outputFormat
+        if recordingFormat.sampleRate == 0 {
+            // Fallback: Create a standard format
+            logger.warning("outputFormat has 0 sample rate, using fallback format")
+            recordingFormat = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+        }
         
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, time in
+        // CRITICAL FIX: Use the INPUT format when installing the tap
+        // Using nil or output format causes error -10868 when input/output formats don't match
+        // The input format reflects what the hardware is actually delivering
+        let tapFormat = inputFormat.sampleRate > 0 ? inputFormat : nil
+        
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, time in
             self?.handleAudioBuffer(buffer, time: time)
         }
         
-        try audioEngine.start()
-        isRunning = true
-        
+        do {
+            try audioEngine.start()
+            isRunning = true
+        } catch {
+            throw error
+        }
     }
     
     func stop() {
@@ -48,7 +79,87 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
         isRunning = false
+    }
+    
+    /// Select the first real (non-aggregate) microphone device
+    /// This is a fallback when no device is specified or an aggregate device was requested
+    private func selectFirstRealMicrophone() {
+        var propertySize: UInt32 = 0
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
         
+        AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize)
+        let deviceCount = Int(propertySize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &deviceIDs
+        )
+        
+        for audioDeviceID in deviceIDs {
+            // Check if device has input channels (is a microphone)
+            var inputChannels: UInt32 = 0
+            var inputSize = UInt32(MemoryLayout<UInt32>.size)
+            var inputAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioObjectPropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            
+            // Get buffer list size first
+            var bufferListSize: UInt32 = 0
+            AudioObjectGetPropertyDataSize(audioDeviceID, &inputAddress, 0, nil, &bufferListSize)
+            
+            if bufferListSize > 0 {
+                let bufferListPtr = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
+                defer { bufferListPtr.deallocate() }
+                
+                if AudioObjectGetPropertyData(audioDeviceID, &inputAddress, 0, nil, &bufferListSize, bufferListPtr) == noErr {
+                    let bufferList = bufferListPtr.pointee
+                    inputChannels = bufferList.mBuffers.mNumberChannels
+                }
+            }
+            
+            guard inputChannels > 0 else { continue }
+            
+            // Get device UID to check if it's an aggregate
+            var deviceUID: CFString = "" as CFString
+            var uidSize = UInt32(MemoryLayout<CFString>.size)
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            
+            let status = AudioObjectGetPropertyData(audioDeviceID, &uidAddress, 0, nil, &uidSize, &deviceUID)
+            if status == noErr {
+                let uid = deviceUID as String
+                
+                // Skip aggregate devices
+                if uid.contains("Aggregate") {
+                    continue
+                }
+                
+                // Found a real microphone - use it!
+                do {
+                    try audioEngine.inputNode.auAudioUnit.setDeviceID(audioDeviceID)
+                    logger.debug("Selected real microphone: \(audioDeviceID), UID: \(uid)")
+                    return
+                } catch {
+                    logger.warning("Failed to set device \(audioDeviceID): \(error)")
+                    continue
+                }
+            }
+        }
+        
+        logger.warning("Could not find a real microphone device")
     }
     
     private func setInputDevice(deviceID: String) {
@@ -63,7 +174,14 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize)
         let deviceCount = Int(propertySize) / MemoryLayout<AudioDeviceID>.size
         var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
-        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize, &deviceIDs)
+        AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &deviceIDs
+        )
         
         for audioDeviceID in deviceIDs {
             // Get device UID
@@ -101,8 +219,8 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         }
         let rms = sqrt(sumOfSquares / Float(frameLength))
         let level = min(rms * 16.0, 1.0)
-        levelHandler?(level)
         
+        levelHandler?(level)
         
         // Convert AVAudioPCMBuffer to CMSampleBuffer for compatibility
         if let sampleBuffer = createCMSampleBuffer(from: buffer, time: time) {
@@ -189,9 +307,11 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         
         // Create sample buffer
         var sampleBuffer: CMSampleBuffer?
+        let hostTime = time.audioTimeStamp.mHostTime
+        let timestamp = hostTime > 0 ? Double(hostTime) / 1_000_000_000.0 : CACurrentMediaTime()
         var timing = CMSampleTimingInfo(
             duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
-            presentationTimeStamp: CMTime(seconds: time.audioTimeStamp.mHostTime > 0 ? Double(time.audioTimeStamp.mHostTime) / 1_000_000_000.0 : CACurrentMediaTime(), preferredTimescale: CMTimeScale(sampleRate)),
+            presentationTimeStamp: CMTime(seconds: timestamp, preferredTimescale: CMTimeScale(sampleRate)),
             decodeTimeStamp: .invalid
         )
         
@@ -224,11 +344,16 @@ typealias StreamInterruptedHandler = @Sendable (Error?) -> Void
 /// Callback type for audio level updates (0.0 to 1.0)
 typealias AudioLevelHandler = @Sendable (Float, AudioCaptureService.AudioType) -> Void
 
+/// Callback type for service warnings (message, details, canRetry)
+/// Used to propagate non-fatal errors to the UI
+typealias AudioWarningHandler = @Sendable (String, String, Bool) -> Void
+
 /// Service responsible for capturing audio from meeting apps and microphone
 /// Uses ScreenCaptureKit to capture system audio from selected applications
 actor AudioCaptureService: AudioCaptureServiceProtocol {
-    
     // MARK: - Types
+    
+    private nonisolated let logger = LoggerFactory.logger(category: "AudioCaptureService")
     
     enum AudioType: Sendable {
         case system  // Audio from the captured application
@@ -278,6 +403,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     private var bufferHandler: AudioBufferHandler?
     private var interruptedHandler: StreamInterruptedHandler?
     private var levelHandler: AudioLevelHandler?
+    private var warningHandler: AudioWarningHandler?
     
     // AVAudioEngine-based microphone capture (replaces SCK's captureMicrophone)
     private var microphoneEngine: MicrophoneCaptureEngine?
@@ -316,6 +442,12 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     /// Set a handler to receive audio level updates (0.0 to 1.0)
     func setLevelHandler(_ handler: @escaping AudioLevelHandler) {
         self.levelHandler = handler
+    }
+    
+    /// Set a handler to receive non-fatal warnings (e.g., microphone unavailable)
+    /// Warnings are informational - recording continues despite the issue
+    func setWarningHandler(_ handler: @escaping AudioWarningHandler) {
+        self.warningHandler = handler
     }
     
     /// Start capturing ALL system audio (no app filter)
@@ -367,7 +499,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     
     /// Common capture logic with a given content filter
     private func startCaptureWithFilter(_ filter: SCContentFilter) async throws {
-        
         // PRECONDITION: Buffer handler must be set before starting capture
         // This prevents race conditions where audio starts flowing before the handler is configured
         guard bufferHandler != nil else {
@@ -390,7 +521,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // 1. Always uses system default mic, ignoring user selection
         // 2. Has been observed to return all-zero samples in some configurations
         // Instead, we use AVAudioEngine for microphone capture below
-        
         
         // Create the stream delegate to handle errors/interruptions
         let delegate = StreamDelegate { [weak self] error in
@@ -424,7 +554,18 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
             self.microphoneEngine = micEngine
         } catch {
             // Continue without mic capture - system audio will still work
-            print("[AudioCaptureService] Warning: Microphone capture failed to start: \(error)")
+            logger.warning("Microphone capture failed to start: \(error.localizedDescription)")
+            
+            // Propagate warning to UI via callback
+            let details = """
+                Microphone capture failed to start.
+                Error: \(error.localizedDescription)
+                Device ID: \(selectedMicrophoneDeviceID ?? "system default")
+                
+                System audio is still being recorded.
+                You can select a different microphone in preferences and try again.
+                """
+            warningHandler?("Microphone unavailable", details, true)
         }
         
         // Start the stream
@@ -482,7 +623,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
 
 /// Handles incoming audio samples from ScreenCaptureKit
 private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
-    
     private let handler: AudioBufferHandler?
     private let levelHandler: AudioLevelHandler?
     
@@ -493,7 +633,6 @@ private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable 
     }
     
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        
         // Only process valid audio samples
         guard sampleBuffer.isValid else { return }
         
@@ -523,7 +662,10 @@ private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable 
     
     /// Calculate RMS (root mean square) audio level from sample buffer
     /// Returns a value between 0.0 and 1.0
-    private func calculateRMSLevel(from sampleBuffer: CMSampleBuffer, audioType: AudioCaptureService.AudioType) -> Float {
+    private func calculateRMSLevel(
+        from sampleBuffer: CMSampleBuffer,
+        audioType: AudioCaptureService.AudioType
+    ) -> Float {
         guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
             return 0.0
         }
@@ -591,7 +733,6 @@ private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable 
 
 /// Handles stream lifecycle events like errors and interruptions
 private final class StreamDelegate: NSObject, SCStreamDelegate, @unchecked Sendable {
-    
     private let onInterrupted: (Error?) -> Void
     
     init(onInterrupted: @escaping (Error?) -> Void) {

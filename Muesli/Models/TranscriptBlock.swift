@@ -36,7 +36,13 @@ struct TranscriptBlock: Identifiable, Codable, Equatable {
         return String(format: "%02d:%02d - %02d:%02d", startMins, startSecs, endMins, endSecs)
     }
     
-    init(id: UUID = UUID(), speaker: Speaker, text: String, startTimestamp: TimeInterval, endTimestamp: TimeInterval? = nil) {
+    init(
+        id: UUID = UUID(),
+        speaker: Speaker,
+        text: String,
+        startTimestamp: TimeInterval,
+        endTimestamp: TimeInterval? = nil
+    ) {
         self.id = id
         self.speaker = speaker
         self.text = text

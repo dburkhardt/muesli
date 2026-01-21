@@ -418,6 +418,112 @@ All Muesli data is stored in `~/Library/Application Support/Muesli/` to avoid pe
 │   │   ├── transcript.md          # Markdown transcript with speaker labels
 │   │   └── transcript.original.md # Original transcript (if refined)
 │   └── ...
+├── Exports/                       # Exported data for external tools
+│   ├── manifest.json              # Global index of all meetings
+│   ├── .muesli-export             # Version marker file
+│   ├── meetings/
+│   │   ├── 2026-01-15_14-30_[UUID]/
+│   │   │   ├── transcript.md      # Copy of transcript for external access
+│   │   │   └── metadata.json      # Structured metadata (JSON)
+│   │   └── ...
+│   └── ...
+└── Models/                        # WhisperKit transcription models
+    └── models/argmaxinc/whisperkit-coreml/
+        ├── openai_whisper-base/
+        ├── openai_whisper-small/
+        └── ...
+```
+
+### Export Architecture (External Tool Integration)
+
+Muesli automatically exports meeting transcripts and metadata to a structured folder that external tools (MCP servers, IDE extensions, etc.) can access as a read-only knowledge source.
+
+**Export Location**: `~/Library/Application Support/Muesli/Exports/` (configurable in preferences)
+
+**Automatic Export**: When enabled (default), meetings are exported automatically after recording completes and when transcripts are reprocessed or refined.
+
+**Manual Export**: Users can manually trigger export of all meetings via the "Export All Now" button in Preferences → Output.
+
+#### Export Folder Structure
+
+Each meeting is exported to `Exports/meetings/[FOLDER_NAME]/` with:
+- `transcript.md` - Human-readable transcript (Markdown format)
+- `metadata.json` - Machine-readable metadata (JSON format)
+
+The export directory also contains:
+- `manifest.json` - Global index listing all exported meetings with summary metadata
+- `.muesli-export` - Version marker file indicating export format version
+
+#### metadata.json Schema
+
+```json
+{
+  "id": "UUID",
+  "title": "Meeting Title",
+  "date": "2026-01-15T14:30:00Z",
+  "duration": 2847,
+  "wordCount": 1240,
+  "hasAudio": true,
+  "hasMicrophone": true,
+  "isRefined": false,
+  "segmentCount": 1,
+  "segments": [
+    {
+      "segmentNumber": 1,
+      "startTime": "2026-01-15T14:30:00Z",
+      "isRefined": false
+    }
+  ],
+  "files": {
+    "transcript": "transcript.md",
+    "audio": "../../Recordings/2026-01-15_14-30_[UUID]/audio.caf",
+    "microphone": "../../Recordings/2026-01-15_14-30_[UUID]/microphone.caf"
+  }
+}
+```
+
+#### manifest.json Schema
+
+```json
+{
+  "version": "1.0",
+  "generatedAt": "2026-01-18T10:30:00Z",
+  "totalMeetings": 42,
+  "meetings": [
+    {
+      "id": "UUID",
+      "title": "Meeting Title",
+      "date": "2026-01-15T14:30:00Z",
+      "directory": "meetings/2026-01-15_14-30_[UUID]",
+      "hasAudio": true,
+      "hasMicrophone": true,
+      "duration": 2847,
+      "wordCount": 1240,
+      "isRefined": false,
+      "segmentCount": 1
+    }
+  ]
+}
+```
+
+#### Use Cases for External Tools
+
+External tools can use the export folder to:
+- **Search**: Index transcripts for full-text search across all meetings
+- **Analysis**: Extract insights, topics, action items from meeting content
+- **Integration**: Connect meeting notes with other productivity tools (task managers, note-taking apps, etc.)
+- **Backup**: Sync exported data to cloud storage or version control
+- **MCP Servers**: Provide meeting context to AI assistants via Model Context Protocol
+
+**Read-Only Access**: External tools should treat the export folder as read-only. Muesli owns the export process and will overwrite files during re-export.
+
+**Version Compatibility**: The `.muesli-export` marker file contains `version=1.0` and `format=markdown+json` to help external tools verify compatibility.
+
+### Recordings Directory
+│   │   ├── microphone.caf         # Microphone audio (user's voice)
+│   │   ├── transcript.md          # Markdown transcript with speaker labels
+│   │   └── transcript.original.md # Original transcript (if refined)
+│   └── ...
 └── Models/                        # WhisperKit transcription models
     └── models/argmaxinc/whisperkit-coreml/
         ├── openai_whisper-base/
@@ -440,12 +546,84 @@ User preferences are stored in standard UserDefaults:
 - Transcription mode (live vs post-processing)
 - Echo cancellation setting
 
+### Diagnostic Logs
+
+Diagnostic logs are stored for debugging release build issues:
+- Location: `~/Library/Application Support/Muesli/Logs/`
+- File naming: `muesli-YYYY-MM-DD.log` (one per day)
+- Retention: 7 days (auto-cleanup on launch)
+- See [spec/diagnostic_logging.md](spec/diagnostic_logging.md) for full specification
+
 ### Why Application Support?
 
 1. **No permission prompts** - Application Support doesn't require user authorization
 2. **Appropriate for app data** - Documents is for user-created files, not app-generated data
 3. **Standard macOS convention** - Follows Apple's Human Interface Guidelines
 4. **Clean separation** - App data stays organized and doesn't clutter user folders
+
+---
+
+## Diagnostic Logging (Required)
+
+Muesli includes a **required** diagnostic logging system that ships with all builds (Debug and Release). This infrastructure is essential for debugging issues that only appear in production builds.
+
+### Purpose
+
+Some bugs only manifest in release builds due to:
+- Code signing and notarization differences
+- Optimizations affecting dynamic color resolution
+- Info.plist embedding differences
+- TCC (Transparency, Consent, and Control) behavior with different bundle IDs
+
+The 30+ minute DMG build cycle makes iteration slow. Diagnostic logs persist across reinstalls and can be easily shared for bug reports.
+
+### Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| DiagnosticLogger | `Muesli/Utilities/DiagnosticLogger.swift` | Thread-safe actor for file-based logging |
+| DebugInfoView | `Muesli/Views/DebugInfoView.swift` | UI panel showing permission states, build info |
+| Menu Item | Menu Bar → "Debug Info..." | Access point (available in idle AND onboarding) |
+
+### Log Categories
+
+| Category | What Gets Logged |
+|----------|------------------|
+| `BUILD` | Bundle ID, version, Info.plist keys (on app launch) |
+| `PERMISSION` | Permission checks with raw status values, request outcomes |
+| `ONBOARDING` | Step transitions, button tap events |
+| `APP` | General app lifecycle events |
+
+### Privacy Policy
+
+Logs contain **only** build/permission metadata. **Never** log:
+- Transcript content
+- Meeting titles or file names
+- User file paths outside Application Support
+- Any personally identifiable information
+
+### Accessing Logs
+
+```bash
+# View today's log
+cat ~/Library/Application\ Support/Muesli/Logs/muesli-$(date +%Y-%m-%d).log
+
+# Search for permission issues
+grep PERMISSION ~/Library/Application\ Support/Muesli/Logs/*.log
+
+# Watch in real-time
+tail -f ~/Library/Application\ Support/Muesli/Logs/muesli-$(date +%Y-%m-%d).log
+```
+
+Or use: Menu Bar → "Debug Info..." → "Open in Finder"
+
+### Full Specification
+
+See [spec/diagnostic_logging.md](spec/diagnostic_logging.md) for complete details including:
+- Log format and file management
+- Integration points (PermissionManager, OnboardingView)
+- Expected log output examples
+- Testing procedures
 
 ---
 
@@ -466,6 +644,7 @@ The MVP is complete. All core features are implemented and functional.
 | Transcript reprocessing | ✅ | Re-transcribe with different models |
 | Audio-only recording | ✅ | Record when no model available |
 | LLM refinement | ✅ | Polish transcripts with local LLM |
+| Diagnostic logging | ✅ | File-based logs for debugging release builds |
 
 ### Model Support
 
@@ -481,6 +660,8 @@ For detailed behavior specifications, see the `spec/` folder:
 | [spec/audio_pipeline.md](spec/audio_pipeline.md) | Audio capture, resampling, file output, debugging |
 | [spec/onboarding_flow.md](spec/onboarding_flow.md) | Permission handling, auto-advance behavior |
 | [spec/window_management.md](spec/window_management.md) | SwiftUI window lifecycle, onboarding window |
+| [spec/export_system.md](spec/export_system.md) | Export architecture, external tool integration, data formats |
+| [spec/diagnostic_logging.md](spec/diagnostic_logging.md) | Diagnostic logging system, debug info panel |
 
 ---
 
@@ -545,7 +726,7 @@ dependencies: [
 
 The MVP is complete when:
 
-1. ✓ App installs and launches on macOS 14+ with M-series chip
+1. ✓ App installs and launches on macOS 26+ with M-series chip
 2. ✓ First-run onboarding guides user through permissions and model setup
 3. ✓ Can detect and select from running meeting apps
 4. ✓ Records audio from meeting app + microphone simultaneously

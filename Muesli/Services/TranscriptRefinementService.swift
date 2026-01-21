@@ -8,7 +8,6 @@ import MLXLMCommon
 @Observable
 @MainActor
 final class TranscriptRefinementService {
-    
     // MARK: - Dependencies
     
     private let llmManager: LLMManager
@@ -131,13 +130,22 @@ final class TranscriptRefinementService {
     
     // MARK: - Private Methods
     
-    private func refineBlockText(_ text: String, container: ModelContainer, speaker: TranscriptBlock.Speaker? = nil) async throws -> String {
+    private func refineBlockText(
+        _ text: String,
+        container: ModelContainer,
+        speaker: TranscriptBlock.Speaker? = nil
+    ) async throws -> String {
         let prompt = buildRefinementPrompt(text, speaker: speaker)
         
         let result = try await container.perform { context in
             // Prepare input messages
+            let systemMessage = """
+                You are a transcript editor. Your job is to clean up transcriptions by fixing grammar, \
+                removing filler words (um, uh, like), improving sentence flow, and making the text more readable. \
+                Do not change the meaning or add information. Output only the cleaned text, nothing else.
+                """
             let messages: [Chat.Message] = [
-                .system("You are a transcript editor. Your job is to clean up transcriptions by fixing grammar, removing filler words (um, uh, like), improving sentence flow, and making the text more readable. Do not change the meaning or add information. Output only the cleaned text, nothing else."),
+                .system(systemMessage),
                 .user(prompt)
             ]
             
@@ -183,14 +191,23 @@ final class TranscriptRefinementService {
         return cleaned
     }
     
-    private func buildRefinementPrompt(_ text: String, speaker: TranscriptBlock.Speaker? = nil) -> String {
+    private func buildRefinementPrompt(
+        _ text: String,
+        speaker: TranscriptBlock.Speaker? = nil
+    ) -> String {
         let speakerContext: String
         if let speaker = speaker {
             switch speaker {
             case .me:
-                speakerContext = "This is the user's own speech (first-person). Focus on fixing first-person statements, removing filler words (um, uh, like, you know), and improving sentence flow."
+                speakerContext = """
+                    This is the user's own speech (first-person). Focus on fixing first-person statements, \
+                    removing filler words (um, uh, like, you know), and improving sentence flow.
+                    """
             case .them:
-                speakerContext = "This is speech from remote participants. There may be multiple speakers - preserve all distinct contributions. Focus on clarity and natural flow."
+                speakerContext = """
+                    This is speech from remote participants. There may be multiple speakers - \
+                    preserve all distinct contributions. Focus on clarity and natural flow.
+                    """
             }
         } else {
             speakerContext = "Fix grammar, remove filler words, and improve readability."
@@ -208,7 +225,9 @@ final class TranscriptRefinementService {
     // MARK: - Speaker Thread Processing
     
     /// Splits blocks into separate speaker threads while preserving original indices
-    private func splitBlocksBySpeaker(_ blocks: [TranscriptBlock]) -> (me: [(Int, TranscriptBlock)], them: [(Int, TranscriptBlock)]) {
+    private func splitBlocksBySpeaker(
+        _ blocks: [TranscriptBlock]
+    ) -> (me: [(Int, TranscriptBlock)], them: [(Int, TranscriptBlock)]) {
         var meBlocks: [(Int, TranscriptBlock)] = []
         var themBlocks: [(Int, TranscriptBlock)] = []
         

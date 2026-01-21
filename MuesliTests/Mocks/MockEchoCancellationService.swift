@@ -1,10 +1,9 @@
-import Foundation
 import CoreMedia
+import Foundation
 @testable import Muesli
 
 /// Mock implementation of EchoCancellationService for testing
 final class MockEchoCancellationService: EchoCancellationServiceProtocol, @unchecked Sendable {
-    
     // MARK: - Call Tracking
     
     var storeSystemAudioCallCount: Int = 0

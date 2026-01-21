@@ -1,5 +1,5 @@
-import Foundation
 @preconcurrency import AVFoundation
+import Foundation
 @preconcurrency import ScreenCaptureKit
 
 /// Manages app permissions for screen recording and microphone access
@@ -7,7 +7,6 @@ import Foundation
 @Observable
 @MainActor
 final class PermissionManager: PermissionManagerProtocol {
-    
     // MARK: - Observable State
     
     /// Cached screen recording permission state (updated via refresh)
@@ -16,14 +15,43 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Cached microphone permission state (updated via refresh)
     var microphoneGranted: Bool = false
     
+    // MARK: - Awaiting Settings State
+    
+    /// Whether user clicked "Open System Settings" for screen recording and we're awaiting their return
+    var awaitingScreenRecordingFromSettings: Bool = false
+    
+    /// Whether user clicked "Open System Settings" for microphone and we're awaiting their return
+    var awaitingMicrophoneFromSettings: Bool = false
+    
     // MARK: - Notification Observers
     
     /// Notification observers for automatic permission refresh
+    /// Contains observers from both NotificationCenter and DistributedNotificationCenter
     private var observers: [NSObjectProtocol] = []
+    
+    /// Observers registered with NotificationCenter (for proper cleanup)
+    private var notificationCenterObservers: [NSObjectProtocol] = []
+    
+    /// Observers registered with DistributedNotificationCenter (for proper cleanup)
+    private var distributedCenterObservers: [NSObjectProtocol] = []
+    
+    /// Callback for real-time permission changes
+    var permissionDidChange: ((Bool, Bool) -> Void)?
+    
+    /// Whether permission monitoring is active (for onboarding screens)
+    private var isMonitoring: Bool = false
+    
+    /// Polling timer for permission checks (fallback) - DEPRECATED, kept for compatibility
+    private var pollingTimer: Timer?
     
     // MARK: - Initialization
     
     init() {
+        // Log bundle ID for TCC debugging
+        if let bundleID = Bundle.main.bundleIdentifier {
+            print("[PermissionManager] Bundle ID: \(bundleID)")
+        }
+        
         // Skip permission checks when running tests to avoid permission prompts
         guard !Self.isRunningTests else {
             // In test environment, assume no permissions granted
@@ -39,39 +67,55 @@ final class PermissionManager: PermissionManagerProtocol {
         screenRecordingGranted = false
         
         // Observe app becoming active (user returns from System Settings)
-        // Use async refresh for reliable permission detection with ad-hoc signing
-        observers.append(
+        // Use strict step-based guards to prevent unwanted permission prompts
+        notificationCenterObservers.append(
             NotificationCenter.default.addObserver(
                 forName: NSApplication.didBecomeActiveNotification,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in
-                    // ⚠️ CRITICAL: Do NOT call refreshPermissionsAsync() on the welcome screen!
-                    // SCShareableContent.excludingDesktopWindows() triggers the screen recording
-                    // permission prompt if permission not granted.
-                    // 
-                    // However, once user is on permission screens (step >= 1), we SHOULD refresh
-                    // when they return from System Settings, otherwise they have to manually
-                    // click "Check Again" which is poor UX.
-                    // 
-                    // See: spec/onboarding_flow.md "SCShareableContent in Notification Observers"
-                    let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding)
-                    let currentStep = UserDefaults.standard.integer(forKey: AppStorageKeys.onboardingCurrentStep)
-                    
-                    // Allow refresh if:
-                    // 1. Onboarding is complete, OR
-                    // 2. User is on permission screens (step 1+), not welcome (step 0)
-                    guard hasCompletedOnboarding || currentStep > 0 else {
-                        return
-                    }
-                    
-                    // Use reliable async check - SCShareableContent correctly queries TCC
-                    // even with ad-hoc signing (CGPreflightScreenCaptureAccess does not)
-                    _ = await self?.refreshPermissionsAsync()
+                    await self?.handleDidBecomeActive()
                 }
             }
         )
+    }
+    
+    /// Handle app becoming active with strict step-based guards
+    /// CRITICAL: step == 0 (welcome screen) must NEVER trigger async checks
+    ///
+    /// Note: Made internal (not private) to enable testing of the permission flow logic.
+    /// Tests can call this directly to verify step-based guards work correctly.
+    func handleDidBecomeActive() async {
+        let hasCompletedOnboarding = UserDefaults.standard.bool(
+            forKey: AppStorageKeys.hasCompletedOnboarding
+        )
+        let currentStep = UserDefaults.standard.integer(forKey: AppStorageKeys.onboardingCurrentStep)
+        
+        if hasCompletedOnboarding {
+            // Post-onboarding: safe to use async refresh
+            _ = await refreshPermissionsAsync()
+        } else if currentStep == 0 {
+            // STRICT GUARD: Welcome screen (step 0) - ONLY safe sync check, NO async
+            // This prevents the screen recording dialog from appearing on the welcome screen
+            _ = refreshPermissions()
+        } else if awaitingScreenRecordingFromSettings {
+            // User returned from System Settings after clicking "Open Settings" for screen recording
+            // Use async check to reliably detect if permission was granted
+            awaitingScreenRecordingFromSettings = false
+            _ = await checkScreenRecordingPermissionAsync()
+            permissionDidChange?(screenRecordingGranted, microphoneGranted)
+        } else if awaitingMicrophoneFromSettings {
+            // User returned from System Settings after clicking "Open Settings" for microphone
+            // Microphone check is always safe (doesn't trigger prompts)
+            awaitingMicrophoneFromSettings = false
+            _ = refreshPermissions()
+            permissionDidChange?(screenRecordingGranted, microphoneGranted)
+        } else {
+            // On permission screens but not awaiting settings return
+            // Use safe sync check only to avoid triggering prompts
+            _ = refreshPermissions()
+        }
     }
     
     /// Detect if running in test environment
@@ -82,7 +126,100 @@ final class PermissionManager: PermissionManagerProtocol {
     deinit {
         // Remove all observers (use MainActor.assumeIsolated since deinit is nonisolated)
         MainActor.assumeIsolated {
-            observers.forEach { NotificationCenter.default.removeObserver($0) }
+            // Remove NotificationCenter observers (from init)
+            notificationCenterObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            
+            // Remove DistributedNotificationCenter observers (from startMonitoringPermissions)
+            distributedCenterObservers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
+            
+            pollingTimer?.invalidate()
+        }
+    }
+    
+    // MARK: - Awaiting Settings Methods
+    
+    /// Mark that user clicked "Open System Settings" for screen recording
+    /// When app becomes active again, we'll use async check to detect permission change
+    func markAwaitingScreenRecordingFromSettings() {
+        awaitingScreenRecordingFromSettings = true
+    }
+    
+    /// Mark that user clicked "Open System Settings" for microphone
+    /// When app becomes active again, we'll check microphone permission
+    func markAwaitingMicrophoneFromSettings() {
+        awaitingMicrophoneFromSettings = true
+    }
+    
+    /// Verify screen recording permission after user clicks "Grant Permission"
+    /// This uses async check to reliably detect if permission was granted
+    func verifyScreenRecordingAfterRequest() async -> Bool {
+        let granted = await checkScreenRecordingPermissionAsync()
+        screenRecordingGranted = granted
+        return granted
+    }
+    
+    // MARK: - Real-time Permission Monitoring
+    
+    /// Start monitoring permissions for real-time updates
+    /// This is more aggressive than the default app activation observer
+    /// Use this when on permission screens to provide instant feedback
+    func startMonitoringPermissions() {
+        guard !isMonitoring else { return }
+        isMonitoring = true
+        
+        // Register for distributed notifications (system-level)
+        // These fire when TCC permissions change in System Settings
+        let distributedCenter = DistributedNotificationCenter.default()
+        
+        // Listen for TCC authorization changes
+        let tccObserver = distributedCenter.addObserver(
+            forName: NSNotification.Name("com.apple.security.authorization-right-change"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                // Use synchronous check to avoid triggering SCShareableContent
+                // which would show the screen recording dialog
+                self?.checkAndNotifyPermissionChangesSynchronously()
+            }
+        }
+        distributedCenterObservers.append(tccObserver)
+        
+        // NOTE: Polling timer removed. We rely on:
+        // 1. Distributed notifications (above) for TCC permission changes
+        // 2. didBecomeActiveNotification (in init) for app returning from System Settings
+        // This prevents the screen recording dialog from appearing on the microphone screen
+    }
+    
+    /// Stop monitoring permissions
+    func stopMonitoringPermissions() {
+        guard isMonitoring else { return }
+        isMonitoring = false
+        
+        // Invalidate and clear polling timer
+        pollingTimer?.invalidate()
+        pollingTimer = nil
+        
+        // Remove distributed notification observers
+        distributedCenterObservers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
+        distributedCenterObservers.removeAll()
+    }
+    
+    /// Check permissions and notify if changed (synchronous version)
+    /// Uses only AVCaptureDevice.authorizationStatus for microphone (no SCShareableContent)
+    /// This prevents triggering the screen recording permission dialog
+    ///
+    /// Note: Made internal (not private) to enable testing of the notification flow logic.
+    func checkAndNotifyPermissionChangesSynchronously() {
+        let oldScreenRecording = screenRecordingGranted
+        let oldMicrophone = microphoneGranted
+        
+        // Use synchronous refresh (no SCShareableContent call)
+        let (newScreenRecording, newMicrophone) = refreshPermissions()
+        
+        // Notify if changed
+        if newScreenRecording != oldScreenRecording || newMicrophone != oldMicrophone {
+            permissionDidChange?(newScreenRecording, newMicrophone)
         }
     }
     
@@ -92,7 +229,7 @@ final class PermissionManager: PermissionManagerProtocol {
     /// NOTE: Returns cached value from last async check. Use checkScreenRecordingPermissionAsync() 
     /// for fresh check. CGPreflightScreenCaptureAccess() is unreliable with ad-hoc signing.
     var hasScreenRecordingPermission: Bool {
-        screenRecordingGranted
+        return screenRecordingGranted
     }
     
     /// Check screen recording permission using SCShareableContent (async, reliable)
@@ -102,16 +239,22 @@ final class PermissionManager: PermissionManagerProtocol {
     /// TRIGGERS the screen recording permission prompt if permission is not granted.
     /// Do NOT call during onboarding welcome screen - see spec/onboarding_flow.md
     func checkScreenRecordingPermissionAsync() async -> Bool {
+        await DiagnosticLogger.shared.log(.permission, "checkScreenRecordingPermissionAsync called")
+        
         // Skip permission checks when running tests
         guard !Self.isRunningTests else {
+            await DiagnosticLogger.shared.log(.permission, "EARLY RETURN: isRunningTests=true")
             return false
         }
         
         do {
             // This call will fail with a specific TCC error if permission is not granted
             _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            await DiagnosticLogger.shared.log(.permission, "Screen recording permission granted (SCShareableContent succeeded)")
+            screenRecordingGranted = true
             return true
         } catch {
+            await DiagnosticLogger.shared.log(.permission, "Screen recording permission denied (SCShareableContent error: \(error.localizedDescription))")
             return false
         }
     }
@@ -119,13 +262,23 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Request screen recording permission
     /// Note: This will trigger the system permission dialog
     func requestScreenRecordingPermission() {
+        Task {
+            await DiagnosticLogger.shared.log(.permission, "requestScreenRecordingPermission called")
+        }
+        
         // Skip permission requests when running tests
         guard !Self.isRunningTests else {
+            Task {
+                await DiagnosticLogger.shared.log(.permission, "EARLY RETURN: isRunningTests=true")
+            }
             return
         }
         
         // This will trigger the permission prompt
-        _ = CGRequestScreenCaptureAccess()
+        let result = CGRequestScreenCaptureAccess()
+        Task {
+            await DiagnosticLogger.shared.log(.permission, "CGRequestScreenCaptureAccess returned: \(result)")
+        }
     }
     
     /// Open System Settings to the Screen Recording pane
@@ -150,21 +303,50 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Request microphone permission
     /// - Returns: Whether permission was granted
     func requestMicrophonePermission() async -> Bool {
+        let bundleID = Bundle.main.bundleIdentifier ?? "unknown"
+        let plistDesc = Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") as? String
+        
+        await DiagnosticLogger.shared.log(.permission,
+            "requestMicrophonePermission called. Bundle: \(bundleID)")
+        await DiagnosticLogger.shared.log(.permission,
+            "NSMicrophoneUsageDescription: \(plistDesc ?? "MISSING")")
+        
         // Skip permission requests when running tests
-        guard !Self.isRunningTests else {
+        if Self.isRunningTests {
+            await DiagnosticLogger.shared.log(.permission, "EARLY RETURN: isRunningTests=true")
             return false
         }
         
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        await DiagnosticLogger.shared.log(.permission,
+            "authorizationStatus(for: .audio) = \(status.rawValue) (\(statusName(status)))")
+        
         switch status {
         case .authorized:
+            await DiagnosticLogger.shared.log(.permission, "Already authorized, returning true")
             return true
         case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .audio)
+            await DiagnosticLogger.shared.log(.permission, "Status is notDetermined, calling requestAccess...")
+            let result = await AVCaptureDevice.requestAccess(for: .audio)
+            await DiagnosticLogger.shared.log(.permission, "requestAccess returned: \(result)")
+            return result
         case .denied, .restricted:
+            await DiagnosticLogger.shared.log(.permission, "Status is denied/restricted, returning false (no prompt possible)")
             return false
         @unknown default:
+            await DiagnosticLogger.shared.log(.permission, "Unknown status, returning false")
             return false
+        }
+    }
+    
+    /// Helper to convert AVAuthorizationStatus to string
+    private func statusName(_ status: AVAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "notDetermined"
+        case .restricted: return "restricted"
+        case .denied: return "denied"
+        case .authorized: return "authorized"
+        @unknown default: return "unknown"
         }
     }
     
@@ -182,10 +364,21 @@ final class PermissionManager: PermissionManagerProtocol {
     }
     
     /// Refresh permission states (call after user returns from settings)
-    /// Updates the observable cached state
+    /// Updates the observable cached state using optimistic OR pattern
+    ///
+    /// IMPORTANT: Uses optimistic OR pattern for screen recording:
+    /// - CGPreflightScreenCaptureAccess() can detect newly granted permission
+    /// - BUT it's unreliable with ad-hoc signing (may return false even when granted)
+    /// - Once cache is true, we keep it true (permission can't be revoked without restart)
     func refreshPermissions() -> (screenRecording: Bool, microphone: Bool) {
-        screenRecordingGranted = hasScreenRecordingPermission
+        // Optimistic OR: CGPreflight can detect newly granted permission,
+        // but is unreliable with ad-hoc signing. Once cache is true, keep it.
+        let preflightResult = CGPreflightScreenCaptureAccess()
+        screenRecordingGranted = preflightResult || screenRecordingGranted
+        
+        // Microphone check is always reliable
         microphoneGranted = hasMicrophonePermission
+        
         return (screenRecordingGranted, microphoneGranted)
     }
     
@@ -196,6 +389,7 @@ final class PermissionManager: PermissionManagerProtocol {
     func refreshPermissionsAsync() async -> (screenRecording: Bool, microphone: Bool) {
         screenRecordingGranted = await checkScreenRecordingPermissionAsync()
         microphoneGranted = hasMicrophonePermission
+        
         return (screenRecordingGranted, microphoneGranted)
     }
 }

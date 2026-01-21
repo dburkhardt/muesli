@@ -1,0 +1,79 @@
+# SwiftLint Configuration for Muesli
+# https://github.com/realm/SwiftLint
+
+# Paths to include/exclude
+included:
+  - Muesli
+  - MuesliTests
+
+excluded:
+  - Pods
+  - .build
+  - DerivedData
+
+# Opt-in rules
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - explicit_init
+  - first_where
+  - sorted_imports
+  - vertical_whitespace_closing_braces
+  - vertical_whitespace_opening_braces
+
+# Disabled rules
+disabled_rules:
+  - trailing_whitespace  # Too noisy for now
+  - todo                 # We use TODO.md instead
+
+# Rule configurations
+line_length:
+  warning: 120
+  error: 150
+  ignores_comments: true
+  ignores_urls: true
+
+file_length:
+  warning: 500
+  error: 800
+
+type_body_length:
+  warning: 300
+  error: 500
+
+function_body_length:
+  warning: 60
+  error: 100
+
+cyclomatic_complexity:
+  warning: 15
+  error: 25
+
+nesting:
+  type_level: 2
+  function_level: 3
+
+identifier_name:
+  min_length:
+    warning: 2
+  max_length:
+    warning: 50
+    error: 60
+  excluded:
+    - id
+    - x
+    - y
+    - z
+    - i
+    - j
+    - k
+
+# Custom rules
+custom_rules:
+  no_print:
+    name: "No print statements"
+    regex: "\\bprint\\("
+    match_kinds:
+      - identifier
+    message: "Use proper logging instead of print()"
+    severity: warning

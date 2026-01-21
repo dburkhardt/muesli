@@ -3,7 +3,6 @@ import Foundation
 
 /// Mock implementation of ModelManager for testing
 final class MockModelManager: ModelManagerProtocol, @unchecked Sendable {
-    
     // MARK: - State
     
     var downloadStates: [ModelManager.ModelSize: ModelManager.DownloadState] = [:]
@@ -26,6 +25,7 @@ final class MockModelManager: ModelManagerProtocol, @unchecked Sendable {
     // MARK: - Test Control Properties
     
     var shouldFailValidation: Bool = false
+    var modelsToFailValidation: Set<ModelManager.ModelSize> = []
     var mockModelPaths: [ModelManager.ModelSize: URL] = [:]
     
     // MARK: - Call Tracking
@@ -76,16 +76,18 @@ final class MockModelManager: ModelManagerProtocol, @unchecked Sendable {
     func validateModel(_ model: ModelManager.ModelSize) -> Bool {
         validateModelCallCount += 1
         if shouldFailValidation { return false }
+        if modelsToFailValidation.contains(model) { return false }
         return downloadedModels.contains(model)
     }
     
     func getFirstValidModel() -> ModelManager.ModelSize? {
         getFirstValidModelCallCount += 1
         if shouldFailValidation { return nil }
-        if let active = activeModel, downloadedModels.contains(active) {
-            return active
+        // Skip models that would fail validation
+        for model in downloadedModels where !modelsToFailValidation.contains(model) {
+            return model
         }
-        return downloadedModels.first
+        return nil
     }
     
     func markModelCorrupted(_ model: ModelManager.ModelSize) {

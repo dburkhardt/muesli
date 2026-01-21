@@ -72,8 +72,11 @@ struct CompletedMeetingWindow: View {
             
             Spacer()
             
+            // Copy transcript button
+            copyTranscriptButton
+            
             // Reprocess button with model picker
-            if viewModel.modelManager.downloadedModels.count > 0 {
+            if !viewModel.modelManager.downloadedModels.isEmpty {
                 Menu {
                     ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
                         Button("Reprocess with \(model.displayName)") {
@@ -112,6 +115,36 @@ struct CompletedMeetingWindow: View {
         .padding(.vertical, 16)
     }
     
+    // MARK: - Copy Transcript Button
+    
+    private var copyTranscriptButton: some View {
+        CopyTranscriptButton(getBlocks: { getTranscriptBlocks() })
+    }
+    
+    /// Get transcript blocks from the meeting
+    private func getTranscriptBlocks() -> [TranscriptBlock]? {
+        // Try segments first (preferred)
+        if !meeting.transcriptSegments.isEmpty {
+            var allBlocks: [TranscriptBlock] = []
+            for segment in meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber }) {
+                let blocksToUse = (meeting.isShowingRefined && segment.isRefined) ?
+                    (segment.refinedBlocks ?? segment.originalBlocks) :
+                    segment.originalBlocks
+                allBlocks.append(contentsOf: blocksToUse)
+            }
+            return allBlocks.isEmpty ? nil : allBlocks
+        }
+        
+        // Fallback to transcriptBlocks
+        if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
+            let showingOriginal = viewModel.showOriginalTranscript(for: meeting) &&
+                meeting.originalTranscriptBlocks != nil
+            return showingOriginal ? meeting.originalTranscriptBlocks : blocks
+        }
+        
+        return nil
+    }
+    
     // MARK: - Metadata Row
     
     private var metadataRow: some View {
@@ -124,29 +157,35 @@ struct CompletedMeetingWindow: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
             
-            Button(action: {
+        Button(
+            action: {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
-            }) {
+            },
+            label: {
                 Text("Open in Finder")
                     .font(.system(size: 12))
                     .foregroundStyle(.blue)
                     .underline()
             }
-            .buttonStyle(.plain)
+        )
+        .buttonStyle(.plain)
             
             Text("·")
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
             
-            Button(action: {
+        Button(
+            action: {
                 historyManager.requestDeleteMeeting(meeting)
-            }) {
+            },
+            label: {
                 Text("Delete Recording")
                     .font(.system(size: 12))
                     .foregroundStyle(.red)
                     .underline()
             }
-            .buttonStyle(.plain)
+        )
+        .buttonStyle(.plain)
         }
         .padding(.bottom, 8)
     }
@@ -157,10 +196,10 @@ struct CompletedMeetingWindow: View {
     private var recordingStartTimeView: some View {
         if meeting.canResume, let firstSegment = meeting.transcriptSegments.first {
             let formatter: DateFormatter = {
-                let f = DateFormatter()
-                f.dateStyle = .medium
-                f.timeStyle = .short
-                return f
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateStyle = .medium
+                dateFormatter.timeStyle = .short
+                return dateFormatter
             }()
             Text("Recording started: \(formatter.string(from: firstSegment.startTime))")
                 .font(.system(size: 12))
@@ -182,10 +221,10 @@ struct CompletedMeetingWindow: View {
                         // Segment marker (except for first segment)
                         if segment.segmentNumber > 1 {
                             let formatter: DateFormatter = {
-                                let f = DateFormatter()
-                                f.dateStyle = .none
-                                f.timeStyle = .short
-                                return f
+                                let dateFormatter = DateFormatter()
+                                dateFormatter.dateStyle = .none
+                                dateFormatter.timeStyle = .short
+                                return dateFormatter
                             }()
                             Text("Recording resumed at \(formatter.string(from: segment.startTime))")
                                 .font(.system(size: 12))

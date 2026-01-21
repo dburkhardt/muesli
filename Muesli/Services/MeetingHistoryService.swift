@@ -1,10 +1,9 @@
-import Foundation
 import AVFoundation
+import Foundation
 
 /// Service responsible for discovering and loading meeting recordings from disk
 @MainActor
 final class MeetingHistoryService: MeetingHistoryServiceProtocol {
-    
     // MARK: - Properties
     
     private let fileManager = FileManager.default
@@ -305,11 +304,14 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             
             // Check if this is a speaker header line
-            if let match = speakerRegex?.firstMatch(in: trimmed, options: [], range: NSRange(trimmed.startIndex..., in: trimmed)),
-               let speakerRange = Range(match.range(at: 1), in: trimmed) {
-                
-                // Save previous block if any
-                if let speaker = currentSpeaker, !currentTextLines.isEmpty {
+            if let match = speakerRegex?.firstMatch(
+                in: trimmed,
+            options: [],
+            range: NSRange(trimmed.startIndex..., in: trimmed)
+        ),
+           let speakerRange = Range(match.range(at: 1), in: trimmed) {
+            // Save previous block if any
+            if let speaker = currentSpeaker, !currentTextLines.isEmpty {
                     let text = currentTextLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                     if !text.isEmpty {
                         let block = TranscriptBlock(
@@ -345,7 +347,6 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
                         currentTimestamp = TimeInterval(first * 60 + second)
                     }
                 }
-                
             } else if !trimmed.isEmpty {
                 // Add to current block's text
                 currentTextLines.append(line)
@@ -418,7 +419,8 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
             }
         }
         
-        return transcriptLines.isEmpty ? nil : transcriptLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return transcriptLines.isEmpty ? nil :
+            transcriptLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     /// Load transcript blocks for a meeting (block format)

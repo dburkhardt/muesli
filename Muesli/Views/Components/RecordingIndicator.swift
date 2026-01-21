@@ -7,6 +7,7 @@ struct RecordingIndicator: View {
     let elapsedTime: String
     var isInitializing: Bool = false
     var isModelLoading: Bool = false
+    var isSlowModelLoad: Bool = false
     var isRecordingOnly: Bool = false
     @State private var isPulsing = false
     
@@ -47,7 +48,9 @@ struct RecordingIndicator: View {
                     ProgressView()
                         .scaleEffect(0.6)
                         .frame(width: 12, height: 12)
-                        .help("Transcription model loading...")
+                        .help(isSlowModelLoad 
+                            ? "Model preparing for first use (one-time setup)..." 
+                            : "Transcription model loading...")
                 } else if isRecordingOnly {
                     Image(systemName: "waveform.slash")
                         .font(.system(size: 11))
@@ -171,10 +174,10 @@ struct MicrophoneLevelIndicator: View {
                 // Apply VU-meter ballistics: fast attack, slow release
                 if targetLevel > displayLevel {
                     // Attack: rising - use fast coefficient
-                    displayLevel = displayLevel + (targetLevel - displayLevel) * attackCoeff
+                    displayLevel += (targetLevel - displayLevel) * attackCoeff
                 } else {
                     // Release: falling - use slow coefficient
-                    displayLevel = displayLevel + (targetLevel - displayLevel) * releaseCoeff
+                    displayLevel += (targetLevel - displayLevel) * releaseCoeff
                 }
             }
             .onChange(of: isActive) { _, active in
@@ -201,10 +204,12 @@ struct MicrophoneControlWithLevel: View {
     
     var body: some View {
         HStack(spacing: 6) {
-            // Mute toggle button (clickable microphone icon)
-            Button(action: {
+        // Mute toggle button (clickable microphone icon)
+        Button(
+            action: {
                 onToggleMute()
-            }) {
+            },
+            label: {
                 Group {
                     if isMuted {
                         // Show muted icon (no level indicator)
@@ -217,15 +222,18 @@ struct MicrophoneControlWithLevel: View {
                     }
                 }
             }
-            .buttonStyle(.plain)
-            .help(isMuted ? "Unmute microphone" : "Mute microphone")
+        )
+        .buttonStyle(.plain)
+        .help(isMuted ? "Unmute microphone" : "Mute microphone")
             
             // Device picker menu (chevron only)
             Menu {
-                ForEach(availableDevices) { device in
-                    Button(action: {
+            ForEach(availableDevices) { device in
+                Button(
+                    action: {
                         onSelectDevice(device.id)
-                    }) {
+                    },
+                    label: {
                         HStack {
                             Text(device.name)
                             if device.isDefault {
@@ -238,6 +246,7 @@ struct MicrophoneControlWithLevel: View {
                             }
                         }
                     }
+                )
                 }
             } label: {
                 Image(systemName: "chevron.down")

@@ -1,16 +1,28 @@
 import Foundation
+import os.log
 
 /// Coordinates transcript refinement using LLM
 /// Extracted from MuesliViewModel as part of the god object refactoring
 @Observable
 @MainActor
 final class RefinementCoordinator {
+    // MARK: - Logging
+    
+    private let logger = Logger(subsystem: "com.muesli.app", category: "RefinementCoordinator")
     
     // MARK: - Dependencies
     
     private let llmManager: LLMManager
     private let refinementService: TranscriptRefinementService
     private let fileOutputService: FileOutputService
+    
+    // MARK: - Callbacks
+    
+    /// Called when a meeting is updated (for export service integration)
+    var onMeetingUpdated: ((MeetingHistoryItem) -> Void)?
+    
+    /// Callback for refinement warnings (message, details, canRetry)
+    var onWarning: ((String, String, Bool) -> Void)?
     
     // MARK: - State
     
@@ -61,7 +73,7 @@ final class RefinementCoordinator {
     }
     
     deinit {
-        print("[RefinementCoordinator] Deallocating")
+        logger.debug("Deallocating")
     }
     
     // MARK: - Show Original/Refined Toggle
@@ -72,13 +84,18 @@ final class RefinementCoordinator {
     }
     
     /// Set whether to show original transcript for a meeting
-    func setShowingOriginal(_ showOriginal: Bool, for meeting: MeetingHistoryItem, historyService: MeetingHistoryService) {
+    func setShowingOriginal(
+        _ showOriginal: Bool,
+        for meeting: MeetingHistoryItem,
+        historyService: MeetingHistoryService
+    ) {
         showOriginalTranscriptForMeeting[meeting.id.uuidString] = showOriginal
         
         // Load original transcript if switching to original view and not already loaded
         if showOriginal && meeting.isRefined {
             Task {
-                if meeting.originalTranscriptBlocks == nil, let blocks = historyService.loadOriginalTranscriptBlocks(for: meeting) {
+                if meeting.originalTranscriptBlocks == nil,
+                   let blocks = historyService.loadOriginalTranscriptBlocks(for: meeting) {
                     await MainActor.run {
                         meeting.originalTranscriptBlocks = blocks
                     }
@@ -96,12 +113,13 @@ final class RefinementCoordinator {
     
     /// Start refining a meeting's transcript
     func refineTranscript(for meeting: MeetingHistoryItem) {
+        // Validate preconditions
         guard canRefineTranscripts else {
-            print("[RefinementCoordinator] Cannot refine: canRefineTranscripts = false")
+            logger.warning("Cannot refine: canRefineTranscripts = false")
             return
         }
         guard !refinementService.isRefining else {
-            print("[RefinementCoordinator] Already refining")
+            logger.warning("Already refining")
             return
         }
         
@@ -119,8 +137,20 @@ final class RefinementCoordinator {
             do {
                 try await llmManager.loadModel(activeModel)
             } catch {
-                refinementService.errorMessage = "Failed to load LLM model: \(error.localizedDescription)"
-                print("[RefinementCoordinator] Failed to load LLM model: \(error)")
+                let errorMsg = "Failed to load LLM model: \(error.localizedDescription)"
+                refinementService.errorMessage = errorMsg
+                logger.error("Failed to load LLM model: \(error)")
+                
+                // Propagate warning to UI
+                let details = """
+                    LLM model failed to load for refinement.
+                    Error: \(error.localizedDescription)
+                    Meeting: \(meeting.title)
+                    
+                    You can try again later or re-download the model.
+                    """
+                onWarning?("Refinement unavailable", details, true)
+                
                 meetingBeingRefined = nil
                 return
             }
@@ -129,7 +159,7 @@ final class RefinementCoordinator {
         do {
             // Refine based on available transcript format
             if let blocks = meeting.transcriptBlocks, !blocks.isEmpty {
-                print("[RefinementCoordinator] Refining \(blocks.count) transcript blocks")
+                logger.info("Refining \(blocks.count) transcript blocks")
                 // Store original before refining
                 if meeting.originalTranscriptBlocks == nil {
                     meeting.originalTranscriptBlocks = blocks
@@ -158,8 +188,10 @@ final class RefinementCoordinator {
                 // Save to disk
                 saveRefinedTranscript(meeting, blocks: refinedBlocks)
                 
+                // Notify that meeting was updated (for export)
+                onMeetingUpdated?(meeting)
             } else if let text = meeting.transcript, !text.isEmpty {
-                print("[RefinementCoordinator] Refining plain text transcript")
+                logger.info("Refining plain text transcript")
                 // Store original before refining
                 meeting.originalTranscript = text
                 
@@ -174,19 +206,34 @@ final class RefinementCoordinator {
                 
                 // Save to disk
                 saveRefinedTranscript(meeting, text: refinedText)
-                print("[RefinementCoordinator] Refinement completed successfully")
+                logger.info("Refinement completed successfully")
+                
+                // Notify that meeting was updated (for export)
+                onMeetingUpdated?(meeting)
             } else {
-                print("[RefinementCoordinator] No transcript blocks or text available for refinement")
+                logger.warning("No transcript blocks or text available for refinement")
                 meetingBeingRefined = nil
                 return
             }
             
             // Clear refinement state
             meetingBeingRefined = nil
-            
         } catch {
             // Error is already set in refinementService
-            print("[RefinementCoordinator] Refinement failed: \(error)")
+            logger.error("Refinement failed: \(error)")
+            
+            // Propagate warning to UI (unless cancelled)
+            if !(error is CancellationError) {
+                let details = """
+                    LLM refinement failed for: \(meeting.title)
+                    Error: \(error.localizedDescription)
+                    
+                    The original transcript is still available.
+                    You can try refinement again later.
+                    """
+                onWarning?("Refinement failed", details, true)
+            }
+            
             meetingBeingRefined = nil
         }
     }
@@ -210,7 +257,7 @@ final class RefinementCoordinator {
             do {
                 try await llmManager.loadModel(activeModel)
             } catch {
-                print("[RefinementCoordinator] Failed to load LLM model for segment refinement: \(error)")
+                logger.error("Failed to load LLM model for segment refinement: \(error)")
                 return
             }
         }
@@ -230,9 +277,8 @@ final class RefinementCoordinator {
             
             // Update meeting transcript display
             updateMeetingTranscriptDisplay(meeting)
-            
         } catch {
-            print("[RefinementCoordinator] Segment refinement failed: \(error)")
+            logger.error("Segment refinement failed: \(error)")
         }
     }
     
@@ -256,7 +302,12 @@ final class RefinementCoordinator {
     }
     
     /// Update segmented meeting transcript display with segment headers
-    func updateSegmentedMeetingTranscriptDisplay(_ meeting: MeetingHistoryItem, with blocks: [TranscriptBlock], segmentNumber: Int, segmentStartTime: Date) {
+    func updateSegmentedMeetingTranscriptDisplay(
+        _ meeting: MeetingHistoryItem,
+        with blocks: [TranscriptBlock],
+        segmentNumber: Int,
+        segmentStartTime: Date
+    ) {
         // Build transcript with segment headers
         var transcriptParts: [String] = []
         
@@ -265,16 +316,24 @@ final class RefinementCoordinator {
             if segment.segmentNumber > 1 {
                 let formatter = DateFormatter()
                 formatter.dateFormat = "h:mm a"
-                transcriptParts.append("\n---\n### Segment \(segment.segmentNumber) (resumed at \(formatter.string(from: segment.startTime)))\n")
+                transcriptParts.append(
+                    """
+                    
+                    ---
+                    ### Segment \(segment.segmentNumber) (resumed at \(formatter.string(from: segment.startTime)))
+                    
+                    """
+                )
             }
             
             // Use refined blocks if available and showing refined, otherwise use original
             let blocksToUse = (meeting.isShowingRefined && segment.isRefined) ?
-                (segment.refinedBlocks ?? segment.originalBlocks) :
-                segment.originalBlocks
+                (segment.refinedBlocks ?? segment.originalBlocks) : segment.originalBlocks
             
             for block in blocksToUse {
-                transcriptParts.append("**\(block.speaker.rawValue.capitalized)** _[\(block.formattedStartTime)]_\n\n\(block.text)")
+                transcriptParts.append(
+                    "**\(block.speaker.rawValue.capitalized)** _[\(block.formattedStartTime)]_\n\n\(block.text)"
+                )
             }
         }
         
@@ -306,7 +365,7 @@ final class RefinementCoordinator {
                 filename: nil  // Use default "transcript.md"
             )
         } catch {
-            print("[RefinementCoordinator] Failed to save refined transcript: \(error)")
+            logger.error("Failed to save refined transcript: \(error)")
         }
     }
     
@@ -339,7 +398,7 @@ final class RefinementCoordinator {
             """
             try content.write(to: transcriptURL, atomically: true, encoding: .utf8)
         } catch {
-            print("[RefinementCoordinator] Failed to save refined transcript: \(error)")
+            logger.error("Failed to save refined transcript: \(error)")
         }
     }
     

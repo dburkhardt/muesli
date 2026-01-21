@@ -1,45 +1,95 @@
 #!/bin/bash
 # Automatic worktree configuration script
-# Reads .cursorworktrees.json and applies app identity configuration
+# Checks for per-branch .worktree-config.json first, then falls back to .cursorworktrees.json
 
 set -e
 
 # Detect worktree suffix from current directory
 WORKTREE_PATH=$(pwd)
-SUFFIX=$(basename "$WORKTREE_PATH")
+GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "$WORKTREE_PATH")
 
-echo "🔍 Detected worktree suffix: $SUFFIX"
+echo "🔍 Detected working directory: $WORKTREE_PATH"
 
-# Check if .cursorworktrees.json exists
-CONFIG_FILE="$WORKTREE_PATH/.cursorworktrees.json"
-if [ ! -f "$CONFIG_FILE" ]; then
-    # Try parent directory (git root)
-    CONFIG_FILE=$(git rev-parse --show-toplevel 2>/dev/null)/.cursorworktrees.json
-fi
-
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "❌ Error: .cursorworktrees.json not found"
-    echo "   Please create it or run manual configuration"
-    exit 1
-fi
-
-echo "📄 Reading configuration from: $CONFIG_FILE"
-
-# Extract configuration using jq or grep
-if command -v jq &> /dev/null; then
-    BUNDLE_ID=$(jq -r ".worktrees.\"$SUFFIX\".bundleId // empty" "$CONFIG_FILE")
-    PRODUCT_NAME=$(jq -r ".worktrees.\"$SUFFIX\".productName // empty" "$CONFIG_FILE")
+# Priority 1: Check for per-branch indicator file (.worktree-config.json)
+BRANCH_CONFIG="$WORKTREE_PATH/.worktree-config.json"
+if [ -f "$BRANCH_CONFIG" ]; then
+    echo "✓ Found per-branch indicator file: $BRANCH_CONFIG"
+    
+    # Extract configuration using jq or grep
+    if command -v jq &> /dev/null; then
+        NEEDS_WORKTREE=$(jq -r ".needsWorktree // false" "$BRANCH_CONFIG")
+        
+        if [ "$NEEDS_WORKTREE" != "true" ]; then
+            echo "⚠️  This branch does not need worktree isolation (needsWorktree: $NEEDS_WORKTREE)"
+            echo "   No configuration changes needed. Exiting."
+            exit 0
+        fi
+        
+        SUFFIX=$(jq -r ".suffix // empty" "$BRANCH_CONFIG")
+        BUNDLE_ID=$(jq -r ".bundleId // empty" "$BRANCH_CONFIG")
+        PRODUCT_NAME=$(jq -r ".productName // empty" "$BRANCH_CONFIG")
+        REASON=$(jq -r ".reason // \"not specified\"" "$BRANCH_CONFIG")
+        
+        echo "📋 Configuration from branch indicator:"
+        echo "   Suffix: $SUFFIX"
+        echo "   Bundle ID: $BUNDLE_ID"
+        echo "   Product Name: $PRODUCT_NAME"
+        echo "   Reason: $REASON"
+    else
+        echo "⚠️  jq not found, cannot parse .worktree-config.json"
+        echo "   Install jq with: brew install jq"
+        exit 1
+    fi
+    
+    if [ -z "$SUFFIX" ] || [ -z "$BUNDLE_ID" ] || [ -z "$PRODUCT_NAME" ]; then
+        echo "❌ Error: Invalid configuration in $BRANCH_CONFIG"
+        echo "   Required fields: suffix, bundleId, productName"
+        exit 1
+    fi
+    
+# Priority 2: Fall back to legacy .cursorworktrees.json (backward compatibility)
 else
-    # Fallback to pattern matching
-    BUNDLE_ID="com.muesli.app.$SUFFIX"
-    PRODUCT_NAME="Muesli-$SUFFIX"
+    SUFFIX=$(basename "$WORKTREE_PATH")
+    echo "⚠️  No per-branch indicator file found (.worktree-config.json)"
+    echo "   Falling back to legacy .cursorworktrees.json lookup"
+    echo "   Detected suffix from directory name: $SUFFIX"
+    
+    # Check if .cursorworktrees.json exists
+    CONFIG_FILE="$GIT_ROOT/.cursorworktrees.json"
+    
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo ""
+        echo "❌ Error: No worktree configuration found"
+        echo ""
+        echo "Options:"
+        echo "  1. Create per-branch indicator: .worktree-config.json (recommended)"
+        echo "     See .worktree-config.json.template for example"
+        echo ""
+        echo "  2. Add entry to legacy .cursorworktrees.json at repo root"
+        echo ""
+        echo "If this branch doesn't need worktree isolation, no action needed."
+        exit 1
+    fi
+    
+    echo "📄 Reading configuration from: $CONFIG_FILE"
+    
+    # Extract configuration using jq or grep
+    if command -v jq &> /dev/null; then
+        BUNDLE_ID=$(jq -r ".worktrees.\"$SUFFIX\".bundleId // empty" "$CONFIG_FILE")
+        PRODUCT_NAME=$(jq -r ".worktrees.\"$SUFFIX\".productName // empty" "$CONFIG_FILE")
+    else
+        # Fallback to pattern matching
+        BUNDLE_ID="com.muesli.app.$SUFFIX"
+        PRODUCT_NAME="Muesli-$SUFFIX"
+    fi
+    
+    if [ -z "$BUNDLE_ID" ]; then
+        echo "⚠️  No configuration found for suffix '$SUFFIX'"
+        echo "   Using defaults: $BUNDLE_ID, $PRODUCT_NAME"
+    fi
 fi
 
-if [ -z "$BUNDLE_ID" ]; then
-    echo "⚠️  No configuration found for suffix '$SUFFIX'"
-    echo "   Using defaults: $BUNDLE_ID, $PRODUCT_NAME"
-fi
-
+echo ""
 echo "🔧 Applying configuration:"
 echo "   Bundle ID: $BUNDLE_ID"
 echo "   Product Name: $PRODUCT_NAME"
@@ -80,6 +130,10 @@ else
     echo ""
     echo "Next steps:"
     echo "  1. Review changes: git diff $PROJECT_FILE"
-    echo "  2. Commit: git add $PROJECT_FILE && git commit -m 'Configure worktree app identity: $SUFFIX'"
+    if [ -f "$BRANCH_CONFIG" ]; then
+        echo "  2. Commit: git add .worktree-config.json $PROJECT_FILE && git commit -m 'Configure worktree isolation for branch'"
+    else
+        echo "  2. Commit: git add $PROJECT_FILE && git commit -m 'Configure worktree app identity: $SUFFIX'"
+    fi
     echo "  3. Push: git push -u origin \$(git branch --show-current)"
 fi

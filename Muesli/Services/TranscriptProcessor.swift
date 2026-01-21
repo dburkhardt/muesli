@@ -5,7 +5,6 @@ import Foundation
 @Observable
 @MainActor
 final class TranscriptProcessor {
-    
     // MARK: - Configuration
     
     /// Maximum words per block before forcing a split
@@ -44,9 +43,11 @@ final class TranscriptProcessor {
             "\\(breathing\\)",
             
             // General patterns for Whisper sound descriptions
-            "\\([^)]*\\b\\w+ing\\b[^)]*\\)",  // Any parenthetical with -ing word (cheering, wailing, ringing, etc.)
-            "\\([^)]*\\b(whistle|siren|bell|chime|horn|alarm|beep|buzz|click|bang|crash|thud)\\b[^)]*\\)",  // Sound words
-            "\\([^)]*\\b(audience|crowd|people|someone|something)\\b[^)]*\\)",  // Generic subjects often in annotations
+            "\\([^)]*\\b\\w+ing\\b[^)]*\\)",  // Any parenthetical with -ing word
+            // Sound words (whistle, siren, bell, etc.)
+            "\\([^)]*\\b(whistle|siren|bell|chime|horn|alarm|beep|buzz|click|bang|crash|thud)\\b[^)]*\\)",
+            // Generic subjects often in annotations
+            "\\([^)]*\\b(audience|crowd|people|someone|something)\\b[^)]*\\)",
             
             // Bracketed annotations
             "\\[.*?\\]",  // Any bracketed annotation (non-greedy)
@@ -57,7 +58,7 @@ final class TranscriptProcessor {
             "\\(.*?playing.*?\\)",
             "\\(.*?speaking.*?foreign.*?\\)",
             "♪[^♪]*♪",  // Music notes
-            "\\.\\.\\.$",  // Trailing ellipsis only
+            "\\.\\.\\.$"  // Trailing ellipsis only
         ]
         let pattern = patterns.joined(separator: "|")
         return try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
@@ -147,6 +148,11 @@ final class TranscriptProcessor {
     private func filterArtifacts(_ text: String) -> String? {
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         
+        // Check for common Whisper hallucinations on silence first
+        if isHallucination(cleaned) {
+            return nil
+        }
+        
         guard let regex = artifactRegex else { return cleaned }
         
         // Remove all artifact patterns
@@ -166,6 +172,67 @@ final class TranscriptProcessor {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         
         return cleaned.isEmpty ? nil : cleaned
+    }
+    
+    /// Detect common Whisper hallucinations that occur on silence/blank audio
+    private func isHallucination(_ text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Strip end-of-sentence punctuation but preserve hyphens (for "bye-bye", etc.)
+        // Only remove: . , ! ? ; : " ' ( ) [ ] { }
+        let endPunctuation = CharacterSet(charactersIn: ".,!?;:\"'()[]{}…")
+        let cleanedComponents = lower.components(separatedBy: endPunctuation)
+        let cleanText = cleanedComponents.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Split into words (punctuation removed but hyphens preserved)
+        let words = cleanText.split(separator: " ").map { String($0) }
+        
+        // Filter very short segments (< 3 words) - often noise at recording boundaries
+        if words.count < 3 {
+            // Allow short segments that contain actual content words
+            // But filter common filler words and noise artifacts
+            let fillerWords: Set<String> = [
+                "uh", "um", "hmm", "ah", "eh", "oh", "huh", "mhm", "mmm", "yeah", "yep", "nope", "okay"
+            ]
+            let hasOnlyFiller = words.allSatisfy { fillerWords.contains($0) }
+            if hasOnlyFiller {
+                return true
+            }
+        }
+        
+        // Detect repetitive text (common hallucination pattern)
+        // e.g. "Thank you. Thank you. Thank you."
+        if let firstWord = words.first, words.count >= 3 {
+            let isAllSameWord = words.allSatisfy { $0 == firstWord }
+            if isAllSameWord {
+                return true
+            }
+        }
+        
+        // Detect common Whisper hallucinations on blank audio
+        let hallucinations = [
+            "thank you",
+            "thanks for watching",
+            "thank you for watching",
+            "subscribe",
+            "like and subscribe",
+            "bye",
+            "bye-bye",
+            "goodbye",
+            "see you next time",
+            "thanks for listening",
+            "you",
+            "i",
+            "the",
+            "a"
+        ]
+        
+        // Check against clean text (hyphens preserved)
+        if hallucinations.contains(cleanText) {
+            return true
+        }
+        
+        return false
     }
     
     /// Add a segment to the blocks array, handling merging logic

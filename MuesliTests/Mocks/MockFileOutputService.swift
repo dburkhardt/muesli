@@ -1,16 +1,16 @@
-import Foundation
 import CoreMedia
+import Foundation
 @testable import Muesli
 
 /// Mock implementation of FileOutputService for testing
 final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendable {
-    
     // MARK: - State
     
-    private(set) var _isWriting: Bool = false
-    var isWriting: Bool { _isWriting }
+    private(set) var isWritingInternal: Bool = false
+    var isWriting: Bool { isWritingInternal }
     
-    private var outputDirectory: URL = FileManager.default.temporaryDirectory.appendingPathComponent("MockMeetingTranscripts")
+    private var outputDirectory: URL =
+        FileManager.default.temporaryDirectory.appendingPathComponent("MockMeetingTranscripts")
     private var currentWriteDirectory: URL?
     
     // MARK: - Test Control Properties
@@ -22,7 +22,11 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
     var shouldFailResumeWriting: Bool = false
     var resumeWritingError: Error = FileOutputService.OutputError.directoryCreationFailed
     var shouldFailSaveTranscript: Bool = false
-    var saveTranscriptError: Error = NSError(domain: "MockFileOutputService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Mock save error"])
+    var saveTranscriptError: Error = NSError(
+        domain: "MockFileOutputService",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Mock save error"]
+    )
     
     // MARK: - Call Tracking
     
@@ -71,7 +75,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         
         currentWriteDirectory = directory
-        _isWriting = true
+        isWritingInternal = true
         return directory
     }
     
@@ -87,7 +91,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
             throw stopWritingError
         }
         
-        _isWriting = false
+        isWritingInternal = false
         return currentWriteDirectory ?? outputDirectory
     }
     
@@ -100,7 +104,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         }
         
         currentWriteDirectory = directory
-        _isWriting = true
+        isWritingInternal = true
         return directory
     }
     
@@ -114,7 +118,13 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         }
     }
     
-    func saveTranscriptBlocks(_ blocks: [TranscriptBlock], title: String, date: Date, to directory: URL, filename: String?) throws {
+    func saveTranscriptBlocks(
+        _ blocks: [TranscriptBlock],
+        title: String,
+        date: Date,
+        to directory: URL,
+        filename: String?
+    ) throws {
         saveTranscriptBlocksCallCount += 1
         lastSavedBlocks = blocks
         lastSavedTitle = title
@@ -129,7 +139,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
     
     /// Reset all state for next test
     func reset() {
-        _isWriting = false
+        isWritingInternal = false
         currentWriteDirectory = nil
         shouldFailStartWriting = false
         shouldFailStopWriting = false

@@ -4,7 +4,6 @@ import Foundation
 /// Mock implementation of LLMManager for testing
 @MainActor
 final class MockLLMManager: LLMManagerProtocol {
-    
     // MARK: - State
     
     var downloadStates: [LLMManager.LLMModel: LLMManager.DownloadState] = [:]

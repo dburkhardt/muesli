@@ -4,7 +4,6 @@ import Foundation
 /// Mock implementation of PermissionManager for testing
 @MainActor
 final class MockPermissionManager: PermissionManagerProtocol {
-    
     // MARK: - State
     
     var hasScreenRecordingPermission: Bool = false
@@ -15,10 +14,16 @@ final class MockPermissionManager: PermissionManagerProtocol {
         hasScreenRecordingPermission && hasMicrophonePermission
     }
     
+    // MARK: - Awaiting Settings State
+    
+    var awaitingScreenRecordingFromSettings: Bool = false
+    var awaitingMicrophoneFromSettings: Bool = false
+    
     // MARK: - Test Control Properties
     
     var screenRecordingPermissionAsyncResult: Bool = false
     var microphonePermissionRequestResult: Bool = false
+    var verifyScreenRecordingResult: Bool = false
     
     // MARK: - Call Tracking
     
@@ -28,6 +33,9 @@ final class MockPermissionManager: PermissionManagerProtocol {
     var requestMicrophoneCallCount: Int = 0
     var openMicrophoneSettingsCallCount: Int = 0
     var refreshPermissionsCallCount: Int = 0
+    var markAwaitingScreenRecordingCallCount: Int = 0
+    var markAwaitingMicrophoneCallCount: Int = 0
+    var verifyScreenRecordingCallCount: Int = 0
     
     // MARK: - PermissionManagerProtocol
     
@@ -59,6 +67,22 @@ final class MockPermissionManager: PermissionManagerProtocol {
         return (hasScreenRecordingPermission, hasMicrophonePermission)
     }
     
+    func markAwaitingScreenRecordingFromSettings() {
+        markAwaitingScreenRecordingCallCount += 1
+        awaitingScreenRecordingFromSettings = true
+    }
+    
+    func markAwaitingMicrophoneFromSettings() {
+        markAwaitingMicrophoneCallCount += 1
+        awaitingMicrophoneFromSettings = true
+    }
+    
+    func verifyScreenRecordingAfterRequest() async -> Bool {
+        verifyScreenRecordingCallCount += 1
+        hasScreenRecordingPermission = verifyScreenRecordingResult
+        return verifyScreenRecordingResult
+    }
+    
     // MARK: - Test Helpers
     
     /// Grant all permissions
@@ -67,6 +91,7 @@ final class MockPermissionManager: PermissionManagerProtocol {
         hasMicrophonePermission = true
         screenRecordingPermissionAsyncResult = true
         microphonePermissionRequestResult = true
+        verifyScreenRecordingResult = true
         isMicrophonePermissionDenied = false
     }
     
@@ -76,6 +101,7 @@ final class MockPermissionManager: PermissionManagerProtocol {
         hasMicrophonePermission = false
         screenRecordingPermissionAsyncResult = false
         microphonePermissionRequestResult = false
+        verifyScreenRecordingResult = false
     }
     
     /// Reset all state for next test
@@ -83,13 +109,19 @@ final class MockPermissionManager: PermissionManagerProtocol {
         hasScreenRecordingPermission = false
         hasMicrophonePermission = false
         isMicrophonePermissionDenied = false
+        awaitingScreenRecordingFromSettings = false
+        awaitingMicrophoneFromSettings = false
         screenRecordingPermissionAsyncResult = false
         microphonePermissionRequestResult = false
+        verifyScreenRecordingResult = false
         checkScreenRecordingAsyncCallCount = 0
         requestScreenRecordingCallCount = 0
         openScreenRecordingSettingsCallCount = 0
         requestMicrophoneCallCount = 0
         openMicrophoneSettingsCallCount = 0
         refreshPermissionsCallCount = 0
+        markAwaitingScreenRecordingCallCount = 0
+        markAwaitingMicrophoneCallCount = 0
+        verifyScreenRecordingCallCount = 0
     }
 }

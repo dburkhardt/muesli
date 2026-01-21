@@ -11,7 +11,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 
 | Aspect | Value |
 |--------|-------|
-| Platform | macOS 14+ (Sonoma) |
+| Platform | macOS 26+ |
 | Language | Swift 6 |
 | UI | SwiftUI with `@Observable` |
 | Architecture | `MuesliViewModel` (app state) + `RecordingSession` (per-recording) |
@@ -26,22 +26,56 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 3. **Check in frequently** — confirm approach before significant work; report progress at milestones
 4. **Native patterns** — Swift 6 concurrency, `@Observable`, one type per file
 5. **UI principle** — "Granola-inspired": minimal, clean, fast
-6. **Track future work** — when asked to "add a todo" or "note this for later", add it to `TODO.md` and continue working without interruption
+6. **Track future work** — when asked to "add a todo" or "note this for later", suggest creating a GitHub Issue and continue working
+7. **Preserve debugging code** — do not remove print statements, Logger calls, or temporary debugging code without asking the user first
 
 ## Commands
 
-**Build & Launch** (main branch):
+**Build & Launch** (recommended):
+
+The build takes 5-8 minutes. **Run with `nohup`** and monitor via log file:
+
 ```bash
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-killall Muesli 2>/dev/null
-xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug build 2>&1 | tee "build-${TIMESTAMP}.txt"
-open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.app
+# Step 1: Start the build with nohup (REQUIRED for long builds)
+nohup ./scripts/build-and-launch.sh > /dev/null 2>&1 &
+
+# Step 2: Check if build is still running
+cat /tmp/muesli-build.lock  # Shows PID if running, missing if done
+
+# Step 3: Find and monitor the log file
+ls -t /tmp/muesli-build-*.log | head -1                          # Find latest log
+tail -30 "$(ls -t /tmp/muesli-build-*.log | head -1)"            # View recent output
+grep "Build & Launch Complete" /tmp/muesli-build-*.log           # Check if finished
+grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)"       # Check for errors
 ```
 
-**For feature branches**, replace `Muesli` with `Muesli-<branch-suffix>` (see Branch Development below).
+**Build completion indicators** in log file:
+- `"Build & Launch Complete"` — Success, app is running
+- `"Build Complete (--build-only)"` — Success, app not launched
+- `"BUILD SUCCEEDED"` — xcodebuild finished successfully
+- `"error:"` — Build failed, check log for details
+
+**Build & Launch options**:
+```bash
+./scripts/build-and-launch.sh              # Deep clean + build (DEFAULT - always use this)
+./scripts/build-and-launch.sh --build-only # Build without launching
+./scripts/build-and-launch.sh --no-log     # Disable logging to file
+./scripts/build-and-launch.sh --dry-run    # Show what would happen
+```
+
+**What the script does** (deep clean + logging by default):
+- Logs all output to `/tmp/muesli-build-TIMESTAMP.log` (strips ANSI colors)
+- Uses lock file `/tmp/muesli-build.lock` to prevent parallel builds
+- Removes DerivedData, Launch Services cache, Swift PM cache, and module caches
+- Runs `xcodebuild clean build` to ensure all code changes are compiled
+
+**Advanced options** (rarely needed):
+- `--preserve-caches` — Skip cache clearing (NOT recommended; stale caches cause confusing issues)
+- `--incremental` — Use cached build (NOT recommended; may miss code changes)
 
 **Other commands**:
-- Test: `xcodebuild ... test 2>&1 | tee "test-${TIMESTAMP}.txt"`
+- Test: `xcodebuild ... test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"`
+- Test with coverage: `./scripts/generate-coverage.sh`
 - Clean: `xcodebuild ... clean`
 - Reset permissions: `tccutil reset ScreenCapture com.muesli.app && tccutil reset Microphone com.muesli.app`
 - Uninstall completely (interactive): `./scripts/uninstall.sh`
@@ -49,7 +83,46 @@ open ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli.
 - Create DMG (modern): `./scripts/create-dmg-modern.sh [VERSION]`
 - Create DMG (legacy): `./scripts/create-dmg.sh [VERSION]`
 
-**Efficient workflows**: Save build/test output once with `| tee`, then grep the file. Never re-run to extract different info.
+**Efficient workflows**: Save build/test output once with `| tee` to `/tmp/`, then grep the file. Never re-run to extract different info.
+
+## Code Coverage
+
+Muesli tracks code coverage to ensure comprehensive testing and guide development efforts.
+
+**Coverage Tools**:
+- Native Xcode coverage collection (built-in, zero-config)
+- Codecov for reporting and trend tracking (free for open source)
+- Coverage badge in README shows current status
+
+**Coverage Thresholds**:
+- **Overall project**: 70% minimum (baseline)
+- **New code (PR diff)**: 80% minimum (enforced in CI)
+- **Critical paths**: 90%+ target (audio, transcription, file I/O)
+
+**Local Coverage Workflow**:
+```bash
+# Generate coverage report locally
+./scripts/generate-coverage.sh
+
+# View in Xcode:
+# 1. Open Muesli.xcodeproj
+# 2. Report Navigator (⌘9)
+# 3. Select latest test run
+# 4. Click 'Coverage' tab
+```
+
+**CI Integration**:
+- Every PR shows coverage diff in comments
+- Status check fails if diff coverage < 80%
+- Coverage reports uploaded to Codecov automatically
+- View trends at: https://codecov.io/gh/dburkhardt/muesli
+
+**Priority Areas for Coverage**:
+1. Controllers - RecordingController (core recording logic)
+2. Services - AudioCaptureService, TranscriptionService, FileOutputService
+3. Managers - ModelManager, MeetingHistoryManager, PreferencesManager
+4. Coordinators - TranscriptionCoordinator, RefinementCoordinator
+5. Views - Complex UI logic (lower priority than business logic)
 
 ## Release Process
 
@@ -122,6 +195,8 @@ Before creating a release tag, verify:
 
 **Build & Installation**:
 - [ ] Clean build succeeds: `xcodebuild clean build`
+- [ ] All tests pass: `xcodebuild test`
+- [ ] Code coverage meets thresholds (≥70% overall)
 - [ ] DMG creation succeeds: `./scripts/create-dmg-modern.sh` or `./scripts/create-dmg.sh`
 - [ ] DMG installs on fresh macOS installation
 - [ ] App launches without errors
@@ -189,7 +264,7 @@ Each release produces:
 
 **Build fails in CI**:
 - Check build logs in GitHub Actions
-- Verify Xcode version matches (15.2 on macos-14)
+- Verify Xcode version matches (26.x on macos-26)
 - Ensure all dependencies resolve correctly
 - Test build locally first: `./scripts/create-dmg.sh`
 
@@ -214,29 +289,80 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history and release notes.
 
 ## Branch Development
 
-When using git worktrees for parallel development, each branch needs a unique bundle ID.
+### Worktree Isolation (Optional)
+
+Most branches work fine in the standard workspace. However, when you need **parallel development** (testing multiple branches simultaneously), each branch needs a unique bundle ID.
 
 **Why**: macOS caches apps by bundle ID. Unique IDs enable side-by-side testing and correct TCC permissions.
 
-**Setup checklist**:
-1. Get branch: `git branch --show-current`
-2. Sanitize name: `feature/foo-bar` → `feature-foo-bar` (slashes → dashes, ~25 chars max)
+### When to Use Worktree Isolation
+
+**Use worktree config when**:
+- Parallel development (testing multiple branches simultaneously)
+- Long-lived feature branches
+- Side-by-side comparison with main
+- Need TCC permission isolation between branches
+
+**Skip worktree config when**:
+- Short-lived branches
+- Quick fixes or hotfixes
+- Single-branch workflow
+- Not testing multiple builds simultaneously
+
+### Agent Workflow: Creating New Branches
+
+When a user asks to create a new branch, **always prompt**:
+
+> "Should this branch need worktree isolation for parallel development? (yes/no)"
+
+**If yes**: Create `.worktree-config.json` indicator file and apply bundle ID configuration
+**If no**: Create standard branch, work normally in main workspace
+
+### Worktree Indicator File
+
+Branches that need worktree isolation include a `.worktree-config.json` file:
+
+```json
+{
+  "needsWorktree": true,
+  "suffix": "xxx",
+  "bundleId": "com.muesli.app.xxx",
+  "productName": "Muesli-xxx",
+  "reason": "parallel development with main branch"
+}
+```
+
+**Suffix naming**: Sanitize branch name to 3-letter code: `feature/foo-bar` → `foo` or use random 3-letter code.
+
+### Setup Checklist (When Indicator Present)
+
+1. Check if `.worktree-config.json` exists in branch root
+2. If present, read suffix from file
 3. In `project.pbxproj`, update BOTH Debug and Release:
-   - `PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.<branch-suffix>;`
-   - `PRODUCT_NAME = "Muesli-<branch-suffix>";`
-4. Update TCC reset script in same file to use `com.muesli.app.<branch-suffix>`
-5. Commit: `git commit -m "Configure bundle ID for branch: <branch>"`
+   - `PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app.<suffix>;`
+   - `PRODUCT_NAME = "Muesli-<suffix>";`
+4. Update TCC reset script in same file to use `com.muesli.app.<suffix>`
+5. Commit: `git add .worktree-config.json project.pbxproj && git commit -m "Configure worktree isolation for branch"`
 6. Push: `git push -u origin <branch>`
+
+Alternatively, use the automated script: `./scripts/configure-worktree.sh`
 
 **main branch**: Always `com.muesli.app` (no suffix). Never commit bundle ID changes to main.
 
-**Cleanup after merge**:
+### Cleanup After Merge
+
 ```bash
 killall Muesli-<suffix> 2>/dev/null
 rm -rf ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Debug/Muesli-<suffix>.app
 tccutil reset ScreenCapture com.muesli.app.<suffix> 2>/dev/null || true
 tccutil reset Microphone com.muesli.app.<suffix> 2>/dev/null || true
 ```
+
+### Backward Compatibility
+
+The project also supports `.cursorworktrees.json` (global config at repo root) for managing multiple worktrees. The configure script checks:
+1. `.worktree-config.json` in branch (preferred, per-branch)
+2. `.cursorworktrees.json` at repo root (legacy, global)
 
 **Troubleshooting**: If bundle ID doesn't match branch, verify with `grep PRODUCT_BUNDLE_IDENTIFIER project.pbxproj | head -1` and reconfigure.
 
@@ -321,6 +447,82 @@ Single source of truth. ViewModel accesses via computed property. OnboardingView
 ### Onboarding Window
 Use `NSWindow` + `NSHostingController` in AppDelegate. Don't auto-advance welcome screen. Poll permissions only on permission screens.
 
+## Debugging Guidance
+
+### Runtime Diagnostic Logs
+
+Muesli includes a `DiagnosticLogger` that writes structured logs to disk for debugging release build issues.
+
+**Log Location**: `~/Library/Application Support/Muesli/Logs/`
+
+**File Format**: `muesli-YYYY-MM-DD.log` (one file per day, auto-rotates)
+
+**Log Categories**:
+- `BUILD` — Bundle ID, version, Info.plist keys (logged on app launch)
+- `PERMISSION` — Permission checks/requests with status values
+- `ONBOARDING` — Step transitions and button tap events
+- `APP` — General app events
+
+**Accessing Logs**:
+```bash
+# View today's log
+cat ~/Library/Application\ Support/Muesli/Logs/muesli-$(date +%Y-%m-%d).log
+
+# Search for permission-related entries
+grep PERMISSION ~/Library/Application\ Support/Muesli/Logs/*.log
+
+# Watch log in real-time
+tail -f ~/Library/Application\ Support/Muesli/Logs/muesli-$(date +%Y-%m-%d).log
+```
+
+**In-App Access**: Menu Bar → Debug Info... (available during both onboarding and normal operation)
+
+**Log Retention**: 7 days (auto-cleanup on app launch)
+
+**Privacy Policy**: Logs contain only build/permission metadata. NO user content (transcripts, meeting titles, file paths).
+
+### Before Starting a Debug Session
+
+**Check the debug log knowledge base first**: [`docs/debug-logs/`](docs/debug-logs/)
+
+Search for similar issues before investigating from scratch:
+```bash
+# Search by category
+grep -r "Category: Audio" docs/debug-logs/
+grep -r "Category: Permissions" docs/debug-logs/
+
+# Search by symptom or error
+grep -r "permission.*denied" docs/debug-logs/
+grep -r "CancellationError" docs/debug-logs/
+
+# Search by component
+grep -r "PermissionManager" docs/debug-logs/
+grep -r "TranscriptionService" docs/debug-logs/
+```
+
+The debug logs capture:
+- Known bugs and their fixes
+- Root cause analysis
+- Code changes that resolved issues
+- Regression tests that prevent recurrence
+
+### After Fixing a Bug
+
+**Document the fix in a debug log**: Use the Cursor command or see [`.cursor/commands/create_debug_log.md`](.cursor/commands/create_debug_log.md)
+
+1. Create a new debug log file: `docs/debug-logs/YYYY-MM-DD_description.md`
+2. Fill in the template (see [`docs/debug-logs/template.md`](docs/debug-logs/template.md)):
+   - Problem description
+   - Symptoms/error messages
+   - Root cause analysis
+   - Fix description
+   - Affected files
+   - Code snippets (before/after)
+3. Add regression test if applicable
+4. Update index in [`docs/debug-logs/README.md`](docs/debug-logs/README.md)
+
+This builds a searchable knowledge base that helps future debugging sessions.
+
 ## Git Workflow (GitHub Flow)
 
 Simple, agent-friendly branching. All work happens in feature branches merged to `main` via PRs.
@@ -343,5 +545,7 @@ Simple, agent-friendly branching. All work happens in feature branches merged to
 - GitHub CLI (`gh`) — for PR management from command line
 
 **Testing**: Use Zoom/Meet/Teams or QuickTime Player. Verify permissions, recording cycles, transcript accuracy.
+
+**Debugging Knowledge Base**: [`docs/debug-logs/`](docs/debug-logs/) — searchable archive of past debugging sessions, root causes, and fixes. Check here before investigating complex issues.
 
 **Reference projects**: Azayaka (menu bar + SCK), WhisperKit Sample, Apple's ScreenCaptureKit Sample

@@ -3,7 +3,6 @@ import Foundation
 
 /// Mock implementation of TranscriptionService for testing
 final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked Sendable {
-    
     // MARK: - State
     
     var transcriptionMode: TranscriptionService.TranscriptionMode = .live
@@ -13,9 +12,20 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     // MARK: - Test Control Properties
     
     var shouldFailInitialize: Bool = false
-    var initializeError: Error = NSError(domain: "MockTranscriptionService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Mock initialization error"])
+    var initializeError: Error = NSError(
+        domain: "MockTranscriptionService",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Mock initialization error"]
+    )
     var shouldFailPostProcessing: Bool = false
-    var postProcessingError: Error = NSError(domain: "MockTranscriptionService", code: 2, userInfo: [NSLocalizedDescriptionKey: "Mock post-processing error"])
+    var postProcessingError: Error = NSError(
+        domain: "MockTranscriptionService",
+        code: 2,
+        userInfo: [NSLocalizedDescriptionKey: "Mock post-processing error"]
+    )
+    
+    /// Simulated delay during initialization (for testing slow model loading)
+    var initializationDelay: TimeInterval = 0
     
     // MARK: - Call Tracking
     
@@ -25,6 +35,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     var appendSystemAudioCallCount: Int = 0
     var appendMicrophoneAudioCallCount: Int = 0
     var postProcessingCallCount: Int = 0
+    var setTranscriptHandlerCallCount: Int = 0
     var lastModelPath: URL?
     var lastRecordingStartTime: Date?
     
@@ -38,6 +49,11 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         initializeCallCount += 1
         lastModelPath = modelPath
         
+        // Simulate initialization delay (for testing slow model loading)
+        if initializationDelay > 0 {
+            try await Task.sleep(for: .seconds(initializationDelay))
+        }
+        
         if shouldFailInitialize {
             throw initializeError
         }
@@ -50,6 +66,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     }
     
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler) {
+        setTranscriptHandlerCallCount += 1
         transcriptHandler = handler
     }
     
@@ -87,8 +104,18 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         transcriptHandler?(segment)
     }
     
+    /// Simulate a transcript segment being generated with default values
+    func simulateTranscriptSegment() {
+        let segment = TranscriptionService.TranscriptSegment(text: "Test segment", timestamp: 0.0, speaker: .me)
+        transcriptHandler?(segment)
+    }
+    
     /// Simulate a transcript segment with given text and speaker
-    func simulateTranscript(text: String, speaker: TranscriptionService.TranscriptSegment.Speaker, timestamp: TimeInterval = 0) {
+    func simulateTranscript(
+        text: String,
+        speaker: TranscriptionService.TranscriptSegment.Speaker,
+        timestamp: TimeInterval = 0
+    ) {
         let segment = TranscriptionService.TranscriptSegment(text: text, timestamp: timestamp, speaker: speaker)
         transcriptHandler?(segment)
     }
@@ -100,12 +127,14 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         isTranscribing = false
         shouldFailInitialize = false
         shouldFailPostProcessing = false
+        initializationDelay = 0
         initializeCallCount = 0
         startTranscriptionCallCount = 0
         stopTranscriptionCallCount = 0
         appendSystemAudioCallCount = 0
         appendMicrophoneAudioCallCount = 0
         postProcessingCallCount = 0
+        setTranscriptHandlerCallCount = 0
         lastModelPath = nil
         lastRecordingStartTime = nil
         transcriptHandler = nil

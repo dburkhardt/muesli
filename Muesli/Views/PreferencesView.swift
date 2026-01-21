@@ -1,10 +1,13 @@
-import SwiftUI
+import os.log
 import ServiceManagement
+import SwiftUI
 
 /// Main Preferences view with tabbed sections for Models, Output, and General settings
 struct PreferencesView: View {
     @Bindable var viewModel: MuesliViewModel
     @Environment(PreferencesManager.self) private var preferencesManager
+    
+    private static let logger = Logger(subsystem: "com.muesli.app", category: "PreferencesView")
     
     var body: some View {
         TabView {
@@ -46,6 +49,11 @@ struct ModelsPreferencesTab: View {
 struct OutputPreferencesTab: View {
     @Environment(PreferencesManager.self) private var preferencesManager
     @State private var showDirectoryPicker = false
+    @State private var showExportDirectoryPicker = false
+    @State private var isExporting = false
+    @State private var exportCount: Int?
+    
+    private static let logger = Logger(subsystem: "com.muesli.app", category: "PreferencesView")
     
     var body: some View {
         @Bindable var prefs = preferencesManager
@@ -85,6 +93,74 @@ struct OutputPreferencesTab: View {
                 }
             }
             .padding()
+            
+            Divider()
+            
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Export for External Tools")
+                        .font(.headline)
+                    
+                    Toggle(isOn: $prefs.exportEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Automatic Export")
+                            Text("Export transcripts to a structured folder for MCP servers and IDE extensions.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    
+                    Divider()
+                    
+                    Text("Export Location")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    
+                    HStack {
+                        // Show current export directory path
+                        Text(preferencesManager.exportDirectory.path)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        
+                        Button("Choose...") {
+                            showExportDirectoryPicker = true
+                        }
+                        .disabled(!prefs.exportEnabled)
+                    }
+                    
+                    Button("Reset to Default") {
+                        preferencesManager.resetExportDirectory()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    .disabled(!prefs.exportEnabled)
+                    
+                    Divider()
+                    
+                    HStack {
+                        Button(isExporting ? "Exporting..." : "Export All Now") {
+                            Task {
+                                await exportAllMeetings()
+                            }
+                        }
+                        .disabled(isExporting || !prefs.exportEnabled)
+                        
+                        if let count = exportCount {
+                            Text("Exported \(count) meetings")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .padding()
         }
         .fileImporter(
             isPresented: $showDirectoryPicker,
@@ -97,9 +173,44 @@ struct OutputPreferencesTab: View {
                     preferencesManager.setOutputDirectory(url)
                 }
             case .failure(let error):
-                print("Failed to select directory: \(error)")
+                Self.logger.error("Failed to select directory: \(error)")
             }
         }
+        .fileImporter(
+            isPresented: $showExportDirectoryPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    preferencesManager.exportDirectory = url
+                }
+            case .failure(let error):
+                Self.logger.error("Failed to select export directory: \(error)")
+            }
+        }
+    }
+    
+    private func exportAllMeetings() async {
+        isExporting = true
+        exportCount = nil
+        
+        // Get the viewModel from the environment or create temporary export service
+        let exportService = ExportService()
+        let meetingHistoryService = MeetingHistoryService()
+        let meetings = meetingHistoryService.discoverMeetings()
+        
+        do {
+            let count = try await exportService.exportAllMeetings(meetings)
+            exportCount = count
+            Self.logger.info("Exported \(count) meetings")
+        } catch {
+            Self.logger.error("Failed to export meetings: \(error.localizedDescription)")
+            exportCount = 0
+        }
+        
+        isExporting = false
     }
 }
 
@@ -146,7 +257,12 @@ struct GeneralPreferencesTab: View {
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 250)
                     
-                    Text("Live mode transcribes during recording. Post-processing waits until the recording ends for potentially better accuracy.")
+                    Text(
+                        """
+                        Live mode transcribes during recording. Post-processing waits until the recording ends \
+                        for potentially better accuracy.
+                        """
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -163,12 +279,41 @@ struct GeneralPreferencesTab: View {
                     Toggle(isOn: $prefs.isEchoCancellationEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Echo Cancellation")
-                            Text("Remove echo from microphone audio caused by speakers. Improves transcription quality and saved audio files.")
+                            Text(
+                                """
+                                Remove echo from microphone audio caused by speakers. \
+                                Improves transcription quality and saved audio files.
+                                """
+                            )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
                     .toggleStyle(.switch)
+                    
+                    Divider()
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Audio Chunk Duration")
+                            Spacer()
+                            Text(String(format: "%.1f seconds", prefs.audioChunkDuration))
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
+                        
+                        Text(
+                            """
+                            Shorter chunks provide faster transcription but may reduce accuracy. \
+                            Longer chunks improve accuracy but increase latency. \
+                            Changes apply to new recordings only.
+                            """
+                        )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding()

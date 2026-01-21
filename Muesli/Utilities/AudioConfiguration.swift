@@ -19,11 +19,17 @@ enum AudioConfiguration {
     
     // MARK: - Transcription Timing
     
-    /// Duration of each transcription chunk (seconds)
+    /// Duration of each transcription chunk for live recordings (seconds)
     static let transcriptionChunkDuration: TimeInterval = 5.0
     
     /// Overlap between transcription chunks for continuity (seconds)
     static let transcriptionOverlapDuration: TimeInterval = 1.5
+    
+    /// Post-processing chunk duration (30 seconds - Whisper's optimal training window)
+    static let postProcessingChunkDuration: TimeInterval = 30.0
+    
+    /// Post-processing overlap (5 seconds - prevents word cutoffs at boundaries)
+    static let postProcessingOverlapDuration: TimeInterval = 5.0
     
     /// Minimum samples needed before processing (chunk duration at whisper sample rate)
     static var minSamplesForProcessing: Int {

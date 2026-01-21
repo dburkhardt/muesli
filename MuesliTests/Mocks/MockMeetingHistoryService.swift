@@ -4,7 +4,6 @@ import Foundation
 /// Mock implementation of MeetingHistoryService for testing
 @MainActor
 final class MockMeetingHistoryService: MeetingHistoryServiceProtocol {
-    
     // MARK: - Test Data
     
     /// Meetings to return from discoverMeetings()

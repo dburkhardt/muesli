@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
+import os.log
 
 /// Service for intelligent transcript chunk stitching
 /// Uses local LLM when available, falls back to heuristics otherwise
@@ -12,10 +13,10 @@ import MLXLMCommon
 /// - Natural text flow improvement
 @MainActor
 final class LLMStitchingService {
-    
     // MARK: - Dependencies
     
     private let llmManager: LLMManager
+    private let logger = LoggerFactory.logger(category: "LLMStitchingService")
     
     // MARK: - Configuration
     
@@ -48,7 +49,7 @@ final class LLMStitchingService {
             do {
                 return try await stitchWithLLM(chunks)
             } catch {
-                print("LLM stitching failed, falling back to heuristics: \(error)")
+                logger.warning("LLM stitching failed, falling back to heuristics: \(error.localizedDescription)")
                 return stitchWithHeuristics(chunks)
             }
         } else {
@@ -82,8 +83,13 @@ final class LLMStitchingService {
         // Generate using the model container
         let result = try await container.perform { context in
             // Prepare input messages
+            let systemMessage = """
+                You are a transcript cleaner. Your job is to merge overlapping transcript chunks into \
+                coherent text. Remove duplicated words/phrases at boundaries. Do not add or change content. \
+                Output only the cleaned text, nothing else.
+                """
             let messages: [Chat.Message] = [
-                .system("You are a transcript cleaner. Your job is to merge overlapping transcript chunks into coherent text. Remove duplicated words/phrases at boundaries. Do not add or change content. Output only the cleaned text, nothing else."),
+                .system(systemMessage),
                 .user(prompt)
             ]
             
@@ -131,7 +137,8 @@ final class LLMStitchingService {
     
     private func buildStitchingPrompt(_ chunks: [String]) -> String {
         """
-        Merge these overlapping transcript chunks into coherent text. Remove any duplicated words or phrases at the boundaries:
+        Merge these overlapping transcript chunks into coherent text. \
+        Remove any duplicated words or phrases at the boundaries:
         
         \(chunks.enumerated().map { "Chunk \($0 + 1): \($1)" }.joined(separator: "\n\n"))
         
@@ -243,19 +250,19 @@ final class LLMStitchingService {
     private func levenshteinDistance(_ s1: String, _ s2: String) -> Int {
         let s1Array = Array(s1)
         let s2Array = Array(s2)
-        let m = s1Array.count
-        let n = s2Array.count
+        let len1 = s1Array.count
+        let len2 = s2Array.count
         
-        if m == 0 { return n }
-        if n == 0 { return m }
+        if len1 == 0 { return len2 }
+        if len2 == 0 { return len1 }
         
-        var matrix = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
+        var matrix = Array(repeating: Array(repeating: 0, count: len2 + 1), count: len1 + 1)
         
-        for i in 0...m { matrix[i][0] = i }
-        for j in 0...n { matrix[0][j] = j }
+        for i in 0...len1 { matrix[i][0] = i }
+        for j in 0...len2 { matrix[0][j] = j }
         
-        for i in 1...m {
-            for j in 1...n {
+        for i in 1...len1 {
+            for j in 1...len2 {
                 let cost = s1Array[i - 1] == s2Array[j - 1] ? 0 : 1
                 matrix[i][j] = min(
                     matrix[i - 1][j] + 1,      // deletion
@@ -265,7 +272,7 @@ final class LLMStitchingService {
             }
         }
         
-        return matrix[m][n]
+        return matrix[len1][len2]
     }
 }
 
