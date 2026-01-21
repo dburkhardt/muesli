@@ -151,11 +151,35 @@ else
         log_info "Found Developer ID certificate: ${SIGNING_IDENTITY}"
         log_info "Signing app with hardened runtime..."
         
+        # CRITICAL: Include entitlements for hardened runtime
+        # Without --entitlements, microphone permission prompt won't appear
+        # See: https://developer.apple.com/documentation/security/hardened_runtime
+        ENTITLEMENTS_PATH="${PROJECT_ROOT}/Muesli/Muesli.entitlements"
+        
+        if [ ! -f "${ENTITLEMENTS_PATH}" ]; then
+            log_error "Entitlements file not found: ${ENTITLEMENTS_PATH}"
+            log_error "Hardened runtime requires entitlements for microphone access"
+            exit 1
+        fi
+        
+        log_info "Using entitlements: ${ENTITLEMENTS_PATH}"
+        
         if codesign --force --deep --options runtime \
             --sign "$SIGNING_IDENTITY" \
+            --entitlements "${ENTITLEMENTS_PATH}" \
             --timestamp \
             "${APP_PATH}"; then
             log_success "App signed successfully with Developer ID"
+            
+            # Verify entitlements were embedded
+            log_info "Verifying entitlements..."
+            if codesign -d --entitlements - "${APP_PATH}" 2>&1 | grep -q "audio-input"; then
+                log_success "Entitlements verified: com.apple.security.device.audio-input present"
+            else
+                log_error "CRITICAL: audio-input entitlement NOT found after signing!"
+                log_error "Microphone permission prompt will not appear with hardened runtime"
+                exit 1
+            fi
         else
             log_warning "Code signing failed, continuing with unsigned app"
         fi
