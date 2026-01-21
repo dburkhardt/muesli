@@ -48,7 +48,7 @@ jobs:
           xcode-version: 'latest-stable'
       
       - name: Cache Homebrew packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/Library/Caches/Homebrew
@@ -59,7 +59,7 @@ jobs:
             ${{ runner.os }}-homebrew-
       
       - name: Cache Swift packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .build
