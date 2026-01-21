@@ -84,27 +84,25 @@ jobs:
           xcrun xccov view --report --json "$COVERAGE_FILE" > coverage.json
           
           # Convert to LCOV format using a simple script
-          python3 -c "
-import json
-import sys
-
-with open('coverage.json', 'r') as f:
-    data = json.load(f)
-
-# Extract coverage data and convert to LCOV
-print('TN:')
-for target in data.get('targets', []):
-    for file_data in target.get('files', []):
-        path = file_data.get('path', '')
-        if not path or 'Test' in path:
-            continue
-        print(f'SF:{path}')
-        for func in file_data.get('functions', []):
-            line = func.get('lineNumber', 0)
-            exec_count = func.get('executionCount', 0)
-            print(f'DA:{line},{exec_count}')
-        print('end_of_record')
-" > coverage.lcov || echo "⚠️ LCOV conversion failed, uploading JSON"
+          python3 << 'PYTHON_SCRIPT' > coverage.lcov || echo "⚠️ LCOV conversion failed, uploading JSON"
+          import json
+          
+          with open('coverage.json', 'r') as f:
+              data = json.load(f)
+          
+          print('TN:')
+          for target in data.get('targets', []):
+              for file_data in target.get('files', []):
+                  path = file_data.get('path', '')
+                  if not path or 'Test' in path:
+                      continue
+                  print(f'SF:{path}')
+                  for func in file_data.get('functions', []):
+                      line = func.get('lineNumber', 0)
+                      exec_count = func.get('executionCount', 0)
+                      print(f'DA:{line},{exec_count}')
+                  print('end_of_record')
+          PYTHON_SCRIPT
           
           echo "✅ Coverage report generated"
       
