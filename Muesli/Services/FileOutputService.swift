@@ -213,47 +213,6 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         
         let presentationTime = CMSampleBufferGetPresentationTimeStamp(buffer)
         
-        // #region agent log
-        // Sample the incoming buffer to check for non-zero data
-        var maxSample: Float = 0.0
-        var sampleCount = 0
-        if let dataBuffer = CMSampleBufferGetDataBuffer(buffer) {
-            var length = 0
-            var dataPointer: UnsafeMutablePointer<Int8>?
-            let status = CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &dataPointer)
-            if status == noErr, let data = dataPointer {
-                let floatCount = length / 4
-                sampleCount = floatCount
-                let floatPointer = UnsafeRawPointer(data).assumingMemoryBound(to: Float.self)
-                for i in 0..<min(floatCount, 100) {
-                    let absVal = abs(floatPointer[i])
-                    if absVal > maxSample { maxSample = absVal }
-                }
-            }
-        }
-        struct FileLogCounter { nonisolated(unsafe) static var system = 0; nonisolated(unsafe) static var mic = 0; nonisolated(unsafe) static var micFirstLogged = false }
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let typeStr = type == .system ? "system" : "microphone"
-        if type == .system { FileLogCounter.system += 1 } else { FileLogCounter.mic += 1 }
-        let counter = type == .system ? FileLogCounter.system : FileLogCounter.mic
-        // Log first mic buffer unconditionally
-        if type == .microphone && !FileLogCounter.micFirstLogged {
-            FileLogCounter.micFirstLogged = true
-            let firstLogEntry = "{\"hypothesisId\":\"E\",\"location\":\"FileOutputService.appendAudioBuffer\",\"message\":\"FIRST microphone buffer received\",\"data\":{\"maxSample\":\(maxSample),\"sampleCount\":\(sampleCount),\"isWriting\":\(_isWriting)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let firstData = firstLogEntry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let firstHandle = FileHandle(forWritingAtPath: logPath) { firstHandle.seekToEndOfFile(); firstHandle.write(firstData); firstHandle.closeFile() }
-            }
-        }
-        if counter <= 3 || counter % 100 == 0 {
-            let logEntry = "{\"hypothesisId\":\"D\",\"location\":\"FileOutputService.appendAudioBuffer\",\"message\":\"Buffer received for writing\",\"data\":{\"type\":\"\(typeStr)\",\"maxSample\":\(maxSample),\"sampleCount\":\(sampleCount),\"bufferNum\":\(counter)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let data = logEntry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-            }
-        }
-        // #endregion
-        
         switch type {
         case .system:
             guard let writer = systemWriter, let input = systemAudioInput else { return }
@@ -271,30 +230,10 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             drainBufferQueue(&systemBufferQueue, to: input)
             
         case .microphone:
-            // #region agent log
-            struct MicWriterLogTracker { nonisolated(unsafe) static var firstWriteLogged = false }
-            if !MicWriterLogTracker.firstWriteLogged {
-                MicWriterLogTracker.firstWriteLogged = true
-                let writerNil = micWriter == nil
-                let inputNil = microphoneInput == nil
-                let writerStatus = micWriter?.status.rawValue ?? -1
-                let logEntry = "{\"hypothesisId\":\"E\",\"location\":\"FileOutputService.appendAudioBuffer.microphone\",\"message\":\"First mic write attempt\",\"data\":{\"micWriterNil\":\(writerNil),\"micInputNil\":\(inputNil),\"writerStatus\":\(writerStatus),\"micSessionStarted\":\(micSessionStarted)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-                if let data = logEntry.data(using: .utf8) {
-                    if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-                }
-            }
-            // #endregion
-            
             guard let writer = micWriter, let input = microphoneInput else { return }
             guard writer.status == .writing else { return }
             
             if !micSessionStarted {
-                // #region agent log
-                let sessionLogEntry = "{\"hypothesisId\":\"E\",\"location\":\"FileOutputService.appendAudioBuffer.microphone\",\"message\":\"Starting mic session\",\"data\":{\"presentationTime\":\(presentationTime.seconds)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-                if let sessionData = sessionLogEntry.data(using: .utf8) {
-                    if let sessionHandle = FileHandle(forWritingAtPath: logPath) { sessionHandle.seekToEndOfFile(); sessionHandle.write(sessionData); sessionHandle.closeFile() }
-                }
-                // #endregion
                 writer.startSession(atSourceTime: presentationTime)
                 micSessionStarted = true
             }

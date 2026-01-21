@@ -66,10 +66,10 @@ final class ModelManagerTests: XCTestCase {
     func testModelSizeDisplayNames() async {
         XCTAssertEqual(ModelManager.ModelSize.tiny.displayName, "Tiny")
         XCTAssertEqual(ModelManager.ModelSize.base.displayName, "Base")
-        XCTAssertEqual(ModelManager.ModelSize.small.displayName, "Small")
+        XCTAssertEqual(ModelManager.ModelSize.small.displayName, "Small (Recommended)")
         XCTAssertEqual(ModelManager.ModelSize.medium.displayName, "Medium")
         XCTAssertEqual(ModelManager.ModelSize.large.displayName, "Large v3")
-        XCTAssertEqual(ModelManager.ModelSize.largeTurbo.displayName, "Large v3 Turbo")
+        XCTAssertEqual(ModelManager.ModelSize.largeTurbo.displayName, "Large v3 Turbo (Best Performance)")
     }
     
     /// Test that all ModelSize cases have size descriptions
@@ -516,17 +516,20 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertTrue(modelManager.downloadedModels.contains(.base))
     }
     
-    /// Test that downloadedModels persists to UserDefaults
-    func testDownloadedModels_PersistsToUserDefaults() async {
-        modelManager.downloadedModels.insert(.tiny)
-        modelManager.downloadedModels.insert(.base)
+    /// Test that downloadedModels persists to UserDefaults via public API
+    /// Note: Uses existing createMockModelDirectory helper for consistency with other tests.
+    /// tearDown() automatically cleans up testModelDirectory recursively.
+    func testDownloadedModels_PersistsToUserDefaults() {
+        // Use existing helper for consistency (creates proper nested path structure)
+        let mockModelDir = createMockModelDirectory(for: .tiny)
         
-        // Manually trigger save (in real code, this happens via @Observable)
-        modelManager.saveDownloadedModelsToDefaults()
+        // Use public API to add model (triggers internal persistence)
+        let success = modelManager.useExistingModel(at: mockModelDir)
+        XCTAssertTrue(success, "useExistingModel should succeed with valid model directory")
         
+        // Verify persistence to UserDefaults
         if let saved = UserDefaults.standard.array(forKey: AppStorageKeys.downloadedWhisperModels) as? [String] {
-            XCTAssertTrue(saved.contains("tiny"))
-            XCTAssertTrue(saved.contains("base"))
+            XCTAssertTrue(saved.contains("tiny"), "tiny model should be persisted to UserDefaults")
         } else {
             XCTFail("downloadedModels not saved to UserDefaults")
         }

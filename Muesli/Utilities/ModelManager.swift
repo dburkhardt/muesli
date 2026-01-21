@@ -23,10 +23,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             switch self {
             case .tiny: return "Tiny"
             case .base: return "Base"
-            case .small: return "Small"
+            case .small: return "Small (Recommended)"
             case .medium: return "Medium"
             case .large: return "Large v3"
-            case .largeTurbo: return "Large v3 Turbo"
+            case .largeTurbo: return "Large v3 Turbo (Best Performance)"
             }
         }
         

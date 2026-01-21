@@ -18,25 +18,12 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
     init(bufferHandler: ((CMSampleBuffer) -> Void)?, levelHandler: ((Float) -> Void)?) {
         self.bufferHandler = bufferHandler
         self.levelHandler = levelHandler
-        
-        // #region agent log
-        struct InstanceCounter { nonisolated(unsafe) static var count = 0 }
-        InstanceCounter.count += 1
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let initEntry = "{\"hypothesisId\":\"F\",\"location\":\"MicrophoneCaptureEngine.init\",\"message\":\"New instance created\",\"data\":{\"instanceNum\":\(InstanceCounter.count),\"bufferHandlerNil\":\(bufferHandler == nil)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-        if let initData = initEntry.data(using: .utf8) {
-            if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-            if let initHandle = FileHandle(forWritingAtPath: logPath) { initHandle.seekToEndOfFile(); initHandle.write(initData); initHandle.closeFile() }
-        }
-        // #endregion
     }
+    
+    private let logger = LoggerFactory.logger(category: "MicrophoneCaptureEngine")
     
     func start(deviceID: String?) throws {
         guard !isRunning else { return }
-        
-        // #region agent log
-        print("[MUESLI_DEBUG] MicrophoneCaptureEngine.start() called with deviceID: \(deviceID ?? "nil")")
-        // #endregion
         
         let inputNode = audioEngine.inputNode
         
@@ -45,7 +32,7 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
             // CRITICAL: Skip aggregate devices - they don't deliver real audio
             // ScreenCaptureKit creates these and they cause first-recording failures
             if deviceID.contains("Aggregate") {
-                print("[MUESLI_DEBUG] WARNING: Skipping aggregate device, will use system default real microphone")
+                logger.warning("Skipping aggregate device, using system default real microphone")
                 // Don't call setInputDevice - let AVAudioEngine find a real device
                 selectFirstRealMicrophone()
             } else {
@@ -60,23 +47,12 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         let inputFormat = inputNode.inputFormat(forBus: 0)
         let outputFormat = inputNode.outputFormat(forBus: 0)
         
-        // #region agent log
-        print("[MUESLI_DEBUG] inputFormat: sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount), commonFormat=\(inputFormat.commonFormat.rawValue)")
-        print("[MUESLI_DEBUG] outputFormat: sampleRate=\(outputFormat.sampleRate), channels=\(outputFormat.channelCount), commonFormat=\(outputFormat.commonFormat.rawValue)")
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let logEntry = "{\"hypothesisId\":\"A\",\"location\":\"MicrophoneCaptureEngine.start\",\"message\":\"AVAudioEngine formats\",\"data\":{\"inputSampleRate\":\(inputFormat.sampleRate),\"inputChannels\":\(inputFormat.channelCount),\"outputSampleRate\":\(outputFormat.sampleRate),\"outputChannels\":\(outputFormat.channelCount),\"deviceID\":\"\(deviceID ?? "nil")\"},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-        if let data = logEntry.data(using: .utf8) {
-            if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-            if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-        }
-        // #endregion
-        
         // Use the output format but check if it's valid
         // If sampleRate is 0 or invalid, the tap won't receive callbacks
         var recordingFormat = outputFormat
         if recordingFormat.sampleRate == 0 {
             // Fallback: Create a standard format
-            print("[MUESLI_DEBUG] WARNING: outputFormat has 0 sample rate, using fallback format")
+            logger.warning("outputFormat has 0 sample rate, using fallback format")
             recordingFormat = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
         }
         
@@ -85,97 +61,24 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         // The input format reflects what the hardware is actually delivering
         let tapFormat = inputFormat.sampleRate > 0 ? inputFormat : nil
         
-        // #region agent log
-        let tapLogEntry = "{\"hypothesisId\":\"D\",\"location\":\"MicrophoneCaptureEngine.start\",\"message\":\"Installing tap on inputNode\",\"data\":{\"bufferSize\":4096,\"tapFormatSampleRate\":\(tapFormat?.sampleRate ?? 0),\"tapFormatChannels\":\(tapFormat?.channelCount ?? 0)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-        if let tapData = tapLogEntry.data(using: .utf8) {
-            if let tapHandle = FileHandle(forWritingAtPath: logPath) { tapHandle.seekToEndOfFile(); tapHandle.write(tapData); tapHandle.closeFile() }
-        }
-        // #endregion
-        
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, time in
-            // #region agent log
-            struct TapCallbackTracker { nonisolated(unsafe) static var count = 0; nonisolated(unsafe) static var firstLogged = false }
-            TapCallbackTracker.count += 1
-            if !TapCallbackTracker.firstLogged || TapCallbackTracker.count <= 5 {
-                TapCallbackTracker.firstLogged = true
-                let selfIsNil = self == nil
-                let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-                let logEntry = "{\"hypothesisId\":\"F\",\"location\":\"MicrophoneCaptureEngine.tapCallback\",\"message\":\"Tap callback fired\",\"data\":{\"selfIsNil\":\(selfIsNil),\"callCount\":\(TapCallbackTracker.count),\"frameLength\":\(buffer.frameLength)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-                if let data = logEntry.data(using: .utf8) {
-                    if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                    if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-                }
-            }
-            // #endregion
             self?.handleAudioBuffer(buffer, time: time)
         }
-        
-        // #region agent log
-        let preStartEntry = "{\"hypothesisId\":\"D\",\"location\":\"MicrophoneCaptureEngine.start\",\"message\":\"About to start audioEngine\",\"data\":{},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-        if let preStartData = preStartEntry.data(using: .utf8) {
-            if let preStartHandle = FileHandle(forWritingAtPath: logPath) { preStartHandle.seekToEndOfFile(); preStartHandle.write(preStartData); preStartHandle.closeFile() }
-        }
-        // #endregion
         
         do {
             try audioEngine.start()
             isRunning = true
-            
-            // #region agent log
-            print("[MUESLI_DEBUG] AVAudioEngine started successfully")
-            let engineIsRunning = audioEngine.isRunning
-            let logEntry2 = "{\"hypothesisId\":\"G\",\"location\":\"MicrophoneCaptureEngine.start\",\"message\":\"AVAudioEngine started\",\"data\":{\"isRunning\":true,\"engineActuallyRunning\":\(engineIsRunning)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let data2 = logEntry2.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let handle2 = FileHandle(forWritingAtPath: logPath) { handle2.seekToEndOfFile(); handle2.write(data2); handle2.closeFile() }
-            }
-            // #endregion
         } catch {
-            // #region agent log
-            print("[MUESLI_DEBUG] AVAudioEngine FAILED to start: \(error)")
-            let errorEntry = "{\"hypothesisId\":\"G\",\"location\":\"MicrophoneCaptureEngine.start\",\"message\":\"AVAudioEngine FAILED to start\",\"data\":{\"error\":\"\(error.localizedDescription)\"},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let errorData = errorEntry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let errorHandle = FileHandle(forWritingAtPath: logPath) { errorHandle.seekToEndOfFile(); errorHandle.write(errorData); errorHandle.closeFile() }
-            }
-            // #endregion
             throw error
         }
-        
-        // #region agent log
-        // Schedule a delayed check to see if tap is firing
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            let checkEntry = "{\"hypothesisId\":\"H\",\"location\":\"MicrophoneCaptureEngine.start\",\"message\":\"Delayed tap check (1s after start)\",\"data\":{\"engineRunning\":\(self.audioEngine.isRunning),\"isRunningFlag\":\(self.isRunning)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let checkData = checkEntry.data(using: .utf8) {
-                if let checkHandle = FileHandle(forWritingAtPath: logPath) { checkHandle.seekToEndOfFile(); checkHandle.write(checkData); checkHandle.closeFile() }
-            }
-        }
-        // #endregion
     }
     
     func stop() {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let wasRunning = isRunning
-        let stopEntry = "{\"hypothesisId\":\"F\",\"location\":\"MicrophoneCaptureEngine.stop\",\"message\":\"Stop called\",\"data\":{\"wasRunning\":\(wasRunning)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-        if let stopData = stopEntry.data(using: .utf8) {
-            if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-            if let stopHandle = FileHandle(forWritingAtPath: logPath) { stopHandle.seekToEndOfFile(); stopHandle.write(stopData); stopHandle.closeFile() }
-        }
-        // #endregion
-        
         guard isRunning else { return }
         
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
         isRunning = false
-        
-        // #region agent log
-        let stoppedEntry = "{\"hypothesisId\":\"F\",\"location\":\"MicrophoneCaptureEngine.stop\",\"message\":\"Engine stopped\",\"data\":{\"isRunning\":\(isRunning)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-        if let stoppedData = stoppedEntry.data(using: .utf8) {
-            if let stoppedHandle = FileHandle(forWritingAtPath: logPath) { stoppedHandle.seekToEndOfFile(); stoppedHandle.write(stoppedData); stoppedHandle.closeFile() }
-        }
-        // #endregion
     }
     
     /// Select the first real (non-aggregate) microphone device
@@ -247,16 +150,16 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
                 // Found a real microphone - use it!
                 do {
                     try audioEngine.inputNode.auAudioUnit.setDeviceID(audioDeviceID)
-                    print("[MUESLI_DEBUG] Selected real microphone with ID: \(audioDeviceID), UID: \(uid)")
+                    logger.debug("Selected real microphone: \(audioDeviceID), UID: \(uid)")
                     return
                 } catch {
-                    print("[MUESLI_DEBUG] Failed to set device \(audioDeviceID): \(error)")
+                    logger.warning("Failed to set device \(audioDeviceID): \(error)")
                     continue
                 }
             }
         }
         
-        print("[MUESLI_DEBUG] WARNING: Could not find a real microphone device")
+        logger.warning("Could not find a real microphone device")
     }
     
     private func setInputDevice(deviceID: String) {
@@ -303,19 +206,6 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
     }
     
     private func handleAudioBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
-        // #region agent log
-        struct FirstCallTracker { nonisolated(unsafe) static var firstCallLogged = false }
-        if !FirstCallTracker.firstCallLogged {
-            FirstCallTracker.firstCallLogged = true
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let logEntry = "{\"hypothesisId\":\"D\",\"location\":\"MicrophoneCaptureEngine.handleAudioBuffer\",\"message\":\"FIRST tap callback invoked\",\"data\":{\"frameLength\":\(buffer.frameLength),\"channelCount\":\(buffer.format.channelCount),\"sampleRate\":\(buffer.format.sampleRate)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let data = logEntry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-            }
-        }
-        // #endregion
-        
         guard let floatChannelData = buffer.floatChannelData else { return }
         
         let frameLength = Int(buffer.frameLength)
@@ -330,43 +220,11 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         let rms = sqrt(sumOfSquares / Float(frameLength))
         let level = min(rms * 16.0, 1.0)
         
-        // #region agent log
-        struct MicBufferLogCounter { nonisolated(unsafe) static var count = 0 }
-        MicBufferLogCounter.count += 1
-        if MicBufferLogCounter.count <= 5 || MicBufferLogCounter.count % 500 == 0 {
-            print("[MUESLI_DEBUG] Mic buffer #\(MicBufferLogCounter.count): frameLength=\(frameLength), rms=\(rms), level=\(level)")
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let logEntry = "{\"hypothesisId\":\"B\",\"location\":\"handleAudioBuffer\",\"message\":\"Mic buffer\",\"data\":{\"bufferNum\":\(MicBufferLogCounter.count),\"frameLength\":\(frameLength),\"rms\":\(rms),\"level\":\(level)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let data = logEntry.data(using: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-                else if FileManager.default.createFile(atPath: logPath, contents: data, attributes: nil) { /* created */ }
-            }
-        }
-        // #endregion
-        
         levelHandler?(level)
         
         // Convert AVAudioPCMBuffer to CMSampleBuffer for compatibility
         if let sampleBuffer = createCMSampleBuffer(from: buffer, time: time) {
-            // #region agent log
-            if MicBufferLogCounter.count <= 5 || MicBufferLogCounter.count % 500 == 0 {
-                let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-                let logEntry = "{\"hypothesisId\":\"C\",\"location\":\"MicrophoneCaptureEngine.handleAudioBuffer\",\"message\":\"CMSampleBuffer created successfully\",\"data\":{\"bufferNum\":\(MicBufferLogCounter.count),\"frameLength\":\(frameLength)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-                if let data = logEntry.data(using: .utf8) {
-                    if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-                }
-            }
-            // #endregion
             bufferHandler?(sampleBuffer)
-        } else {
-            // #region agent log
-            print("[MUESLI_DEBUG] createCMSampleBuffer returned nil, frameLength=\(frameLength)")
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let logEntry = "{\"hypothesisId\":\"C\",\"location\":\"MicrophoneCaptureEngine.handleAudioBuffer\",\"message\":\"createCMSampleBuffer returned nil\",\"data\":{\"bufferNum\":\(MicBufferLogCounter.count),\"frameLength\":\(frameLength)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let data = logEntry.data(using: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-            }
-            // #endregion
         }
     }
     
@@ -620,7 +478,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
             throw CaptureError.alreadyRecording
         }
         
-        // #region agent log
         // Get available content - this is where TCC permission is checked
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         
@@ -665,16 +522,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // 2. Has been observed to return all-zero samples in some configurations
         // Instead, we use AVAudioEngine for microphone capture below
         
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        let bufferHandlerIsNil = bufferHandler == nil
-        let logEntry0 = "{\"hypothesisId\":\"B\",\"location\":\"AudioCaptureService.startCaptureWithFilter\",\"message\":\"About to create MicrophoneCaptureEngine\",\"data\":{\"bufferHandlerIsNil\":\(bufferHandlerIsNil)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-        if let data0 = logEntry0.data(using: .utf8) {
-            if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-            if let handle0 = FileHandle(forWritingAtPath: logPath) { handle0.seekToEndOfFile(); handle0.write(data0); handle0.closeFile() }
-        }
-        // #endregion
-        
         // Create the stream delegate to handle errors/interruptions
         let delegate = StreamDelegate { [weak self] error in
             guard let self = self else { return }
@@ -695,19 +542,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         let micLevelHandler = levelHandler
         let micEngine = MicrophoneCaptureEngine(
             bufferHandler: { buffer in
-                // #region agent log
-                struct MicHandlerLogCounter { nonisolated(unsafe) static var count = 0 }
-                MicHandlerLogCounter.count += 1
-                if MicHandlerLogCounter.count <= 5 || MicHandlerLogCounter.count % 200 == 0 {
-                    let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-                    let handlerIsNil = micHandler == nil
-                    let logEntry = "{\"hypothesisId\":\"B\",\"location\":\"MicrophoneCaptureEngine.bufferHandler\",\"message\":\"Mic buffer callback invoked\",\"data\":{\"bufferNum\":\(MicHandlerLogCounter.count),\"handlerIsNil\":\(handlerIsNil)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-                    if let data = logEntry.data(using: .utf8) {
-                        if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                        if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-                    }
-                }
-                // #endregion
                 micHandler?(buffer, .microphone)
             },
             levelHandler: { level in
@@ -716,14 +550,8 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         )
         
         do {
-            // #region agent log
-            print("[MUESLI_DEBUG] About to start MicrophoneCaptureEngine with deviceID: \(selectedMicrophoneDeviceID ?? "nil")")
-            // #endregion
             try micEngine.start(deviceID: selectedMicrophoneDeviceID)
             self.microphoneEngine = micEngine
-            // #region agent log
-            print("[MUESLI_DEBUG] MicrophoneCaptureEngine started successfully")
-            // #endregion
         } catch {
             // Continue without mic capture - system audio will still work
             logger.warning("Microphone capture failed to start: \(error.localizedDescription)")
@@ -738,16 +566,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
                 You can select a different microphone in preferences and try again.
                 """
             warningHandler?("Microphone unavailable", details, true)
-            
-            // #region agent log
-            print("[MUESLI_DEBUG] MicrophoneCaptureEngine FAILED: \(error.localizedDescription)")
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let failEntry = "{\"hypothesisId\":\"CRITICAL\",\"location\":\"AudioCaptureService.startCaptureWithFilter\",\"message\":\"MicrophoneCaptureEngine FAILED to start\",\"data\":{\"error\":\"\(error.localizedDescription)\"},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let failData = failEntry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let failHandle = FileHandle(forWritingAtPath: logPath) { failHandle.seekToEndOfFile(); failHandle.write(failData); failHandle.closeFile() }
-            }
-            // #endregion
         }
         
         // Start the stream
@@ -831,42 +649,6 @@ private final class StreamOutput: NSObject, SCStreamOutput, @unchecked Sendable 
         @unknown default:
             return
         }
-        
-        // #region agent log
-        // Check raw SCK buffer for non-zero data
-        struct SCKLogCounter { nonisolated(unsafe) static var count = 0 }
-        SCKLogCounter.count += 1
-        if SCKLogCounter.count <= 3 || SCKLogCounter.count % 100 == 0 {
-            var maxSample: Float = 0.0
-            var bufferLength = 0
-            var formatInfo = ""
-            if let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
-                var length = 0
-                var dataPointer: UnsafeMutablePointer<Int8>?
-                let status = CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &dataPointer)
-                bufferLength = length
-                if status == noErr, let data = dataPointer {
-                    let floatPointer = UnsafeRawPointer(data).assumingMemoryBound(to: Float.self)
-                    let floatCount = length / 4
-                    for i in 0..<min(floatCount, 100) {
-                        let absVal = abs(floatPointer[i])
-                        if absVal > maxSample { maxSample = absVal }
-                    }
-                }
-            }
-            if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
-               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee {
-                formatInfo = "sr=\(asbd.mSampleRate),ch=\(asbd.mChannelsPerFrame),bits=\(asbd.mBitsPerChannel)"
-            }
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let typeStr = type == .audio ? "system" : "other"
-            let logEntry = "{\"hypothesisId\":\"E\",\"location\":\"StreamOutput.didOutputSampleBuffer\",\"message\":\"SCK buffer received\",\"data\":{\"type\":\"\(typeStr)\",\"maxSample\":\(maxSample),\"bufferLength\":\(bufferLength),\"format\":\"\(formatInfo)\",\"bufferNum\":\(SCKLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let data = logEntry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-            }
-        }
-        // #endregion
         
         // Call buffer handler
         handler?(sampleBuffer, audioType)

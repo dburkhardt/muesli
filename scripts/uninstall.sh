@@ -78,7 +78,7 @@ check_not_root() {
 find_app_bundles() {
     print_info "Searching for Muesli app bundles..."
     
-    # Search in DerivedData Debug builds
+    # Search in DerivedData Debug builds (Xcode default location)
     local debug_dir="$HOME/Library/Developer/Xcode/DerivedData"
     if [ -d "$debug_dir" ]; then
         while IFS= read -r -d '' app; do
@@ -87,6 +87,19 @@ find_app_bundles() {
             APP_BUNDLE_IDS+=("$bundle_id")
             APP_BUNDLE_TYPES+=("Debug")
         done < <(find "$debug_dir" -maxdepth 5 -name "Muesli*.app" -type d -print0 2>/dev/null)
+    fi
+    
+    # Search in project-local DerivedData (custom build location)
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_dir="$(dirname "$script_dir")"
+    local local_derived_data="$project_dir/DerivedData"
+    if [ -d "$local_derived_data" ]; then
+        while IFS= read -r -d '' app; do
+            local bundle_id=$(defaults read "$app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null || echo "unknown")
+            APP_BUNDLES+=("$app")
+            APP_BUNDLE_IDS+=("$bundle_id")
+            APP_BUNDLE_TYPES+=("Local Debug")
+        done < <(find "$local_derived_data" -maxdepth 5 -name "Muesli*.app" -type d -print0 2>/dev/null)
     fi
     
     # Search in /Applications
@@ -106,11 +119,20 @@ find_app_bundles() {
 find_derived_data() {
     print_info "Searching for DerivedData folders..."
     
+    # Search in Xcode default DerivedData location
     local derived_data_dir="$HOME/Library/Developer/Xcode/DerivedData"
     if [ -d "$derived_data_dir" ]; then
         while IFS= read -r -d '' dir; do
             DERIVED_DATA_FOLDERS+=("$dir")
         done < <(find "$derived_data_dir" -maxdepth 1 -name "Muesli-*" -type d -print0 2>/dev/null)
+    fi
+    
+    # Search for project-local DerivedData folder
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_dir="$(dirname "$script_dir")"
+    local local_derived_data="$project_dir/DerivedData"
+    if [ -d "$local_derived_data" ]; then
+        DERIVED_DATA_FOLDERS+=("$local_derived_data")
     fi
     
     print_info "Found ${#DERIVED_DATA_FOLDERS[@]} DerivedData folder(s)"
@@ -738,6 +760,7 @@ main() {
         echo ""
         echo "Searched in:"
         echo "  - ~/Library/Developer/Xcode/DerivedData/"
+        echo "  - <project>/DerivedData/ (local build folder)"
         echo "  - /Applications/"
         echo "  - ~/Library/Application Support/Muesli/"
         echo ""

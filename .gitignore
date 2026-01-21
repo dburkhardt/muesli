@@ -20,8 +20,18 @@ Pods/
 # Carthage (if used)
 Carthage/Build/
 
-# Cursor/IDE
-.cursor/
+# Cursor/IDE (but keep commands tracked)
+.cursor/*
+!.cursor/commands/
+
+# Development notes (local only, not for public repo)
+dev-notes/
+
+# Build logs
+build-*.txt
+
+# Worktree configuration (personal development setup)
+.cursorworktrees.json
 
 # Coverage reports (generated files in workspace root)
 coverage.json

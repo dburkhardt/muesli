@@ -107,19 +107,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     /// - Parameter modelPath: Path to the WhisperKit model directory (required)
     @MainActor
     func initialize(modelPath: URL) async throws {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        func writeLog(_ msg: String, _ data: [String: Any]) {
-            let dataStr = data.map { "\"\($0.key)\":\"\($0.value)\"" }.joined(separator: ",")
-            let entry = "{\"hypothesisId\":\"A\",\"location\":\"TranscriptionService.initialize\",\"message\":\"\(msg)\",\"data\":{\(dataStr)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let d = entry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let h = FileHandle(forWritingAtPath: logPath) { h.seekToEndOfFile(); h.write(d); h.closeFile() }
-            }
-        }
-        writeLog("initialize called", ["modelPath": modelPath.path, "isInitialized": String(isInitialized)])
-        // #endregion
-        
         guard !isInitialized else { return }
         
         // Use Application Support for all WhisperKit storage to avoid Documents folder prompts
@@ -136,19 +123,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             download: false  // Don't download since we're using a local model
         )
         
-        // #region agent log
-        writeLog("WhisperKit init starting", ["modelFolder": modelPath.path])
-        let initStart = Date()
-        // #endregion
-        
         // Initialize WhisperKit with optimized configuration for Apple Silicon
         whisperKit = try await WhisperKit(config)
         isInitialized = true
-        
-        // #region agent log
-        let initDuration = Date().timeIntervalSince(initStart)
-        writeLog("WhisperKit init completed", ["durationSeconds": String(format: "%.2f", initDuration), "isInitialized": String(isInitialized)])
-        // #endregion
     }
     
     /// Set transcription mode (live or post-processing)
@@ -239,22 +216,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     }
     
     private func processBuffers() async {
-        // #region agent log
-        struct ProcLogCounter { nonisolated(unsafe) static var count = 0 }
-        ProcLogCounter.count += 1
-        let shouldLog = ProcLogCounter.count <= 5 || ProcLogCounter.count % 50 == 0
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        if shouldLog {
-            let sysCount = bufferState.withLock { $0.systemAudioBuffer.count }
-            let micCount = bufferState.withLock { $0.micAudioBuffer.count }
-            let entry = "{\"hypothesisId\":\"D\",\"location\":\"TranscriptionService.processBuffers\",\"message\":\"processBuffers called\",\"data\":{\"isInitialized\":\(isInitialized),\"hasWhisperKit\":\(whisperKit != nil),\"mode\":\"\(transcriptionMode.rawValue)\",\"sysBufferCount\":\(sysCount),\"micBufferCount\":\(micCount),\"minSamples\":\(minSamplesForProcessing),\"callNum\":\(ProcLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let d = entry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let h = FileHandle(forWritingAtPath: logPath) { h.seekToEndOfFile(); h.write(d); h.closeFile() }
-            }
-        }
-        // #endregion
-        
         guard isInitialized, let whisperKit = whisperKit else { return }
         
         // Skip processing if in post-processing mode

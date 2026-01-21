@@ -159,19 +159,6 @@ final class TranscriptionCoordinator {
     /// Check model availability and prepare for transcription
     /// Returns immediately with current state, loads async if needed
     func prepareModel() async -> ModelState {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        func writeLog(_ msg: String, _ data: [String: Any]) {
-            let dataStr = data.map { "\"\($0.key)\":\"\($0.value)\"" }.joined(separator: ",")
-            let entry = "{\"hypothesisId\":\"B\",\"location\":\"TranscriptionCoordinator.prepareModel\",\"message\":\"\(msg)\",\"data\":{\(dataStr)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let d = entry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let h = FileHandle(forWritingAtPath: logPath) { h.seekToEndOfFile(); h.write(d); h.closeFile() }
-            }
-        }
-        writeLog("prepareModel called", ["retriesRemaining": String(retriesRemaining), "isInitialized": String(isInitialized)])
-        // #endregion
-        
         // Check retry limit to prevent infinite recursion
         guard retriesRemaining > 0 else {
             modelState = .failed(MuesliError.modelNotFound)
@@ -181,23 +168,13 @@ final class TranscriptionCoordinator {
         
         // Check if model is available
         guard let activeModel = modelManager.activeModel else {
-            // #region agent log
-            writeLog("no activeModel", [:])
-            // #endregion
             modelState = .notAvailable
             return .notAvailable
         }
         
-        // #region agent log
-        writeLog("activeModel found", ["model": activeModel.displayName])
-        // #endregion
-        
         // Validate model
         guard modelManager.validateModel(activeModel),
               let modelPath = modelManager.pathForModel(activeModel) else {
-            // #region agent log
-            writeLog("model validation failed", ["model": activeModel.displayName])
-            // #endregion
             // Only mark corrupted on validation errors
             modelManager.markModelCorrupted(activeModel)
             
@@ -216,15 +193,8 @@ final class TranscriptionCoordinator {
             return .notAvailable
         }
         
-        // #region agent log
-        writeLog("model validated", ["modelPath": modelPath.path])
-        // #endregion
-        
         // If already initialized, return ready
         if isInitialized {
-            // #region agent log
-            writeLog("already initialized, returning ready", [:])
-            // #endregion
             modelState = .ready
             // Flush any buffered audio in case we resumed
             processBufferedAudio()
@@ -273,11 +243,6 @@ final class TranscriptionCoordinator {
             }
         }
         
-        // #region agent log
-        writeLog("starting model load", ["modelState": "loading"])
-        let loadStart = Date()
-        // #endregion
-        
         do {
             try await transcriptionService.initialize(modelPath: modelPath)
             isInitialized = true
@@ -288,19 +253,12 @@ final class TranscriptionCoordinator {
             slowLoadCheckTask?.cancel()
             slowLoadCheckTask = nil
             
-            // #region agent log
-            let loadDuration = Date().timeIntervalSince(loadStart)
-            writeLog("model load completed", ["durationSeconds": String(format: "%.2f", loadDuration), "modelState": "ready", "isInitialized": "true"])
-            // #endregion
             // Flush any buffered audio collected during loading
             processBufferedAudio()
             // Reset retry count on success
             retriesRemaining = maxModelRetries
             return .ready
         } catch {
-            // #region agent log
-            writeLog("model load failed", ["error": error.localizedDescription])
-            // #endregion
             modelState = .failed(error)
             
             // Only mark corrupted on specific initialization errors, not temporary failures
@@ -530,29 +488,11 @@ final class TranscriptionCoordinator {
         using modelSize: ModelManager.ModelSize,
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
-        // #region agent log
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        func writeLog(_ msg: String, _ data: [String: Any]) {
-            let dataStr = data.map { "\"\($0.key)\":\"\($0.value)\"" }.joined(separator: ",")
-            let entry = "{\"hypothesisId\":\"C\",\"location\":\"TranscriptionCoordinator.reprocessTranscript\",\"message\":\"\(msg)\",\"data\":{\(dataStr)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let d = entry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let h = FileHandle(forWritingAtPath: logPath) { h.seekToEndOfFile(); h.write(d); h.closeFile() }
-            }
-        }
-        writeLog("reprocessTranscript called", ["modelSize": modelSize.displayName, "meetingTitle": meeting.title])
-        let reprocessStart = Date()
-        // #endregion
-        
         // Get model path
         guard let modelPath = modelManager.pathForModel(modelSize) else {
             throw NSError(domain: "TranscriptionCoordinator", code: 1,
                          userInfo: [NSLocalizedDescriptionKey: "Model not found: \(modelSize.rawValue)"])
         }
-        
-        // #region agent log
-        writeLog("model path found", ["modelPath": modelPath.path])
-        // #endregion
         
         // Validate model
         guard modelManager.validateModel(modelSize) else {
@@ -560,19 +500,10 @@ final class TranscriptionCoordinator {
                          userInfo: [NSLocalizedDescriptionKey: "Model is corrupted: \(modelSize.rawValue)"])
         }
         
-        // #region agent log
-        writeLog("model validated, creating temp service", [:])
-        let initStart = Date()
-        // #endregion
-        
         // Initialize transcription service with selected model
         let tempService = TranscriptionService()
         try await tempService.initialize(modelPath: modelPath)
         tempService.setTranscriptionMode(.postProcessing)
-        
-        // #region agent log
-        let initDuration = Date().timeIntervalSince(initStart)
-        writeLog("temp service initialized", ["initDurationSeconds": String(format: "%.2f", initDuration)])
         
         // Get audio file URLs
         let systemAudioURL = meeting.directory.appendingPathComponent("audio.caf")
@@ -613,11 +544,6 @@ final class TranscriptionCoordinator {
             // Notify that meeting was updated (for export)
             onMeetingUpdated?(meeting)
         }
-        
-        // #region agent log
-        let totalDuration = Date().timeIntervalSince(reprocessStart)
-        writeLog("reprocessTranscript completed", ["totalDurationSeconds": String(format: "%.2f", totalDuration), "blocksCount": String(blocks.count)])
-        // #endregion
         
         progressHandler?(1.0)
     }

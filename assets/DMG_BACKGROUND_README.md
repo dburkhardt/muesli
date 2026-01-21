@@ -4,12 +4,23 @@ This directory contains the background image for the DMG installer.
 
 ## Files
 
-- `dmg-background.svg` - Source SVG file (scalable vector format)
-- `dmg-background.png` - Generated PNG for DMG (1280x720px)
+- `dmg-background.png` - **Primary background image** (1280x720px) - Create this file directly
+- `dmg-background.svg` - Legacy SVG source (optional, scripts will convert if PNG not found)
 
-## Generating PNG from SVG
+## Creating the Background Image
 
-To convert the SVG to PNG for use in the DMG:
+**Preferred method**: Create `dmg-background.png` directly using your preferred graphics tool (Figma, Sketch, Photoshop, etc.)
+
+**Specifications:**
+- **Size**: 1280x720 pixels
+- **Format**: PNG (with transparency if needed)
+- **Location**: `assets/dmg-background.png`
+
+The DMG creation scripts will automatically use this PNG file. If it doesn't exist, they will attempt to convert `dmg-background.svg` to PNG as a fallback.
+
+## Converting SVG to PNG (Fallback)
+
+If you need to convert the SVG to PNG, use one of these methods:
 
 ### Using ImageMagick (recommended for high quality):
 ```bash
@@ -35,16 +46,16 @@ cairosvg dmg-background.svg -o dmg-background.png -W 1280 -H 720
 
 ## Design Notes
 
-The background features:
-- Clean, minimal macOS-style design
-- App icon on the left (with shadow)
-- Arrow pointing to Applications folder on the right
-- Applications folder icon
-- Product tagline
-- Installation instructions
+The background is a clean gradient design. **Do not include** app icons, arrows, or text - these are automatically handled by the DMG creation script:
+- App icon is automatically placed at x=200, y=190
+- Applications folder icon is automatically placed at x=600, y=185
+- Window title and other UI elements are handled by macOS
 
-Colors match macOS Big Sur+ design language:
-- Background: #f5f5f7 (light gray)
-- Primary: #007AFF (blue)
-- Secondary: #5AC8FA (cyan for folder)
-- Text: #1d1d1f, #6e6e73, #86868b (grays)
+**Color Palette** (matching app branding):
+- **Base**: #FFF8F0 (cream) - warm, inviting background
+- **Gradient accent**: #E86A34 to #F9C66B (orange-to-gold gradient) - matches app icon
+- Keep it minimal and clean - a beautiful gradient background is all that's needed
+
+**Window Layout:**
+- DMG window size: 800x400 pixels
+- Background image: 1280x720 pixels (scales automatically to fit window)

@@ -18,7 +18,7 @@ Use the Cursor command to quickly create a new debug log:
 
 1. Open Cursor command palette (Cmd+Shift+P)
 2. Search for "Create Debug Log"
-3. Or use the command file: [`commands/create_debug_log.md`](../../commands/create_debug_log.md)
+3. Or use the command file: [`.cursor/commands/create_debug_log.md`](../../.cursor/commands/create_debug_log.md)
 
 The command will create a new file with today's date and the template structure.
 

@@ -53,6 +53,7 @@ jobs:
           path: |
             ~/Library/Caches/Homebrew
             /usr/local/Cellar/create-dmg
+            /usr/local/Cellar/fileicon
           key: ${{ runner.os }}-homebrew-${{ hashFiles('.github/workflows/release.yml') }}
           restore-keys: |
             ${{ runner.os }}-homebrew-
@@ -67,13 +68,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
       
-      - name: Install create-dmg
+      - name: Install create-dmg and fileicon
         run: |
           if ! command -v create-dmg &> /dev/null; then
             echo "Installing create-dmg..."
             brew install create-dmg
           else
             echo "create-dmg already installed"
+          fi
+          
+          if ! command -v fileicon &> /dev/null; then
+            echo "Installing fileicon..."
+            brew install fileicon
+          else
+            echo "fileicon already installed"
           fi
       
       - name: Extract version from tag or input

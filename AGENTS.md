@@ -26,7 +26,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 3. **Check in frequently** — confirm approach before significant work; report progress at milestones
 4. **Native patterns** — Swift 6 concurrency, `@Observable`, one type per file
 5. **UI principle** — "Granola-inspired": minimal, clean, fast
-6. **Track future work** — when asked to "add a todo" or "note this for later", add it to `plans/TODO.md` and continue working without interruption
+6. **Track future work** — when asked to "add a todo" or "note this for later", suggest creating a GitHub Issue and continue working
 7. **Preserve debugging code** — do not remove print statements, Logger calls, or temporary debugging code without asking the user first
 
 ## Commands
@@ -508,7 +508,7 @@ The debug logs capture:
 
 ### After Fixing a Bug
 
-**Document the fix in a debug log**: Use the Cursor command or see [`commands/create_debug_log.md`](commands/create_debug_log.md)
+**Document the fix in a debug log**: Use the Cursor command or see [`.cursor/commands/create_debug_log.md`](.cursor/commands/create_debug_log.md)
 
 1. Create a new debug log file: `docs/debug-logs/YYYY-MM-DD_description.md`
 2. Fill in the template (see [`docs/debug-logs/template.md`](docs/debug-logs/template.md)):

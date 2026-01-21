@@ -3,7 +3,10 @@
 # create-dmg-modern.sh - Build Muesli and create a DMG installer using create-dmg tool
 #
 # Usage:
-#   ./scripts/create-dmg-modern.sh [VERSION]
+#   ./scripts/create-dmg-modern.sh [OPTIONS] [VERSION]
+#
+# Options:
+#   --skip-signing    Skip code signing (useful for local testing)
 #
 # If VERSION is not provided, it will be extracted from Version.xcconfig
 # Output: Muesli-vX.X.X.dmg in the project root
@@ -12,6 +15,23 @@
 # Install with: brew install create-dmg
 
 set -euo pipefail
+
+# Parse command line options
+SKIP_SIGNING=false
+VERSION=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --skip-signing)
+            SKIP_SIGNING=true
+            shift
+            ;;
+        *)
+            VERSION="$1"
+            shift
+            ;;
+    esac
+done
 
 # Colors for output
 RED='\033[0;31m'
@@ -44,6 +64,9 @@ cd "${PROJECT_ROOT}"
 
 log_info "Starting modern DMG creation process..."
 log_info "Project root: ${PROJECT_ROOT}"
+if [ "$SKIP_SIGNING" = true ]; then
+    log_info "Code signing will be skipped (--skip-signing)"
+fi
 
 # Check for create-dmg tool
 if ! command -v create-dmg &> /dev/null; then
@@ -55,8 +78,7 @@ fi
 log_success "create-dmg tool found: $(which create-dmg)"
 
 # Extract version from argument or Version.xcconfig
-if [ $# -ge 1 ]; then
-    VERSION="$1"
+if [ -n "$VERSION" ]; then
     log_info "Using version from argument: ${VERSION}"
 else
     # Extract from Version.xcconfig (required)
@@ -118,34 +140,38 @@ fi
 
 log_info "Built app found at: ${APP_PATH}"
 
-# Sign the app if Developer ID certificate is available
-log_info "Checking for code signing certificate..."
-SIGNING_IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -n 1 | awk '{print $2}')
+# Sign the app if Developer ID certificate is available (skip if --skip-signing)
+if [ "$SKIP_SIGNING" = true ]; then
+    log_warning "Skipping code signing (--skip-signing flag set)"
+else
+    log_info "Checking for code signing certificate..."
+    SIGNING_IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -n 1 | awk '{print $2}')
 
-if [ -n "$SIGNING_IDENTITY" ]; then
-    log_info "Found Developer ID certificate: ${SIGNING_IDENTITY}"
-    log_info "Signing app with hardened runtime..."
-    
-    if codesign --force --deep --options runtime \
-        --sign "$SIGNING_IDENTITY" \
-        --timestamp \
-        "${APP_PATH}"; then
-        log_success "App signed successfully with Developer ID"
+    if [ -n "$SIGNING_IDENTITY" ]; then
+        log_info "Found Developer ID certificate: ${SIGNING_IDENTITY}"
+        log_info "Signing app with hardened runtime..."
+        
+        if codesign --force --deep --options runtime \
+            --sign "$SIGNING_IDENTITY" \
+            --timestamp \
+            "${APP_PATH}"; then
+            log_success "App signed successfully with Developer ID"
+        else
+            log_warning "Code signing failed, continuing with unsigned app"
+        fi
     else
-        log_warning "Code signing failed, continuing with unsigned app"
+        log_warning "No Developer ID certificate found"
+        log_warning "App will be signed ad-hoc (users will see warnings)"
     fi
-else
-    log_warning "No Developer ID certificate found"
-    log_warning "App will be signed ad-hoc (users will see warnings)"
-fi
 
-# Verify app is signed (even if ad-hoc)
-log_info "Verifying app signature..."
-if ! codesign -dv "${APP_PATH}" 2>&1 | grep -q "Signature"; then
-    log_warning "App does not appear to be signed. This may cause issues on other machines."
-else
-    log_success "App signature verified"
-    codesign -dv --verbose=2 "${APP_PATH}" 2>&1 | head -n 5
+    # Verify app is signed (even if ad-hoc)
+    log_info "Verifying app signature..."
+    if ! codesign -dv "${APP_PATH}" 2>&1 | grep -q "Signature"; then
+        log_warning "App does not appear to be signed. This may cause issues on other machines."
+    else
+        log_success "App signature verified"
+        codesign -dv --verbose=2 "${APP_PATH}" 2>&1 | head -n 5
+    fi
 fi
 
 # Remove any existing DMG
@@ -180,6 +206,17 @@ else
     log_warning "No custom background found, using default"
 fi
 
+# Check for volume icon (use app icon from built app)
+VOLICON_PATH="${APP_PATH}/Contents/Resources/AppIcon.icns"
+VOLICON_ARG=""
+
+if [ -f "${VOLICON_PATH}" ]; then
+    log_info "Using app icon for DMG volume: ${VOLICON_PATH}"
+    VOLICON_ARG="--volicon ${VOLICON_PATH}"
+else
+    log_warning "No volume icon found at ${VOLICON_PATH}, using default"
+fi
+
 # Create DMG using create-dmg tool
 log_info "Creating DMG with create-dmg tool..."
 
@@ -205,12 +242,32 @@ if [ -n "${BACKGROUND_ARG}" ]; then
     CREATE_DMG_CMD="${CREATE_DMG_CMD} ${BACKGROUND_ARG}"
 fi
 
+# Add volume icon if available
+if [ -n "${VOLICON_ARG}" ]; then
+    CREATE_DMG_CMD="${CREATE_DMG_CMD} ${VOLICON_ARG}"
+fi
+
 # Add output path and source
 CREATE_DMG_CMD="${CREATE_DMG_CMD} \"${FINAL_DMG}\" \"${TEMP_APP_DIR}\""
 
 # Execute create-dmg
 if eval ${CREATE_DMG_CMD}; then
     log_success "DMG created successfully"
+    
+    # Set DMG file icon (requires fileicon tool)
+    if [ -f "${VOLICON_PATH}" ]; then
+        if command -v fileicon &> /dev/null; then
+            log_info "Setting DMG file icon..."
+            if fileicon set "${FINAL_DMG}" "${VOLICON_PATH}"; then
+                log_success "DMG file icon set successfully"
+            else
+                log_warning "Failed to set DMG file icon"
+            fi
+        else
+            log_warning "fileicon tool not found. Install with: brew install fileicon"
+            log_warning "DMG file will use default icon (volume icon is still set)"
+        fi
+    fi
 else
     log_error "Failed to create DMG with create-dmg"
     log_info "Attempting fallback to legacy script..."

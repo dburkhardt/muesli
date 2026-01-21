@@ -261,34 +261,6 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
-        // #region agent log
-        struct SysLogCounter { nonisolated(unsafe) static var count = 0 }
-        SysLogCounter.count += 1
-        if SysLogCounter.count <= 3 || SysLogCounter.count % 100 == 0 {
-            var maxSample: Float = 0.0
-            var bufferLength = 0
-            if let dataBuffer = CMSampleBufferGetDataBuffer(buffer) {
-                var length = 0
-                var dataPointer: UnsafeMutablePointer<Int8>?
-                let status = CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &dataPointer)
-                bufferLength = length
-                if status == noErr, let data = dataPointer {
-                    let floatPointer = UnsafeRawPointer(data).assumingMemoryBound(to: Float.self)
-                    for i in 0..<min(length/4, 100) {
-                        let absVal = abs(floatPointer[i])
-                        if absVal > maxSample { maxSample = absVal }
-                    }
-                }
-            }
-            let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-            let logEntry = "{\"hypothesisId\":\"G\",\"location\":\"RecordingController.handleSystemAudioBuffer\",\"message\":\"System buffer received\",\"data\":{\"maxSample\":\(maxSample),\"bufferLength\":\(bufferLength),\"bufferNum\":\(SysLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let data = logEntry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-            }
-        }
-        // #endregion
-        
         // Store system audio for AEC reference (if AEC enabled)
         if isAECEnabled {
             if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
@@ -322,13 +294,6 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
-        // #region agent log
-        struct MicLogCounter { nonisolated(unsafe) static var count = 0 }
-        MicLogCounter.count += 1
-        let shouldLog = MicLogCounter.count <= 3 || MicLogCounter.count % 100 == 0
-        let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-        // #endregion
-        
         // Get the actual sample rate from the incoming buffer (may be 44100Hz, 48000Hz, etc.)
         var sourceSampleRate: Int = 48000  // default
         if let formatDesc = CMSampleBufferGetFormatDescription(buffer),
@@ -339,30 +304,10 @@ final class RecordingController {
         // Extract microphone samples at native rate (NOT necessarily 48kHz!)
         let micSamplesNative = EchoCancellationService.extractSamples(from: buffer)
         guard let micSamplesNative = micSamplesNative else {
-            // #region agent log
-            if shouldLog {
-                let logEntry = "{\"hypothesisId\":\"F\",\"location\":\"RecordingController.handleMicrophoneAudioBuffer\",\"message\":\"extractSamples returned nil - using fallback\",\"data\":{\"bufferNum\":\(MicLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-                if let data = logEntry.data(using: .utf8) {
-                    if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                    if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-                }
-            }
-            // #endregion
             // Fallback: save original buffer
             fileService.appendAudioBuffer(buffer, type: .microphone)
             return
         }
-        
-        // #region agent log
-        if shouldLog {
-            let maxExtracted = micSamplesNative.prefix(100).map { abs($0) }.max() ?? 0
-            let logEntry = "{\"hypothesisId\":\"F\",\"location\":\"RecordingController.handleMicrophoneAudioBuffer\",\"message\":\"Samples extracted\",\"data\":{\"sampleCount\":\(micSamplesNative.count),\"sourceSampleRate\":\(sourceSampleRate),\"maxExtracted\":\(maxExtracted),\"isAECEnabled\":\(isAECEnabled),\"bufferNum\":\(MicLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let data = logEntry.data(using: .utf8) {
-                if !FileManager.default.fileExists(atPath: logPath) { FileManager.default.createFile(atPath: logPath, contents: nil) }
-                if let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-            }
-        }
-        // #endregion
         
         // Apply AEC if enabled (operates at native sample rate)
         let processedSamplesNative: [Float]
@@ -375,14 +320,6 @@ final class RecordingController {
             processedSamplesNative = micSamplesNative
         }
         
-        // #region agent log
-        if shouldLog {
-            let maxProcessed = processedSamplesNative.prefix(100).map { abs($0) }.max() ?? 0
-            let logEntry = "{\"hypothesisId\":\"F\",\"location\":\"RecordingController.handleMicrophoneAudioBuffer\",\"message\":\"After AEC processing\",\"data\":{\"sampleCount\":\(processedSamplesNative.count),\"maxProcessed\":\(maxProcessed),\"bufferNum\":\(MicLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-            if let data = logEntry.data(using: .utf8), let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-        }
-        // #endregion
-        
         // Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
         // CRITICAL: Pass the actual source sample rate so resampling works correctly
         // This fixes the pitch issue when mic is at 44100Hz but file expects 48000Hz
@@ -394,12 +331,6 @@ final class RecordingController {
         ) {
             fileService.appendAudioBuffer(processedBuffer, type: .microphone)
         } else {
-            // #region agent log
-            if shouldLog {
-                let logEntry = "{\"hypothesisId\":\"F\",\"location\":\"RecordingController.handleMicrophoneAudioBuffer\",\"message\":\"createSampleBuffer returned nil - using fallback\",\"data\":{\"bufferNum\":\(MicLogCounter.count)},\"timestamp\":\(Date().timeIntervalSince1970 * 1000)}\n"
-                if let data = logEntry.data(using: .utf8), let handle = FileHandle(forWritingAtPath: logPath) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
-            }
-            // #endregion
             // Fallback: save original if conversion fails
             fileService.appendAudioBuffer(buffer, type: .microphone)
         }
