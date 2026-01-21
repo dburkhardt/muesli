@@ -130,7 +130,7 @@ jobs:
           fi
       
       - name: Setup code signing certificates
-        if: ${{ env.P12_BASE64 != '' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
+        if: ${{ env.P12_BASE64 != '' && !contains(steps.version.outputs.version, '-unsigned') && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
         env:
           P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
           P12_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
@@ -205,7 +205,7 @@ jobs:
           echo "size=${DMG_SIZE}" >> $GITHUB_OUTPUT
       
       - name: Sign and notarize DMG
-        if: ${{ env.APPLE_ID != '' && env.P12_BASE64 != '' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
+        if: ${{ env.APPLE_ID != '' && env.P12_BASE64 != '' && !contains(steps.version.outputs.version, '-unsigned') && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
         env:
           P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
