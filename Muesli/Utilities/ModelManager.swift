@@ -114,32 +114,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     /// Whether to skip file system scanning (for testing)
     private let skipScan: Bool
     
-    // #region agent log
-    private func debugLog(_ message: String, _ data: [String: Any] = [:]) {
-        let logPath = NSHomeDirectory() + "/git-repos/muesli/.cursor/debug.log"
-        let timestamp = Date().timeIntervalSince1970 * 1000
-        var payload: [String: Any] = [
-            "timestamp": timestamp,
-            "location": "ModelManager",
-            "message": message,
-            "sessionId": "debug-session",
-            "hypothesisId": "A"
-        ]
-        if !data.isEmpty { payload["data"] = data }
-        if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-           let jsonString = String(data: jsonData, encoding: .utf8) {
-            let line = jsonString + "\n"
-            if let handle = FileHandle(forWritingAtPath: logPath) {
-                handle.seekToEndOfFile()
-                handle.write(line.data(using: .utf8)!)
-                handle.closeFile()
-            } else {
-                FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
-            }
-        }
-    }
-    // #endregion
-    
     init(skipScan: Bool = false) {
         self.skipScan = skipScan
         
@@ -151,34 +125,16 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         // Load stored model paths from UserDefaults
         loadModelPaths()
         
-        // #region agent log
-        debugLog("init: after loadModelPaths", [
-            "modelPathsCount": modelPaths.count,
-            "modelPathsKeys": modelPaths.keys.map { $0.rawValue },
-            "savedActiveModel": UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel) ?? "nil"
-        ])
-        // #endregion
-        
         // Migration: Handle removed models (tiny, base) - clear preference to trigger fallback
         if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel),
            savedModel == "tiny" || savedModel == "base" {
             Self.logger.info("Migrating from removed model '\(savedModel)' - will select first valid model")
             UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
-            // #region agent log
-            debugLog("init: migrated from removed model", ["removedModel": savedModel])
-            // #endregion
         }
         
         // Scan for existing downloaded models (skip during tests)
         if !skipScan {
             scanForDownloadedModels()
-            
-            // #region agent log
-            debugLog("init: after scanForDownloadedModels", [
-                "downloadedModelsCount": downloadedModels.count,
-                "downloadedModels": downloadedModels.map { $0.rawValue }
-            ])
-            // #endregion
             
             // Load saved active model preference with validation
             if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel),
@@ -188,20 +144,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
                 activeModel = model
                 // Ensure it's in downloadedModels (should be after scan, but be safe)
                 downloadedModels.insert(model)
-                // #region agent log
-                debugLog("init: using saved model", ["model": model.rawValue])
-                // #endregion
             } else if let firstValid = getFirstValidModel() {
                 // Saved model was invalid or missing - fall back to first valid model
                 activeModel = firstValid
                 UserDefaults.standard.set(firstValid.rawValue, forKey: AppStorageKeys.activeWhisperModel)
-                // #region agent log
-                debugLog("init: fell back to first valid model", ["model": firstValid.rawValue])
-                // #endregion
-            } else {
-                // #region agent log
-                debugLog("init: no valid models found", [:])
-                // #endregion
             }
             // If no valid models found, activeModel remains nil
         }
@@ -392,26 +338,12 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         // First, scan the whisperkit-coreml directory to discover all model folders
         let whisperKitDir = modelDirectory.appendingPathComponent("models/argmaxinc/whisperkit-coreml")
         
-        // #region agent log
-        debugLog("scanForDownloadedModels: starting", [
-            "whisperKitDir": whisperKitDir.path,
-            "dirExists": FileManager.default.fileExists(atPath: whisperKitDir.path)
-        ])
-        // #endregion
-        
         if FileManager.default.fileExists(atPath: whisperKitDir.path),
            let contents = try? FileManager.default.contentsOfDirectory(
                at: whisperKitDir,
                includingPropertiesForKeys: [.isDirectoryKey],
                options: [.skipsHiddenFiles]
            ) {
-            // #region agent log
-            debugLog("scanForDownloadedModels: found folders", [
-                "folderCount": contents.count,
-                "folders": contents.map { $0.lastPathComponent }
-            ])
-            // #endregion
-            
             // Match discovered folders to ModelSize cases
             for folderURL in contents {
                 let folderName = folderURL.lastPathComponent
@@ -427,12 +359,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
                         // Store the discovered path
                         modelPaths[model] = folderURL
                         Self.logger.debug("Discovered model folder: \(folderName) -> \(model.displayName)")
-                        // #region agent log
-                        debugLog("scanForDownloadedModels: matched folder to model", [
-                            "folder": folderName,
-                            "model": model.rawValue
-                        ])
-                        // #endregion
                         break
                     }
                 }
@@ -448,13 +374,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             // This checks for AudioEncoder.mlmodelc and TextDecoder.mlmodelc with weights
             let isValid = validateModel(model)
             let hasPath = pathForModel(model) != nil
-            // #region agent log
-            debugLog("scanForDownloadedModels: validating model", [
-                "model": model.rawValue,
-                "isValid": isValid,
-                "hasPath": hasPath
-            ])
-            // #endregion
             if isValid {
                 downloadedModels.insert(model)
                 downloadStates[model] = .completed

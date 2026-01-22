@@ -26,7 +26,7 @@ struct PreferencesView: View {
                     Label("General", systemImage: "gearshape")
                 }
         }
-        .frame(width: 500, height: 400)
+        .frame(minWidth: 520, minHeight: 450)
     }
 }
 
@@ -59,66 +59,46 @@ struct OutputPreferencesTab: View {
         @Bindable var prefs = preferencesManager
         
         Form {
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Recording Output Location")
-                        .font(.headline)
-                    
-                    Text("Choose where meeting recordings and transcripts are saved.")
-                        .font(.subheadline)
+            Section("Recording Output Location") {
+                Text("Choose where meeting recordings and transcripts are saved.")
+                    .foregroundStyle(.secondary)
+                
+                HStack {
+                    Text(preferencesManager.outputDirectory.path)
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
                     
-                    HStack {
-                        // Show current directory path
-                        Text(preferencesManager.outputDirectory.path)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                            .background(Color(nsColor: .textBackgroundColor))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        
-                        Button("Choose...") {
-                            showDirectoryPicker = true
-                        }
+                    Button("Choose...") {
+                        showDirectoryPicker = true
                     }
-                    
-                    Button("Reset to Default") {
-                        preferencesManager.resetOutputDirectory()
-                    }
-                    .buttonStyle(.link)
-                    .font(.caption)
                 }
+                
+                Button("Reset to Default") {
+                    preferencesManager.resetOutputDirectory()
+                }
+                .buttonStyle(.link)
+                .font(.caption)
             }
-            .padding()
             
-            Divider()
-            
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Export for External Tools")
-                        .font(.headline)
-                    
-                    Toggle(isOn: $prefs.exportEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Automatic Export")
-                            Text("Export transcripts to a structured folder for MCP servers and IDE extensions.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+            Section("Export for External Tools") {
+                Toggle(isOn: $prefs.exportEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Automatic Export")
+                        Text("Export transcripts to a structured folder for MCP servers and IDE extensions.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .toggleStyle(.switch)
-                    
-                    Divider()
-                    
-                    Text("Export Location")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    
+                }
+                .toggleStyle(.switch)
+                
+                LabeledContent("Export Location") {
                     HStack {
-                        // Show current export directory path
                         Text(preferencesManager.exportDirectory.path)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
@@ -134,34 +114,32 @@ struct OutputPreferencesTab: View {
                         }
                         .disabled(!prefs.exportEnabled)
                     }
-                    
-                    Button("Reset to Default") {
-                        preferencesManager.resetExportDirectory()
+                }
+                
+                Button("Reset to Default") {
+                    preferencesManager.resetExportDirectory()
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                .disabled(!prefs.exportEnabled)
+                
+                HStack {
+                    Button(isExporting ? "Exporting..." : "Export All Now") {
+                        Task {
+                            await exportAllMeetings()
+                        }
                     }
-                    .buttonStyle(.link)
-                    .font(.caption)
-                    .disabled(!prefs.exportEnabled)
+                    .disabled(isExporting || !prefs.exportEnabled)
                     
-                    Divider()
-                    
-                    HStack {
-                        Button(isExporting ? "Exporting..." : "Export All Now") {
-                            Task {
-                                await exportAllMeetings()
-                            }
-                        }
-                        .disabled(isExporting || !prefs.exportEnabled)
-                        
-                        if let count = exportCount {
-                            Text("Exported \(count) meetings")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                    if let count = exportCount {
+                        Text("Exported \(count) meetings")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
-            .padding()
         }
+        .formStyle(.grouped)
         .fileImporter(
             isPresented: $showDirectoryPicker,
             allowedContentTypes: [.folder],
@@ -225,99 +203,60 @@ struct GeneralPreferencesTab: View {
         @Bindable var prefs = preferencesManager
         
         Form {
-            Section {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Startup")
-                        .font(.headline)
-                    
-                    Toggle(isOn: $prefs.launchAtLogin) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Launch Muesli at Login")
-                            Text("Muesli will start automatically when you log in.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.switch)
-                }
-            }
-            .padding()
-            
-            Divider()
-            
-            Section {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Transcription")
-                        .font(.headline)
-                    
-                    Picker("Default Mode:", selection: $prefs.transcriptionMode) {
-                        Text("Live").tag(PreferencesManager.TranscriptionMode.live)
-                        Text("Post-processing").tag(PreferencesManager.TranscriptionMode.postProcessing)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 250)
-                    
-                    Text(
-                        """
-                        Live mode transcribes during recording. Post-processing waits until the recording ends \
-                        for potentially better accuracy.
-                        """
-                    )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding()
-            
-            Divider()
-            
-            Section {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Audio")
-                        .font(.headline)
-                    
-                    Toggle(isOn: $prefs.isEchoCancellationEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Echo Cancellation")
-                            Text(
-                                """
-                                Remove echo from microphone audio caused by speakers. \
-                                Improves transcription quality and saved audio files.
-                                """
-                            )
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.switch)
-                    
-                    Divider()
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Audio Chunk Duration")
-                            Spacer()
-                            Text(String(format: "%.1f seconds", prefs.audioChunkDuration))
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                        
-                        Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
-                        
-                        Text(
-                            """
-                            Shorter chunks provide faster transcription but may reduce accuracy. \
-                            Longer chunks improve accuracy but increase latency. \
-                            Changes apply to new recordings only.
-                            """
-                        )
+            Section("Startup") {
+                Toggle(isOn: $prefs.launchAtLogin) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Launch Muesli at Login")
+                        Text("Muesli will start automatically when you log in.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
+                .toggleStyle(.switch)
             }
-            .padding()
+            
+            Section("Transcription") {
+                LabeledContent("Default Mode") {
+                    Picker(selection: $prefs.transcriptionMode) {
+                        Text("Live").tag(PreferencesManager.TranscriptionMode.live)
+                        Text("Post-processing").tag(PreferencesManager.TranscriptionMode.postProcessing)
+                    } label: {
+                        EmptyView()
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 250)
+                }
+                
+                Text("Live mode transcribes during recording. Post-processing waits until the recording ends for potentially better accuracy.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            
+            Section("Audio") {
+                Toggle(isOn: $prefs.isEchoCancellationEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Echo Cancellation")
+                        Text("Remove echo from microphone audio caused by speakers. Improves transcription quality and saved audio files.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                LabeledContent("Audio Chunk Duration") {
+                    Text(String(format: "%.1f seconds", prefs.audioChunkDuration))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                
+                Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
+                
+                Text("Shorter chunks provide faster transcription but may reduce accuracy. Longer chunks improve accuracy but increase latency. Changes apply to new recordings only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .formStyle(.grouped)
     }
 }
 

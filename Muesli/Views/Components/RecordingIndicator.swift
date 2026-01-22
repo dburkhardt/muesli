@@ -204,54 +204,58 @@ struct MicrophoneControlWithLevel: View {
     
     var body: some View {
         HStack(spacing: 6) {
-        // Mute toggle button (clickable microphone icon)
-        Button(
-            action: {
-                onToggleMute()
-            },
-            label: {
-                Group {
-                    if isMuted {
-                        // Show muted icon (no level indicator)
-                        Image(systemName: "mic.slash.fill")
-                            .font(.system(size: iconSize))
-                            .foregroundStyle(.red)
-                    } else {
-                        // Show level indicator when not muted
-                        MicrophoneLevelIndicator(level: level, isActive: isRecording)
+            // Mute toggle button (clickable microphone icon)
+            Button(
+                action: {
+                    onToggleMute()
+                },
+                label: {
+                    Group {
+                        if isMuted {
+                            // Show muted icon (no level indicator)
+                            Image(systemName: "mic.slash.fill")
+                                .font(.system(size: iconSize))
+                                .foregroundStyle(.red)
+                        } else {
+                            // Show level indicator when not muted
+                            MicrophoneLevelIndicator(level: level, isActive: isRecording)
+                        }
                     }
+                    .padding(4)
+                    .contentShape(Rectangle())
                 }
-            }
-        )
-        .buttonStyle(.plain)
-        .help(isMuted ? "Unmute microphone" : "Mute microphone")
+            )
+            .buttonStyle(.plain)
+            .help(isMuted ? "Unmute microphone" : "Mute microphone")
             
             // Device picker menu (chevron only)
             Menu {
-            ForEach(availableDevices) { device in
-                Button(
-                    action: {
-                        onSelectDevice(device.id)
-                    },
-                    label: {
-                        HStack {
-                            Text(device.name)
-                            if device.isDefault {
-                                Text("(Default)")
-                                    .foregroundStyle(.secondary)
-                                    .font(.caption)
-                            }
-                            if selectedDeviceID == device.id {
-                                Image(systemName: "checkmark")
+                ForEach(availableDevices) { device in
+                    Button(
+                        action: {
+                            onSelectDevice(device.id)
+                        },
+                        label: {
+                            HStack {
+                                Text(device.name)
+                                if device.isDefault {
+                                    Text("(Default)")
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption)
+                                }
+                                if selectedDeviceID == device.id {
+                                    Image(systemName: "checkmark")
+                                }
                             }
                         }
-                    }
-                )
+                    )
                 }
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8))
                     .foregroundStyle(.secondary)
+                    .padding(4)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }

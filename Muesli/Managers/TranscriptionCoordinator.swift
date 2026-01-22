@@ -1,32 +1,6 @@
 import Foundation
 import os.log
 
-// #region agent log
-private func tcDebugLog(_ message: String, _ data: [String: Any] = [:]) {
-    let logPath = NSHomeDirectory() + "/git-repos/muesli/.cursor/debug.log"
-    let timestamp = Date().timeIntervalSince1970 * 1000
-    var payload: [String: Any] = [
-        "timestamp": timestamp,
-        "location": "TranscriptionCoordinator",
-        "message": message,
-        "sessionId": "debug-session",
-        "hypothesisId": "J"
-    ]
-    if !data.isEmpty { payload["data"] = data }
-    if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-       let jsonString = String(data: jsonData, encoding: .utf8) {
-        let line = jsonString + "\n"
-        if let handle = FileHandle(forWritingAtPath: logPath) {
-            handle.seekToEndOfFile()
-            handle.write(line.data(using: .utf8)!)
-            handle.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
-        }
-    }
-}
-// #endregion
-
 /// Coordinates transcription model lifecycle and audio buffering
 /// Decouples transcription from recording - recording can start immediately,
 /// while transcription loads asynchronously
@@ -382,13 +356,6 @@ final class TranscriptionCoordinator {
     
     /// Stop transcription and process remaining audio
     func stopTranscription() async {
-        // #region agent log
-        tcDebugLog("stopTranscription called", [
-            "modelState": String(describing: modelState),
-            "isInitialized": isInitialized,
-            "callStack": Thread.callStackSymbols.prefix(10).joined(separator: "\n")
-        ])
-        // #endregion
         await transcriptionService.stopTranscription()
         clearBuffers()
         

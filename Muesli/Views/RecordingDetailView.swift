@@ -1,31 +1,5 @@
 import SwiftUI
 
-// #region agent log
-private func rdvDebugLog(_ message: String, _ data: [String: Any] = [:]) {
-    let logPath = NSHomeDirectory() + "/git-repos/muesli/.cursor/debug.log"
-    let timestamp = Date().timeIntervalSince1970 * 1000
-    var payload: [String: Any] = [
-        "timestamp": timestamp,
-        "location": "RecordingDetailView",
-        "message": message,
-        "sessionId": "debug-session",
-        "hypothesisId": "F-J"
-    ]
-    if !data.isEmpty { payload["data"] = data }
-    if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-       let jsonString = String(data: jsonData, encoding: .utf8) {
-        let line = jsonString + "\n"
-        if let handle = FileHandle(forWritingAtPath: logPath) {
-            handle.seekToEndOfFile()
-            handle.write(line.data(using: .utf8)!)
-            handle.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
-        }
-    }
-}
-// #endregion
-
 /// Detail view showing active recording, completed recording, or historical meeting
 struct RecordingDetailView: View {
     @Bindable var viewModel: MuesliViewModel
@@ -450,7 +424,7 @@ struct RecordingDetailView: View {
             // Disable during switching or first-time model compilation
             transcriptionModelMenu
         } label: {
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 16))
                     .foregroundStyle(.blue)
@@ -458,8 +432,11 @@ struct RecordingDetailView: View {
                     .font(.system(size: 8))
                     .foregroundStyle(.secondary)
             }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
         .onAppear {
             // Refresh available apps when menu appears
             Task {
@@ -481,9 +458,6 @@ struct RecordingDetailView: View {
         Menu("Model") {
             ForEach(models, id: \.self) { model in
                 Button {
-                    // #region agent log
-                    rdvDebugLog("model button tapped", ["model": model.rawValue])
-                    // #endregion
                     Task {
                         await viewModel.switchTranscriptionModel(to: model)
                     }
