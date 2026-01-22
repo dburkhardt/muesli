@@ -16,6 +16,7 @@ actor DiagnosticLogger {
         case onboarding = "ONBOARDING"
         case build = "BUILD"
         case app = "APP"
+        case transcription = "TRANSCRIPTION"  // Debug category for transcription issues
     }
     
     /// Maximum log file size (10MB)
@@ -85,6 +86,16 @@ actor DiagnosticLogger {
         #else
         log(.build, "Configuration: RELEASE")
         #endif
+        
+        // Git build info (from auto-generated BuildInfo.swift)
+        let dirtyFlag = BuildInfo.isDirty ? " (dirty)" : ""
+        log(.build, "Git Commit: \(BuildInfo.gitCommit)\(dirtyFlag)")
+        log(.build, "Git Branch: \(BuildInfo.gitBranch)")
+        log(.build, "Build Type: \(BuildInfo.buildType)")
+        log(.build, "Build Timestamp: \(BuildInfo.buildTimestamp)")
+        if BuildInfo.isCIBuild {
+            log(.build, "CI Build: \(BuildInfo.ciRunInfo)")
+        }
         
         // Info.plist permission descriptions
         let micDesc = Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") as? String
