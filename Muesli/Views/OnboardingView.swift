@@ -604,7 +604,7 @@ struct OnboardingView: View {
         HStack {
             // Model name and size
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.displayName)
+                Text(model.displayNameDetailed)
                     .font(.system(size: 13, weight: .medium))
                 HStack(spacing: 4) {
                 Text(model.sizeDescription)
@@ -683,15 +683,15 @@ struct OnboardingView: View {
                 .foregroundStyle(.secondary)
             
             Picker("", selection: Binding(
-                get: { modelManager.activeModel ?? .base },
+                get: { modelManager.activeModel ?? .small },
                 set: { modelManager.setActiveModel($0) }
             )) {
                 ForEach(modelManager.downloadedModelsOrdered) { model in
-                    Text(model.displayName).tag(model)
+                    Text(model.displayNameDetailed).tag(model)
                 }
             }
             .pickerStyle(.menu)
-            .frame(width: 140)
+            .frame(width: 200)
         }
         .padding(.top, 4)
     }

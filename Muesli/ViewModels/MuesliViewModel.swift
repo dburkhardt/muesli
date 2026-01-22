@@ -127,6 +127,12 @@ final class MuesliViewModel {
         transcriptionCoordinator.isSlowModelLoad
     }
     
+    /// Whether a model switch is currently in progress
+    /// Delegates to TranscriptionCoordinator
+    var isModelSwitching: Bool {
+        transcriptionCoordinator.isModelSwitching
+    }
+    
     // MARK: - Active Session Tracking
     // NOTE: Delegates to RecordingController - do not manage session state here
     
@@ -874,6 +880,27 @@ final class MuesliViewModel {
         
         meeting.isReprocessing = false
         meeting.reprocessingProgress = 0.0
+    }
+    
+    // MARK: - Model Switching (delegates to TranscriptionCoordinator)
+    
+    /// Switch transcription model during active recording
+    /// Audio buffers while new model loads, then resumes transcription
+    @MainActor
+    func switchTranscriptionModel(to model: ModelManager.ModelSize) async {
+        guard activeRecordingSession != nil else { return }
+        
+        let result = await transcriptionCoordinator.switchModel(to: model)
+        
+        // Handle failure - show warning banner
+        if case .failed(let error) = result {
+            warningManager.addWarning(
+                .modelLoading,
+                message: "Failed to switch model",
+                details: error.localizedDescription,
+                canRetry: false
+            )
+        }
     }
     
     // MARK: - Resume Recording (delegates to RecordingController)

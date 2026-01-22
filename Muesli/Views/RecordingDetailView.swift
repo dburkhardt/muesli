@@ -1,5 +1,31 @@
 import SwiftUI
 
+// #region agent log
+private func rdvDebugLog(_ message: String, _ data: [String: Any] = [:]) {
+    let logPath = NSHomeDirectory() + "/git-repos/muesli/.cursor/debug.log"
+    let timestamp = Date().timeIntervalSince1970 * 1000
+    var payload: [String: Any] = [
+        "timestamp": timestamp,
+        "location": "RecordingDetailView",
+        "message": message,
+        "sessionId": "debug-session",
+        "hypothesisId": "F-J"
+    ]
+    if !data.isEmpty { payload["data"] = data }
+    if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+       let jsonString = String(data: jsonData, encoding: .utf8) {
+        let line = jsonString + "\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8)!)
+            handle.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
+        }
+    }
+}
+// #endregion
+
 /// Detail view showing active recording, completed recording, or historical meeting
 struct RecordingDetailView: View {
     @Bindable var viewModel: MuesliViewModel
@@ -417,6 +443,12 @@ struct RecordingDetailView: View {
                     }
                 }
             }
+            
+            Divider()
+            
+            // Submenu 3: Transcription Model
+            // Disable during switching or first-time model compilation
+            transcriptionModelMenu
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: "gearshape.fill")
@@ -427,11 +459,50 @@ struct RecordingDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .buttonStyle(.plain)
-        .task {
+        .menuStyle(.borderlessButton)
+        .onAppear {
             // Refresh available apps when menu appears
-            await viewModel.refreshMeetingApps()
+            Task {
+                await viewModel.refreshMeetingApps()
+            }
         }
+    }
+    
+    // MARK: - Transcription Model Menu
+    
+    @ViewBuilder
+    private var transcriptionModelMenu: some View {
+        let isModelBusy = viewModel.isModelSwitching || viewModel.isSlowModelLoad
+        let models = viewModel.modelManager.downloadedModelsOrdered
+        let activeModel = viewModel.modelManager.activeModel
+        
+        // Use simple string title to match other submenus (Live Transcript, Audio Source)
+        // Custom labels with HStack break nested menu rendering
+        Menu("Model") {
+            ForEach(models, id: \.self) { model in
+                Button {
+                    // #region agent log
+                    rdvDebugLog("model button tapped", ["model": model.rawValue])
+                    // #endregion
+                    Task {
+                        await viewModel.switchTranscriptionModel(to: model)
+                    }
+                } label: {
+                    HStack {
+                        Text(model.displayName)
+                        if activeModel == model {
+                            if viewModel.isModelSwitching {
+                                Image(systemName: "arrow.trianglehead.2.clockwise")
+                            } else {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+                .disabled(isModelBusy)
+            }
+        }
+        .disabled(isModelBusy)
     }
     
     // MARK: - Stop Recording Button

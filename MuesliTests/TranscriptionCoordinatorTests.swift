@@ -23,7 +23,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model is downloaded and ready
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         
         // Prepare the model (this initializes TranscriptionService)
         _ = await sut.prepareModel()
@@ -52,7 +52,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model is downloaded and ready
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         
         // Prepare the model
         _ = await sut.prepareModel()
@@ -79,7 +79,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model is downloaded and ready
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         _ = await sut.prepareModel()
         XCTAssertTrue(sut.modelState.isReady)
         
@@ -169,7 +169,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertEqual(mockTranscriptionService.appendMicrophoneAudioCallCount, 0)
         
         // When: Model becomes ready
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         _ = await sut.prepareModel()
         
         // Then: Buffered audio should be processed
@@ -198,7 +198,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertFalse(sut.modelState.isLoading)
         
         // Add model and prepare
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         _ = await sut.prepareModel()
         
         // Should be ready
@@ -240,7 +240,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model exists but validation fails
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         mockModelManager.shouldFailValidation = true
         
         // When: prepareModel is called
@@ -260,11 +260,11 @@ final class TranscriptionCoordinatorTests: XCTestCase {
             modelManager: mockModelManager
         )
         
-        // Given: Base model is corrupted, tiny model is valid
-        mockModelManager.addDownloadedModel(.base)
-        mockModelManager.addDownloadedModel(.tiny)
-        mockModelManager.activeModel = .base
-        mockModelManager.modelsToFailValidation = [.base]
+        // Given: Small model is corrupted, medium model is valid
+        mockModelManager.addDownloadedModel(.small)
+        mockModelManager.addDownloadedModel(.medium)
+        mockModelManager.activeModel = .small
+        mockModelManager.modelsToFailValidation = [.small]
         
         var switchedFrom: ModelManager.ModelSize?
         var switchedTo: ModelManager.ModelSize?
@@ -278,8 +278,8 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         
         // Then: Should fall back to valid model
         XCTAssertTrue(mockModelManager.markModelCorruptedCallCount > 0, "Should mark corrupted model")
-        XCTAssertEqual(switchedFrom, .base)
-        XCTAssertEqual(switchedTo, .tiny)
+        XCTAssertEqual(switchedFrom, .small)
+        XCTAssertEqual(switchedTo, .medium)
     }
     
     /// Test model preparation retry limit enforcement
@@ -293,9 +293,9 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model validation always fails (will trigger retries)
-        // Only base is downloaded and it fails validation, so no fallback available
-        mockModelManager.addDownloadedModel(.base)
-        mockModelManager.modelsToFailValidation = [.base]
+        // Only small is downloaded and it fails validation, so no fallback available
+        mockModelManager.addDownloadedModel(.small)
+        mockModelManager.modelsToFailValidation = [.small]
         
         // When: prepareModel is called multiple times
         _ = await sut.prepareModel()
@@ -354,10 +354,10 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Two models, first one will fail validation
-        mockModelManager.addDownloadedModel(.base)
         mockModelManager.addDownloadedModel(.small)
-        mockModelManager.activeModel = .base
-        mockModelManager.modelsToFailValidation = [.base]
+        mockModelManager.addDownloadedModel(.medium)
+        mockModelManager.activeModel = .small
+        mockModelManager.modelsToFailValidation = [.small]
         
         var callbackInvoked = false
         sut.onModelSwitched = { _, _, _ in
@@ -470,7 +470,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertEqual(mockTranscriptionService.appendMicrophoneAudioCallCount, 0)
         
         // When: Model becomes ready
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         _ = await sut.prepareModel()
         
         // Then: Both buffers should be flushed
@@ -497,7 +497,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         
         // Then: Buffers should be cleared
         // When model becomes ready later, old buffer shouldn't be processed
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         _ = await sut.prepareModel()
         
         // Should not forward the old buffered audio after stop
@@ -521,7 +521,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertEqual(mockTranscriptionService.appendSystemAudioCallCount, 0)
         
         // When: Model state changes to ready (via prepareModel)
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         _ = await sut.prepareModel()
         
         // Then: didSet on modelState should trigger processBufferedAudio automatically
@@ -542,7 +542,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Audio arrives while model is being prepared
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         
         // Start model preparation (async)
         let prepareTask = Task {
@@ -580,7 +580,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         sut.resetForNewRecording()
         
         // When: Model is now available and we try again
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         let state = await sut.prepareModel()
         
         // Then: Should succeed this time
@@ -598,7 +598,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Coordinator with mock service
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         _ = await sut.prepareModel()
         
         // When: Setting transcription mode
@@ -642,7 +642,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model is available (will load instantly in mock)
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         
         // When: prepareModel is called (will complete quickly in mock)
         _ = await sut.prepareModel()
@@ -663,7 +663,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model is available but mock will take time to initialize
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         mockTranscriptionService.initializationDelay = 0.2  // 200ms delay
         
         // When: prepareModel starts
@@ -702,7 +702,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         }
         
         // Given: Model with slow initialization
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         mockTranscriptionService.initializationDelay = 0.2  // 200ms delay
         
         // When: prepareModel is called
@@ -727,7 +727,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Slow-load state is set
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         mockTranscriptionService.initializationDelay = 0.2
         
         // Start loading (will trigger slow-load detection)
@@ -767,7 +767,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         }
         
         // Given: Model loads quickly
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         // No initialization delay - will be instant
         
         // When: prepareModel completes successfully
@@ -793,7 +793,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model is available
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         mockTranscriptionService.initializationDelay = 0.1
         
         // Initial state
@@ -833,7 +833,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Coordinator ready
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         _ = await sut.prepareModel()
         
         // When: Setting transcript handler
@@ -867,7 +867,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         )
         
         // Given: Model ready
-        mockModelManager.addDownloadedModel(.base)
+        mockModelManager.addDownloadedModel(.small)
         _ = await sut.prepareModel()
         
         // When: Starting transcription with start time

@@ -415,7 +415,15 @@ Recordings saved to: `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD
 ## Known Pitfalls
 
 ### TCC Permissions
-`CGPreflightScreenCaptureAccess()` unreliable with ad-hoc signing. Use `PermissionManager.checkScreenRecordingPermissionAsync()` which uses `SCShareableContent`. Only for permission checking—not app detection (triggers prompt).
+**Stable Code Signing Required**: The project uses `DEVELOPMENT_TEAM` in `project.pbxproj` to ensure stable code signatures. This makes `CGPreflightScreenCaptureAccess()` reliable and allows TCC permissions to persist across builds. Without `DEVELOPMENT_TEAM`, Xcode uses ad-hoc signing which changes the code signature on every build, causing:
+- TCC permissions to reset after each rebuild
+- `CGPreflightScreenCaptureAccess()` to return false incorrectly
+- Random permission prompts during normal operation
+
+**Permission Check APIs**:
+- `CGPreflightScreenCaptureAccess()` — Now reliable with stable signing. Used as a gate in `AudioCaptureService` before `SCShareableContent` calls.
+- `PermissionManager.checkScreenRecordingPermissionAsync()` — Uses `SCShareableContent` for authoritative check. Includes 5-minute caching to reduce prompt frequency.
+- Do NOT use `SCShareableContent` for meeting app detection (triggers prompt). Use `NSWorkspace.shared.runningApplications` instead.
 
 ### Audio Sample Rates (CRITICAL)
 **If transcription outputs gibberish, check sample rates first!** WhisperKit requires 16kHz. Both system audio (ScreenCaptureKit) and microphone (AVAudioEngine) capture at 48kHz. Use `TranscriptionService.resampleToWhisperFormat()`:

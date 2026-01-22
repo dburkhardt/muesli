@@ -185,3 +185,11 @@ func refreshPermissionsAsync() async {
 - Still need to call async check periodically to keep cache fresh
 - Timing window between permission grant and cache update (onboarding polls every 0.5s)
 - Must be careful not to trigger prompt prematurely during onboarding
+
+---
+
+**Update (2026-01-21):** This issue is now mitigated by configuring stable code signing with `DEVELOPMENT_TEAM` in `project.pbxproj`. With stable signing:
+- `CGPreflightScreenCaptureAccess()` becomes reliable
+- TCC permissions persist across rebuilds
+- Permission caching (5-minute TTL) reduces SCShareableContent calls
+- `AudioCaptureService` now gates SCShareableContent calls with CGPreflight to avoid spurious prompts

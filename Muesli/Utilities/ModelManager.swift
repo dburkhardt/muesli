@@ -10,8 +10,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     // MARK: - Model Options
     
     enum ModelSize: String, CaseIterable, Identifiable, Hashable {
-        case tiny = "tiny"
-        case base = "base"
         case small = "small"
         case medium = "medium"
         case large = "large-v3-v20240930"
@@ -19,25 +17,33 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         
         var id: String { rawValue }
         
+        /// Display name for menus and general UI (just the name)
         var displayName: String {
             switch self {
-            case .tiny: return "Tiny"
-            case .base: return "Base"
-            case .small: return "Small (Recommended)"
+            case .small: return "Small"
             case .medium: return "Medium"
             case .large: return "Large v3"
-            case .largeTurbo: return "Large v3 Turbo (Best Performance)"
+            case .largeTurbo: return "Large v3 Turbo"
+            }
+        }
+        
+        /// Detailed display name with recommendation for preferences/onboarding
+        /// Size is shown separately below, so not included here
+        var displayNameDetailed: String {
+            switch self {
+            case .small: return "Small"
+            case .medium: return "Medium"
+            case .large: return "Large v3 — Best Quality"
+            case .largeTurbo: return "Large v3 Turbo — Recommended"
             }
         }
         
         var sizeDescription: String {
             switch self {
-            case .tiny: return "~75MB"
-            case .base: return "~145MB"
-            case .small: return "~465MB"
-            case .medium: return "~1.5GB"
-            case .large: return "~3GB"
-            case .largeTurbo: return "~1.6GB"
+            case .small: return "465 MB"
+            case .medium: return "1.5 GB"
+            case .large: return "3 GB"
+            case .largeTurbo: return "1.6 GB"
             }
         }
         
@@ -108,6 +114,32 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     /// Whether to skip file system scanning (for testing)
     private let skipScan: Bool
     
+    // #region agent log
+    private func debugLog(_ message: String, _ data: [String: Any] = [:]) {
+        let logPath = NSHomeDirectory() + "/git-repos/muesli/.cursor/debug.log"
+        let timestamp = Date().timeIntervalSince1970 * 1000
+        var payload: [String: Any] = [
+            "timestamp": timestamp,
+            "location": "ModelManager",
+            "message": message,
+            "sessionId": "debug-session",
+            "hypothesisId": "A"
+        ]
+        if !data.isEmpty { payload["data"] = data }
+        if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+            let line = jsonString + "\n"
+            if let handle = FileHandle(forWritingAtPath: logPath) {
+                handle.seekToEndOfFile()
+                handle.write(line.data(using: .utf8)!)
+                handle.closeFile()
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
+            }
+        }
+    }
+    // #endregion
+    
     init(skipScan: Bool = false) {
         self.skipScan = skipScan
         
@@ -119,9 +151,34 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         // Load stored model paths from UserDefaults
         loadModelPaths()
         
+        // #region agent log
+        debugLog("init: after loadModelPaths", [
+            "modelPathsCount": modelPaths.count,
+            "modelPathsKeys": modelPaths.keys.map { $0.rawValue },
+            "savedActiveModel": UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel) ?? "nil"
+        ])
+        // #endregion
+        
+        // Migration: Handle removed models (tiny, base) - clear preference to trigger fallback
+        if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel),
+           savedModel == "tiny" || savedModel == "base" {
+            Self.logger.info("Migrating from removed model '\(savedModel)' - will select first valid model")
+            UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
+            // #region agent log
+            debugLog("init: migrated from removed model", ["removedModel": savedModel])
+            // #endregion
+        }
+        
         // Scan for existing downloaded models (skip during tests)
         if !skipScan {
             scanForDownloadedModels()
+            
+            // #region agent log
+            debugLog("init: after scanForDownloadedModels", [
+                "downloadedModelsCount": downloadedModels.count,
+                "downloadedModels": downloadedModels.map { $0.rawValue }
+            ])
+            // #endregion
             
             // Load saved active model preference with validation
             if let savedModel = UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel),
@@ -131,10 +188,20 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
                 activeModel = model
                 // Ensure it's in downloadedModels (should be after scan, but be safe)
                 downloadedModels.insert(model)
+                // #region agent log
+                debugLog("init: using saved model", ["model": model.rawValue])
+                // #endregion
             } else if let firstValid = getFirstValidModel() {
                 // Saved model was invalid or missing - fall back to first valid model
                 activeModel = firstValid
                 UserDefaults.standard.set(firstValid.rawValue, forKey: AppStorageKeys.activeWhisperModel)
+                // #region agent log
+                debugLog("init: fell back to first valid model", ["model": firstValid.rawValue])
+                // #endregion
+            } else {
+                // #region agent log
+                debugLog("init: no valid models found", [:])
+                // #endregion
             }
             // If no valid models found, activeModel remains nil
         }
@@ -325,12 +392,26 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         // First, scan the whisperkit-coreml directory to discover all model folders
         let whisperKitDir = modelDirectory.appendingPathComponent("models/argmaxinc/whisperkit-coreml")
         
+        // #region agent log
+        debugLog("scanForDownloadedModels: starting", [
+            "whisperKitDir": whisperKitDir.path,
+            "dirExists": FileManager.default.fileExists(atPath: whisperKitDir.path)
+        ])
+        // #endregion
+        
         if FileManager.default.fileExists(atPath: whisperKitDir.path),
            let contents = try? FileManager.default.contentsOfDirectory(
                at: whisperKitDir,
                includingPropertiesForKeys: [.isDirectoryKey],
                options: [.skipsHiddenFiles]
            ) {
+            // #region agent log
+            debugLog("scanForDownloadedModels: found folders", [
+                "folderCount": contents.count,
+                "folders": contents.map { $0.lastPathComponent }
+            ])
+            // #endregion
+            
             // Match discovered folders to ModelSize cases
             for folderURL in contents {
                 let folderName = folderURL.lastPathComponent
@@ -340,11 +421,18 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
                 
                 // Try to match this folder to a ModelSize
                 for model in ModelSize.allCases {
-                    // Match by checking if the folder contains the model's rawValue
-                    if folderName.contains(model.rawValue) {
+                    // Match by checking if the folder ENDS WITH the model's rawValue
+                    // (Using hasSuffix prevents "large-v3-v20240930" from matching "...turbo" folder)
+                    if folderName.hasSuffix(model.rawValue) {
                         // Store the discovered path
                         modelPaths[model] = folderURL
                         Self.logger.debug("Discovered model folder: \(folderName) -> \(model.displayName)")
+                        // #region agent log
+                        debugLog("scanForDownloadedModels: matched folder to model", [
+                            "folder": folderName,
+                            "model": model.rawValue
+                        ])
+                        // #endregion
                         break
                     }
                 }
@@ -358,10 +446,19 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         for model in ModelSize.allCases {
             // Use validateModel() to ensure the model is actually complete and usable
             // This checks for AudioEncoder.mlmodelc and TextDecoder.mlmodelc with weights
-            if validateModel(model) {
+            let isValid = validateModel(model)
+            let hasPath = pathForModel(model) != nil
+            // #region agent log
+            debugLog("scanForDownloadedModels: validating model", [
+                "model": model.rawValue,
+                "isValid": isValid,
+                "hasPath": hasPath
+            ])
+            // #endregion
+            if isValid {
                 downloadedModels.insert(model)
                 downloadStates[model] = .completed
-            } else if pathForModel(model) != nil {
+            } else if hasPath {
                 // Model directory exists but is incomplete/corrupted
                 downloadStates[model] = .failed("Model is incomplete or corrupted")
             }
@@ -465,12 +562,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             }
         }
         
-        // If we can't determine the model size, still accept it as "base" 
-        downloadedModels.insert(.base)
-        downloadStates[.base] = .completed
-        setActiveModel(.base)
-        saveDownloadedModels()
-        return true
+        // If we can't determine the model size, we can't safely use it
+        // (tiny/base are removed, and guessing could assign wrong model)
+        Self.logger.warning("Could not determine model size for folder: \(url.lastPathComponent)")
+        return false
     }
     
     // MARK: - Delete Model

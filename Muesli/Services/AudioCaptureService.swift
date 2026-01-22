@@ -457,6 +457,13 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
             throw CaptureError.alreadyRecording
         }
         
+        // Pre-check permission to avoid triggering a prompt via SCShareableContent
+        // NOTE: CGPreflightScreenCaptureAccess() is reliable when using stable code signing
+        // (DEVELOPMENT_TEAM configured). With ad-hoc signing, it may return false incorrectly.
+        guard CGPreflightScreenCaptureAccess() else {
+            throw CaptureError.permissionDenied
+        }
+        
         // Get available content - this is where TCC permission is checked
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         
@@ -476,6 +483,13 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     func startCapture(forBundleIdentifier bundleIdentifier: String) async throws {
         guard !isRecording else {
             throw CaptureError.alreadyRecording
+        }
+        
+        // Pre-check permission to avoid triggering a prompt via SCShareableContent
+        // NOTE: CGPreflightScreenCaptureAccess() is reliable when using stable code signing
+        // (DEVELOPMENT_TEAM configured). With ad-hoc signing, it may return false incorrectly.
+        guard CGPreflightScreenCaptureAccess() else {
+            throw CaptureError.permissionDenied
         }
         
         // Get available content - this is where TCC permission is checked

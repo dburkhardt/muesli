@@ -175,7 +175,7 @@ struct ModelManagementView: View {
             // Model name and size
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text(model.displayName)
+                    Text(model.displayNameDetailed)
                         .font(.system(size: 13, weight: .medium))
                     if modelManager.activeModel == model {
                         Text("(Active)")
@@ -286,11 +286,11 @@ struct ModelManagementView: View {
                 .foregroundStyle(.secondary)
             
             Picker("", selection: Binding(
-                get: { modelManager.activeModel ?? .base },
+                get: { modelManager.activeModel ?? .small },
                 set: { modelManager.setActiveModel($0) }
             )) {
                 ForEach(modelManager.downloadedModelsOrdered) { model in
-                    Text(model.displayName).tag(model)
+                    Text(model.displayNameDetailed).tag(model)
                 }
             }
             .pickerStyle(.menu)

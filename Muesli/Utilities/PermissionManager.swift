@@ -44,6 +44,16 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Polling timer for permission checks (fallback) - DEPRECATED, kept for compatibility
     private var pollingTimer: Timer?
     
+    // MARK: - Permission Caching
+    
+    /// Timestamp of last successful screen recording permission check
+    /// Used to avoid repeated SCShareableContent calls which can trigger prompts
+    private var lastPermissionCheck: Date?
+    
+    /// Duration to cache permission check results (5 minutes)
+    /// This reduces SCShareableContent calls while still detecting permission revocation
+    private let permissionCacheDuration: TimeInterval = 300
+    
     // MARK: - Initialization
     
     init() {
@@ -76,6 +86,20 @@ final class PermissionManager: PermissionManagerProtocol {
             ) { [weak self] _ in
                 Task { @MainActor in
                     await self?.handleDidBecomeActive()
+                }
+            }
+        )
+        
+        // Observe app going to background to clear permission cache
+        // This ensures a fresh check when the user returns (in case they changed permissions)
+        notificationCenterObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.lastPermissionCheck = nil
                 }
             }
         )
@@ -238,6 +262,10 @@ final class PermissionManager: PermissionManagerProtocol {
     /// ⚠️ WARNING: This method calls SCShareableContent.excludingDesktopWindows() which
     /// TRIGGERS the screen recording permission prompt if permission is not granted.
     /// Do NOT call during onboarding welcome screen - see spec/onboarding_flow.md
+    ///
+    /// This method uses caching to avoid repeated SCShareableContent calls:
+    /// - If permission was verified within the last 5 minutes and was granted, returns cached value
+    /// - Cache is cleared when app goes to background (willResignActiveNotification)
     func checkScreenRecordingPermissionAsync() async -> Bool {
         await DiagnosticLogger.shared.log(.permission, "checkScreenRecordingPermissionAsync called")
         
@@ -247,14 +275,25 @@ final class PermissionManager: PermissionManagerProtocol {
             return false
         }
         
+        // Return cached value if recently verified and permission was granted
+        if let lastCheck = lastPermissionCheck,
+           Date().timeIntervalSince(lastCheck) < permissionCacheDuration,
+           screenRecordingGranted {
+            let remaining = Int(permissionCacheDuration - Date().timeIntervalSince(lastCheck))
+            await DiagnosticLogger.shared.log(.permission, "Returning cached permission (valid for \(remaining)s)")
+            return true
+        }
+        
         do {
             // This call will fail with a specific TCC error if permission is not granted
             _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             await DiagnosticLogger.shared.log(.permission, "Screen recording permission granted (SCShareableContent succeeded)")
             screenRecordingGranted = true
+            lastPermissionCheck = Date()  // Update cache timestamp after successful check
             return true
         } catch {
             await DiagnosticLogger.shared.log(.permission, "Screen recording permission denied (SCShareableContent error: \(error.localizedDescription))")
+            lastPermissionCheck = nil  // Clear cache on failure
             return false
         }
     }

@@ -2,7 +2,10 @@
 
 # Uninstall script for Muesli
 # Completely removes all traces of Muesli from the system
-# Usage: ./scripts/uninstall.sh
+# Usage: ./scripts/uninstall.sh [--dry-run]
+#
+# Options:
+#   --dry-run    Preview what would be deleted without making changes
 
 set -e
 
@@ -13,12 +16,81 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# CLI options
+DRY_RUN=false
+LOG_FILE="/tmp/muesli-uninstall-$(date +%Y%m%d-%H%M%S).log"
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: ./scripts/uninstall.sh [--dry-run]"
+            echo ""
+            echo "Options:"
+            echo "  --dry-run    Preview what would be deleted without making changes"
+            echo "  --help       Show this help message"
+            exit 0
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# Logging function - logs all actions to file for troubleshooting
+log_action() {
+    local action="$1"
+    local target="$2"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $action: $target" >> "$LOG_FILE"
+}
+
+# Wrapper for destructive operations - respects DRY_RUN mode
+execute_or_preview() {
+    local action="$1"
+    local target="$2"
+    local command="$3"
+    
+    log_action "$action" "$target"
+    
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}[DRY RUN]${NC} Would $action: $target"
+        return 0
+    else
+        eval "$command"
+    fi
+}
+
+# Launch Services register path
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+
 # Arrays to store discovered items
 declare -a APP_BUNDLES=()
 declare -a APP_BUNDLE_IDS=()
 declare -a APP_BUNDLE_TYPES=()
 declare -a SELECTED_BUNDLES=()
 declare -a DERIVED_DATA_FOLDERS=()
+
+# New arrays for comprehensive cleanup
+declare -a MOUNTED_DMG_APPS=()
+declare -a MOUNTED_DMG_VOLUMES=()
+declare -a TRASH_APPS=()
+declare -a USER_APPS=()
+declare -a LOGIN_ITEMS=()
+declare -a BUNDLE_CACHE_DIRS=()
+declare -a BUNDLE_HTTP_DIRS=()
+declare -a BUNDLE_PREF_FILES=()
+declare -a WORKTREE_BUILD_DIRS=()
+declare -a PROJECT_BUILD_DIRS=()
+
+# Flags for user choices on new items
+DELETE_TRASH_APPS=false
+EJECT_DMGS=false
+CLEAN_PER_BUNDLE_ARTIFACTS=false
+CLEAN_WORKTREE_BUILDS=false
 
 # Variables for recordings
 RECORDINGS_DIR="$HOME/Library/Application Support/Muesli/Recordings"
@@ -29,6 +101,11 @@ RECORDING_DESTINATION=""
 # Variables for application support
 APP_SUPPORT_DIR="$HOME/Library/Application Support/Muesli"
 APP_SUPPORT_ACTION=""
+
+# Variables for models
+MODELS_DIR="$HOME/Library/Application Support/Muesli/Models"
+HUGGINGFACE_CACHE_DIR="$HOME/.cache/huggingface/hub"
+KEEP_MODELS=false
 
 # Exit codes
 EXIT_SUCCESS=0
@@ -144,6 +221,115 @@ count_recordings() {
     else
         RECORDINGS_COUNT=0
     fi
+}
+
+find_user_applications_apps() {
+    print_info "Searching in ~/Applications..."
+    if [ -d "$HOME/Applications" ]; then
+        while IFS= read -r -d '' app; do
+            local bundle_id=$(defaults read "$app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null || echo "unknown")
+            USER_APPS+=("$app")
+            APP_BUNDLES+=("$app")
+            APP_BUNDLE_IDS+=("$bundle_id")
+            APP_BUNDLE_TYPES+=("User Installed")
+        done < <(find "$HOME/Applications" -maxdepth 1 -name "Muesli*.app" -type d -print0 2>/dev/null)
+    fi
+    print_info "Found ${#USER_APPS[@]} app(s) in ~/Applications"
+}
+
+find_mounted_dmg_apps() {
+    print_info "Searching for Muesli on mounted DMGs..."
+    
+    # Check /Volumes/Muesli* and /Volumes/dmg.* patterns
+    for vol in /Volumes/Muesli* /Volumes/dmg.*; do
+        if [ -d "$vol" ]; then
+            while IFS= read -r -d '' app; do
+                MOUNTED_DMG_APPS+=("$app")
+                # Store the volume path (parent of app)
+                local vol_path=$(dirname "$app")
+                # Only add unique volumes
+                if [[ ! " ${MOUNTED_DMG_VOLUMES[*]} " =~ " ${vol_path} " ]]; then
+                    MOUNTED_DMG_VOLUMES+=("$vol_path")
+                fi
+            done < <(find "$vol" -maxdepth 1 -name "Muesli*.app" -type d -print0 2>/dev/null)
+        fi
+    done
+    
+    print_info "Found ${#MOUNTED_DMG_APPS[@]} app(s) on ${#MOUNTED_DMG_VOLUMES[@]} mounted DMG(s)"
+}
+
+find_trash_apps() {
+    print_info "Searching for Muesli in Trash..."
+    if [ -d "$HOME/.Trash" ]; then
+        while IFS= read -r -d '' app; do
+            TRASH_APPS+=("$app")
+        done < <(find "$HOME/.Trash" -maxdepth 1 -name "Muesli*.app" -type d -print0 2>/dev/null)
+    fi
+    print_info "Found ${#TRASH_APPS[@]} app(s) in Trash"
+}
+
+find_login_items() {
+    print_info "Searching for Login Items..."
+    if [ -d "$HOME/Library/LaunchAgents" ]; then
+        while IFS= read -r -d '' plist; do
+            LOGIN_ITEMS+=("$plist")
+        done < <(find "$HOME/Library/LaunchAgents" -maxdepth 1 -iname "*muesli*" -type f -print0 2>/dev/null)
+    fi
+    print_info "Found ${#LOGIN_ITEMS[@]} Login Item(s)"
+}
+
+find_per_bundle_artifacts() {
+    print_info "Searching for per-bundle caches and preferences..."
+    
+    # Use tight pattern: exact match OR 3-letter suffix (worktree convention) OR named suffix
+    # This prevents matching unintended bundle IDs
+    
+    # Caches - ~/Library/Caches/
+    if [ -d "$HOME/Library/Caches" ]; then
+        while IFS= read -r -d '' dir; do
+            BUNDLE_CACHE_DIRS+=("$dir")
+        done < <(find "$HOME/Library/Caches" -maxdepth 1 -type d \( -name "com.muesli.app" -o -name "com.muesli.app.???" -o -name "com.muesli.app.*-*" \) -print0 2>/dev/null)
+    fi
+    
+    # HTTP Storages - ~/Library/HTTPStorages/
+    if [ -d "$HOME/Library/HTTPStorages" ]; then
+        while IFS= read -r -d '' dir; do
+            BUNDLE_HTTP_DIRS+=("$dir")
+        done < <(find "$HOME/Library/HTTPStorages" -maxdepth 1 -type d \( -name "com.muesli.app" -o -name "com.muesli.app.???" -o -name "com.muesli.app.*-*" \) -print0 2>/dev/null)
+    fi
+    
+    # Preference files - ~/Library/Preferences/
+    if [ -d "$HOME/Library/Preferences" ]; then
+        while IFS= read -r -d '' file; do
+            BUNDLE_PREF_FILES+=("$file")
+        done < <(find "$HOME/Library/Preferences" -maxdepth 1 -type f \( -name "com.muesli.app.plist" -o -name "com.muesli.app.???.plist" -o -name "com.muesli.app.*-*.plist" \) -print0 2>/dev/null)
+    fi
+    
+    print_info "Found ${#BUNDLE_CACHE_DIRS[@]} cache dir(s), ${#BUNDLE_HTTP_DIRS[@]} HTTP storage(s), ${#BUNDLE_PREF_FILES[@]} pref file(s)"
+}
+
+find_worktree_builds() {
+    print_info "Searching for builds in Cursor worktrees..."
+    local worktree_base="$HOME/.cursor/worktrees/muesli"
+    if [ -d "$worktree_base" ]; then
+        while IFS= read -r -d '' build_dir; do
+            WORKTREE_BUILD_DIRS+=("$build_dir")
+        done < <(find "$worktree_base" -maxdepth 3 -type d \( -name "DerivedData" -o -name "build" \) -print0 2>/dev/null)
+    fi
+    print_info "Found ${#WORKTREE_BUILD_DIRS[@]} build dir(s) in worktrees"
+}
+
+find_project_build_dirs() {
+    print_info "Searching for project build directories..."
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_dir="$(dirname "$script_dir")"
+    
+    # Check for build/ directory in project root
+    if [ -d "$project_dir/build" ]; then
+        PROJECT_BUILD_DIRS+=("$project_dir/build")
+    fi
+    
+    print_info "Found ${#PROJECT_BUILD_DIRS[@]} project build dir(s)"
 }
 
 # ============================================================================
@@ -352,35 +538,252 @@ prompt_app_support_action() {
     
     print_header "APPLICATION SUPPORT FILES"
     
-    echo "The Application Support folder may contain:"
-    echo "  - Settings and preferences"
-    echo "  - Cached data"
-    echo "  - Downloaded models"
+    echo "Found the following Muesli data in Application Support:"
+    echo "  - Settings and preferences (UserDefaults)"
+    echo "  - Diagnostic logs"
+    echo "  - Downloaded WhisperKit models (~75MB - 3GB each)"
     echo ""
     echo "Location: ~/Library/Application Support/Muesli/"
     echo ""
-    echo "Would you like to remove application support files?"
+    
+    # Check if models exist
+    local has_whisperkit_models=false
+    local has_llm_models=false
+    
+    if [ -d "$MODELS_DIR" ] && [ -n "$(find "$MODELS_DIR" -name "*.mlmodelc" 2>/dev/null | head -1)" ]; then
+        has_whisperkit_models=true
+        echo -e "  ${BLUE}WhisperKit models found${NC}"
+    fi
+    
+    if [ -d "$HUGGINGFACE_CACHE_DIR" ]; then
+        # Check for Muesli-relevant LLM models (mlx-community models)
+        if ls "$HUGGINGFACE_CACHE_DIR"/models--mlx-community--* >/dev/null 2>&1; then
+            has_llm_models=true
+            echo -e "  ${BLUE}LLM models found in ~/.cache/huggingface/hub/${NC}"
+        fi
+    fi
+    
     echo ""
-    echo "  1. Yes, remove all application support files"
-    echo "  2. No, keep application support files (preserves settings for reinstall)"
+    echo "What would you like to do?"
+    echo ""
+    echo "  1. Remove everything (settings, logs, and models)"
+    echo "  2. Keep models only (remove settings/logs; keep models for faster reinstall)"
+    echo "  3. Keep everything (preserves all data for reinstall)"
     echo ""
     
     while true; do
-        read -p "Choice (1-2): " choice
+        read -p "Choice (1-3): " choice
         
         case "$choice" in
             1)
                 APP_SUPPORT_ACTION="delete"
-                print_warning "Application support files will be DELETED"
+                KEEP_MODELS=false
+                print_warning "All application support files will be DELETED (including models)"
                 break
                 ;;
             2)
+                APP_SUPPORT_ACTION="delete"
+                KEEP_MODELS=true
+                print_info "Settings and logs will be deleted, models will be KEPT"
+                break
+                ;;
+            3)
                 APP_SUPPORT_ACTION="keep"
-                print_info "Application support files will be kept"
+                print_info "All application support files will be kept"
                 break
                 ;;
             *)
-                print_error "Invalid choice. Please enter 1 or 2."
+                print_error "Invalid choice. Please enter 1, 2, or 3."
+                ;;
+        esac
+    done
+}
+
+prompt_mounted_dmg_action() {
+    if [ ${#MOUNTED_DMG_APPS[@]} -eq 0 ]; then
+        return
+    fi
+    
+    print_header "MOUNTED DMG VOLUMES"
+    
+    echo "Found ${#MOUNTED_DMG_APPS[@]} Muesli app(s) on mounted DMG volume(s):"
+    echo ""
+    
+    for app in "${MOUNTED_DMG_APPS[@]}"; do
+        local app_name=$(basename "$app")
+        local vol_path=$(dirname "$app")
+        local bundle_id=$(defaults read "$app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null || echo "unknown")
+        echo "  - $app_name ($bundle_id)"
+        echo "    Volume: $vol_path"
+    done
+    
+    echo ""
+    echo -e "${YELLOW}Apps on mounted DMGs can cause 'wrong version' launches.${NC}"
+    echo "Ejecting these volumes will unregister them from Launch Services."
+    echo ""
+    
+    while true; do
+        read -p "Eject these DMG volumes? (yes/no): " response
+        case "$response" in
+            yes|YES|y|Y)
+                EJECT_DMGS=true
+                print_success "DMG volumes will be ejected"
+                break
+                ;;
+            no|NO|n|N)
+                EJECT_DMGS=false
+                print_info "DMG volumes will be kept mounted"
+                break
+                ;;
+            *)
+                print_error "Please answer 'yes' or 'no'"
+                ;;
+        esac
+    done
+}
+
+prompt_trash_deletion() {
+    if [ ${#TRASH_APPS[@]} -eq 0 ]; then
+        return
+    fi
+    
+    print_header "APPS IN TRASH"
+    
+    echo -e "${RED}⚠️  WARNING: Deleting apps from Trash is PERMANENT.${NC}"
+    echo -e "${RED}    These items cannot be recovered after deletion.${NC}"
+    echo ""
+    echo "Found ${#TRASH_APPS[@]} Muesli app(s) in Trash:"
+    echo ""
+    
+    for app in "${TRASH_APPS[@]}"; do
+        local app_name=$(basename "$app")
+        local app_size=$(du -sh "$app" 2>/dev/null | cut -f1)
+        local bundle_id=$(defaults read "$app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null || echo "unknown")
+        echo "  - $app_name ($bundle_id) - $app_size"
+    done
+    
+    echo ""
+    echo -e "${YELLOW}Apps in Trash can still be launched and cause 'wrong version' issues.${NC}"
+    echo ""
+    
+    while true; do
+        read -p "Delete these permanently? (yes/no): " response
+        case "$response" in
+            yes|YES)
+                DELETE_TRASH_APPS=true
+                print_warning "Trash apps will be PERMANENTLY deleted"
+                break
+                ;;
+            no|NO|n|N)
+                DELETE_TRASH_APPS=false
+                print_info "Trash apps will be kept"
+                break
+                ;;
+            *)
+                print_error "Please type 'yes' or 'no' (full word for deletion)"
+                ;;
+        esac
+    done
+}
+
+prompt_per_bundle_artifacts() {
+    local total_artifacts=$((${#BUNDLE_CACHE_DIRS[@]} + ${#BUNDLE_HTTP_DIRS[@]} + ${#BUNDLE_PREF_FILES[@]}))
+    
+    if [ $total_artifacts -eq 0 ]; then
+        return
+    fi
+    
+    print_header "PER-BUNDLE ARTIFACTS"
+    
+    echo "Found artifacts from Muesli bundle ID variants:"
+    echo ""
+    
+    if [ ${#BUNDLE_CACHE_DIRS[@]} -gt 0 ]; then
+        local cache_size=$(du -shc "${BUNDLE_CACHE_DIRS[@]}" 2>/dev/null | tail -1 | cut -f1)
+        echo "  Caches (${#BUNDLE_CACHE_DIRS[@]} dirs, ~$cache_size total):"
+        for dir in "${BUNDLE_CACHE_DIRS[@]}"; do
+            echo "    - $(basename "$dir")"
+        done
+        echo ""
+    fi
+    
+    if [ ${#BUNDLE_HTTP_DIRS[@]} -gt 0 ]; then
+        echo "  HTTP Storages (${#BUNDLE_HTTP_DIRS[@]} dirs):"
+        for dir in "${BUNDLE_HTTP_DIRS[@]}"; do
+            echo "    - $(basename "$dir")"
+        done
+        echo ""
+    fi
+    
+    if [ ${#BUNDLE_PREF_FILES[@]} -gt 0 ]; then
+        echo "  Preference Files (${#BUNDLE_PREF_FILES[@]} files):"
+        for file in "${BUNDLE_PREF_FILES[@]}"; do
+            echo "    - $(basename "$file")"
+        done
+        echo ""
+    fi
+    
+    echo "These are caches and preferences from different Muesli builds (worktrees, etc.)."
+    echo "Removing them is safe and can free up disk space."
+    echo ""
+    
+    while true; do
+        read -p "Delete these artifacts? (yes/no): " response
+        case "$response" in
+            yes|YES|y|Y)
+                CLEAN_PER_BUNDLE_ARTIFACTS=true
+                print_success "Per-bundle artifacts will be deleted"
+                break
+                ;;
+            no|NO|n|N)
+                CLEAN_PER_BUNDLE_ARTIFACTS=false
+                print_info "Per-bundle artifacts will be kept"
+                break
+                ;;
+            *)
+                print_error "Please answer 'yes' or 'no'"
+                ;;
+        esac
+    done
+}
+
+prompt_worktree_builds() {
+    if [ ${#WORKTREE_BUILD_DIRS[@]} -eq 0 ]; then
+        return
+    fi
+    
+    print_header "CURSOR WORKTREE BUILDS"
+    
+    echo "Found build directories in Cursor worktrees:"
+    echo ""
+    
+    for dir in "${WORKTREE_BUILD_DIRS[@]}"; do
+        local dir_size=$(du -sh "$dir" 2>/dev/null | cut -f1)
+        # Show relative path from worktree base
+        local rel_path=${dir#$HOME/.cursor/worktrees/muesli/}
+        echo "  - $rel_path ($dir_size)"
+    done
+    
+    echo ""
+    echo "These are build artifacts from worktree branches."
+    echo "The worktrees themselves (git data) will NOT be deleted."
+    echo ""
+    
+    while true; do
+        read -p "Delete these build directories? (yes/no): " response
+        case "$response" in
+            yes|YES|y|Y)
+                CLEAN_WORKTREE_BUILDS=true
+                print_success "Worktree build directories will be deleted"
+                break
+                ;;
+            no|NO|n|N)
+                CLEAN_WORKTREE_BUILDS=false
+                print_info "Worktree build directories will be kept"
+                break
+                ;;
+            *)
+                print_error "Please answer 'yes' or 'no'"
                 ;;
         esac
     done
@@ -395,10 +798,18 @@ show_summary() {
     
     local has_items=0
     
+    # Show DRY RUN notice at top if applicable
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}═══ DRY RUN MODE - No changes will be made ═══${NC}"
+        echo ""
+    fi
+    
+    echo "Will DELETE:"
+    echo ""
+    
     # App Bundles
     if [ ${#SELECTED_BUNDLES[@]} -gt 0 ]; then
         has_items=1
-        echo "Will DELETE:"
         echo "  App Bundles (${#SELECTED_BUNDLES[@]}):"
         for idx in "${SELECTED_BUNDLES[@]}"; do
             local app="${APP_BUNDLES[$idx]}"
@@ -410,6 +821,17 @@ show_summary() {
         echo ""
     fi
     
+    # Trash Apps
+    if [ "$DELETE_TRASH_APPS" = true ] && [ ${#TRASH_APPS[@]} -gt 0 ]; then
+        has_items=1
+        echo -e "  ${RED}Apps in Trash (PERMANENT):${NC}"
+        for app in "${TRASH_APPS[@]}"; do
+            local app_name=$(basename "$app")
+            echo "    - $app_name"
+        done
+        echo ""
+    fi
+    
     # DerivedData
     if [ ${#DERIVED_DATA_FOLDERS[@]} -gt 0 ]; then
         has_items=1
@@ -417,6 +839,58 @@ show_summary() {
         for folder in "${DERIVED_DATA_FOLDERS[@]}"; do
             local folder_name=$(basename "$folder")
             echo "    - $folder_name"
+        done
+        echo ""
+    fi
+    
+    # Project build directories
+    if [ ${#PROJECT_BUILD_DIRS[@]} -gt 0 ]; then
+        has_items=1
+        echo "  Project Build Directories (${#PROJECT_BUILD_DIRS[@]}):"
+        for dir in "${PROJECT_BUILD_DIRS[@]}"; do
+            local dir_name=$(basename "$dir")
+            echo "    - $dir_name"
+        done
+        echo ""
+    fi
+    
+    # Per-bundle artifacts
+    if [ "$CLEAN_PER_BUNDLE_ARTIFACTS" = true ]; then
+        local total=$((${#BUNDLE_CACHE_DIRS[@]} + ${#BUNDLE_HTTP_DIRS[@]} + ${#BUNDLE_PREF_FILES[@]}))
+        if [ $total -gt 0 ]; then
+            has_items=1
+            echo "  Per-Bundle Artifacts ($total items):"
+            if [ ${#BUNDLE_CACHE_DIRS[@]} -gt 0 ]; then
+                echo "    - ${#BUNDLE_CACHE_DIRS[@]} cache directories"
+            fi
+            if [ ${#BUNDLE_HTTP_DIRS[@]} -gt 0 ]; then
+                echo "    - ${#BUNDLE_HTTP_DIRS[@]} HTTP storage directories"
+            fi
+            if [ ${#BUNDLE_PREF_FILES[@]} -gt 0 ]; then
+                echo "    - ${#BUNDLE_PREF_FILES[@]} preference files"
+            fi
+            echo ""
+        fi
+    fi
+    
+    # Worktree builds
+    if [ "$CLEAN_WORKTREE_BUILDS" = true ] && [ ${#WORKTREE_BUILD_DIRS[@]} -gt 0 ]; then
+        has_items=1
+        echo "  Worktree Build Directories (${#WORKTREE_BUILD_DIRS[@]}):"
+        for dir in "${WORKTREE_BUILD_DIRS[@]}"; do
+            local rel_path=${dir#$HOME/.cursor/worktrees/muesli/}
+            echo "    - $rel_path"
+        done
+        echo ""
+    fi
+    
+    # Login Items
+    if [ ${#LOGIN_ITEMS[@]} -gt 0 ]; then
+        has_items=1
+        echo "  Login Items (${#LOGIN_ITEMS[@]}):"
+        for plist in "${LOGIN_ITEMS[@]}"; do
+            local plist_name=$(basename "$plist")
+            echo "    - $plist_name"
         done
         echo ""
     fi
@@ -460,26 +934,62 @@ show_summary() {
         echo ""
     elif [ "$RECORDING_ACTION" = "delete" ]; then
         has_items=1
-        echo "Will DELETE:"
         echo "  Meeting Recordings:"
         echo "    - $RECORDINGS_COUNT recording(s) in $RECORDINGS_DIR"
+        echo ""
     fi
     
     # Application Support
     if [ "$APP_SUPPORT_ACTION" = "delete" ]; then
         has_items=1
-        echo "Will DELETE:"
-        echo "  Application Support:"
-        if [ "$RECORDING_ACTION" = "move" ]; then
-            echo "    - ~/Library/Application Support/Muesli/ (after moving recordings)"
+        if [ "$KEEP_MODELS" = true ]; then
+            echo "  Application Support (keeping models):"
+            echo "    - ~/Library/Application Support/Muesli/Logs/"
+            echo "    - ~/Library/Application Support/Muesli/Exports/"
+            if [ "$RECORDING_ACTION" != "keep" ] && [ "$RECORDING_ACTION" != "move" ]; then
+                echo "    - ~/Library/Application Support/Muesli/Recordings/"
+            fi
+            echo ""
+            echo "Will KEEP:"
+            echo "  Downloaded Models:"
+            echo "    - ~/Library/Application Support/Muesli/Models/"
         else
-            echo "    - ~/Library/Application Support/Muesli/"
+            echo "  Application Support:"
+            if [ "$RECORDING_ACTION" = "move" ]; then
+                echo "    - ~/Library/Application Support/Muesli/ (after moving recordings)"
+            else
+                echo "    - ~/Library/Application Support/Muesli/"
+            fi
         fi
         echo ""
     elif [ "$APP_SUPPORT_ACTION" = "keep" ]; then
         echo "Will KEEP:"
         echo "  Application Support:"
         echo "    - ~/Library/Application Support/Muesli/"
+        echo ""
+    fi
+    
+    # DMG Volumes to eject
+    if [ "$EJECT_DMGS" = true ] && [ ${#MOUNTED_DMG_VOLUMES[@]} -gt 0 ]; then
+        has_items=1
+        echo "Will EJECT:"
+        echo "  Mounted DMG Volumes (${#MOUNTED_DMG_VOLUMES[@]}):"
+        for vol in "${MOUNTED_DMG_VOLUMES[@]}"; do
+            local vol_name=$(basename "$vol")
+            echo "    - $vol_name"
+        done
+        echo ""
+    fi
+    
+    # Launch Services unregistration
+    local apps_to_unregister=0
+    [ ${#SELECTED_BUNDLES[@]} -gt 0 ] && apps_to_unregister=$((apps_to_unregister + ${#SELECTED_BUNDLES[@]}))
+    [ "$EJECT_DMGS" = true ] && apps_to_unregister=$((apps_to_unregister + ${#MOUNTED_DMG_APPS[@]}))
+    [ "$DELETE_TRASH_APPS" = true ] && apps_to_unregister=$((apps_to_unregister + ${#TRASH_APPS[@]}))
+    
+    if [ $apps_to_unregister -gt 0 ]; then
+        echo "Will UNREGISTER from Launch Services:"
+        echo "  - $apps_to_unregister app(s) will be unregistered before deletion"
         echo ""
     fi
     
@@ -490,7 +1000,11 @@ show_summary() {
     fi
     
     echo "═══════════════════════════════════════════════════════════════"
-    echo -e "${RED}WARNING: This action cannot be undone (except for moved recordings)${NC}"
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}DRY RUN: No changes will be made${NC}"
+    else
+        echo -e "${RED}WARNING: This action cannot be undone (except for moved recordings)${NC}"
+    fi
     echo "═══════════════════════════════════════════════════════════════"
     echo ""
     
@@ -518,6 +1032,57 @@ confirm_uninstall() {
 # EXECUTION FUNCTIONS
 # ============================================================================
 
+# Unregister a single app from Launch Services (targeted, not global reset)
+unregister_from_launch_services() {
+    local app_path="$1"
+    
+    if [ ! -x "$LSREGISTER" ]; then
+        print_warning "lsregister not found, skipping Launch Services cleanup"
+        return 1
+    fi
+    
+    local app_name=$(basename "$app_path")
+    
+    # Unregister BEFORE deleting the app
+    if [ "$DRY_RUN" = true ]; then
+        log_action "unregister" "$app_path"
+        echo -e "${YELLOW}[DRY RUN]${NC} Would unregister from Launch Services: $app_name"
+    else
+        if "$LSREGISTER" -u "$app_path" 2>/dev/null; then
+            log_action "unregistered" "$app_path"
+            print_success "Unregistered from Launch Services: $app_name"
+        else
+            # May fail if already unregistered or path doesn't exist in DB, not an error
+            log_action "unregister_skipped" "$app_path"
+            print_info "Could not unregister (may already be unregistered): $app_name"
+        fi
+    fi
+}
+
+# Unregister all discovered apps from Launch Services
+unregister_all_apps() {
+    print_info "Unregistering apps from Launch Services..."
+    
+    # Unregister selected app bundles (these are being deleted)
+    for idx in "${SELECTED_BUNDLES[@]}"; do
+        unregister_from_launch_services "${APP_BUNDLES[$idx]}"
+    done
+    
+    # Unregister mounted DMG apps (if user chose to eject)
+    if [ "$EJECT_DMGS" = true ]; then
+        for app in "${MOUNTED_DMG_APPS[@]}"; do
+            unregister_from_launch_services "$app"
+        done
+    fi
+    
+    # Unregister Trash apps (if user chose to delete them)
+    if [ "$DELETE_TRASH_APPS" = true ]; then
+        for app in "${TRASH_APPS[@]}"; do
+            unregister_from_launch_services "$app"
+        done
+    fi
+}
+
 kill_muesli_processes() {
     print_info "Killing running Muesli processes..."
     
@@ -526,11 +1091,27 @@ kill_muesli_processes() {
         local app="${APP_BUNDLES[$idx]}"
         local app_name=$(basename "$app" .app)
         
-        if killall "$app_name" 2>/dev/null; then
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_kill" "$app_name"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would kill process: $app_name"
+            killed=$((killed + 1))
+        elif killall "$app_name" 2>/dev/null; then
+            log_action "killed" "$app_name"
             print_success "Killed: $app_name"
             killed=$((killed + 1))
         fi
     done
+    
+    # Also try to kill any Muesli-* variants (worktree builds)
+    for variant in Muesli-???; do
+        if [ "$DRY_RUN" = true ]; then
+            continue
+        elif killall "$variant" 2>/dev/null; then
+            log_action "killed" "$variant"
+            print_success "Killed: $variant"
+            killed=$((killed + 1))
+        fi
+    done 2>/dev/null
     
     if [ $killed -eq 0 ]; then
         print_info "No running processes found"
@@ -551,7 +1132,11 @@ move_recordings() {
     
     # Create a Recordings subfolder in destination
     local dest_recordings="$RECORDING_DESTINATION/Recordings"
-    if ! mkdir -p "$dest_recordings" 2>/dev/null; then
+    
+    if [ "$DRY_RUN" = true ]; then
+        log_action "would_create_dir" "$dest_recordings"
+        echo -e "${YELLOW}[DRY RUN]${NC} Would create: $dest_recordings"
+    elif ! mkdir -p "$dest_recordings" 2>/dev/null; then
         print_error "Failed to create destination: $dest_recordings"
         return 1
     fi
@@ -561,9 +1146,15 @@ move_recordings() {
     local failed=0
     while IFS= read -r -d '' recording; do
         local recording_name=$(basename "$recording")
-        if mv "$recording" "$dest_recordings/" 2>/dev/null; then
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_move" "$recording -> $dest_recordings/"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would move: $recording_name"
+            moved=$((moved + 1))
+        elif mv "$recording" "$dest_recordings/" 2>/dev/null; then
+            log_action "moved" "$recording -> $dest_recordings/"
             moved=$((moved + 1))
         else
+            log_action "move_failed" "$recording"
             print_error "Failed to move: $recording_name"
             failed=$((failed + 1))
         fi
@@ -589,9 +1180,14 @@ delete_app_bundles() {
         local app="${APP_BUNDLES[$idx]}"
         local app_name=$(basename "$app")
         
-        if rm -rf "$app" 2>/dev/null; then
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete" "$app"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete: $app_name"
+        elif rm -rf "$app" 2>/dev/null; then
+            log_action "deleted" "$app"
             print_success "Deleted: $app_name"
         else
+            log_action "delete_failed" "$app"
             print_error "Failed to delete: $app_name"
         fi
     done
@@ -607,10 +1203,200 @@ delete_derived_data() {
     for folder in "${DERIVED_DATA_FOLDERS[@]}"; do
         local folder_name=$(basename "$folder")
         
-        if rm -rf "$folder" 2>/dev/null; then
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete" "$folder"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete: $folder_name"
+        elif rm -rf "$folder" 2>/dev/null; then
+            log_action "deleted" "$folder"
             print_success "Deleted: $folder_name"
         else
+            log_action "delete_failed" "$folder"
             print_error "Failed to delete: $folder_name"
+        fi
+    done
+}
+
+eject_mounted_dmgs() {
+    if [ "$EJECT_DMGS" != true ] || [ ${#MOUNTED_DMG_VOLUMES[@]} -eq 0 ]; then
+        return 0
+    fi
+    
+    print_info "Ejecting mounted DMG volumes..."
+    
+    # Get unique volumes
+    local -a unique_volumes=()
+    for vol in "${MOUNTED_DMG_VOLUMES[@]}"; do
+        if [[ ! " ${unique_volumes[*]} " =~ " ${vol} " ]]; then
+            unique_volumes+=("$vol")
+        fi
+    done
+    
+    for vol in "${unique_volumes[@]}"; do
+        local vol_name=$(basename "$vol")
+        
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_eject" "$vol"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would eject: $vol_name"
+        else
+            # Check if volume has open files (lsof)
+            if lsof +D "$vol" &>/dev/null; then
+                log_action "eject_blocked" "$vol"
+                print_warning "Volume has open files: $vol_name"
+                print_warning "Close any Finder windows or apps using this volume, then retry"
+            else
+                if diskutil eject "$vol" 2>/dev/null; then
+                    log_action "ejected" "$vol"
+                    print_success "Ejected: $vol_name"
+                else
+                    log_action "eject_failed" "$vol"
+                    print_error "Failed to eject: $vol_name"
+                fi
+            fi
+        fi
+    done
+}
+
+delete_trash_apps() {
+    if [ "$DELETE_TRASH_APPS" != true ] || [ ${#TRASH_APPS[@]} -eq 0 ]; then
+        return 0
+    fi
+    
+    print_info "Deleting apps from Trash..."
+    
+    for app in "${TRASH_APPS[@]}"; do
+        local app_name=$(basename "$app")
+        
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_trash" "$app"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would permanently delete from Trash: $app_name"
+        elif rm -rf "$app" 2>/dev/null; then
+            log_action "deleted_trash" "$app"
+            print_success "Permanently deleted from Trash: $app_name"
+        else
+            log_action "delete_trash_failed" "$app"
+            print_error "Failed to delete from Trash: $app_name"
+        fi
+    done
+}
+
+delete_per_bundle_artifacts() {
+    if [ "$CLEAN_PER_BUNDLE_ARTIFACTS" != true ]; then
+        return 0
+    fi
+    
+    print_info "Deleting per-bundle artifacts..."
+    
+    # Delete cache directories
+    for dir in "${BUNDLE_CACHE_DIRS[@]}"; do
+        local dir_name=$(basename "$dir")
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_cache" "$dir"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete cache: $dir_name"
+        elif rm -rf "$dir" 2>/dev/null; then
+            log_action "deleted_cache" "$dir"
+            print_success "Deleted cache: $dir_name"
+        else
+            log_action "delete_cache_failed" "$dir"
+            print_error "Failed to delete cache: $dir_name"
+        fi
+    done
+    
+    # Delete HTTP storage directories
+    for dir in "${BUNDLE_HTTP_DIRS[@]}"; do
+        local dir_name=$(basename "$dir")
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_http" "$dir"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete HTTP storage: $dir_name"
+        elif rm -rf "$dir" 2>/dev/null; then
+            log_action "deleted_http" "$dir"
+            print_success "Deleted HTTP storage: $dir_name"
+        else
+            log_action "delete_http_failed" "$dir"
+            print_error "Failed to delete HTTP storage: $dir_name"
+        fi
+    done
+    
+    # Delete preference files
+    for file in "${BUNDLE_PREF_FILES[@]}"; do
+        local file_name=$(basename "$file")
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_pref" "$file"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete preference: $file_name"
+        elif rm -f "$file" 2>/dev/null; then
+            log_action "deleted_pref" "$file"
+            print_success "Deleted preference: $file_name"
+        else
+            log_action "delete_pref_failed" "$file"
+            print_error "Failed to delete preference: $file_name"
+        fi
+    done
+}
+
+delete_worktree_builds() {
+    if [ "$CLEAN_WORKTREE_BUILDS" != true ] || [ ${#WORKTREE_BUILD_DIRS[@]} -eq 0 ]; then
+        return 0
+    fi
+    
+    print_info "Deleting worktree build directories..."
+    
+    for dir in "${WORKTREE_BUILD_DIRS[@]}"; do
+        local rel_path=${dir#$HOME/.cursor/worktrees/muesli/}
+        
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_worktree_build" "$dir"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete worktree build: $rel_path"
+        elif rm -rf "$dir" 2>/dev/null; then
+            log_action "deleted_worktree_build" "$dir"
+            print_success "Deleted worktree build: $rel_path"
+        else
+            log_action "delete_worktree_build_failed" "$dir"
+            print_error "Failed to delete worktree build: $rel_path"
+        fi
+    done
+}
+
+delete_project_build_dirs() {
+    if [ ${#PROJECT_BUILD_DIRS[@]} -eq 0 ]; then
+        return 0
+    fi
+    
+    print_info "Deleting project build directories..."
+    
+    for dir in "${PROJECT_BUILD_DIRS[@]}"; do
+        local dir_name=$(basename "$dir")
+        
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_project_build" "$dir"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete project build: $dir_name"
+        elif rm -rf "$dir" 2>/dev/null; then
+            log_action "deleted_project_build" "$dir"
+            print_success "Deleted project build: $dir_name"
+        else
+            log_action "delete_project_build_failed" "$dir"
+            print_error "Failed to delete project build: $dir_name"
+        fi
+    done
+}
+
+delete_login_items() {
+    if [ ${#LOGIN_ITEMS[@]} -eq 0 ]; then
+        return 0
+    fi
+    
+    print_info "Deleting Login Items..."
+    
+    for plist in "${LOGIN_ITEMS[@]}"; do
+        local plist_name=$(basename "$plist")
+        
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_login_item" "$plist"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete Login Item: $plist_name"
+        elif rm -f "$plist" 2>/dev/null; then
+            log_action "deleted_login_item" "$plist"
+            print_success "Deleted Login Item: $plist_name"
+        else
+            log_action "delete_login_item_failed" "$plist"
+            print_error "Failed to delete Login Item: $plist_name"
         fi
     done
 }
@@ -622,7 +1408,7 @@ reset_tcc_permissions() {
     
     print_info "Resetting TCC permissions..."
     
-    # Get unique bundle IDs
+    # Get unique bundle IDs from selected bundles
     local unique_ids=()
     for idx in "${SELECTED_BUNDLES[@]}"; do
         local bundle_id="${APP_BUNDLE_IDS[$idx]}"
@@ -631,19 +1417,36 @@ reset_tcc_permissions() {
         fi
     done
     
+    # Also include bundle IDs from per-bundle artifacts being cleaned
+    if [ "$CLEAN_PER_BUNDLE_ARTIFACTS" = true ]; then
+        for dir in "${BUNDLE_CACHE_DIRS[@]}"; do
+            local bundle_id=$(basename "$dir")
+            if [[ ! " ${unique_ids[@]} " =~ " ${bundle_id} " ]]; then
+                unique_ids+=("$bundle_id")
+            fi
+        done
+    fi
+    
     for bundle_id in "${unique_ids[@]}"; do
-        # Reset Screen Recording permission
-        if tccutil reset ScreenCapture "$bundle_id" 2>/dev/null; then
-            print_success "Reset Screen Recording for: $bundle_id"
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_reset_tcc" "$bundle_id"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would reset TCC permissions for: $bundle_id"
         else
-            print_warning "Could not reset Screen Recording for: $bundle_id"
-        fi
-        
-        # Reset Microphone permission
-        if tccutil reset Microphone "$bundle_id" 2>/dev/null; then
-            print_success "Reset Microphone for: $bundle_id"
-        else
-            print_warning "Could not reset Microphone for: $bundle_id"
+            # Reset Screen Recording permission
+            if tccutil reset ScreenCapture "$bundle_id" 2>/dev/null; then
+                log_action "reset_tcc_screen" "$bundle_id"
+                print_success "Reset Screen Recording for: $bundle_id"
+            else
+                print_warning "Could not reset Screen Recording for: $bundle_id"
+            fi
+            
+            # Reset Microphone permission
+            if tccutil reset Microphone "$bundle_id" 2>/dev/null; then
+                log_action "reset_tcc_mic" "$bundle_id"
+                print_success "Reset Microphone for: $bundle_id"
+            else
+                print_warning "Could not reset Microphone for: $bundle_id"
+            fi
         fi
     done
 }
@@ -665,7 +1468,11 @@ delete_user_defaults() {
     done
     
     for bundle_id in "${unique_ids[@]}"; do
-        if defaults delete "$bundle_id" 2>/dev/null; then
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_defaults" "$bundle_id"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete UserDefaults for: $bundle_id"
+        elif defaults delete "$bundle_id" 2>/dev/null; then
+            log_action "deleted_defaults" "$bundle_id"
             print_success "Deleted UserDefaults for: $bundle_id"
         else
             print_info "No UserDefaults found for: $bundle_id"
@@ -684,57 +1491,169 @@ delete_application_support() {
         return 0
     fi
     
-    print_info "Deleting Application Support folder..."
-    
-    if rm -rf "$APP_SUPPORT_DIR" 2>/dev/null; then
-        print_success "Deleted: ~/Library/Application Support/Muesli"
+    if [ "$KEEP_MODELS" = true ]; then
+        # Delete everything EXCEPT the Models directory
+        print_info "Deleting Application Support (keeping models)..."
+        
+        # Delete Logs directory
+        if [ -d "$APP_SUPPORT_DIR/Logs" ]; then
+            if [ "$DRY_RUN" = true ]; then
+                log_action "would_delete" "$APP_SUPPORT_DIR/Logs"
+                echo -e "${YELLOW}[DRY RUN]${NC} Would delete: ~/Library/Application Support/Muesli/Logs"
+            elif rm -rf "$APP_SUPPORT_DIR/Logs" 2>/dev/null; then
+                log_action "deleted" "$APP_SUPPORT_DIR/Logs"
+                print_success "Deleted: ~/Library/Application Support/Muesli/Logs"
+            else
+                print_warning "Could not delete Logs folder"
+            fi
+        fi
+        
+        # Delete Recordings directory (if not already moved/kept by user choice)
+        if [ -d "$APP_SUPPORT_DIR/Recordings" ] && [ "$RECORDING_ACTION" != "keep" ] && [ "$RECORDING_ACTION" != "move" ]; then
+            if [ "$DRY_RUN" = true ]; then
+                log_action "would_delete" "$APP_SUPPORT_DIR/Recordings"
+                echo -e "${YELLOW}[DRY RUN]${NC} Would delete: ~/Library/Application Support/Muesli/Recordings"
+            elif rm -rf "$APP_SUPPORT_DIR/Recordings" 2>/dev/null; then
+                log_action "deleted" "$APP_SUPPORT_DIR/Recordings"
+                print_success "Deleted: ~/Library/Application Support/Muesli/Recordings"
+            else
+                print_warning "Could not delete Recordings folder"
+            fi
+        fi
+        
+        # Delete Exports directory
+        if [ -d "$APP_SUPPORT_DIR/Exports" ]; then
+            if [ "$DRY_RUN" = true ]; then
+                log_action "would_delete" "$APP_SUPPORT_DIR/Exports"
+                echo -e "${YELLOW}[DRY RUN]${NC} Would delete: ~/Library/Application Support/Muesli/Exports"
+            elif rm -rf "$APP_SUPPORT_DIR/Exports" 2>/dev/null; then
+                log_action "deleted" "$APP_SUPPORT_DIR/Exports"
+                print_success "Deleted: ~/Library/Application Support/Muesli/Exports"
+            else
+                print_warning "Could not delete Exports folder"
+            fi
+        fi
+        
+        # Delete any other files in the root (but not subdirectories we want to keep)
+        if [ "$DRY_RUN" = true ]; then
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete root files in Application Support"
+        else
+            find "$APP_SUPPORT_DIR" -maxdepth 1 -type f -delete 2>/dev/null
+        fi
+        
+        print_success "Kept: ~/Library/Application Support/Muesli/Models"
+        return 0
     else
-        print_error "Failed to delete Application Support folder"
-        return 1
+        # Delete everything
+        print_info "Deleting Application Support folder..."
+        
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete" "$APP_SUPPORT_DIR"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete: ~/Library/Application Support/Muesli"
+        elif rm -rf "$APP_SUPPORT_DIR" 2>/dev/null; then
+            log_action "deleted" "$APP_SUPPORT_DIR"
+            print_success "Deleted: ~/Library/Application Support/Muesli"
+        else
+            print_error "Failed to delete Application Support folder"
+            return 1
+        fi
     fi
 }
 
 execute_uninstall() {
-    print_header "EXECUTING UNINSTALL"
+    if [ "$DRY_RUN" = true ]; then
+        print_header "EXECUTING UNINSTALL (DRY RUN)"
+        echo -e "${YELLOW}This is a DRY RUN - no changes will be made${NC}"
+        echo ""
+    else
+        print_header "EXECUTING UNINSTALL"
+    fi
     
-    local success=0
+    # Log start of uninstall
+    log_action "uninstall_started" "$(date)"
     
     # Move recordings first (if requested)
     if [ "$RECORDING_ACTION" = "move" ]; then
         move_recordings || print_warning "Recording move failed, continuing with uninstall..."
     fi
     
-    # Kill running processes
+    # 1. Unregister apps from Launch Services BEFORE deleting them
+    unregister_all_apps
+    
+    # 2. Kill running processes
     kill_muesli_processes
     
-    # Delete app bundles
+    # 3. Delete app bundles (DerivedData, /Applications, ~/Applications)
     delete_app_bundles
     
-    # Delete DerivedData
+    # 4. Delete Trash apps (if user confirmed)
+    delete_trash_apps
+    
+    # 5. Eject mounted DMGs (if user confirmed)
+    eject_mounted_dmgs
+    
+    # 6. Delete DerivedData folders
     delete_derived_data
     
-    # Reset TCC permissions
+    # 7. Delete project build directories
+    delete_project_build_dirs
+    
+    # 8. Reset TCC permissions
     reset_tcc_permissions
     
-    # Delete UserDefaults
+    # 9. Delete UserDefaults
     delete_user_defaults
     
-    # Delete Application Support (unless keeping recordings)
+    # 10. Delete per-bundle caches/HTTP storages/preferences
+    delete_per_bundle_artifacts
+    
+    # 11. Delete Login Items
+    delete_login_items
+    
+    # 12. Delete worktree builds (if user confirmed)
+    delete_worktree_builds
+    
+    # 13. Delete Application Support (unless keeping recordings)
     delete_application_support || print_warning "Application Support deletion failed, continuing..."
     
-    print_header "UNINSTALL COMPLETE"
+    # Log completion
+    log_action "uninstall_completed" "$(date)"
     
-    if [ "$RECORDING_ACTION" = "move" ] && [ -n "$RECORDING_DESTINATION" ]; then
-        print_info "Recordings saved to: $RECORDING_DESTINATION/Recordings"
+    if [ "$DRY_RUN" = true ]; then
+        print_header "DRY RUN COMPLETE"
+        echo -e "${YELLOW}No changes were made. Review the output above.${NC}"
+        echo ""
+        echo "To perform the actual uninstall, run without --dry-run:"
+        echo "  ./scripts/uninstall.sh"
+        echo ""
+        echo "Log file: $LOG_FILE"
+    else
+        print_header "UNINSTALL COMPLETE"
+        
+        if [ "$RECORDING_ACTION" = "move" ] && [ -n "$RECORDING_DESTINATION" ]; then
+            print_info "Recordings saved to: $RECORDING_DESTINATION/Recordings"
+        fi
+        
+        if [ "$KEEP_MODELS" = true ]; then
+            print_success "Muesli has been uninstalled (models preserved)"
+            echo ""
+            echo "Models kept at:"
+            echo "  - WhisperKit: ~/Library/Application Support/Muesli/Models/"
+            echo "  - LLM models: ~/.cache/huggingface/hub/ (if present)"
+            echo ""
+            echo "On reinstall, Muesli will automatically detect these models."
+        else
+            print_success "Muesli has been uninstalled from your system"
+        fi
+        
+        echo ""
+        echo "You can now:"
+        echo "  - Test a clean installation from DMG"
+        echo "  - Build fresh from Xcode"
+        echo "  - Test the onboarding flow"
+        echo ""
+        echo "Log file: $LOG_FILE"
     fi
-    
-    print_success "Muesli has been uninstalled from your system"
-    echo ""
-    echo "You can now:"
-    echo "  - Test a clean installation from DMG"
-    echo "  - Build fresh from Xcode"
-    echo "  - Test the onboarding flow"
-    echo ""
 }
 
 # ============================================================================
@@ -746,31 +1665,82 @@ main() {
     
     print_header "MUESLI UNINSTALLER"
     
+    # Show dry run notice
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}═══ DRY RUN MODE ═══${NC}"
+        echo "No changes will be made. This is a preview of what would be deleted."
+        echo ""
+    fi
+    
     # Safety check
     check_not_root
     
-    # Discovery phase
+    # Initialize log file
+    echo "Muesli Uninstaller Log - $(date)" > "$LOG_FILE"
+    echo "DRY_RUN=$DRY_RUN" >> "$LOG_FILE"
+    echo "---" >> "$LOG_FILE"
+    
+    # =========================================================================
+    # DISCOVERY PHASE
+    # =========================================================================
+    print_header "DISCOVERY PHASE"
+    
+    # Original discovery functions
     find_app_bundles
+    find_user_applications_apps
     find_derived_data
     count_recordings
     
+    # New discovery functions for comprehensive cleanup
+    find_mounted_dmg_apps
+    find_trash_apps
+    find_login_items
+    find_per_bundle_artifacts
+    find_worktree_builds
+    find_project_build_dirs
+    
     # Check if anything was found
-    if [ ${#APP_BUNDLES[@]} -eq 0 ] && [ ${#DERIVED_DATA_FOLDERS[@]} -eq 0 ] && [ "$RECORDINGS_COUNT" -eq 0 ]; then
+    local has_app_support=false
+    if [ -d "$APP_SUPPORT_DIR" ]; then
+        has_app_support=true
+    fi
+    
+    local total_found=$((${#APP_BUNDLES[@]} + ${#DERIVED_DATA_FOLDERS[@]} + ${#MOUNTED_DMG_APPS[@]} + ${#TRASH_APPS[@]} + ${#BUNDLE_CACHE_DIRS[@]} + ${#BUNDLE_HTTP_DIRS[@]} + ${#BUNDLE_PREF_FILES[@]} + ${#WORKTREE_BUILD_DIRS[@]} + ${#PROJECT_BUILD_DIRS[@]} + ${#LOGIN_ITEMS[@]}))
+    
+    if [ $total_found -eq 0 ] && [ "$RECORDINGS_COUNT" -eq 0 ] && [ "$has_app_support" = false ]; then
         print_warning "No Muesli installations found"
         echo ""
         echo "Searched in:"
         echo "  - ~/Library/Developer/Xcode/DerivedData/"
         echo "  - <project>/DerivedData/ (local build folder)"
         echo "  - /Applications/"
+        echo "  - ~/Applications/"
+        echo "  - ~/.Trash/"
+        echo "  - /Volumes/ (mounted DMGs)"
         echo "  - ~/Library/Application Support/Muesli/"
+        echo "  - ~/Library/Caches/com.muesli.app*/"
+        echo "  - ~/Library/HTTPStorages/com.muesli.app*/"
+        echo "  - ~/Library/Preferences/com.muesli.app*.plist"
+        echo "  - ~/Library/LaunchAgents/"
+        echo "  - ~/.cursor/worktrees/muesli/"
         echo ""
         exit $EXIT_SUCCESS
     fi
     
-    # Interactive selection
+    # =========================================================================
+    # INTERACTIVE SELECTION PHASE
+    # =========================================================================
+    
+    # App bundle selection
     if [ ${#APP_BUNDLES[@]} -gt 0 ]; then
         interactive_select_bundles
     fi
+    
+    # Mounted DMG handling
+    prompt_mounted_dmg_action
+    
+    # Trash apps handling (with permanent deletion warning)
+    prompt_trash_deletion
     
     # Recording handling
     if [ "$RECORDINGS_COUNT" -gt 0 ]; then
@@ -782,6 +1752,16 @@ main() {
     # Application Support handling (separate from recordings)
     prompt_app_support_action
     
+    # Per-bundle artifacts handling
+    prompt_per_bundle_artifacts
+    
+    # Worktree builds handling
+    prompt_worktree_builds
+    
+    # =========================================================================
+    # SUMMARY AND CONFIRMATION
+    # =========================================================================
+    
     # Show summary and confirm
     if ! show_summary; then
         print_warning "Nothing selected to uninstall"
@@ -792,6 +1772,10 @@ main() {
         print_info "Uninstall cancelled by user"
         exit $EXIT_CANCELLED
     fi
+    
+    # =========================================================================
+    # EXECUTION
+    # =========================================================================
     
     # Execute uninstall
     execute_uninstall

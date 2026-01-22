@@ -148,6 +148,11 @@ final class TranscriptProcessor {
     private func filterArtifacts(_ text: String) -> String? {
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         
+        // First, remove WhisperKit special tokens
+        // These appear in segment-level text: <|startoftranscript|>, <|en|>, <|transcribe|>,
+        // <|0.00|>, <|endoftext|>, <|notimestamps|>, etc.
+        cleaned = removeWhisperKitTokens(cleaned)
+        
         // Check for common Whisper hallucinations on silence first
         if isHallucination(cleaned) {
             return nil
@@ -172,6 +177,28 @@ final class TranscriptProcessor {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         
         return cleaned.isEmpty ? nil : cleaned
+    }
+    
+    /// Remove WhisperKit special tokens from text
+    /// These tokens appear in segment-level transcription output
+    private func removeWhisperKitTokens(_ text: String) -> String {
+        // WhisperKit special token pattern: <|...|>
+        // Includes: <|startoftranscript|>, <|en|>, <|transcribe|>, <|translate|>,
+        // <|notimestamps|>, <|endoftext|>, and timestamp tokens like <|0.00|>, <|10.00|>
+        guard let tokenRegex = try? NSRegularExpression(
+            pattern: "<\\|[^|>]+\\|>",
+            options: []
+        ) else {
+            return text
+        }
+        
+        let range = NSRange(text.startIndex..., in: text)
+        return tokenRegex.stringByReplacingMatches(
+            in: text,
+            options: [],
+            range: range,
+            withTemplate: ""
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     /// Detect common Whisper hallucinations that occur on silence/blank audio

@@ -1,6 +1,32 @@
 import Foundation
 import os.log
 
+// #region agent log
+private func tcDebugLog(_ message: String, _ data: [String: Any] = [:]) {
+    let logPath = NSHomeDirectory() + "/git-repos/muesli/.cursor/debug.log"
+    let timestamp = Date().timeIntervalSince1970 * 1000
+    var payload: [String: Any] = [
+        "timestamp": timestamp,
+        "location": "TranscriptionCoordinator",
+        "message": message,
+        "sessionId": "debug-session",
+        "hypothesisId": "J"
+    ]
+    if !data.isEmpty { payload["data"] = data }
+    if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+       let jsonString = String(data: jsonData, encoding: .utf8) {
+        let line = jsonString + "\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8)!)
+            handle.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
+        }
+    }
+}
+// #endregion
+
 /// Coordinates transcription model lifecycle and audio buffering
 /// Decouples transcription from recording - recording can start immediately,
 /// while transcription loads asynchronously
@@ -136,6 +162,65 @@ final class TranscriptionCoordinator {
         self.transcriptionService = transcriptionService
         self.modelManager = modelManager
         self.slowLoadThreshold = slowLoadThreshold
+    }
+    
+    // MARK: - Model Switching
+    
+    /// Whether a model switch is in progress (observable for UI)
+    var isModelSwitching = false
+    
+    /// Switch to a different model during active transcription
+    /// Audio continues buffering while new model loads
+    func switchModel(to newModel: ModelManager.ModelSize) async -> ModelState {
+        // Prevent concurrent model switches
+        guard !isModelSwitching else {
+            logger.warning("Model switch already in progress, ignoring request")
+            return modelState
+        }
+        
+        guard modelManager.validateModel(newModel) else {
+            return .notAvailable
+        }
+        
+        // Skip if already using this model
+        guard modelManager.activeModel != newModel else {
+            return modelState
+        }
+        
+        isModelSwitching = true
+        defer { isModelSwitching = false }
+        
+        let oldModel = modelManager.activeModel
+        
+        // Log the switch with buffer state (async call)
+        await DiagnosticLogger.shared.log(.transcription,
+            "Model switch: \(oldModel?.rawValue ?? "none") -> \(newModel.rawValue), " +
+            "buffered=\(pendingSystemAudio.count + pendingMicAudio.count) samples")
+        
+        // CRITICAL: Set loading state FIRST - enables buffering before cleanup
+        modelState = .loading
+        isInitialized = false
+        
+        // Now safe to stop current transcription (new audio goes to buffer)
+        await transcriptionService.stopTranscription()
+        
+        // Switch active model and reinitialize
+        modelManager.setActiveModel(newModel)
+        let result = await prepareModel()
+        // processBufferedAudio() called automatically when ready via didSet
+        
+        // If switch failed, attempt to restart old model for recovery
+        if case .failed = result, let oldModel = oldModel {
+            logger.warning("Model switch failed, attempting to restore \(oldModel.displayName)")
+            modelManager.setActiveModel(oldModel)
+            let recoveryResult = await prepareModel()
+            if recoveryResult.isReady {
+                logger.info("Successfully restored \(oldModel.displayName)")
+            }
+            return result  // Still return failure so UI can show warning
+        }
+        
+        return result
     }
     
     // MARK: - Model Lifecycle
@@ -297,6 +382,13 @@ final class TranscriptionCoordinator {
     
     /// Stop transcription and process remaining audio
     func stopTranscription() async {
+        // #region agent log
+        tcDebugLog("stopTranscription called", [
+            "modelState": String(describing: modelState),
+            "isInitialized": isInitialized,
+            "callStack": Thread.callStackSymbols.prefix(10).joined(separator: "\n")
+        ])
+        // #endregion
         await transcriptionService.stopTranscription()
         clearBuffers()
         
@@ -500,6 +592,10 @@ final class TranscriptionCoordinator {
                          userInfo: [NSLocalizedDescriptionKey: "Model is corrupted: \(modelSize.rawValue)"])
         }
         
+        // Log reprocess start
+        Task { await DiagnosticLogger.shared.log(.transcription,
+            "Reprocess: model=\(modelSize.rawValue)") }
+        
         // Initialize transcription service with selected model
         let tempService = TranscriptionService()
         try await tempService.initialize(modelPath: modelPath)
@@ -510,6 +606,10 @@ final class TranscriptionCoordinator {
         let micAudioURL = meeting.directory.appendingPathComponent("microphone.caf")
         let systemExists = FileManager.default.fileExists(atPath: systemAudioURL.path)
         let micExists = FileManager.default.fileExists(atPath: micAudioURL.path)
+        
+        // Log audio file availability
+        Task { await DiagnosticLogger.shared.log(.transcription,
+            "Audio files: system=\(systemExists), mic=\(micExists)") }
         
         // Transcribe - use nonisolated(unsafe) since we're on MainActor and handler runs synchronously
         nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
@@ -523,6 +623,10 @@ final class TranscriptionCoordinator {
             startTime: meeting.date
         )
         
+        // Log reprocess completion
+        Task { await DiagnosticLogger.shared.log(.transcription,
+            "Reprocess done: segments=\(segments.count)") }
+        
         // Use TranscriptProcessor to filter artifacts (e.g., [BLANK_AUDIO], hallucinations)
         // and merge segments into blocks with word limits
         let processor = TranscriptProcessor()
@@ -531,6 +635,10 @@ final class TranscriptionCoordinator {
         }
         processor.finalize()
         let blocks = processor.blocks
+        
+        // Log processor output
+        Task { await DiagnosticLogger.shared.log(.transcription,
+            "Processor: blocks=\(blocks.count)") }
         
         // IMPORTANT: Update meeting AND save to disk - both are required for UI to reflect changes
         if !blocks.isEmpty {

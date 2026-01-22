@@ -53,7 +53,7 @@ Structure your review as:
 
 **Summary:** One paragraph overall assessment
 
-**Verdict:** APPROVE / APPROVE WITH CHANGES / REQUEST REVISION
+**Outcome:** NO CHANGES NEEDED / CHANGES NEEDED
 
 **Strengths:**
 - What the plan does well

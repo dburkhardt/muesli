@@ -127,6 +127,31 @@ struct MuesliApp: App {
                 .environment(viewModel)
                 .environment(preferencesManager)
         }
+        
+        // Custom About window (SwiftUI-native approach)
+        Window("About \(Self.appDisplayName)", id: "about") {
+            AboutView()
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .commands {
+            // Replace the standard About command with our custom one
+            CommandGroup(replacing: .appInfo) {
+                AboutMenuButton()
+            }
+        }
+    }
+}
+
+/// Helper view to access openWindow environment and trigger About window
+private struct AboutMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+    
+    var body: some View {
+        Button("About \(MuesliApp.appDisplayName)") {
+            openWindow(id: "about")
+        }
     }
 }
 

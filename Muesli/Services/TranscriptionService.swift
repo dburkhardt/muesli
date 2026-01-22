@@ -281,6 +281,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Process system audio ("Them") with VAD check
         if let chunk = chunkInfo.systemChunk, hasVoiceActivity(chunk) {
+            Task { await DiagnosticLogger.shared.log(.transcription,
+                "Live chunk: speaker=them, samples=\(chunk.count)") }
             await transcribeChunk(
                 chunk,
                 speaker: .them,
@@ -292,6 +294,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Process mic audio ("Me") with VAD check
         if let chunk = chunkInfo.micChunk, hasVoiceActivity(chunk) {
+            Task { await DiagnosticLogger.shared.log(.transcription,
+                "Live chunk: speaker=me, samples=\(chunk.count)") }
             await transcribeChunk(
                 chunk,
                 speaker: .me,
@@ -442,80 +446,197 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             )
         }
         
-        // Transcribe system audio if available (with chunking)
+        let chunkDuration = AudioConfiguration.postProcessingChunkDuration
+        let overlap = AudioConfiguration.postProcessingOverlapDuration
+        
+        // Transcribe system audio if available (with chunking and deduplication)
         if let systemURL = systemAudioURL {
             if let samples = await loadAudioFile(url: systemURL) {
                 let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
                 logger.info("Post-processing system audio: \(samples.count) samples (\(duration)s)")
                 
-                // Split into 30-second chunks with 5-second overlap
                 let chunks = splitIntoChunks(
                     samples: samples,
-                    chunkDuration: AudioConfiguration.postProcessingChunkDuration,
-                    overlap: AudioConfiguration.postProcessingOverlapDuration
+                    chunkDuration: chunkDuration,
+                    overlap: overlap
                 )
                 
                 logger.info("Split system audio into \(chunks.count) chunks")
                 
-                // Process each chunk
-                for (index, chunk) in chunks.enumerated() {
-                    let results = try await whisperKit.transcribe(audioArray: chunk.samples)
-                    
-                    for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        let segment = TranscriptSegment(
-                            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                            timestamp: chunk.timestamp,
-                            speaker: .them
-                        )
-                        transcriptHandler?(segment)
-                    }
-                    
-                    // Log progress
-                    if (index + 1) % 5 == 0 || index == chunks.count - 1 {
-                        logger.info("Processed system audio chunk \(index + 1)/\(chunks.count)")
-                    }
-                }
+                try await processChunksWithDeduplication(
+                    chunks: chunks,
+                    speaker: .them,
+                    chunkDuration: chunkDuration,
+                    overlap: overlap,
+                    whisperKit: whisperKit
+                )
             }
         }
         
-    // Transcribe mic audio if available (with chunking)
-    if let micURL = micAudioURL,
-       let samples = await loadAudioFile(url: micURL) {
-        logger.info(
-                """
-                Post-processing mic audio: \(samples.count) samples \
-                (\(String(format: "%.1f", Double(samples.count) / Double(self.sampleRate)))s)
-                """
-            )
+        // Transcribe mic audio if available (with chunking and deduplication)
+        if let micURL = micAudioURL,
+           let samples = await loadAudioFile(url: micURL) {
+            let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
+            logger.info("Post-processing mic audio: \(samples.count) samples (\(duration)s)")
             
-            // Split into 30-second chunks with 5-second overlap
             let chunks = splitIntoChunks(
                 samples: samples,
-                chunkDuration: AudioConfiguration.postProcessingChunkDuration,
-                overlap: AudioConfiguration.postProcessingOverlapDuration
+                chunkDuration: chunkDuration,
+                overlap: overlap
             )
             
             logger.info("Split mic audio into \(chunks.count) chunks")
             
-            // Process each chunk
-            for (index, chunk) in chunks.enumerated() {
-                let results = try await whisperKit.transcribe(audioArray: chunk.samples)
+            try await processChunksWithDeduplication(
+                chunks: chunks,
+                speaker: .me,
+                chunkDuration: chunkDuration,
+                overlap: overlap,
+                whisperKit: whisperKit
+            )
+        }
+    }
+    
+    /// Process audio chunks with timestamp-based deduplication
+    ///
+    /// This method handles the overlap between chunks by tracking a "coverage boundary"
+    /// and only emitting segments that start at or after this boundary. This prevents
+    /// duplicate transcription when chunks overlap (e.g., 5-second overlap in 30-second chunks).
+    ///
+    /// - Parameters:
+    ///   - chunks: Audio chunks with timestamps (from splitIntoChunks)
+    ///   - speaker: Speaker label for segments (.me or .them)
+    ///   - chunkDuration: Duration of each chunk in seconds (e.g., 30.0)
+    ///   - overlap: Overlap duration between chunks in seconds (e.g., 5.0)
+    ///   - whisperKit: WhisperKit instance for transcription
+    ///
+    /// - Note: Assumes overlap < chunkDuration (e.g., 5s < 30s per AudioConfiguration)
+    private func processChunksWithDeduplication(
+        chunks: [(samples: [Float], timestamp: TimeInterval)],
+        speaker: TranscriptSegment.Speaker,
+        chunkDuration: TimeInterval,
+        overlap: TimeInterval,
+        whisperKit: WhisperKit
+    ) async throws {
+        // Effective chunk duration is the non-overlapping portion
+        let effectiveChunkDuration = chunkDuration - overlap
+        
+        // Track coverage boundary for deduplication
+        // Segments starting before this boundary have already been emitted
+        var coverageBoundary: TimeInterval = 0.0
+        
+        // Tolerance for floating-point comparison (10ms)
+        let tolerance: TimeInterval = 0.01
+        
+        // Counters for summary logging
+        var emittedCount = 0
+        var skippedCount = 0
+        
+        // Log dedup start
+        Task { await DiagnosticLogger.shared.log(.transcription,
+            "Dedup started: chunks=\(chunks.count), speaker=\(speaker.rawValue), effectiveDuration=\(effectiveChunkDuration)s") }
+        
+        for (index, chunk) in chunks.enumerated() {
+            let results = try await whisperKit.transcribe(audioArray: chunk.samples)
+            
+            // Log chunk results
+            Task { await DiagnosticLogger.shared.log(.transcription,
+                "Chunk#\(index): resultsCount=\(results.count)") }
+            
+            for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Log segment availability (CRITICAL for path detection)
+                Task { await DiagnosticLogger.shared.log(.transcription,
+                    "Result: segmentsEmpty=\(result.segments.isEmpty), segCount=\(result.segments.count)") }
                 
-                for result in results where !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    let segment = TranscriptSegment(
-                        text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                        timestamp: chunk.timestamp,
-                        speaker: .me
-                    )
-                    transcriptHandler?(segment)
-                }
-                
-                // Log progress
-                if (index + 1) % 5 == 0 || index == chunks.count - 1 {
-                    logger.info("Processed mic audio chunk \(index + 1)/\(chunks.count)")
+                // Fallback: if segments array is empty, use result.text with chunk timestamp
+                if result.segments.isEmpty {
+                    // Only emit if this chunk's content starts at or after coverage boundary
+                    if chunk.timestamp >= coverageBoundary - tolerance {
+                        let segment = TranscriptSegment(
+                            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                            timestamp: chunk.timestamp,
+                            speaker: speaker
+                        )
+                        transcriptHandler?(segment)
+                        emittedCount += 1
+                        // Pre-capture values for Sendable closure
+                        let logTs = chunk.timestamp
+                        let logText = String(segment.text.prefix(30))
+                        Task { await DiagnosticLogger.shared.log(.transcription,
+                            "EMIT[fallback]: ts=\(logTs), text=\"\(logText)...\"") }
+                    } else {
+                        skippedCount += 1
+                        // Pre-capture values for Sendable closure
+                        let logChunkTs = chunk.timestamp
+                        let logBoundary = coverageBoundary
+                        Task { await DiagnosticLogger.shared.log(.transcription,
+                            "SKIP[fallback]: chunkTs=\(logChunkTs) < boundary=\(logBoundary)") }
+                    }
+                } else {
+                    // Use segment-level timestamps for precise deduplication
+                    for seg in result.segments {
+                        let segmentText = seg.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !segmentText.isEmpty else { continue }
+                        
+                        // Calculate absolute timestamp (chunk start + segment offset within chunk)
+                        // seg.start is Float, convert to TimeInterval (Double)
+                        let absoluteStart = chunk.timestamp + TimeInterval(seg.start)
+                        
+                        // Log segment details - pre-capture values for Sendable closure
+                        let logSegStart = seg.start
+                        let logAbsStart = absoluteStart
+                        let logBoundary = coverageBoundary
+                        Task { await DiagnosticLogger.shared.log(.transcription,
+                            "Segment: start=\(logSegStart), absStart=\(logAbsStart), boundary=\(logBoundary)") }
+                        
+                        // Only emit segments that start at or after coverage boundary
+                        if absoluteStart >= coverageBoundary - tolerance {
+                            let transcriptSegment = TranscriptSegment(
+                                text: segmentText,
+                                timestamp: absoluteStart,
+                                speaker: speaker
+                            )
+                            transcriptHandler?(transcriptSegment)
+                            emittedCount += 1
+                            // Pre-capture values for Sendable closure
+                            let logEmitTs = absoluteStart
+                            let logEmitText = String(segmentText.prefix(30))
+                            Task { await DiagnosticLogger.shared.log(.transcription,
+                                "EMIT[segment]: ts=\(logEmitTs), text=\"\(logEmitText)...\"") }
+                        } else {
+                            skippedCount += 1
+                            // Pre-capture values for Sendable closure
+                            let logSkipTs = absoluteStart
+                            let logSkipBoundary = coverageBoundary
+                            Task { await DiagnosticLogger.shared.log(.transcription,
+                                "SKIP[segment]: absStart=\(logSkipTs) < boundary=\(logSkipBoundary)") }
+                        }
+                    }
                 }
             }
+            
+            // Update coverage boundary for next chunk
+            // Next chunk's unique content starts at: chunk.timestamp + effectiveChunkDuration
+            coverageBoundary = chunk.timestamp + effectiveChunkDuration
+            
+            // Log boundary update - pre-capture values for Sendable closure
+            let logIdx = index
+            let logNewBoundary = coverageBoundary
+            Task { await DiagnosticLogger.shared.log(.transcription,
+                "Dedup boundary: chunk#\(logIdx) -> \(logNewBoundary)s") }
+            
+            // Log progress
+            if (index + 1) % 5 == 0 || index == chunks.count - 1 {
+                logger.info("Processed \(speaker.rawValue) audio chunk \(index + 1)/\(chunks.count)")
+            }
         }
+        
+        // Log summary at method exit - pre-capture values for Sendable closure
+        let logSpeaker = speaker.rawValue
+        let logEmitted = emittedCount
+        let logSkipped = skippedCount
+        Task { await DiagnosticLogger.shared.log(.transcription,
+            "Dedup complete: speaker=\(logSpeaker), emitted=\(logEmitted), skipped=\(logSkipped)") }
     }
     
     /// Split audio samples into chunks with overlap for post-processing
@@ -532,6 +653,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         let chunkSamples = Int(chunkDuration * Double(sampleRate))
         let overlapSamples = Int(overlap * Double(sampleRate))
         let stride = chunkSamples - overlapSamples
+        
+        // Log chunking parameters
+        Task { await DiagnosticLogger.shared.log(.transcription,
+            "Chunking: samples=\(samples.count), chunkDuration=\(chunkDuration)s, overlap=\(overlap)s, stride=\(stride)") }
         
         var chunks: [(samples: [Float], timestamp: TimeInterval)] = []
         var offset = 0
