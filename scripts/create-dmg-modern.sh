@@ -33,6 +33,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# CI detection - use explicit flag to avoid false positives
+IS_CI_BUILD=false
+if [ "${MUESLI_CI_BUILD:-}" = "1" ]; then
+    IS_CI_BUILD=true
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -66,6 +72,9 @@ log_info "Starting modern DMG creation process..."
 log_info "Project root: ${PROJECT_ROOT}"
 if [ "$SKIP_SIGNING" = true ]; then
     log_info "Code signing will be skipped (--skip-signing)"
+fi
+if [ "$IS_CI_BUILD" = true ]; then
+    log_info "CI build mode: xcodebuild signing disabled, will sign manually with Developer ID"
 fi
 
 # Check for create-dmg tool
@@ -119,11 +128,19 @@ log_info "Building ${APP_NAME} in Release configuration..."
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 BUILD_LOG="${PROJECT_ROOT}/build-release-${TIMESTAMP}.txt"
 
+# In CI mode, disable xcodebuild signing (we sign manually with Developer ID later)
+SIGNING_FLAGS=""
+if [ "$IS_CI_BUILD" = true ]; then
+    SIGNING_FLAGS="CODE_SIGN_IDENTITY= CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
+    log_info "xcodebuild signing disabled for CI build"
+fi
+
 if ! xcodebuild \
     -project "${PROJECT}" \
     -scheme "${SCHEME}" \
     -configuration "${CONFIGURATION}" \
     -derivedDataPath "${BUILD_DIR}/DerivedData" \
+    $SIGNING_FLAGS \
     clean build 2>&1 | tee "${BUILD_LOG}"; then
     log_error "Build failed! Check ${BUILD_LOG} for details."
     exit 1
@@ -164,7 +181,9 @@ else
         
         log_info "Using entitlements: ${ENTITLEMENTS_PATH}"
         
-        if codesign --force --deep --options runtime \
+        # Sign without --deep (deprecated in macOS 13.0)
+        # App uses static linking so no nested frameworks to sign separately
+        if codesign --force --options runtime \
             --sign "$SIGNING_IDENTITY" \
             --entitlements "${ENTITLEMENTS_PATH}" \
             --timestamp \
@@ -179,6 +198,22 @@ else
                 log_error "CRITICAL: audio-input entitlement NOT found after signing!"
                 log_error "Microphone permission prompt will not appear with hardened runtime"
                 exit 1
+            fi
+            
+            # Verify signature integrity (--deep is fine for verification, just not signing)
+            log_info "Verifying signature integrity..."
+            if ! codesign --verify --deep --strict "${APP_PATH}"; then
+                log_error "Signature verification failed"
+                exit 1
+            fi
+            log_success "Signature verification passed"
+            
+            # Check Gatekeeper acceptance
+            log_info "Checking Gatekeeper assessment..."
+            if spctl --assess --type execute "${APP_PATH}" 2>&1; then
+                log_success "Gatekeeper assessment passed"
+            else
+                log_warning "Gatekeeper assessment failed (expected if not notarized yet)"
             fi
         else
             log_warning "Code signing failed, continuing with unsigned app"

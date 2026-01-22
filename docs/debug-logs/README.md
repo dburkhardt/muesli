@@ -32,6 +32,7 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### January
 
+- [2026-01-22: CI Code Signing Workflow Bug](2026-01-22_ci-signing-workflow-bug.md) - Workflow checked undefined env vars instead of secrets
 - [2026-01-15: Screen Recording Permission Detection Unreliable](2026-01-15_screen-recording-permission-detection.md) - CGPreflightScreenCaptureAccess() fails with ad-hoc signing
 
 ## Search Tips for Agents
