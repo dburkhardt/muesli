@@ -54,7 +54,10 @@ jobs:
             -scheme Muesli \
             -configuration Debug \
             -destination 'platform=macOS' \
-            build | xcpretty || true
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build | xcpretty
       
       - name: Run tests with coverage
         run: |
@@ -66,7 +69,10 @@ jobs:
             -destination 'platform=macOS' \
             -enableCodeCoverage YES \
             -derivedDataPath DerivedData \
-            test | xcpretty || true
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            test | xcpretty
       
       - name: Generate coverage report
         run: |
@@ -119,7 +125,7 @@ jobs:
       
       - name: Check for build warnings
         run: |
-          if xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug -destination 'platform=macOS' build 2>&1 | grep -i "warning:"; then
+          if xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug -destination 'platform=macOS' CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -i "warning:"; then
             echo "⚠️ Build contains warnings"
             exit 0  # Don't fail on warnings, just report them
           else
@@ -176,7 +182,10 @@ jobs:
             -scheme Muesli \
             -configuration Release \
             -destination 'platform=macOS' \
-            build | xcpretty || true
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build | xcpretty
       
       - name: Verify app bundle
         run: |
