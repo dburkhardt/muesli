@@ -17,6 +17,7 @@ actor DiagnosticLogger {
         case build = "BUILD"
         case app = "APP"
         case transcription = "TRANSCRIPTION"  // Debug category for transcription issues
+        case aec = "AEC"  // Echo cancellation diagnostics
     }
     
     /// Maximum log file size (10MB)

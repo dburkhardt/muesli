@@ -26,6 +26,11 @@ jobs:
     name: Build and Test
     runs-on: macos-26
     
+    # Job-level env vars from secrets (for use in step conditions)
+    env:
+      SIGNING_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+      SIGNING_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -35,6 +40,48 @@ jobs:
       
       - name: Show Xcode version
         run: xcodebuild -version
+      
+      - name: Preflight - Verify signing secrets
+        run: |
+          MISSING=""
+          if [ -z "$SIGNING_CERT_P12" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_P12"; fi
+          if [ -z "$SIGNING_CERT_PASSWORD" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_PASSWORD"; fi
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required secrets:$MISSING"
+            echo "CI builds require Developer ID signing for consistent app identity."
+            echo "External contributor PRs from forks will fail (no access to signing secrets)."
+            exit 1
+          fi
+          echo "✅ All signing secrets present"
+      
+      - name: Setup code signing certificates
+        run: |
+          echo "Setting up code signing certificates..."
+          
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          
+          # Decode and import certificate
+          echo "$SIGNING_CERT_P12" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 \
+            -k "$KEYCHAIN_PATH" \
+            -P "$SIGNING_CERT_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productsign
+          
+          # Set keychain for codesign
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          
+          # Verify certificate is available
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          
+          echo "✅ Code signing certificates configured"
       
       - name: Cache Swift Package Manager dependencies
         uses: actions/cache@v4
@@ -54,7 +101,7 @@ jobs:
             -scheme Muesli \
             -configuration Debug \
             -destination 'platform=macOS' \
-            build | xcpretty || true
+            build 2>&1 | tee /tmp/build-debug.log | xcpretty
       
       - name: Run tests with coverage
         run: |
@@ -66,7 +113,7 @@ jobs:
             -destination 'platform=macOS' \
             -enableCodeCoverage YES \
             -derivedDataPath DerivedData \
-            test | xcpretty || true
+            test 2>&1 | tee /tmp/test.log | xcpretty
       
       - name: Generate coverage report
         run: |
@@ -119,13 +166,18 @@ jobs:
       
       - name: Check for build warnings
         run: |
-          if xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug -destination 'platform=macOS' build 2>&1 | grep -i "warning:"; then
-            echo "⚠️ Build contains warnings"
+          if grep -i "warning:" /tmp/build-debug.log; then
+            echo "⚠️ Build contains warnings (see above)"
             exit 0  # Don't fail on warnings, just report them
           else
             echo "✅ No build warnings"
           fi
-  
+      
+      - name: Verify signing identity
+        run: |
+          echo "Signing identities in keychain:"
+          security find-identity -v -p codesigning | grep "Developer ID" || echo "No Developer ID found"
+
   lint:
     name: Swift Lint
     runs-on: macos-26
@@ -146,10 +198,15 @@ jobs:
           fi
         continue-on-error: true  # Advisory only - violations reported but don't block merges
                                  # TODO: Remove after baseline cleanup (track in TODO.md)
-  
+
   build-release:
     name: Build Release Configuration
     runs-on: macos-26
+    
+    # Job-level env vars from secrets (for use in step conditions)
+    env:
+      SIGNING_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+      SIGNING_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
     
     steps:
       - name: Checkout code
@@ -157,6 +214,48 @@ jobs:
       
       - name: Select Xcode version
         run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer
+      
+      - name: Preflight - Verify signing secrets
+        run: |
+          MISSING=""
+          if [ -z "$SIGNING_CERT_P12" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_P12"; fi
+          if [ -z "$SIGNING_CERT_PASSWORD" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_PASSWORD"; fi
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required secrets:$MISSING"
+            echo "CI builds require Developer ID signing for consistent app identity."
+            echo "External contributor PRs from forks will fail (no access to signing secrets)."
+            exit 1
+          fi
+          echo "✅ All signing secrets present"
+      
+      - name: Setup code signing certificates
+        run: |
+          echo "Setting up code signing certificates..."
+          
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          
+          # Decode and import certificate
+          echo "$SIGNING_CERT_P12" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 \
+            -k "$KEYCHAIN_PATH" \
+            -P "$SIGNING_CERT_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productsign
+          
+          # Set keychain for codesign
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          
+          # Verify certificate is available
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          
+          echo "✅ Code signing certificates configured"
       
       - name: Cache Swift Package Manager dependencies
         uses: actions/cache@v4
@@ -176,7 +275,7 @@ jobs:
             -scheme Muesli \
             -configuration Release \
             -destination 'platform=macOS' \
-            build | xcpretty || true
+            build 2>&1 | tee /tmp/build-release.log | xcpretty
       
       - name: Verify app bundle
         run: |
@@ -189,7 +288,12 @@ jobs:
             echo "❌ App bundle not found"
             exit 1
           fi
-  
+      
+      - name: Verify signing identity
+        run: |
+          echo "Signing identities in keychain:"
+          security find-identity -v -p codesigning | grep "Developer ID" || echo "No Developer ID found"
+
   summary:
     name: CI Summary
     runs-on: ubuntu-latest

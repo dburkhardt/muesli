@@ -107,6 +107,10 @@ final class TranscriptionCoordinator {
     /// Callback for transcription warnings (category, message, details, canRetry)
     var onWarning: ((ServiceWarning.WarningCategory, String, String, Bool) -> Void)?
     
+    /// Callback when a warning should be dismissed (category)
+    /// Called when model becomes ready to auto-dismiss the model loading warning
+    var onWarningDismissed: ((ServiceWarning.WarningCategory) -> Void)?
+    
     // MARK: - Model Load Timing
     
     /// When model loading started (for detecting slow loads)
@@ -311,6 +315,9 @@ final class TranscriptionCoordinator {
             isSlowModelLoad = false
             slowLoadCheckTask?.cancel()
             slowLoadCheckTask = nil
+            
+            // Auto-dismiss the model loading warning (if one was shown)
+            onWarningDismissed?(.modelLoading)
             
             // Flush any buffered audio collected during loading
             processBufferedAudio()

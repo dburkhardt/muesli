@@ -124,6 +124,25 @@ Muesli tracks code coverage to ensure comprehensive testing and guide developmen
 4. Coordinators - TranscriptionCoordinator, RefinementCoordinator
 5. Views - Complex UI logic (lower priority than business logic)
 
+## CI Code Signing
+
+CI builds use the **same Developer ID certificate** as release builds. This ensures consistent code signing identity across all environments, which is critical for TCC (macOS permission system) stability.
+
+**Why Developer ID signing in CI?**
+- TCC validates apps based on code signing identity
+- Changing signing identity between builds causes "TCC thrash" - permissions reset
+- Using the same certificate for local, CI, and release builds ensures permissions persist
+
+**Required Secrets** (same as release workflow):
+- `DEVELOPER_ID_CERT_P12` - Base64-encoded .p12 certificate
+- `DEVELOPER_ID_CERT_PASSWORD` - Certificate password
+
+**Important Notes**:
+- CI signing is **required** - builds fail if secrets are missing
+- External contributor PRs from forks will fail CI (no access to signing secrets)
+  - This is expected behavior; maintainers must check out and test fork PRs locally
+- The `lint` job does not require signing (only runs SwiftLint)
+
 ## Release Process
 
 ### Creating a Release

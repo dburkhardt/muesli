@@ -18,6 +18,23 @@ struct OnboardingView: View {
     @State private var currentStep: OnboardingStep
     @State private var showFilePicker = false
     
+    // MARK: - Model Compilation State
+    
+    /// Whether model is currently being compiled/optimized
+    @State private var isCompiling = false
+    
+    /// Error that occurred during compilation
+    @State private var compilationError: Error?
+    
+    /// Task for tracking compilation (for cancellation)
+    @State private var compilationTask: Task<Void, Never>?
+    
+    /// When compilation started (to detect if model was already compiled)
+    @State private var compilationStartTime: Date?
+    
+    /// The model currently being compiled
+    @State private var compilingModel: ModelManager.ModelSize?
+    
     // Using centralized AppStorageKeys for onboarding state
     
     private var appName: String {
@@ -415,8 +432,39 @@ struct OnboardingView: View {
             modelListView
                 .padding(.top, 4)
             
-            // Active model picker (only if models are downloaded)
-            if !modelManager.downloadedModels.isEmpty {
+            // Compilation status message (shown during first-time setup)
+            if isCompiling {
+                VStack(spacing: 8) {
+                    Text("Optimizing for your device...")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("This one-time setup may take a few minutes")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.top, 8)
+            }
+            
+            // Compilation error (shown if optimization failed)
+            if let error = compilationError {
+                VStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Optimization failed")
+                            .font(.subheadline)
+                            .foregroundStyle(.orange)
+                    }
+                    Text(error.localizedDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 8)
+            }
+            
+            // Active model picker (only if models are downloaded and not compiling)
+            if !modelManager.downloadedModels.isEmpty && !isCompiling && compilationError == nil {
                 activeModelPicker
                     .padding(.top, 4)
             }
@@ -430,11 +478,15 @@ struct OnboardingView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!modelManager.hasModel)
+            .disabled(!modelManager.hasModel || isCompiling || compilationError != nil)
         }
         .padding(.horizontal, 40)
         .padding(.top, 24)
         .padding(.bottom, 8) // Reduced since progress indicator now has more bottom padding
+        .onDisappear {
+            // Cancel compilation task if user navigates away
+            compilationTask?.cancel()
+        }
     }
     
     // MARK: - LLM Setup Screen
@@ -632,45 +684,99 @@ struct OnboardingView: View {
     private func modelStatusView(for model: ModelManager.ModelSize) -> some View {
         let state = modelManager.downloadState(for: model)
         
-        switch state {
-        case .idle, .checking:
-            Button("Download") {
-                Task {
-                    await modelManager.downloadModel(model)
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            
-        case .downloading(let progress):
+        // Check if this model is currently compiling
+        if isCompiling && compilingModel == model {
             HStack(spacing: 6) {
-                ProgressView(value: progress)
-                    .progressViewStyle(.linear)
-                    .frame(width: 60)
-                Text("\(Int(progress * 100))%")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 35, alignment: .trailing)
-            }
-            
-        case .completed:
-            HStack(spacing: 4) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("Downloaded")
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Optimizing...")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            
-        case .failed(let error):
+        } else if let error = compilationError, compilingModel == model {
+            // Compilation failed for this model
             Button("Retry") {
-                Task {
-                    await modelManager.downloadModel(model)
-                }
+                compilationError = nil
+                startCompilation(for: model)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help(error)
+            .help(error.localizedDescription)
+        } else {
+            switch state {
+            case .idle, .checking:
+                Button("Download") {
+                    Task {
+                        await modelManager.downloadModel(model)
+                        // After download completes, start compilation
+                        if modelManager.downloadState(for: model) == .completed {
+                            startCompilation(for: model)
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                
+            case .downloading(let progress):
+                HStack(spacing: 6) {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .frame(width: 60)
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 35, alignment: .trailing)
+                }
+                
+            case .completed:
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Ready")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                
+            case .failed(let error):
+                Button("Retry") {
+                    Task {
+                        await modelManager.downloadModel(model)
+                        // After download completes, start compilation
+                        if modelManager.downloadState(for: model) == .completed {
+                            startCompilation(for: model)
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(error)
+            }
+        }
+    }
+    
+    // MARK: - Model Compilation
+    
+    /// Start compiling a model for the device
+    private func startCompilation(for model: ModelManager.ModelSize) {
+        isCompiling = true
+        compilingModel = model
+        compilationStartTime = Date()
+        compilationError = nil
+        
+        compilationTask = Task {
+            do {
+                try await modelManager.compileModel(model)
+                await MainActor.run {
+                    isCompiling = false
+                    compilingModel = nil
+                    // Model is now ready for use
+                }
+            } catch {
+                await MainActor.run {
+                    compilationError = error
+                    isCompiling = false
+                }
+            }
         }
     }
     

@@ -453,6 +453,40 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         UserDefaults.standard.set(model.rawValue, forKey: AppStorageKeys.activeWhisperModel)
     }
     
+    // MARK: - Model Compilation
+    
+    /// Compile model for device (triggers CoreML optimization on first use)
+    /// - Parameters:
+    ///   - model: The model size to compile
+    /// - Note: WhisperKit.init() triggers CoreML compilation; instance can be discarded after.
+    ///         Cancellation is "best effort" - WhisperKit may continue compiling in background
+    ///         if task is cancelled, but UI will proceed.
+    func compileModel(_ model: ModelSize) async throws {
+        guard let modelPath = pathForModel(model) else {
+            throw MuesliError.modelNotFound
+        }
+        
+        // Use the same config as TranscriptionService.initialize() to ensure path parity
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let muesliDir = appSupport.appendingPathComponent("Muesli", isDirectory: true)
+        
+        Self.logger.info("Compiling model \(model.displayName) at path: \(modelPath.path)")
+        
+        let config = WhisperKitConfig(
+            downloadBase: muesliDir,
+            modelFolder: modelPath.path,
+            tokenizerFolder: muesliDir.appendingPathComponent("Tokenizers"),
+            verbose: false,
+            download: false
+        )
+        
+        // Initialize WhisperKit - this triggers CoreML compilation on first use
+        // The instance is discarded after; we only care about the compilation side effect
+        _ = try await WhisperKit(config)
+        
+        Self.logger.info("Model compilation completed for \(model.displayName)")
+    }
+    
     // MARK: - Persistence
     
     private func saveDownloadedModels() {

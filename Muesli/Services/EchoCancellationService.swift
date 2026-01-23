@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import os.lock
 
 // MARK: - Helper Extensions
 
@@ -240,6 +241,11 @@ extension EchoCancellationService {
 /// Reference signal: System audio (what's playing through speakers)
 /// Input signal: Microphone audio (may contain echo)
 /// Output: Clean microphone audio (echo removed)
+///
+/// Known limitations:
+/// - No Double-Talk Detection (DTD): Algorithm assumes speaker and listener don't talk simultaneously
+/// - No NLP (Non-Linear Processing): Uses linear NLMS only, no residual echo suppression
+/// - Filter length constraint: Echo path must be shorter than filterLength * samplePeriod
 final class EchoCancellationService: @unchecked Sendable, EchoCancellationServiceProtocol {
     // MARK: - Configuration
     
@@ -259,18 +265,17 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     /// Sample rate (must match input audio)
     private let sampleRate: Int
     
-    // MARK: - State
-    
-    /// Adaptive filter coefficients (weights)
-    private var filterCoefficients: [Float]
-    
-    /// Buffer for reference signal (system audio)
-    /// Used to predict echo in microphone signal
-    private var referenceBuffer: [Float]
-    
     /// Maximum delay to handle (in samples)
     /// This determines how much history we keep
     private let maxDelaySamples: Int
+    
+    /// Maximum number of buffers to keep for synchronization
+    private let maxBuffers: Int = 10
+    
+    /// Acoustic delay in samples (DAC + propagation + ADC latency)
+    private let acousticDelaySamples: Int
+    
+    // MARK: - State (Thread-Safe via OSAllocatedUnfairLock)
     
     /// Presentation timestamps for synchronization
     private struct TimestampedBuffer {
@@ -278,14 +283,45 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         let timestamp: CMTime
     }
     
-    /// Buffers for system audio (reference signal) with timestamps
-    private var systemAudioBuffers: [TimestampedBuffer] = []
+    /// Circular buffer for O(1) append/access operations on reference signal
+    private struct CircularBuffer {
+        var samples: [Float]
+        var writeIndex: Int = 0
+        let capacity: Int
+        
+        init(capacity: Int) {
+            self.capacity = capacity
+            self.samples = Array(repeating: 0.0, count: capacity)
+        }
+        
+        mutating func append(_ sample: Float) {
+            samples[writeIndex] = sample
+            writeIndex = (writeIndex + 1) % capacity
+        }
+        
+        /// Get sample at offset from the most recent write position
+        /// offsetFromEnd = 0 returns the most recently written sample
+        func sample(at offsetFromEnd: Int) -> Float {
+            guard offsetFromEnd >= 0 && offsetFromEnd < capacity else { return 0.0 }
+            let idx = (writeIndex - offsetFromEnd - 1 + capacity) % capacity
+            return samples[idx]
+        }
+        
+        mutating func reset() {
+            samples = Array(repeating: 0.0, count: capacity)
+            writeIndex = 0
+        }
+    }
     
-    /// Lock for thread-safe access
-    private let lock = NSLock()
+    /// All mutable state wrapped for thread-safe access
+    private struct AECState {
+        var filterCoefficients: [Float]
+        var referenceBuffer: CircularBuffer
+        var systemAudioBuffers: [TimestampedBuffer]
+    }
     
-    /// Maximum number of buffers to keep for synchronization
-    private let maxBuffers: Int = 10
+    /// Thread-safe state using OSAllocatedUnfairLock (AGENTS.md requirement)
+    private let state: OSAllocatedUnfairLock<AECState>
     
     // MARK: - Initialization
     
@@ -295,22 +331,30 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     ///   - learningRate: Learning rate for adaptation (default: 0.3)
     ///   - sampleRate: Audio sample rate (default: 48000)
     ///   - maxDelayMs: Maximum echo delay to handle in milliseconds (default: 100ms)
+    ///   - acousticDelayMs: Acoustic delay (DAC + propagation + ADC) in milliseconds (default: 30ms)
     init(
         filterLength: Int = 256,
         learningRate: Float = 0.3,
         sampleRate: Int = 48000,
-        maxDelayMs: Int = 100
+        maxDelayMs: Int = 100,
+        acousticDelayMs: Int = AudioConfiguration.aecAcousticDelayMs
     ) {
         self.filterLength = filterLength
         self.learningRate = learningRate
         self.sampleRate = sampleRate
         self.maxDelaySamples = (sampleRate * maxDelayMs) / 1000
+        self.acousticDelaySamples = (sampleRate * acousticDelayMs) / 1000
         
-        // Initialize filter coefficients to zero
-        self.filterCoefficients = Array(repeating: 0.0, count: filterLength)
+        // Calculate circular buffer capacity:
+        // maxMicFrameSize (4096) + filterLength (256) + maxDelaySamples (4800) + bufferMargin (2400)
+        // = ~11,552 samples → round to 12,000 (~250ms of audio history at 48kHz)
+        let bufferCapacity = 12000
         
-        // Initialize reference buffer
-        self.referenceBuffer = Array(repeating: 0.0, count: filterLength)
+        self.state = OSAllocatedUnfairLock(initialState: AECState(
+            filterCoefficients: Array(repeating: 0.0, count: filterLength),
+            referenceBuffer: CircularBuffer(capacity: bufferCapacity),
+            systemAudioBuffers: []
+        ))
     }
     
     // MARK: - Public API
@@ -320,9 +364,15 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     ///   - systemSamples: System audio samples (reference signal - what's playing through speakers)
     ///   - timestamp: Presentation timestamp for system audio
     func storeSystemAudio(samples: [Float], timestamp: CMTime) {
-        lock.lock()
-        defer { lock.unlock() }
-        storeSystemAudioInternal(samples: samples, timestamp: timestamp)
+        state.withLock { state in
+            state.systemAudioBuffers.append(TimestampedBuffer(samples: samples, timestamp: timestamp))
+            
+            // Keep only recent buffers - O(1) operation with circular indexing would be better
+            // but for small maxBuffers (10), this is acceptable
+            if state.systemAudioBuffers.count > maxBuffers {
+                state.systemAudioBuffers.removeFirst()
+            }
+        }
     }
     
     /// Process microphone audio to remove echo
@@ -334,110 +384,96 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         microphoneSamples: [Float],
         micTimestamp: CMTime
     ) -> [Float] {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        // Find matching system audio for this microphone timestamp
-        guard let referenceSamples = findMatchingSystemAudio(for: micTimestamp) else {
-            // No matching system audio found, return microphone as-is
-            return microphoneSamples
-        }
-        
-        // Ensure reference buffer is long enough
-        if referenceBuffer.count < filterLength {
-            referenceBuffer = Array(repeating: 0.0, count: filterLength)
-        }
-        
-        // Process samples using NLMS adaptive filter
-        var outputSamples: [Float] = []
-        outputSamples.reserveCapacity(microphoneSamples.count)
-        
-        for i in 0..<microphoneSamples.count {
-            // Update reference buffer (shift and add new sample)
-            if referenceSamples.count > i {
-                // Shift buffer left
-                referenceBuffer.removeFirst()
-                referenceBuffer.append(referenceSamples[i])
+        state.withLock { state in
+            // Find matching system audio for this microphone timestamp
+            guard let referenceSamples = findMatchingSystemAudio(for: micTimestamp, in: state.systemAudioBuffers) else {
+                // No matching system audio found, return microphone as-is
+                // This is normal during warmup period (~250ms) - NLMS needs reference data
+                return microphoneSamples
             }
             
-            // Compute predicted echo using current filter coefficients
-            var predictedEcho: Float = 0.0
-            for j in 0..<filterLength {
-                let idx = referenceBuffer.count - filterLength + j
-                if idx >= 0 && idx < referenceBuffer.count {
-                    predictedEcho += filterCoefficients[j] * referenceBuffer[idx]
+            // Process samples using NLMS adaptive filter
+            var outputSamples: [Float] = []
+            outputSamples.reserveCapacity(microphoneSamples.count)
+            
+            for i in 0..<microphoneSamples.count {
+                // Update reference buffer with O(1) circular append
+                if referenceSamples.count > i {
+                    state.referenceBuffer.append(referenceSamples[i])
                 }
-            }
-            
-            // Compute error (microphone signal - predicted echo)
-            let error = microphoneSamples[i] - predictedEcho
-            
-            // Update filter coefficients using NLMS algorithm
-            // Compute power of reference signal
-            var referencePower: Float = epsilon
-            for j in 0..<filterLength {
-                let idx = referenceBuffer.count - filterLength + j
-                if idx >= 0 && idx < referenceBuffer.count {
-                    referencePower += referenceBuffer[idx] * referenceBuffer[idx]
+                
+                // Compute predicted echo using current filter coefficients
+                var predictedEcho: Float = 0.0
+                for j in 0..<filterLength {
+                    let sample = state.referenceBuffer.sample(at: filterLength - 1 - j)
+                    predictedEcho += state.filterCoefficients[j] * sample
                 }
-            }
-            
-            // Update coefficients: w(n+1) = w(n) + μ * error * x(n) / (||x(n)||² + ε)
-            let stepSize = learningRate / referencePower
-            for j in 0..<filterLength {
-                let idx = referenceBuffer.count - filterLength + j
-                if idx >= 0 && idx < referenceBuffer.count {
-                    filterCoefficients[j] += stepSize * error * referenceBuffer[idx]
+                
+                // Compute error (microphone signal - predicted echo)
+                let error = microphoneSamples[i] - predictedEcho
+                
+                // Update filter coefficients using NLMS algorithm
+                // Compute power of reference signal
+                var referencePower: Float = epsilon
+                for j in 0..<filterLength {
+                    let sample = state.referenceBuffer.sample(at: filterLength - 1 - j)
+                    referencePower += sample * sample
                 }
+                
+                // Update coefficients: w(n+1) = w(n) + μ * error * x(n) / (||x(n)||² + ε)
+                let stepSize = learningRate / referencePower
+                for j in 0..<filterLength {
+                    let sample = state.referenceBuffer.sample(at: filterLength - 1 - j)
+                    state.filterCoefficients[j] += stepSize * error * sample
+                }
+                
+                // Output is the error signal (microphone with echo removed)
+                outputSamples.append(error)
             }
             
-            // Output is the error signal (microphone with echo removed)
-            outputSamples.append(error)
+            return outputSamples
         }
-        
-        return outputSamples
     }
     
     /// Reset filter state (call when starting new recording)
     func reset() {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        filterCoefficients = Array(repeating: 0.0, count: filterLength)
-        referenceBuffer = Array(repeating: 0.0, count: filterLength)
-        systemAudioBuffers.removeAll()
+        state.withLock { state in
+            state.filterCoefficients = Array(repeating: 0.0, count: filterLength)
+            state.referenceBuffer.reset()
+            state.systemAudioBuffers.removeAll()
+        }
     }
     
     // MARK: - Private Helpers
     
-    /// Store system audio buffer with timestamp (internal, assumes lock held)
-    private func storeSystemAudioInternal(samples: [Float], timestamp: CMTime) {
-        systemAudioBuffers.append(TimestampedBuffer(samples: samples, timestamp: timestamp))
-        
-        // Keep only recent buffers
-        if systemAudioBuffers.count > maxBuffers {
-            systemAudioBuffers.removeFirst()
-        }
-    }
-    
     /// Find matching system audio for microphone timestamp
     /// Handles timing differences between system and microphone streams
-    private func findMatchingSystemAudio(for micTimestamp: CMTime) -> [Float]? {
-        // Find system audio buffer closest to microphone timestamp
-        // Account for potential delay between system audio and microphone pickup
+    /// IMPORTANT: Only matches PAST system audio (timestamp <= micTimestamp) to avoid
+    /// using future audio that hasn't been played through speakers yet
+    private func findMatchingSystemAudio(for micTimestamp: CMTime, in buffers: [TimestampedBuffer]) -> [Float]? {
+        guard !buffers.isEmpty else { return nil }
         
-        guard !systemAudioBuffers.isEmpty else { return nil }
+        // Filter to only PAST system audio (timestamp <= micTimestamp)
+        // This ensures we never use audio that hasn't been played through speakers yet
+        let validBuffers = buffers.filter { buffer in
+            CMTimeCompare(buffer.timestamp, micTimestamp) <= 0
+        }
         
-        // Find buffer with timestamp closest to microphone timestamp
+        // Handle empty validBuffers edge case
+        guard !validBuffers.isEmpty else {
+            // No past system audio available yet - return nil (mic passes through unprocessed)
+            // This is normal during warmup period (~250ms)
+            return nil
+        }
+        
+        // Find closest past buffer
         var bestMatch: TimestampedBuffer?
         var minTimeDiff = CMTime.positiveInfinity
         
-        for buffer in systemAudioBuffers {
+        for buffer in validBuffers {
             let timeDiff = CMTimeSubtract(micTimestamp, buffer.timestamp)
-            let absTimeDiff = CMTimeAbsoluteValue(timeDiff)
-            
-            if CMTimeCompare(absTimeDiff, minTimeDiff) < 0 {
-                minTimeDiff = absTimeDiff
+            if CMTimeCompare(timeDiff, minTimeDiff) < 0 {
+                minTimeDiff = timeDiff
                 bestMatch = buffer
             }
         }

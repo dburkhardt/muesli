@@ -135,6 +135,13 @@ final class RecordingController {
             }
         }
         
+        // TranscriptionCoordinator warning dismissal (auto-dismiss when model ready)
+        transcriptionCoordinator.onWarningDismissed = { [weak self] category in
+            Task { @MainActor in
+                self?.warningManager.dismissWarnings(for: category)
+            }
+        }
+        
         // ExportService warnings
         exportService.onWarning = { [weak self] message, details in
             Task { @MainActor in
@@ -309,24 +316,47 @@ final class RecordingController {
             return
         }
         
-        // Apply AEC if enabled (operates at native sample rate)
-        let processedSamplesNative: [Float]
+        // CRITICAL: Resample mic to 48kHz BEFORE AEC for consistent alignment with system audio
+        // System audio is always at 48kHz, so AEC must operate at 48kHz
+        let micSamples48k: [Float]
+        if sourceSampleRate != 48000 {
+            let resampled = EchoCancellationService.resampleFloat32Public(
+                samples: micSamplesNative,
+                sourceSampleRate: sourceSampleRate,
+                targetSampleRate: 48000
+            )
+            if resampled.isEmpty {
+                // Fallback: use native samples (degraded AEC but no data loss)
+                // Log warning for diagnostics
+                Task { @MainActor in
+                    await DiagnosticLogger.shared.log(.aec,
+                        "Resampling failed for \(sourceSampleRate)Hz mic, using native samples")
+                }
+                micSamples48k = micSamplesNative
+            } else {
+                micSamples48k = resampled
+            }
+        } else {
+            micSamples48k = micSamplesNative
+        }
+        
+        // Apply AEC at consistent 48kHz (system audio is always 48kHz)
+        let processedSamples48k: [Float]
         if isAECEnabled {
-            processedSamplesNative = aecService.processMicrophoneAudio(
-                microphoneSamples: micSamplesNative,
+            processedSamples48k = aecService.processMicrophoneAudio(
+                microphoneSamples: micSamples48k,
                 micTimestamp: timestamp
             )
         } else {
-            processedSamplesNative = micSamplesNative
+            processedSamples48k = micSamples48k
         }
         
         // Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
-        // CRITICAL: Pass the actual source sample rate so resampling works correctly
-        // This fixes the pitch issue when mic is at 44100Hz but file expects 48000Hz
+        // Now always at 48kHz after pre-AEC resampling
         if let processedBuffer = EchoCancellationService.createSampleBuffer(
-            from: processedSamplesNative,
+            from: processedSamples48k,
             timestamp: timestamp,
-            sourceSampleRate: sourceSampleRate,
+            sourceSampleRate: 48000,  // Now always 48kHz after pre-AEC resampling
             targetSampleRate: 48000
         ) {
             fileService.appendAudioBuffer(processedBuffer, type: .microphone)
@@ -341,10 +371,10 @@ final class RecordingController {
         }
         
         // Feed to transcription coordinator (handles buffering during model load)
-        // Use high-quality AVAudioConverter resampling with the actual source sample rate
+        // Use high-quality AVAudioConverter resampling from 48kHz to 16kHz
         let resampled = TranscriptionService.resampleSamples(
-            samples: processedSamplesNative,
-            sourceSampleRate: Double(sourceSampleRate),  // Use actual mic sample rate (may be 44100Hz)
+            samples: processedSamples48k,
+            sourceSampleRate: 48000,  // Now always 48kHz after pre-AEC resampling
             sourceChannels: 1,  // Mic is mono
             targetSampleRate: 16000,
             targetChannels: 1,

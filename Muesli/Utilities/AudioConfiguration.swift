@@ -44,7 +44,11 @@ enum AudioConfiguration {
     // MARK: - Buffer Management
     
     /// Maximum time to buffer audio while model loads (seconds)
-    static let bufferTimeoutSeconds: TimeInterval = 30.0
+    /// This is a generous timeout (5 minutes) to cover even the largest models
+    /// on the slowest supported hardware. Memory is bounded by maxBufferSamples,
+    /// not this timeout - we use a rolling 30s buffer regardless of how long
+    /// we wait. This timeout is just a safety net for genuinely broken situations.
+    static let bufferTimeoutSeconds: TimeInterval = 300.0
     
     /// Maximum buffer size in samples (30 seconds at 16kHz = 480,000 samples)
     static let maxBufferSamples: Int = 480_000
@@ -73,4 +77,16 @@ enum AudioConfiguration {
     
     /// Maximum retries for model loading
     static let maxModelRetries: Int = 3
+    
+    // MARK: - Echo Cancellation (AEC)
+    
+    /// Acoustic delay for AEC (milliseconds)
+    /// This accounts for DAC + acoustic propagation + ADC latency
+    /// Typical range: 15-50ms depending on audio hardware
+    /// Default: 30ms (middle of typical range for laptop speakers)
+    static let aecAcousticDelayMs: Int = 30
+    
+    /// AEC filter length (number of taps)
+    /// Longer filters handle longer echo delays but require more computation
+    static let aecFilterLength: Int = 256
 }
