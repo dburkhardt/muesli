@@ -35,6 +35,14 @@ jobs:
     # Use macos-26 (Tahoe) to get macOS 26 SDK for liquid glass button styling
     runs-on: macos-26
     
+    # Job-level env vars from secrets (for use in step conditions)
+    env:
+      SIGNING_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+      SIGNING_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+      NOTARIZE_APPLE_ID: ${{ secrets.APPLE_ID }}
+      NOTARIZE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      NOTARIZE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -133,11 +141,11 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true' }}
         run: |
           MISSING=""
-          if [ -z "${{ secrets.DEVELOPER_ID_CERT_P12 }}" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_P12"; fi
-          if [ -z "${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_PASSWORD"; fi
-          if [ -z "${{ secrets.APPLE_ID }}" ]; then MISSING="$MISSING APPLE_ID"; fi
-          if [ -z "${{ secrets.APPLE_TEAM_ID }}" ]; then MISSING="$MISSING APPLE_TEAM_ID"; fi
-          if [ -z "${{ secrets.APPLE_APP_PASSWORD }}" ]; then MISSING="$MISSING APPLE_APP_PASSWORD"; fi
+          if [ -z "$SIGNING_CERT_P12" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_P12"; fi
+          if [ -z "$SIGNING_CERT_PASSWORD" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_PASSWORD"; fi
+          if [ -z "$NOTARIZE_APPLE_ID" ]; then MISSING="$MISSING APPLE_ID"; fi
+          if [ -z "$NOTARIZE_TEAM_ID" ]; then MISSING="$MISSING APPLE_TEAM_ID"; fi
+          if [ -z "$NOTARIZE_APP_PASSWORD" ]; then MISSING="$MISSING APPLE_APP_PASSWORD"; fi
           if [ -n "$MISSING" ]; then
             echo "::error::Missing required secrets:$MISSING"
             exit 1
@@ -145,10 +153,7 @@ jobs:
           echo "✅ All signing secrets present"
       
       - name: Setup code signing certificates
-        if: ${{ secrets.DEVELOPER_ID_CERT_P12 != '' && !contains(steps.version.outputs.version, '-unsigned') && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
-        env:
-          P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
-          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        if: ${{ env.SIGNING_CERT_P12 != '' && !contains(steps.version.outputs.version, '-unsigned') && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
         run: |
           echo "Setting up code signing certificates..."
           
@@ -161,10 +166,10 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           
           # Decode and import certificate
-          echo "$P12_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          echo "$SIGNING_CERT_P12" | base64 --decode > $RUNNER_TEMP/certificate.p12
           security import $RUNNER_TEMP/certificate.p12 \
             -k "$KEYCHAIN_PATH" \
-            -P "$P12_PASSWORD" \
+            -P "$SIGNING_CERT_PASSWORD" \
             -T /usr/bin/codesign \
             -T /usr/bin/productsign
           
@@ -222,12 +227,7 @@ jobs:
           echo "size=${DMG_SIZE}" >> $GITHUB_OUTPUT
       
       - name: Sign and notarize DMG
-        if: ${{ secrets.APPLE_ID != '' && secrets.DEVELOPER_ID_CERT_P12 != '' && !contains(steps.version.outputs.version, '-unsigned') && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
-        env:
-          P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        if: ${{ env.NOTARIZE_APPLE_ID != '' && env.SIGNING_CERT_P12 != '' && !contains(steps.version.outputs.version, '-unsigned') && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_notarization != 'true') }}
         run: |
           echo "Signing and notarizing DMG..."
           
@@ -245,15 +245,15 @@ jobs:
           fi
           
           # Notarize the DMG
-          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
+          if [ -n "$NOTARIZE_APPLE_ID" ] && [ -n "$NOTARIZE_TEAM_ID" ] && [ -n "$NOTARIZE_APP_PASSWORD" ]; then
             # Determine timeout (use input parameter if provided, otherwise default to 60m for tag-triggered builds)
             TIMEOUT="${{ github.event.inputs.notarization_timeout || '60' }}m"
             echo "Submitting DMG for notarization (timeout: ${TIMEOUT})..."
             
             xcrun notarytool submit "$DMG_FILE" \
-              --apple-id "$APPLE_ID" \
-              --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_PASSWORD" \
+              --apple-id "$NOTARIZE_APPLE_ID" \
+              --team-id "$NOTARIZE_TEAM_ID" \
+              --password "$NOTARIZE_APP_PASSWORD" \
               --wait \
               --timeout "${TIMEOUT}"
             
