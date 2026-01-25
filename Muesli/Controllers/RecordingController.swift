@@ -2,6 +2,7 @@ import CoreMedia
 import Foundation
 import os.lock
 import os.log
+import QuartzCore
 import ScreenCaptureKit
 import SwiftUI
 
@@ -281,6 +282,67 @@ final class RecordingController {
     /// nonisolated(unsafe) is acceptable here - worst case is slightly inaccurate count for diagnostics
     private nonisolated(unsafe) static var sysBufferDiagCount = 0
     
+    // MARK: - Callback Performance Instrumentation
+    
+    /// Component timing breakdown for callback performance analysis
+    private struct CallbackTiming: Sendable {
+        var extract: TimeInterval = 0
+        var aec: TimeInterval = 0
+        var fileOutput: TimeInterval = 0
+        var resample: TimeInterval = 0
+        var transcription: TimeInterval = 0
+        var total: TimeInterval = 0
+    }
+    
+    /// Pre-allocated timing buffer to avoid allocation in hot path (capacity: 200)
+    /// nonisolated(unsafe) is acceptable - worst case is slightly inaccurate timing data
+    private nonisolated(unsafe) static var systemTimings: [CallbackTiming] = {
+        var arr = [CallbackTiming]()
+        arr.reserveCapacity(200)
+        return arr
+    }()
+    
+    /// Pre-allocated timing buffer for microphone callbacks
+    private nonisolated(unsafe) static var micTimings: [CallbackTiming] = {
+        var arr = [CallbackTiming]()
+        arr.reserveCapacity(200)
+        return arr
+    }()
+    
+    /// Counter for system buffer timing flush (every 100 buffers)
+    private nonisolated(unsafe) static var sysTimingFlushCount = 0
+    
+    /// Counter for microphone buffer timing flush (every 100 buffers)
+    private nonisolated(unsafe) static var micTimingFlushCount = 0
+    
+    /// Compute timing statistics from buffer (min, p50, p95, max)
+    private static nonisolated func computeTimingStats(_ timings: [CallbackTiming]) -> (
+        total: (min: Double, p50: Double, p95: Double, max: Double),
+        extract: Double, aec: Double, fileOutput: Double, resample: Double, transcription: Double
+    ) {
+        guard !timings.isEmpty else {
+            return ((0, 0, 0, 0), 0, 0, 0, 0, 0)
+        }
+        
+        let sorted = timings.map { $0.total }.sorted()
+        let count = sorted.count
+        
+        let minVal = sorted.first! * 1000  // Convert to ms
+        let maxVal = sorted.last! * 1000
+        let p50 = sorted[count / 2] * 1000
+        let p95Idx = Swift.min(count - 1, Int(Double(count) * 0.95))
+        let p95 = sorted[p95Idx] * 1000
+        
+        // Average component times (in ms)
+        let avgExtract = timings.map { $0.extract }.reduce(0, +) / Double(count) * 1000
+        let avgAec = timings.map { $0.aec }.reduce(0, +) / Double(count) * 1000
+        let avgFileOutput = timings.map { $0.fileOutput }.reduce(0, +) / Double(count) * 1000
+        let avgResample = timings.map { $0.resample }.reduce(0, +) / Double(count) * 1000
+        let avgTranscription = timings.map { $0.transcription }.reduce(0, +) / Double(count) * 1000
+        
+        return ((minVal, p50, p95, maxVal), avgExtract, avgAec, avgFileOutput, avgResample, avgTranscription)
+    }
+    
     /// Process system audio buffer (extracted for error handling)
     private static nonisolated func handleSystemAudioBuffer(
         _ buffer: CMSampleBuffer,
@@ -290,6 +352,9 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
+        let callbackStart = CACurrentMediaTime()
+        var timing = CallbackTiming()
+        
         // AEC Diagnostic: Log system audio timestamps to verify SCK clock domain
         // Throttled to every 100th buffer to avoid performance impact
         sysBufferDiagCount += 1
@@ -304,27 +369,68 @@ final class RecordingController {
             }
         }
         
-        // Store system audio for AEC reference (if AEC enabled)
-        // Note: timestamp no longer passed - AEC uses sample-count synchronization
+        // TIMING: Extract samples for AEC
+        let extractStart = CACurrentMediaTime()
+        var systemSamples: [Float]?
         if isAECEnabled {
-            if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
-                aecService.storeSystemAudio(samples: systemSamples)
-            }
+            systemSamples = EchoCancellationService.extractSamples(from: buffer)
         }
+        timing.extract = CACurrentMediaTime() - extractStart
         
-        // Save to file (always)
+        // TIMING: Store system audio for AEC reference (if AEC enabled)
+        let aecStart = CACurrentMediaTime()
+        if isAECEnabled, let samples = systemSamples {
+            aecService.storeSystemAudio(samples: samples)
+        }
+        timing.aec = CACurrentMediaTime() - aecStart
+        
+        // TIMING: Save to file (always)
+        let fileStart = CACurrentMediaTime()
         fileService.appendAudioBuffer(buffer, type: .system)
+        timing.fileOutput = CACurrentMediaTime() - fileStart
         
-        // Feed to transcription coordinator (handles buffering during model load)
+        // TIMING: Feed to transcription coordinator (handles buffering during model load)
+        let resampleStart = CACurrentMediaTime()
         let samples = TranscriptionService.resampleToWhisperFormat(
             buffer,
             sourceSampleRate: 48000,
             sourceChannels: 2
         )
+        timing.resample = CACurrentMediaTime() - resampleStart
+        
+        // TIMING: Transcription buffering
+        let transcriptionStart = CACurrentMediaTime()
         if let samples = samples {
             Task { @MainActor in
                 transcriptionCoordinator.bufferSystemAudio(samples)
             }
+        }
+        timing.transcription = CACurrentMediaTime() - transcriptionStart
+        
+        timing.total = CACurrentMediaTime() - callbackStart
+        
+        // Collect timing (no allocation if within capacity)
+        if systemTimings.count < 200 {
+            systemTimings.append(timing)
+        }
+        
+        // Flush every 100 buffers (~2 seconds) - NOT per-buffer
+        sysTimingFlushCount += 1
+        if sysTimingFlushCount % 100 == 0 {
+            let stats = computeTimingStats(systemTimings)
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "SYS_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
+                    "p50=\(String(format: "%.2f", stats.total.p50))ms, " +
+                    "p95=\(String(format: "%.2f", stats.total.p95))ms, " +
+                    "max=\(String(format: "%.2f", stats.total.max))ms) " +
+                    "components(extract=\(String(format: "%.2f", stats.extract))ms, " +
+                    "aec=\(String(format: "%.2f", stats.aec))ms, " +
+                    "file=\(String(format: "%.2f", stats.fileOutput))ms, " +
+                    "resample=\(String(format: "%.2f", stats.resample))ms, " +
+                    "transcription=\(String(format: "%.2f", stats.transcription))ms)")
+            }
+            systemTimings.removeAll(keepingCapacity: true)
         }
     }
     
@@ -341,6 +447,9 @@ final class RecordingController {
         warningShownLock: OSAllocatedUnfairLock<Bool>,
         warningManager: WarningManager
     ) throws {
+        let callbackStart = CACurrentMediaTime()
+        var timing = CallbackTiming()
+        
         // Get the actual sample rate from the incoming buffer (may be 44100Hz, 48000Hz, etc.)
         var sourceSampleRate: Int = 48000  // default
         if let formatDesc = CMSampleBufferGetFormatDescription(buffer),
@@ -348,8 +457,11 @@ final class RecordingController {
             sourceSampleRate = Int(asbd.pointee.mSampleRate)
         }
         
-        // Extract microphone samples at native rate (NOT necessarily 48kHz!)
+        // TIMING: Extract microphone samples at native rate (NOT necessarily 48kHz!)
+        let extractStart = CACurrentMediaTime()
         let micSamplesNative = EchoCancellationService.extractSamples(from: buffer)
+        timing.extract = CACurrentMediaTime() - extractStart
+        
         guard let micSamplesNative = micSamplesNative else {
             // Fallback: save original buffer
             fileService.appendAudioBuffer(buffer, type: .microphone)
@@ -433,8 +545,9 @@ final class RecordingController {
         // AEC is disabled if: user disabled it, OR resampling failed (sample rate mismatch)
         let effectiveAECEnabled = isAECEnabled && !aecWasDisabled && actualMicRate == 48000
         
-        // Apply AEC at consistent 48kHz (system audio is always 48kHz)
+        // TIMING: Apply AEC at consistent 48kHz (system audio is always 48kHz)
         // Note: timestamp no longer passed - AEC uses sample-count synchronization
+        let aecStart = CACurrentMediaTime()
         let processedSamples: [Float]
         if effectiveAECEnabled {
             processedSamples = aecService.processMicrophoneAudio(
@@ -443,9 +556,11 @@ final class RecordingController {
         } else {
             processedSamples = micSamples48k
         }
+        timing.aec = CACurrentMediaTime() - aecStart
         
-        // Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
+        // TIMING: Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
         // Use actualMicRate for correct sample rate metadata
+        let fileStart = CACurrentMediaTime()
         if let processedBuffer = EchoCancellationService.createSampleBuffer(
             from: processedSamples,
             timestamp: timestamp,
@@ -457,14 +572,38 @@ final class RecordingController {
             // Fallback: save original if conversion fails
             fileService.appendAudioBuffer(buffer, type: .microphone)
         }
+        timing.fileOutput = CACurrentMediaTime() - fileStart
         
         // Skip microphone audio for transcription if muted
         if isMicMuted {
+            // Still record timing for muted case
+            timing.total = CACurrentMediaTime() - callbackStart
+            if micTimings.count < 200 {
+                micTimings.append(timing)
+            }
+            micTimingFlushCount += 1
+            if micTimingFlushCount % 100 == 0 {
+                let stats = computeTimingStats(micTimings)
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "MIC_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
+                        "p50=\(String(format: "%.2f", stats.total.p50))ms, " +
+                        "p95=\(String(format: "%.2f", stats.total.p95))ms, " +
+                        "max=\(String(format: "%.2f", stats.total.max))ms) " +
+                        "components(extract=\(String(format: "%.2f", stats.extract))ms, " +
+                        "aec=\(String(format: "%.2f", stats.aec))ms, " +
+                        "file=\(String(format: "%.2f", stats.fileOutput))ms, " +
+                        "resample=\(String(format: "%.2f", stats.resample))ms, " +
+                        "transcription=\(String(format: "%.2f", stats.transcription))ms)")
+                }
+                micTimings.removeAll(keepingCapacity: true)
+            }
             return
         }
         
-        // Feed to transcription coordinator (handles buffering during model load)
+        // TIMING: Feed to transcription coordinator (handles buffering during model load)
         // Use high-quality AVAudioConverter resampling from actualMicRate to 16kHz
+        let resampleStart = CACurrentMediaTime()
         let resampled = TranscriptionService.resampleSamples(
             samples: processedSamples,
             sourceSampleRate: Double(actualMicRate),
@@ -473,10 +612,41 @@ final class RecordingController {
             targetChannels: 1,
             isInterleaved: false
         )
+        timing.resample = CACurrentMediaTime() - resampleStart
+        
+        // TIMING: Transcription buffering
+        let transcriptionStart = CACurrentMediaTime()
         if let resampled = resampled {
             Task { @MainActor in
                 transcriptionCoordinator.bufferMicrophoneAudio(resampled)
             }
+        }
+        timing.transcription = CACurrentMediaTime() - transcriptionStart
+        
+        timing.total = CACurrentMediaTime() - callbackStart
+        
+        // Collect timing (no allocation if within capacity)
+        if micTimings.count < 200 {
+            micTimings.append(timing)
+        }
+        
+        // Flush every 100 buffers (~2 seconds) - NOT per-buffer
+        micTimingFlushCount += 1
+        if micTimingFlushCount % 100 == 0 {
+            let stats = computeTimingStats(micTimings)
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
+                    "p50=\(String(format: "%.2f", stats.total.p50))ms, " +
+                    "p95=\(String(format: "%.2f", stats.total.p95))ms, " +
+                    "max=\(String(format: "%.2f", stats.total.max))ms) " +
+                    "components(extract=\(String(format: "%.2f", stats.extract))ms, " +
+                    "aec=\(String(format: "%.2f", stats.aec))ms, " +
+                    "file=\(String(format: "%.2f", stats.fileOutput))ms, " +
+                    "resample=\(String(format: "%.2f", stats.resample))ms, " +
+                    "transcription=\(String(format: "%.2f", stats.transcription))ms)")
+            }
+            micTimings.removeAll(keepingCapacity: true)
         }
     }
     
