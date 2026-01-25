@@ -285,9 +285,6 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     /// Drift monitoring task - created when recording starts, cancelled when recording stops
     private var driftMonitoringTask: Task<Void, Never>?
     
-    /// Recording start time for drift monitoring (wall-clock)
-    private var recordingStartTime: Double = 0
-    
     // MARK: - Configuration
     
     /// Filter length (number of taps)
@@ -412,6 +409,18 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         var totalGapSamples: Int64 = 0
         /// Maximum gap size in samples (for end-of-recording stats)
         var maxGapSamples: Int64 = 0
+        
+        // MARK: - Offset Validation State (per AEC offset validation fix plan)
+        
+        /// Number of times bounds check fallback was triggered (target > totalSystemSamples)
+        var boundsCheckFallbackCount: Int = 0
+        /// Counter for periodic OFFSET_CHECK logging (every 2880 buffers = 60 seconds)
+        var offsetCheckCounter: Int = 0
+        
+        // MARK: - Drift Monitoring State
+        
+        /// Recording start time for drift monitoring (wall-clock)
+        var recordingStartTime: Double = 0
     }
     
     /// Thread-safe state using OSAllocatedUnfairLock (AGENTS.md requirement)
@@ -646,10 +655,21 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 return (microphoneSamples, gapToLog)  // Pass through during warmup
             }
             
+            // MARK: - Periodic Offset Check (per AEC offset validation fix plan)
+            // Log offset stability every 60 seconds (2880 buffers at ~20ms/buffer)
+            state.offsetCheckCounter += 1
+            if state.offsetCheckCounter % 2880 == 0 {
+                let actualDelta = state.totalSystemSamples - state.totalMicSamples
+                let offsetError = actualDelta - state.deliveryOffsetSamples
+                let checkMsg = "OFFSET_CHECK: claimed=\(state.deliveryOffsetSamples), " +
+                    "actual=\(actualDelta), mismatch=\(offsetError) samples"
+                Task { await DiagnosticLogger.shared.log(.aec, checkMsg) }
+            }
+            
             // Diagnostic: Log index calculation (every 500th synced buffer)
             Self.indexDiagCount += 1
             if Self.indexDiagCount % 500 == 1 {
-                let targetSysIdx = micStartIndex - Int64(acousticDelaySamples) + state.deliveryOffsetSamples
+                let targetSysIdx = micStartIndex - Int64(acousticDelaySamples) - state.deliveryOffsetSamples
                 let indexMsg = "INDEX: micStart=\(micStartIndex), acoustic=\(acousticDelaySamples), " +
                     "offset=\(state.deliveryOffsetSamples), target=\(targetSysIdx), sysSamples=\(state.totalSystemSamples)"
                 Task { await DiagnosticLogger.shared.log(.aec, indexMsg) }
@@ -657,15 +677,31 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             
             // Account for:
             // 1. Acoustic delay (DAC + propagation + ADC): subtract to look backward
-            // 2. Delivery offset: ADD the offset (sign convention is already correct)
-            //    - Positive offset (mic ahead): add positive → look forward in system buffer
-            //    - Negative offset (system ahead): add negative → look backward in system buffer
-            let targetSysIndex = micStartIndex - Int64(acousticDelaySamples) + state.deliveryOffsetSamples
+            // 2. Delivery offset: SUBTRACT the offset to align sample indices
+            //    - Positive offset (mic ahead): mic index > system index for same moment → subtract to get lower system index
+            //    - Negative offset (system ahead): mic index < system index for same moment → subtract negative = add
+            let targetSysIndex = micStartIndex - Int64(acousticDelaySamples) - state.deliveryOffsetSamples
             
             // Handle negative index during initial acoustic delay window
             // This is normal for the first ~50ms of recording
             if targetSysIndex < 0 {
                 return (microphoneSamples, gapToLog)
+            }
+            
+            // MARK: - Bounds Check Fallback (per AEC offset validation fix plan)
+            // If target exceeds available samples, fall back to pass-through
+            // This preserves user's voice even if echo is present
+            if targetSysIndex > state.totalSystemSamples {
+                state.boundsCheckFallbackCount += 1
+                
+                // Log first occurrence and every 100th thereafter
+                if state.boundsCheckFallbackCount == 1 || state.boundsCheckFallbackCount % 100 == 0 {
+                    let errorMsg = "BOUNDS_FALLBACK: target=\(targetSysIndex) > totalSys=\(state.totalSystemSamples), " +
+                        "occurred \(state.boundsCheckFallbackCount) times, using pass-through"
+                    Task { await DiagnosticLogger.shared.log(.aec, errorMsg) }
+                }
+                
+                return (microphoneSamples, gapToLog)  // Pass-through preserves user's voice
             }
             
             // Find aligned reference samples with cross-buffer support
@@ -776,13 +812,22 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             state.negativeGapLogCount = 0
             state.totalGapSamples = 0
             state.maxGapSamples = 0
+            
+            // Clear offset validation state
+            state.boundsCheckFallbackCount = 0
+            state.offsetCheckCounter = 0
+            
+            // Clear drift monitoring state
+            state.recordingStartTime = 0
         }
     }
     
     /// Start drift monitoring when recording begins
     /// Call this after reset() when starting a new recording
     func startDriftMonitoring() {
-        recordingStartTime = timeProvider.currentTime()
+        state.withLock { state in
+            state.recordingStartTime = timeProvider.currentTime()
+        }
         
         driftMonitoringTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -804,7 +849,7 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     /// Check cumulative drift (called every 60 seconds by drift monitoring task)
     private func checkDrift() async {
         let (expected, actual, duration) = state.withLock { state in
-            let duration = timeProvider.currentTime() - recordingStartTime
+            let duration = timeProvider.currentTime() - state.recordingStartTime
             let expected = Int64(duration * Double(AudioConfiguration.captureSampleRate))
             return (expected, state.totalSystemSamples, duration)
         }
@@ -855,7 +900,29 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             state.deliveryOffsetSamples = offsetSamples
             state.offsetCalculated = true
             
-            // CHANGED (per plan): Sync streams AFTER offset is calculated, not immediately
+            // MARK: - Post-Warmup Offset Validation (per AEC offset validation fix plan)
+            // Validate that calculated offset matches actual sample count difference
+            // Threshold: 50ms (2400 samples) = 2x typical steady-state jitter
+            let actualDelta = state.totalSystemSamples - state.totalMicSamples
+            let mismatch = abs(actualDelta - state.deliveryOffsetSamples)
+            let mismatchThreshold: Int64 = 2400  // 50ms at 48kHz
+            
+            if mismatch > mismatchThreshold {
+                // Offset doesn't match reality - use actual sample difference
+                var correctedOffset = actualDelta
+                
+                // Apply same sanity clamp as initial offset (±500ms)
+                correctedOffset = max(-maxReasonableOffset, min(maxReasonableOffset, correctedOffset))
+                
+                let warnMsg = "OFFSET_VALIDATION: mismatch=\(mismatch) samples " +
+                    "(\(String(format: "%.1f", Double(mismatch) / 48.0))ms), " +
+                    "correcting offset from \(state.deliveryOffsetSamples) to \(correctedOffset)"
+                Task { await DiagnosticLogger.shared.log(.aec, warnMsg) }
+                
+                state.deliveryOffsetSamples = correctedOffset
+            }
+            
+            // CHANGED (per plan): Sync streams AFTER offset is calculated and validated
             // This fixes the sync window gap where AEC operated with deliveryOffsetSamples = 0
             state.streamsSynchronized = true
             // NOTE: Don't reset sample counts - buffers are already indexed with current counts
@@ -1065,5 +1132,25 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     /// Get current buffer count (for testing buffer pruning)
     var bufferCount: Int {
         state.withLock { $0.systemAudioBuffers.count }
+    }
+    
+    /// Get bounds check fallback count (for testing offset validation fix)
+    var boundsCheckFallbackCount: Int {
+        state.withLock { $0.boundsCheckFallbackCount }
+    }
+    
+    /// Get delivery offset in samples (for testing offset validation)
+    var deliveryOffsetSamples: Int64 {
+        state.withLock { $0.deliveryOffsetSamples }
+    }
+    
+    /// Get total mic samples (for testing)
+    var totalMicSamples: Int64 {
+        state.withLock { $0.totalMicSamples }
+    }
+    
+    /// Check if streams are synchronized (for testing)
+    var streamsSynchronized: Bool {
+        state.withLock { $0.streamsSynchronized }
     }
 }
