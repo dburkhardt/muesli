@@ -15,6 +15,10 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
     private let bufferHandler: ((CMSampleBuffer) -> Void)?
     private let levelHandler: ((Float) -> Void)?
     
+    /// Counter for throttling mic diagnostic logging (every 100th buffer)
+    /// nonisolated(unsafe) is acceptable here - worst case is slightly inaccurate count for diagnostics
+    private nonisolated(unsafe) static var micBufferDiagCount = 0
+    
     init(bufferHandler: ((CMSampleBuffer) -> Void)?, levelHandler: ((Float) -> Void)?) {
         self.bufferHandler = bufferHandler
         self.levelHandler = levelHandler
@@ -43,23 +47,33 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
             selectFirstRealMicrophone()
         }
         
-        // Get both input and output formats for diagnostics
+        // Get the input format to determine hardware sample rate and channels
         let inputFormat = inputNode.inputFormat(forBus: 0)
-        let outputFormat = inputNode.outputFormat(forBus: 0)
         
-        // Use the output format but check if it's valid
-        // If sampleRate is 0 or invalid, the tap won't receive callbacks
-        var recordingFormat = outputFormat
-        if recordingFormat.sampleRate == 0 {
-            // Fallback: Create a standard format
-            logger.warning("outputFormat has 0 sample rate, using fallback format")
-            recordingFormat = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+        // CRITICAL FIX: Always request Float32 format for the tap
+        // The hardware may deliver Int16 audio, which causes handleAudioBuffer to fail
+        // (floatChannelData is nil for Int16 buffers)
+        // By requesting Float32, AVAudioEngine automatically converts for us
+        let tapSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
+        let tapChannels = inputFormat.channelCount > 0 ? inputFormat.channelCount : 1
+        
+        guard let tapFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: tapSampleRate,
+            channels: tapChannels,
+            interleaved: false
+        ) else {
+            logger.error("Failed to create Float32 tap format, using input format directly")
+            // Fall back to input format (may not have floatChannelData)
+            inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat.sampleRate > 0 ? inputFormat : nil) { [weak self] buffer, time in
+                self?.handleAudioBuffer(buffer, time: time)
+            }
+            try audioEngine.start()
+            isRunning = true
+            return
         }
         
-        // CRITICAL FIX: Use the INPUT format when installing the tap
-        // Using nil or output format causes error -10868 when input/output formats don't match
-        // The input format reflects what the hardware is actually delivering
-        let tapFormat = inputFormat.sampleRate > 0 ? inputFormat : nil
+        logger.debug("Installing tap with Float32 format: \(tapSampleRate)Hz, \(tapChannels) channels")
         
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, time in
             self?.handleAudioBuffer(buffer, time: time)
@@ -307,8 +321,23 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         
         // Create sample buffer
         var sampleBuffer: CMSampleBuffer?
-        let hostTime = time.audioTimeStamp.mHostTime
-        let timestamp = hostTime > 0 ? Double(hostTime) / 1_000_000_000.0 : CACurrentMediaTime()
+        
+        // FIX: Use CACurrentMediaTime() for timestamps to match ScreenCaptureKit's clock domain
+        // BEFORE (buggy): mHostTime ÷ 1e9 assumes nanoseconds, but Mach time uses hardware-
+        // dependent timebase (~125:3 on Apple Silicon), giving timestamps ~41x off
+        // This caused findMatchingSystemAudio() to always return nil (0% match rate)
+        let timestamp = CACurrentMediaTime()
+        
+        // AEC Diagnostic: Log mic timestamps to verify fix
+        // After fix: timestamps should match wall clock within ~100ms
+        Self.micBufferDiagCount += 1
+        if Self.micBufferDiagCount % 100 == 0 {
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC: timestamp=\(String(format: "%.3f", timestamp))s (using CACurrentMediaTime)")
+            }
+        }
+        
         var timing = CMSampleTimingInfo(
             duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
             presentationTimeStamp: CMTime(seconds: timestamp, preferredTimescale: CMTimeScale(sampleRate)),

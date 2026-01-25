@@ -83,10 +83,33 @@ enum AudioConfiguration {
     /// Acoustic delay for AEC (milliseconds)
     /// This accounts for DAC + acoustic propagation + ADC latency
     /// Typical range: 15-50ms depending on audio hardware
-    /// Default: 30ms (middle of typical range for laptop speakers)
-    static let aecAcousticDelayMs: Int = 30
+    /// Default: 50ms (conservative for laptop speakers with room reflections)
+    static let aecAcousticDelayMs: Int = 50
     
     /// AEC filter length (number of taps)
+    /// At 48kHz: 1024 taps = ~21ms of echo path modeling
     /// Longer filters handle longer echo delays but require more computation
-    static let aecFilterLength: Int = 256
+    static let aecFilterLength: Int = 1024
+    
+    /// AEC learning rate (NLMS step size)
+    /// Higher values adapt faster but may be less stable
+    /// Typical range: 0.1-0.5
+    static let aecLearningRate: Float = 0.2
+    
+    // MARK: - AEC Debugging (Debug Builds Only)
+    
+    #if DEBUG
+    /// Enable verbose AEC diagnostic logging
+    /// When enabled, logs RMS levels, match quality, and filter state every Nth buffer
+    /// WARNING: May impact real-time performance; use only for debugging
+    /// Enable via: `defaults write com.muesli.app aecVerboseLogging -bool true`
+    static var aecVerboseLogging: Bool {
+        get { UserDefaults.standard.bool(forKey: "aecVerboseLogging") }
+        set { UserDefaults.standard.set(newValue, forKey: "aecVerboseLogging") }
+    }
+    
+    /// Log sampling interval for verbose AEC diagnostics
+    /// Logs every Nth buffer to minimize performance impact (~2-3 logs/second at 10)
+    static let aecLogSampleInterval: Int = 10
+    #endif
 }

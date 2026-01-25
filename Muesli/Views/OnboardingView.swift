@@ -35,6 +35,15 @@ struct OnboardingView: View {
     /// The model currently being compiled
     @State private var compilingModel: ModelManager.ModelSize?
     
+    /// Whether compilation was cancelled while user navigated away (per plan Issue 5)
+    /// Used to refresh stale UI state in onAppear
+    @State private var wasCompilationCancelled = false
+    
+    // MARK: - Background Download State
+    
+    /// Whether user has initiated at least one download (enables Continue button)
+    @State private var userHasInitiatedDownload = false
+    
     // Using centralized AppStorageKeys for onboarding state
     
     private var appName: String {
@@ -414,6 +423,11 @@ struct OnboardingView: View {
     
     // MARK: - Model Setup Screen
     
+    /// Check if any model is downloading or ready
+    private var isAnyModelDownloadingOrReady: Bool {
+        modelManager.isAnyModelDownloading || modelManager.hasModel
+    }
+    
     private var modelSetupScreen: some View {
         VStack(spacing: 12) {
             Image(systemName: "brain.head.profile")
@@ -463,6 +477,20 @@ struct OnboardingView: View {
                 .padding(.top, 8)
             }
             
+            // Background download message (shown when downloading and user can proceed)
+            if modelManager.isAnyModelDownloading && !modelManager.hasModel {
+                VStack(spacing: 4) {
+                    Text("Download will continue in background")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("You can start using the app now - transcription will be available once the model is ready")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 8)
+            }
+            
             // Active model picker (only if models are downloaded and not compiling)
             if !modelManager.downloadedModels.isEmpty && !isCompiling && compilationError == nil {
                 activeModelPicker
@@ -478,14 +506,37 @@ struct OnboardingView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!modelManager.hasModel || isCompiling || compilationError != nil)
+            // Enable Continue once user has initiated a download OR a model is ready
+            // No longer blocks on compilation completion
+            .disabled(!userHasInitiatedDownload && !modelManager.hasModel)
         }
         .padding(.horizontal, 40)
         .padding(.top, 24)
         .padding(.bottom, 8) // Reduced since progress indicator now has more bottom padding
         .onDisappear {
-            // Cancel compilation task if user navigates away
+            // Cancel compilation task if user navigates away (per plan Issue 5)
             compilationTask?.cancel()
+            wasCompilationCancelled = true
+        }
+        .onAppear {
+            // Refresh stale compilation state (per plan Issue 5)
+            // Case 1: User navigated away and cancelled
+            if isCompiling && wasCompilationCancelled {
+                isCompiling = false
+                compilingModel = nil
+                wasCompilationCancelled = false
+            }
+            
+            // Case 2: Task completed but UI didn't update (defensive)
+            if isCompiling && compilationTask == nil {
+                isCompiling = false
+                compilingModel = nil
+            }
+            
+            // If user already has models, mark as initiated
+            if modelManager.hasModel || modelManager.isAnyModelDownloading {
+                userHasInitiatedDownload = true
+            }
         }
     }
     
@@ -598,11 +649,21 @@ struct OnboardingView: View {
             HStack(spacing: 6) {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
-                    .frame(width: 60)
+                    .frame(width: 50)
                 Text("\(Int(progress * 100))%")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(width: 35, alignment: .trailing)
+                    .frame(width: 30, alignment: .trailing)
+                // Cancel button
+                Button {
+                    llmManager.cancelDownload(model)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancel download")
             }
             
         case .loading:
@@ -706,7 +767,8 @@ struct OnboardingView: View {
             switch state {
             case .idle, .checking:
                 Button("Download") {
-                    Task {
+                    userHasInitiatedDownload = true
+                    Task { @MainActor in
                         await modelManager.downloadModel(model)
                         // After download completes, start compilation
                         if modelManager.downloadState(for: model) == .completed {
@@ -721,11 +783,21 @@ struct OnboardingView: View {
                 HStack(spacing: 6) {
                     ProgressView(value: progress)
                         .progressViewStyle(.linear)
-                        .frame(width: 60)
+                        .frame(width: 50)
                     Text("\(Int(progress * 100))%")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 35, alignment: .trailing)
+                        .frame(width: 30, alignment: .trailing)
+                    // Cancel button
+                    Button {
+                        modelManager.cancelDownload(model)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Cancel download")
                 }
                 
             case .completed:
@@ -739,7 +811,8 @@ struct OnboardingView: View {
                 
             case .failed(let error):
                 Button("Retry") {
-                    Task {
+                    userHasInitiatedDownload = true
+                    Task { @MainActor in
                         await modelManager.downloadModel(model)
                         // After download completes, start compilation
                         if modelManager.downloadState(for: model) == .completed {
@@ -758,6 +831,13 @@ struct OnboardingView: View {
     
     /// Start compiling a model for the device
     private func startCompilation(for model: ModelManager.ModelSize) {
+        // Prevent overlapping compilations (per plan Issue 3)
+        guard !isCompiling else {
+            // Log skipped compilation for debugging (per bdb9 review)
+            print("Skipping compilation for \(model) - already compiling \(String(describing: compilingModel))")
+            return
+        }
+        
         isCompiling = true
         compilingModel = model
         compilationStartTime = Date()
@@ -766,12 +846,19 @@ struct OnboardingView: View {
         compilationTask = Task {
             do {
                 try await modelManager.compileModel(model)
+                
+                // Check if we were cancelled while compiling (per plan Issue 5)
+                guard !Task.isCancelled else { return }
+                
                 await MainActor.run {
                     isCompiling = false
                     compilingModel = nil
                     // Model is now ready for use
                 }
             } catch {
+                // Check if we were cancelled while compiling (per plan Issue 5)
+                guard !Task.isCancelled else { return }
+                
                 await MainActor.run {
                     compilationError = error
                     isCompiling = false

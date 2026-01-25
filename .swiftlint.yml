@@ -24,7 +24,7 @@ opt_in_rules:
 # Disabled rules
 disabled_rules:
   - trailing_whitespace  # Too noisy for now
-  - todo                 # We use TODO.md instead
+  - todo                 # We use plans/todo.md instead
 
 # Rule configurations
 line_length:

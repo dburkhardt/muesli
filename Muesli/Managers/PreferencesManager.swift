@@ -107,15 +107,18 @@ final class PreferencesManager {
     /// Thread-safe storage for echo cancellation state (for synchronous access from audio callbacks)
     /// Uses OSAllocatedUnfairLock for proper synchronization
     /// Internal access for audio callback setup
-    let echoCancellationLock = OSAllocatedUnfairLock(initialState: false)
+    let echoCancellationLock = OSAllocatedUnfairLock(initialState: true)
+    
+    /// Backing storage for @Observable tracking
+    /// Note: The lock above is for thread-safe audio callback access; this property enables SwiftUI observation
+    private var _isEchoCancellationEnabled: Bool = true
     
     /// Whether echo cancellation is enabled
-    /// Uses a cached value for thread-safe access from audio callbacks
+    /// Uses a stored property for @Observable tracking, synced to lock for audio callbacks
     var isEchoCancellationEnabled: Bool {
-        get {
-            echoCancellationLock.withLock { $0 }
-        }
+        get { _isEchoCancellationEnabled }
         set {
+            _isEchoCancellationEnabled = newValue
             echoCancellationLock.withLock { $0 = newValue }
             UserDefaults.standard.set(newValue, forKey: AppStorageKeys.echoCancellationEnabled)
         }
@@ -199,8 +202,14 @@ final class PreferencesManager {
     // MARK: - Initialization
 
     init() {
-        // Load persisted echo cancellation state into the lock
-        let savedValue = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
+        // Load persisted echo cancellation state (default to true if not set)
+        let savedValue: Bool
+        if UserDefaults.standard.object(forKey: AppStorageKeys.echoCancellationEnabled) != nil {
+            savedValue = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
+        } else {
+            savedValue = true  // Default: AEC enabled for new installations
+        }
+        _isEchoCancellationEnabled = savedValue
         echoCancellationLock.withLock { $0 = savedValue }
 
         // Perform storage migration if needed

@@ -9,31 +9,37 @@ struct UnifiedHistoryView: View {
     var body: some View {
         @Bindable var history = historyManager
         
-        VStack(spacing: 0) {
-            // Warning banners (if any active warnings)
-            if viewModel.warningManager.hasActiveWarnings {
-                WarningBannerStack(
-                    warnings: viewModel.warningManager.activeWarnings,
-                    onDismiss: { id in
-                        viewModel.warningManager.dismissWarning(id)
-                    },
-                    onCopy: { id in
-                        viewModel.warningManager.copyWarningDetails(id)
-                    }
-                )
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 0) {
+                // Warning banners (if any active warnings)
+                if viewModel.warningManager.hasActiveWarnings {
+                    WarningBannerStack(
+                        warnings: viewModel.warningManager.activeWarnings,
+                        onDismiss: { id in
+                            viewModel.warningManager.dismissWarning(id)
+                        },
+                        onCopy: { id in
+                            viewModel.warningManager.copyWarningDetails(id)
+                        }
+                    )
+                }
+                
+                // Header with title and start button
+                headerView
+                
+                Divider()
+                
+                // Meeting list
+                if historyManager.groupedHistory.isEmpty {
+                    emptyStateView
+                } else {
+                    meetingListView
+                }
             }
             
-            // Header with title and start button
-            headerView
-            
-            Divider()
-            
-            // Meeting list
-            if historyManager.groupedHistory.isEmpty {
-                emptyStateView
-            } else {
-                meetingListView
-            }
+            // Floating download indicator (shown when model download in progress)
+            DownloadIndicatorView(viewModel: viewModel)
+                .padding()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)

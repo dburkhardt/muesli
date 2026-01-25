@@ -598,6 +598,6 @@ Planned improvements for future releases:
 
 - **SPEC.md**: Overall product specification
 - **AGENTS.md**: Development guidelines and commands
-- **plans/TODO.md**: Feature tracking and roadmap
+- **plans/todo.md**: Feature tracking and roadmap
 - **Muesli/Services/ExportService.swift**: Implementation
 - **MuesliTests/ExportServiceTests.swift**: Test suite

@@ -26,8 +26,34 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 3. **Check in frequently** — confirm approach before significant work; report progress at milestones
 4. **Native patterns** — Swift 6 concurrency, `@Observable`, one type per file
 5. **UI principle** — "Granola-inspired": minimal, clean, fast
-6. **Track future work** — when asked to "add a todo" or "note this for later", suggest creating a GitHub Issue and continue working
+6. **Track future work** — add todos to [`plans/todo.md`](plans/todo.md) or create a GitHub Issue for larger features
 7. **Preserve debugging code** — do not remove print statements, Logger calls, or temporary debugging code without asking the user first
+
+## Todo Tracking
+
+**Location**: [`plans/todo.md`](plans/todo.md)
+
+Track future work, features, and improvements in the todo file. Use the `/todo` Cursor command to add new entries.
+
+**When to use todos vs GitHub Issues**:
+- **Todo file**: Quick notes, implementation details, small improvements
+- **GitHub Issues**: Larger features, bugs that need discussion, work that may span multiple PRs
+
+**Todo format**:
+```markdown
+## [Category] - Brief Description
+
+Detailed description of the feature or improvement.
+
+### Requirements
+- Specific requirement 1
+- Specific requirement 2
+```
+
+**Agents should**:
+- Check `plans/todo.md` when planning work to understand pending items
+- Add new todos when discovering future work during implementation
+- Remove or update todos when completing related work
 
 ## Commands
 
@@ -54,6 +80,22 @@ grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)"       # Check for err
 - `"Build Complete (--build-only)"` — Success, app not launched
 - `"BUILD SUCCEEDED"` — xcodebuild finished successfully
 - `"error:"` — Build failed, check log for details
+
+**Build timestamp verification** (REQUIRED):
+- After successful build, the log includes a prominent `BUILD TIMESTAMP` box
+- The timestamp is also written to `/tmp/muesli-build-timestamp.txt`
+- **Agents MUST provide this timestamp to the user** when reporting build completion
+- Format: UTC ISO 8601 (e.g., `2026-01-24T15:49:31Z`)
+- User can verify in app: Help → About → Build Details → Built
+- This ensures the user knows they're running the exact build that was just compiled
+
+```bash
+# Extract timestamp from log file
+grep "BUILD TIMESTAMP:" "$(ls -t /tmp/muesli-build-*.log | head -1)"
+
+# Or read from dedicated timestamp file
+cat /tmp/muesli-build-timestamp.txt
+```
 
 **Build & Launch options**:
 ```bash

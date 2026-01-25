@@ -1,5 +1,31 @@
 import SwiftUI
 
+// #region agent log
+private func rdvDebugLog(_ message: String, _ data: [String: Any] = [:]) {
+    let logPath = NSHomeDirectory() + "/git-repos/muesli/.cursor/debug.log"
+    let timestamp = Date().timeIntervalSince1970 * 1000
+    var payload: [String: Any] = [
+        "timestamp": timestamp,
+        "location": "RecordingDetailView",
+        "message": message,
+        "sessionId": "debug-session",
+        "hypothesisId": "A-D"
+    ]
+    if !data.isEmpty { payload["data"] = data }
+    if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+       let jsonString = String(data: jsonData, encoding: .utf8) {
+        let line = jsonString + "\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8)!)
+            handle.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
+        }
+    }
+}
+// #endregion
+
 /// Detail view showing active recording, completed recording, or historical meeting
 struct RecordingDetailView: View {
     @Bindable var viewModel: MuesliViewModel
@@ -101,6 +127,11 @@ struct RecordingDetailView: View {
                             viewModel.warningManager.copyWarningDetails(id)
                         }
                     )
+                }
+                
+                // Audio-only mode banner (shown when model is downloading)
+                if session.isRecordingOnly && viewModel.isAnyModelDownloading {
+                    audioOnlyBanner
                 }
                 
                 // Header with title and recording indicator
@@ -339,9 +370,15 @@ struct RecordingDetailView: View {
     // MARK: - Settings Menu Control (Gear icon with submenus)
     
     private func settingsMenuControl(session: RecordingSession) -> some View {
-        Menu {
+        // #region agent log
+        let _ = rdvDebugLog("settingsMenuControl rendered", ["hasToggle": true])
+        // #endregion
+        return Menu {
             // Submenu 1: Live Transcript
             Menu("Live Transcript") {
+                // #region agent log
+                let _ = rdvDebugLog("Live Transcript submenu content rendered")
+                // #endregion
                 Button(
                     action: {
                         viewModel.transcriptionMode = .live
@@ -375,6 +412,9 @@ struct RecordingDetailView: View {
             
             // Submenu 2: Audio Source (shows current, can change only when not recording)
             Menu("Audio Source") {
+                // #region agent log
+                let _ = rdvDebugLog("Audio Source submenu content rendered")
+                // #endregion
                 // "All System Audio" option
                 Button(
                     action: {
@@ -423,6 +463,16 @@ struct RecordingDetailView: View {
             // Submenu 3: Transcription Model
             // Disable during switching or first-time model compilation
             transcriptionModelMenu
+            
+            Divider()
+            
+            // Echo Cancellation toggle
+            // #region agent log
+            let _ = rdvDebugLog("Echo Cancellation toggle rendered", ["enabled": viewModel.isEchoCancellationEnabled])
+            // #endregion
+            Toggle(isOn: $viewModel.isEchoCancellationEnabled) {
+                Text("Echo Cancellation")
+            }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "gearshape.fill")
@@ -456,6 +506,9 @@ struct RecordingDetailView: View {
         // Use simple string title to match other submenus (Live Transcript, Audio Source)
         // Custom labels with HStack break nested menu rendering
         Menu("Model") {
+            // #region agent log
+            let _ = rdvDebugLog("Model submenu content rendered", ["modelsCount": models.count])
+            // #endregion
             ForEach(models, id: \.self) { model in
                 Button {
                     Task {
@@ -960,6 +1013,42 @@ struct RecordingDetailView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Audio-Only Mode Banner
+    
+    /// Banner shown when recording in audio-only mode (model downloading)
+    private var audioOnlyBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 14))
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Recording audio only")
+                    .font(.system(size: 12, weight: .medium))
+                Text("Transcription will start when model download completes")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            
+            Spacer()
+            
+            // Show download progress if available
+            if let download = viewModel.activeDownloads.first {
+                HStack(spacing: 4) {
+                    ProgressView(value: download.progress)
+                        .progressViewStyle(.linear)
+                        .frame(width: 40)
+                    Text("\(Int(download.progress * 100))%")
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.orange.opacity(0.1))
     }
     
     // MARK: - Helpers

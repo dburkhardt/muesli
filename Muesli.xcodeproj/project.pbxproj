@@ -59,6 +59,7 @@
 		A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000073241D1A1D00000011 /* PreferencesView.swift */; };
 		A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000075241D1A1D00000012 /* RecordingIndicator.swift */; };
 		CT00001241D1A1D00000013 /* CopyTranscriptButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = CT00002241D1A1D00000013 /* CopyTranscriptButton.swift */; };
+		DIV0001241D1A1D00000104 /* DownloadIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DIV0002241D1A1D00000104 /* DownloadIndicatorView.swift */; };
 		C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000002241D1A1D00000050 /* PreferencesManager.swift */; };
 		C1000003241D1A1D00000051 /* MeetingHistoryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */; };
 		SW00001241D1A1D00000054 /* ServiceWarning.swift in Sources */ = {isa = PBXBuildFile; fileRef = SW00002241D1A1D00000054 /* ServiceWarning.swift */; };
@@ -147,6 +148,7 @@
 		A1000073241D1A1D00000011 /* PreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesView.swift; sourceTree = "<group>"; };
 	A1000075241D1A1D00000012 /* RecordingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIndicator.swift; sourceTree = "<group>"; };
 	CT00002241D1A1D00000013 /* CopyTranscriptButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyTranscriptButton.swift; sourceTree = "<group>"; };
+	DIV0002241D1A1D00000104 /* DownloadIndicatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadIndicatorView.swift; sourceTree = "<group>"; };
 	HL00002241D1A1D00000102 /* HoverableLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverableLink.swift; sourceTree = "<group>"; };
 	A1000080241D1A1D00000020 /* TranscriptBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlock.swift; sourceTree = "<group>"; };
 		A1000082241D1A1D00000021 /* TranscriptProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptProcessor.swift; sourceTree = "<group>"; };
@@ -331,6 +333,7 @@
 			A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */,
 			A1000075241D1A1D00000012 /* RecordingIndicator.swift */,
 			CT00002241D1A1D00000013 /* CopyTranscriptButton.swift */,
+			DIV0002241D1A1D00000104 /* DownloadIndicatorView.swift */,
 			HL00002241D1A1D00000102 /* HoverableLink.swift */,
 			A1000088241D1A1D00000024 /* TranscriptBlockView.swift */,
 				A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */,
@@ -642,6 +645,7 @@
 			A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */,
 			A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */,
 			CT00001241D1A1D00000013 /* CopyTranscriptButton.swift in Sources */,
+			DIV0001241D1A1D00000104 /* DownloadIndicatorView.swift in Sources */,
 			A1000081241D1A1D00000020 /* TranscriptBlock.swift in Sources */,
 				A1000083241D1A1D00000021 /* TranscriptProcessor.swift in Sources */,
 				A1000085241D1A1D00000022 /* LLMStitchingService.swift in Sources */,

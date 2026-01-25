@@ -32,6 +32,7 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### January
 
+- [2026-01-24: AEC Zero Match Rate Bug](2026-01-24_aec-zero-match-rate.md) - Echo cancellation shows 0% match rate despite successful stream sync (IN PROGRESS)
 - [2026-01-22: CI Code Signing Workflow Bug](2026-01-22_ci-signing-workflow-bug.md) - Workflow checked undefined env vars instead of secrets
 - [2026-01-15: Screen Recording Permission Detection Unreliable](2026-01-15_screen-recording-permission-detection.md) - CGPreflightScreenCaptureAccess() fails with ad-hoc signing
 

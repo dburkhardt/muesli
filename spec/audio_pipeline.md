@@ -187,6 +187,44 @@ Chunk 3:           |████████|
 4. Once model is ready, buffered audio is processed
 5. If model takes >30 seconds, timeout triggers
 
+## Echo Cancellation (AEC)
+
+The Echo Cancellation Service removes echo from microphone audio when the user's speakers play system audio (e.g., meeting participants' voices).
+
+### AEC Warmup Period
+
+The Echo Cancellation Service requires a warmup period at the start of each recording:
+
+1. **First ~50 buffers from each stream:** Both audio streams deliver samples while delivery offset is calculated
+2. **During warmup:** Microphone audio passes through unprocessed (no echo cancellation)
+3. **After warmup:** AEC activates with correct stream alignment
+
+**Configuration:** `kBuffersToAverage = 50` (defined in `EchoCancellationService.AECState`)
+
+**Expected warmup duration:**
+- Typical buffer: ~4096 samples at 48kHz (~85ms per buffer)
+- Conservative estimate: 50 buffers × 85ms = ~4.25 seconds
+- Practical observation: ~1 second (buffers interleave rapidly from both streams)
+- Timeout fallback: 5 seconds (forces pass-through mode if sync fails)
+
+### Why Warmup is Necessary
+
+The warmup period exists because:
+1. **NLMS algorithm needs reference data:** Echo prediction requires a history of system audio samples
+2. **Stream timing must be measured:** Delivery offset between system audio and microphone must be calculated
+3. **Sample-count synchronization:** Unlike timestamp-based sync, sample-count alignment needs to observe buffer delivery patterns
+
+### User Impact
+
+The first ~1 second of recording may have echo. This is acceptable for meeting recordings where the first few seconds are typically introductions, silence, or "Can you hear me?" exchanges.
+
+### Fallback Behavior
+
+If sample rate resampling fails (mic not at 48kHz and can't be resampled), AEC is **disabled for the entire recording session**. This ensures:
+- Audio is still recorded correctly (no data loss)
+- No corrupt AEC output from mismatched sample rates
+- User is warned via UI notification
+
 ## Thread Safety
 
 ### CMSampleBuffer Handling

@@ -70,6 +70,52 @@ final class MuesliViewModel {
         modelManager.modelPath
     }
     
+    // MARK: - Model Download State (for background download indicator)
+    
+    /// Whether any model (WhisperKit or LLM) is currently downloading
+    var isAnyModelDownloading: Bool {
+        modelManager.isAnyModelDownloading || llmManager.isAnyModelDownloading
+    }
+    
+    /// Active downloads with progress information (for UI indicator)
+    /// Returns array of tuples: (model name, progress 0.0-1.0)
+    var activeDownloads: [(name: String, progress: Double)] {
+        var downloads: [(name: String, progress: Double)] = []
+        
+        // Check WhisperKit models
+        for model in ModelManager.ModelSize.allCases {
+            if case .downloading(let progress) = modelManager.downloadState(for: model) {
+                downloads.append((name: model.displayName, progress: progress))
+            }
+        }
+        
+        // Check LLM models
+        for model in LLMManager.LLMModel.allCases {
+            if case .downloading(let progress) = llmManager.downloadState(for: model) {
+                downloads.append((name: model.displayName, progress: progress))
+            }
+        }
+        
+        return downloads
+    }
+    
+    /// Cancel all active model downloads
+    func cancelActiveDownloads() {
+        // Cancel WhisperKit downloads
+        for model in ModelManager.ModelSize.allCases {
+            if modelManager.isDownloading(model) {
+                modelManager.cancelDownload(model)
+            }
+        }
+        
+        // Cancel LLM downloads
+        for model in LLMManager.LLMModel.allCases {
+            if llmManager.isDownloading(model) {
+                llmManager.cancelDownload(model)
+            }
+        }
+    }
+    
     // MARK: - Services (injectable for testing)
     
     private let audioCaptureService: AudioCaptureService
@@ -415,10 +461,11 @@ final class MuesliViewModel {
         self.meetingHistoryService = meetingHistoryService ?? MeetingHistoryService()
         self.exportService = exportService ?? ExportService()
         self.echoCancellationService = echoCancellationService ?? EchoCancellationService(
-            filterLength: 256,
-            learningRate: 0.3,
-            sampleRate: 48000,
-            maxDelayMs: 100
+            filterLength: AudioConfiguration.aecFilterLength,
+            learningRate: AudioConfiguration.aecLearningRate,
+            sampleRate: AudioConfiguration.captureSampleRate,
+            maxDelayMs: 3000,  // Allow up to 3s to handle SCK's variable delivery latency
+            acousticDelayMs: AudioConfiguration.aecAcousticDelayMs
         )
         
         // Initialize managers (skip scanning during tests to avoid file system/Documents prompts)
@@ -656,6 +703,14 @@ final class MuesliViewModel {
         // Clear selection before recording
         selectedMeeting = nil
         selectedMeetingIDs.removeAll()
+        
+        // Check if model is available - if downloading, show info banner
+        if !modelManager.hasModel && isAnyModelDownloading {
+            // Model is downloading - recording will be audio-only until ready
+            // The RecordingController's prepareTranscriptionAsync will handle this,
+            // but we can proactively set up for auto-reprocessing via TranscriptionCoordinator
+            logger.info("Starting recording while model is downloading - will auto-reprocess when ready")
+        }
         
         recordingController.quickStartRecording()
         isSplitViewVisible = true

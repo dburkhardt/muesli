@@ -197,7 +197,7 @@ jobs:
             echo "ℹ️ No .swiftlint.yml found, skipping lint"
           fi
         continue-on-error: true  # Advisory only - violations reported but don't block merges
-                                 # TODO: Remove after baseline cleanup (track in TODO.md)
+                                 # TODO: Remove after baseline cleanup (track in plans/todo.md)
 
   build-release:
     name: Build Release Configuration

@@ -344,22 +344,6 @@ if [ "$DEEP_CLEAN" = true ]; then
             print_info "No local DerivedData to remove"
         fi
         
-        # Remove ANY stale Muesli.app bundles in project directory (outside expected location)
-        # This prevents confusion when old builds exist in different directories
-        STALE_APPS=$(find "$PROJECT_DIR" -name "Muesli.app" -type d 2>/dev/null | grep -v "^$DERIVED_DATA" || true)
-        if [ -n "$STALE_APPS" ]; then
-            echo "$STALE_APPS" | while read -r stale_app; do
-                rm -rf "$stale_app"
-                print_warning "Removed stale app bundle: $stale_app"
-            done
-        fi
-        
-        # Also remove legacy build/ directory if it exists (old build location)
-        if [ -d "$PROJECT_DIR/build" ]; then
-            rm -rf "$PROJECT_DIR/build"
-            print_success "Removed legacy build/ directory"
-        fi
-        
         # Remove stale builds from standard Xcode DerivedData location
         STALE_FOLDERS=$(find ~/Library/Developer/Xcode/DerivedData -maxdepth 1 -name "Muesli-*" -type d 2>/dev/null || true)
         if [ -n "$STALE_FOLDERS" ]; then
@@ -496,28 +480,6 @@ else
         exit 1
     fi
     print_success "App bundle exists"
-    
-    # Check for duplicate app bundles (common source of confusion)
-    ALL_APP_BUNDLES=$(find "$PROJECT_DIR" -name "Muesli.app" -type d 2>/dev/null)
-    BUNDLE_COUNT=$(echo "$ALL_APP_BUNDLES" | grep -c "Muesli.app" || echo "0")
-    if [ "$BUNDLE_COUNT" -gt 1 ]; then
-        print_error "MULTIPLE Muesli.app bundles found! This can cause permission issues."
-        echo "$ALL_APP_BUNDLES" | while read -r bundle; do
-            TEAM_ID=$(codesign -dv "$bundle" 2>&1 | grep TeamIdentifier | cut -d= -f2)
-            print_info "  $bundle (TeamID: ${TEAM_ID:-not set})"
-        done
-        print_info "Run with deep clean (default) to remove stale bundles"
-        exit 1
-    fi
-    
-    # Verify code signature has TeamIdentifier set (prevents ad-hoc signing issues)
-    TEAM_ID=$(codesign -dv "$APP_PATH" 2>&1 | grep TeamIdentifier | cut -d= -f2)
-    if [ -z "$TEAM_ID" ] || [ "$TEAM_ID" = "not set" ]; then
-        print_warning "App is ad-hoc signed (no TeamIdentifier). TCC permissions may not persist."
-        print_info "Configure DEVELOPMENT_TEAM in project.pbxproj for stable signing."
-    else
-        print_success "App signed with TeamIdentifier: $TEAM_ID"
-    fi
     
     # Check modification time (should be within last 2 minutes)
     if [[ $(find "$APP_PATH" -maxdepth 0 -mmin -2 2>/dev/null) ]]; then

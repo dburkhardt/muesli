@@ -88,6 +88,9 @@ final class LLMManager: LLMManagerProtocol {
     /// Set of downloaded models (internal storage)
     private var _downloadedModels: Set<LLMModel> = []
     
+    /// Active download tasks (for cancellation support)
+    private var downloadTasks: [LLMModel: Task<Void, Never>] = [:]
+    
     /// Set of downloaded models (triggers lazy scan on first access)
     var downloadedModels: Set<LLMModel> {
         get {
@@ -250,33 +253,103 @@ final class LLMManager: LLMManagerProtocol {
     func downloadModel(_ model: LLMModel) async {
         downloadStates[model] = .checking
         
-        do {
-            downloadStates[model] = .downloading(progress: 0)
+        // Create and store the download task for cancellation support
+        let task = Task { @MainActor [weak self] in
+            guard let self = self else { return }
             
-            // Download from Hugging Face using MLXLMCommon
-            _ = try await MLXLMCommon.downloadModel(
-                hub: hubApi,
-                configuration: model.modelConfiguration
-            ) { progress in
-                Task { @MainActor in
-                    let fraction = progress.fractionCompleted
-                    self.downloadStates[model] = .downloading(progress: fraction)
+            do {
+                self.downloadStates[model] = .downloading(progress: 0)
+                
+                // Download from Hugging Face using MLXLMCommon
+                _ = try await MLXLMCommon.downloadModel(
+                    hub: self.hubApi,
+                    configuration: model.modelConfiguration
+                ) { progress in
+                    Task { @MainActor [weak self] in
+                        // Check if cancelled before updating
+                        guard self?.downloadTasks[model] != nil else { return }
+                        let fraction = progress.fractionCompleted
+                        self?.downloadStates[model] = .downloading(progress: fraction)
+                    }
                 }
+                
+                // Check for cancellation before completing
+                if Task.isCancelled {
+                    return
+                }
+                
+                self.downloadedModels.insert(model)
+                self.downloadStates[model] = .completed
+                
+                // Automatically enable LLM stitching when a model is downloaded
+                self.isLLMStitchingEnabled = true
+                
+                if self.activeModel == nil {
+                    self.setActiveModel(model)
+                }
+                
+                self.saveDownloadedModels()
+            } catch {
+                // Check if this was a cancellation
+                if Task.isCancelled {
+                    return
+                }
+                self.downloadStates[model] = .failed(error.localizedDescription)
             }
             
-            downloadedModels.insert(model)
-            downloadStates[model] = .completed
-            
-            // Automatically enable LLM stitching when a model is downloaded
-            isLLMStitchingEnabled = true
-            
-            if activeModel == nil {
-                setActiveModel(model)
+            // Remove task reference after completion
+            self.downloadTasks.removeValue(forKey: model)
+        }
+        
+        downloadTasks[model] = task
+        await task.value
+    }
+    
+    /// Cancel an in-progress download and clean up partial files
+    func cancelDownload(_ model: LLMModel) {
+        guard let task = downloadTasks[model] else {
+            return
+        }
+        
+        // Cancel the task
+        task.cancel()
+        downloadTasks.removeValue(forKey: model)
+        
+        // Reset state
+        downloadStates[model] = .idle
+        
+        // Clean up partial download files
+        cleanupPartialDownload(model)
+    }
+    
+    /// Clean up partial download files from disk
+    private func cleanupPartialDownload(_ model: LLMModel) {
+        guard let modelPath = pathForModel(model) else { return }
+        
+        // Only delete if it exists and is incomplete (no config.json means incomplete)
+        let configPath = modelPath.appendingPathComponent("config.json")
+        if !FileManager.default.fileExists(atPath: configPath.path) {
+            do {
+                try FileManager.default.removeItem(at: modelPath)
+            } catch {
+                // Ignore cleanup errors
             }
-            
-            saveDownloadedModels()
-        } catch {
-            downloadStates[model] = .failed(error.localizedDescription)
+        }
+    }
+    
+    /// Check if a model is currently downloading
+    func isDownloading(_ model: LLMModel) -> Bool {
+        if case .downloading = downloadStates[model] {
+            return true
+        }
+        return false
+    }
+    
+    /// Check if any model is currently downloading
+    var isAnyModelDownloading: Bool {
+        downloadStates.values.contains { state in
+            if case .downloading = state { return true }
+            return false
         }
     }
     

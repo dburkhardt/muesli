@@ -168,9 +168,10 @@ protocol LLMManagerProtocol: AnyObject {
 // MARK: - EchoCancellationServiceProtocol
 
 /// Protocol for EchoCancellationService to enable mocking in tests
+/// Uses sample-count synchronization instead of timestamps to avoid clock domain mismatch
 protocol EchoCancellationServiceProtocol: Sendable {
-    func storeSystemAudio(samples: [Float], timestamp: CMTime)
-    func processMicrophoneAudio(microphoneSamples: [Float], micTimestamp: CMTime) -> [Float]
+    func storeSystemAudio(samples: [Float])
+    func processMicrophoneAudio(microphoneSamples: [Float]) -> [Float]
     func reset()
 }
 

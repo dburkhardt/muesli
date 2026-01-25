@@ -18,11 +18,13 @@ final class RecordingControllerTests: XCTestCase {
             transcriptionService: transcriptionService,
             modelManager: modelManager
         )
+        // Use AudioConfiguration values to test production-equivalent behavior
         let echoCancellationService = EchoCancellationService(
-            filterLength: 256,
-            learningRate: 0.3,
-            sampleRate: 48000,
-            maxDelayMs: 100
+            filterLength: AudioConfiguration.aecFilterLength,
+            learningRate: AudioConfiguration.aecLearningRate,
+            sampleRate: AudioConfiguration.captureSampleRate,
+            maxDelayMs: 100,
+            acousticDelayMs: AudioConfiguration.aecAcousticDelayMs
         )
         let preferencesManager = PreferencesManager()
         let microphoneManager = MicrophoneManager()

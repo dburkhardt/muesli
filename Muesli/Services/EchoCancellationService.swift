@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import os.lock
+import QuartzCore
 
 // MARK: - Helper Extensions
 
@@ -247,6 +248,12 @@ extension EchoCancellationService {
 /// - No NLP (Non-Linear Processing): Uses linear NLMS only, no residual echo suppression
 /// - Filter length constraint: Echo path must be shorter than filterLength * samplePeriod
 final class EchoCancellationService: @unchecked Sendable, EchoCancellationServiceProtocol {
+    // MARK: - AEC Diagnostic Counters
+    
+    /// Thread-safe counter for match rate tracking
+    /// Uses OSAllocatedUnfairLock per AGENTS.md for audio callback safety
+    private static let matchCounterLock = OSAllocatedUnfairLock(initialState: (hits: 0, misses: 0))
+    
     // MARK: - Configuration
     
     /// Filter length (number of taps)
@@ -270,17 +277,32 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     private let maxDelaySamples: Int
     
     /// Maximum number of buffers to keep for synchronization
-    private let maxBuffers: Int = 10
+    /// Increased to 150 to handle ~3 seconds of audio and accommodate clock drift
+    /// between mic and system audio streams (~1-2% drift is common)
+    private let maxBuffers: Int = 150
     
     /// Acoustic delay in samples (DAC + propagation + ADC latency)
     private let acousticDelaySamples: Int
     
+    /// Synchronization timeout: 5 seconds covers worst-case SCK startup delay
+    /// while preventing indefinite blocking if one stream fails
+    private let syncTimeoutSeconds: TimeInterval = 5.0
+    
+    // MARK: - Diagnostic Counters (for debugging AEC sync issues)
+    
+    /// Counter for INDEX diagnostic logging (every Nth synced buffer)
+    private nonisolated(unsafe) static var indexDiagCount = 0
+    
+    /// Counter for LOOKUP diagnostic logging (every Nth lookup)
+    private nonisolated(unsafe) static var lookupDiagCount = 0
+    
     // MARK: - State (Thread-Safe via OSAllocatedUnfairLock)
     
-    /// Presentation timestamps for synchronization
-    private struct TimestampedBuffer {
+    /// Sample-count-based buffer for stream synchronization
+    /// Uses sample indices instead of timestamps to avoid clock domain mismatch
+    private struct IndexedBuffer {
         let samples: [Float]
-        let timestamp: CMTime
+        let startSampleIndex: Int64  // Sample index from recording start
     }
     
     /// Circular buffer for O(1) append/access operations on reference signal
@@ -314,10 +336,29 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     }
     
     /// All mutable state wrapped for thread-safe access
+    /// IMPORTANT: Sample counting assumes both streams are 48kHz.
+    /// RecordingController ensures this via resampling before AEC.
+    /// If sample rates diverge, counts will misalign catastrophically.
     private struct AECState {
+        // Number of buffers to average for offset calculation (~1 second of data)
+        // At 4096 samples/buffer @ 48kHz = ~85ms/buffer, so 12 buffers ≈ 1 second
+        static let kBuffersToAverage = 12
+        
         var filterCoefficients: [Float]
         var referenceBuffer: CircularBuffer
-        var systemAudioBuffers: [TimestampedBuffer]
+        var systemAudioBuffers: [IndexedBuffer]  // Changed from TimestampedBuffer
+        var totalSystemSamples: Int64 = 0        // Running count of system samples
+        var totalMicSamples: Int64 = 0           // Running count of mic samples
+        // Stream synchronization
+        var systemAudioStarted: Bool = false
+        var microphoneStarted: Bool = false
+        var streamsSynchronized: Bool = false
+        var streamSyncStartTime: Date?           // For timeout detection
+        // Delivery offset tracking (for stream synchronization)
+        var systemAudioBufferTimes: [Double] = []   // CACurrentMediaTime() for first N buffers
+        var microphoneBufferTimes: [Double] = []    // CACurrentMediaTime() for first N buffers
+        var deliveryOffsetSamples: Int64 = 0        // Positive = mic ahead, negative = system ahead
+        var offsetCalculated: Bool = false          // True once we have enough samples to calculate
     }
     
     /// Thread-safe state using OSAllocatedUnfairLock (AGENTS.md requirement)
@@ -327,15 +368,15 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     
     /// Initialize echo cancellation service
     /// - Parameters:
-    ///   - filterLength: Number of filter taps (default: 256)
-    ///   - learningRate: Learning rate for adaptation (default: 0.3)
-    ///   - sampleRate: Audio sample rate (default: 48000)
+    ///   - filterLength: Number of filter taps (default: AudioConfiguration.aecFilterLength)
+    ///   - learningRate: Learning rate for adaptation (default: AudioConfiguration.aecLearningRate)
+    ///   - sampleRate: Audio sample rate (default: AudioConfiguration.captureSampleRate)
     ///   - maxDelayMs: Maximum echo delay to handle in milliseconds (default: 100ms)
-    ///   - acousticDelayMs: Acoustic delay (DAC + propagation + ADC) in milliseconds (default: 30ms)
+    ///   - acousticDelayMs: Acoustic delay (DAC + propagation + ADC) in milliseconds (default: AudioConfiguration.aecAcousticDelayMs)
     init(
-        filterLength: Int = 256,
-        learningRate: Float = 0.3,
-        sampleRate: Int = 48000,
+        filterLength: Int = AudioConfiguration.aecFilterLength,
+        learningRate: Float = AudioConfiguration.aecLearningRate,
+        sampleRate: Int = AudioConfiguration.captureSampleRate,
         maxDelayMs: Int = 100,
         acousticDelayMs: Int = AudioConfiguration.aecAcousticDelayMs
     ) {
@@ -345,10 +386,10 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         self.maxDelaySamples = (sampleRate * maxDelayMs) / 1000
         self.acousticDelaySamples = (sampleRate * acousticDelayMs) / 1000
         
-        // Calculate circular buffer capacity:
-        // maxMicFrameSize (4096) + filterLength (256) + maxDelaySamples (4800) + bufferMargin (2400)
-        // = ~11,552 samples → round to 12,000 (~250ms of audio history at 48kHz)
-        let bufferCapacity = 12000
+        // Calculate circular buffer capacity dynamically based on maxDelaySamples:
+        // Need: maxDelaySamples + filterLength + maxMicFrameSize (4096) + margin
+        // With maxDelayMs=3000: 144000 + 1024 + 4096 + margin ≈ 160,000 samples
+        let bufferCapacity = maxDelaySamples + filterLength + 8192  // 8192 = frame size + margin
         
         self.state = OSAllocatedUnfairLock(initialState: AECState(
             filterCoefficients: Array(repeating: 0.0, count: filterLength),
@@ -360,15 +401,37 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     // MARK: - Public API
     
     /// Store system audio as reference signal for echo cancellation
-    /// - Parameters:
-    ///   - systemSamples: System audio samples (reference signal - what's playing through speakers)
-    ///   - timestamp: Presentation timestamp for system audio
-    func storeSystemAudio(samples: [Float], timestamp: CMTime) {
+    /// - Parameter samples: System audio samples (reference signal - what's playing through speakers)
+    func storeSystemAudio(samples: [Float]) {
+        // Empty input guard - avoid unnecessary lock acquisition
+        guard !samples.isEmpty else { return }
+        
         state.withLock { state in
-            state.systemAudioBuffers.append(TimestampedBuffer(samples: samples, timestamp: timestamp))
+            // Record arrival times for first N buffers (for offset averaging)
+            if state.systemAudioBufferTimes.count < AECState.kBuffersToAverage {
+                state.systemAudioBufferTimes.append(CACurrentMediaTime())
+            }
             
-            // Keep only recent buffers - O(1) operation with circular indexing would be better
-            // but for small maxBuffers (10), this is acceptable
+            if !state.systemAudioStarted {
+                state.systemAudioStarted = true
+                checkAndSynchronizeStreams(&state)
+            } else if !state.offsetCalculated {
+                // Keep trying to calculate offset until we have enough samples
+                checkAndSynchronizeStreams(&state)
+            }
+            
+            // CRITICAL FIX: Always buffer system audio, even during warmup
+            // Previously we discarded pre-sync samples, but with deferred sync
+            // this caused 0% match rate since there was no reference audio
+            // at index 0 when sync finally happened
+            let startIndex = state.totalSystemSamples
+            state.systemAudioBuffers.append(IndexedBuffer(
+                samples: samples,
+                startSampleIndex: startIndex
+            ))
+            state.totalSystemSamples += Int64(samples.count)
+            
+            // Buffer pruning - prevent memory growth during long recordings
             if state.systemAudioBuffers.count > maxBuffers {
                 state.systemAudioBuffers.removeFirst()
             }
@@ -376,19 +439,63 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     }
     
     /// Process microphone audio to remove echo
-    /// - Parameters:
-    ///   - microphoneSamples: Microphone audio samples (may contain echo)
-    ///   - micTimestamp: Presentation timestamp for microphone audio
+    /// - Parameter microphoneSamples: Microphone audio samples (may contain echo)
     /// - Returns: Clean microphone audio with echo removed
-    func processMicrophoneAudio(
-        microphoneSamples: [Float],
-        micTimestamp: CMTime
-    ) -> [Float] {
-        state.withLock { state in
-            // Find matching system audio for this microphone timestamp
-            guard let referenceSamples = findMatchingSystemAudio(for: micTimestamp, in: state.systemAudioBuffers) else {
-                // No matching system audio found, return microphone as-is
-                // This is normal during warmup period (~250ms) - NLMS needs reference data
+    func processMicrophoneAudio(microphoneSamples: [Float]) -> [Float] {
+        // Empty input guard - avoid unnecessary lock acquisition
+        guard !microphoneSamples.isEmpty else { return microphoneSamples }
+        
+        return state.withLock { state in
+            // Record arrival times for first N buffers (for offset averaging)
+            if state.microphoneBufferTimes.count < AECState.kBuffersToAverage {
+                state.microphoneBufferTimes.append(CACurrentMediaTime())
+            }
+            
+            if !state.microphoneStarted {
+                state.microphoneStarted = true
+                checkAndSynchronizeStreams(&state)
+            } else if !state.offsetCalculated {
+                // Keep trying to calculate offset until we have enough samples
+                checkAndSynchronizeStreams(&state)
+            }
+            
+            // CRITICAL: Count mic samples BEFORE sync guard (matching storeSystemAudio behavior)
+            // Both streams must count samples during warmup for correct alignment after sync
+            let micStartIndex = state.totalMicSamples
+            state.totalMicSamples += Int64(microphoneSamples.count)
+            
+            guard state.streamsSynchronized else {
+                return microphoneSamples  // Pass through during warmup
+            }
+            
+            // Diagnostic: Log index calculation (every 500th synced buffer)
+            Self.indexDiagCount += 1
+            if Self.indexDiagCount % 500 == 1 {
+                let targetSysIdx = micStartIndex - Int64(acousticDelaySamples) + state.deliveryOffsetSamples
+                let indexMsg = "INDEX: micStart=\(micStartIndex), acoustic=\(acousticDelaySamples), " +
+                    "offset=\(state.deliveryOffsetSamples), target=\(targetSysIdx), sysSamples=\(state.totalSystemSamples)"
+                Task { await DiagnosticLogger.shared.log(.aec, indexMsg) }
+            }
+            
+            // Account for:
+            // 1. Acoustic delay (DAC + propagation + ADC): subtract to look backward
+            // 2. Delivery offset: ADD the offset (sign convention is already correct)
+            //    - Positive offset (mic ahead): add positive → look forward in system buffer
+            //    - Negative offset (system ahead): add negative → look backward in system buffer
+            let targetSysIndex = micStartIndex - Int64(acousticDelaySamples) + state.deliveryOffsetSamples
+            
+            // Handle negative index during initial acoustic delay window
+            // This is normal for the first ~50ms of recording
+            if targetSysIndex < 0 {
+                return microphoneSamples
+            }
+            
+            // Find aligned reference samples with cross-buffer support
+            guard let referenceSamples = findMatchingSystemAudio(
+                forSampleIndex: targetSysIndex,
+                sampleCount: microphoneSamples.count,
+                in: state.systemAudioBuffers
+            ) else {
                 return microphoneSamples
             }
             
@@ -437,53 +544,230 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     
     /// Reset filter state (call when starting new recording)
     func reset() {
+        // Called when recording starts, BEFORE first audio buffers arrive
         state.withLock { state in
             state.filterCoefficients = Array(repeating: 0.0, count: filterLength)
             state.referenceBuffer.reset()
             state.systemAudioBuffers.removeAll()
+            state.totalSystemSamples = 0
+            state.totalMicSamples = 0
+            state.systemAudioStarted = false
+            state.microphoneStarted = false
+            state.streamsSynchronized = false
+            state.streamSyncStartTime = nil  // Clear timeout tracking
+            
+            // Clear delivery offset tracking
+            state.systemAudioBufferTimes.removeAll()
+            state.microphoneBufferTimes.removeAll()
+            state.deliveryOffsetSamples = 0
+            state.offsetCalculated = false
         }
     }
     
     // MARK: - Private Helpers
     
-    /// Find matching system audio for microphone timestamp
-    /// Handles timing differences between system and microphone streams
-    /// IMPORTANT: Only matches PAST system audio (timestamp <= micTimestamp) to avoid
-    /// using future audio that hasn't been played through speakers yet
-    private func findMatchingSystemAudio(for micTimestamp: CMTime, in buffers: [TimestampedBuffer]) -> [Float]? {
-        guard !buffers.isEmpty else { return nil }
+    /// Synchronize streams when both have started, with timeout handling
+    private func checkAndSynchronizeStreams(_ state: inout AECState) {
+        let now = Date()
         
-        // Filter to only PAST system audio (timestamp <= micTimestamp)
-        // This ensures we never use audio that hasn't been played through speakers yet
-        let validBuffers = buffers.filter { buffer in
-            CMTimeCompare(buffer.timestamp, micTimestamp) <= 0
+        // Calculate offset once we have enough buffer timestamps from both streams
+        let kBuffersToAverage = AECState.kBuffersToAverage
+        if !state.offsetCalculated &&
+           state.systemAudioBufferTimes.count >= kBuffersToAverage &&
+           state.microphoneBufferTimes.count >= kBuffersToAverage {
+            
+            // Average the timestamps to reduce jitter (especially after sleep/wake)
+            let avgSysTime = state.systemAudioBufferTimes.reduce(0, +) / Double(kBuffersToAverage)
+            let avgMicTime = state.microphoneBufferTimes.reduce(0, +) / Double(kBuffersToAverage)
+            
+            // Calculate offset: sysTime - micTime
+            // Positive result = mic arrived first (mic is ahead)
+            // Negative result = system arrived first (system is ahead)
+            let offsetSeconds = avgSysTime - avgMicTime
+            
+            // Convert to samples (48kHz)
+            var offsetSamples = Int64(offsetSeconds * Double(sampleRate))
+            
+            // Sanity check: clamp to reasonable range (±500ms = ±24000 samples)
+            let maxReasonableOffset: Int64 = 24000
+            if abs(offsetSamples) > maxReasonableOffset {
+                // Pre-build log message to avoid Sendable issues
+                let warningMsg = "SYNC_WARNING: offset \(offsetSamples) samples " +
+                    "(\(String(format: "%.1f", offsetSeconds * 1000))ms) exceeds ±500ms, clamping"
+                Task { await DiagnosticLogger.shared.log(.aec, warningMsg) }
+                offsetSamples = max(-maxReasonableOffset, min(maxReasonableOffset, offsetSamples))
+            }
+            
+            state.deliveryOffsetSamples = offsetSamples
+            state.offsetCalculated = true
+            
+            // CHANGED (per plan): Sync streams AFTER offset is calculated, not immediately
+            // This fixes the sync window gap where AEC operated with deliveryOffsetSamples = 0
+            state.streamsSynchronized = true
+            // NOTE: Don't reset sample counts - buffers are already indexed with current counts
+            // Resetting would cause index mismatch between buffer indices and expected lookups
+            
+            // Log with correct status for all cases (positive/negative/zero)
+            let offsetStatus = offsetSamples > 0 ? "ahead" : (offsetSamples < 0 ? "behind" : "synced")
+            let syncDuration = now.timeIntervalSince(state.streamSyncStartTime ?? now)
+            let offsetMsg = "SYNC_OFFSET: delivery_offset=\(offsetSamples) samples " +
+                "(\(String(format: "%.1f", offsetSeconds * 1000))ms), mic_\(offsetStatus), " +
+                "sync_after=\(String(format: "%.3f", syncDuration))s"
+            Task { await DiagnosticLogger.shared.log(.aec, offsetMsg) }
+            
+            // DIAGNOSTIC: Log full state at sync completion for debugging
+            let bufferRange: String
+            let avgSysBufferSize: Int
+            if state.systemAudioBuffers.isEmpty {
+                bufferRange = "empty"
+                avgSysBufferSize = 0
+            } else {
+                let minIdx = state.systemAudioBuffers.first?.startSampleIndex ?? 0
+                let maxIdx = (state.systemAudioBuffers.last?.startSampleIndex ?? 0) +
+                    Int64(state.systemAudioBuffers.last?.samples.count ?? 0)
+                bufferRange = "\(minIdx)-\(maxIdx)"
+                let totalSamples = state.systemAudioBuffers.reduce(0) { $0 + $1.samples.count }
+                avgSysBufferSize = totalSamples / max(1, state.systemAudioBuffers.count)
+            }
+            let stateMsg = "SYNC_STATE: totalSys=\(state.totalSystemSamples), " +
+                "totalMic=\(state.totalMicSamples), " +
+                "offset=\(state.deliveryOffsetSamples), " +
+                "bufferCount=\(state.systemAudioBuffers.count), " +
+                "bufferRange=\(bufferRange), " +
+                "avgSysBufSize=\(avgSysBufferSize)"
+            Task { await DiagnosticLogger.shared.log(.aec, stateMsg) }
+            
+            // Log drift rate diagnostic
+            let expectedSamples = Int64(syncDuration * Double(sampleRate))
+            let sysDrift = state.totalSystemSamples - expectedSamples
+            let micDrift = state.totalMicSamples - expectedSamples
+            let driftMsg = "SYNC_DRIFT: expected=\(expectedSamples) (for \(String(format: "%.3f", syncDuration))s), " +
+                "sysDrift=\(sysDrift) (\(String(format: "%.1f", Double(sysDrift)/Double(expectedSamples)*100))%), " +
+                "micDrift=\(micDrift) (\(String(format: "%.1f", Double(micDrift)/Double(expectedSamples)*100))%)"
+            Task { await DiagnosticLogger.shared.log(.aec, driftMsg) }
         }
         
-        // Handle empty validBuffers edge case
-        guard !validBuffers.isEmpty else {
-            // No past system audio available yet - return nil (mic passes through unprocessed)
-            // This is normal during warmup period (~250ms)
-            return nil
+        // Track when first stream started (for timeout detection)
+        if state.streamSyncStartTime == nil && (state.systemAudioStarted || state.microphoneStarted) {
+            state.streamSyncStartTime = now
         }
         
-        // Find closest past buffer
-        var bestMatch: TimestampedBuffer?
-        var minTimeDiff = CMTime.positiveInfinity
+        // Timeout after 5 seconds - fallback to pass-through mode (UNCHANGED per plan)
+        // This ensures we never block indefinitely if offset calculation fails
+        if let startTime = state.streamSyncStartTime,
+           now.timeIntervalSince(startTime) > syncTimeoutSeconds,
+           !state.streamsSynchronized {
+            // NOTE: Don't reset sample counts - buffers are already indexed with current counts
+            state.streamsSynchronized = true  // Proceed anyway to avoid indefinite blocking
+            let timeoutMsg = "SYNC_TIMEOUT: streams not synchronized after \(syncTimeoutSeconds)s, using pass-through mode"
+            Task { await DiagnosticLogger.shared.log(.aec, timeoutMsg) }
+            return
+        }
         
-        for buffer in validBuffers {
-            let timeDiff = CMTimeSubtract(micTimestamp, buffer.timestamp)
-            if CMTimeCompare(timeDiff, minTimeDiff) < 0 {
-                minTimeDiff = timeDiff
-                bestMatch = buffer
+        // REMOVED: Immediate sync when both streams start (was causing sync window gap)
+        // Now we only sync after offset is calculated (above) or on timeout (pass-through fallback)
+    }
+    
+    /// Find matching system audio for a given sample index with cross-buffer support
+    /// Returns aligned samples starting at targetIndex
+    private func findMatchingSystemAudio(
+        forSampleIndex targetIndex: Int64,
+        sampleCount: Int,
+        in buffers: [IndexedBuffer]
+    ) -> [Float]? {
+        // Compute result first, then track statistics
+        let result = findMatchingSystemAudioImpl(
+            forSampleIndex: targetIndex,
+            sampleCount: sampleCount,
+            in: buffers
+        )
+        
+        // Track match statistics (keeping per AGENTS.md)
+        let matchFound = result != nil
+        let logData: (shouldLog: Bool, hits: Int, total: Int, rate: Double) = Self.matchCounterLock.withLock { counters in
+            if matchFound { counters.hits += 1 }
+            else { counters.misses += 1 }
+            let total = counters.hits + counters.misses
+            // Log every 100th call to avoid performance impact
+            if total % 100 == 0 {
+                let rate = Double(counters.hits) / Double(total) * 100
+                return (true, counters.hits, total, rate)
+            }
+            return (false, 0, 0, 0.0)
+        }
+        
+        if logData.shouldLog {
+            let matchMsg = "MATCH: \(logData.hits)/\(logData.total) (\(String(format: "%.1f", logData.rate))%)"
+            Task { await DiagnosticLogger.shared.log(.aec, matchMsg) }
+        }
+        
+        return result
+    }
+    
+    /// Implementation of findMatchingSystemAudio (separated for statistics tracking)
+    private func findMatchingSystemAudioImpl(
+        forSampleIndex targetIndex: Int64,
+        sampleCount: Int,
+        in buffers: [IndexedBuffer]
+    ) -> [Float]? {
+        // Diagnostic: Log buffer range vs requested index (every 500th call)
+        Self.lookupDiagCount += 1
+        if Self.lookupDiagCount % 500 == 1 {
+            let bufferRange: String
+            if buffers.isEmpty {
+                bufferRange = "empty"
+            } else {
+                let minIdx = buffers.first?.startSampleIndex ?? 0
+                let maxIdx = (buffers.last?.startSampleIndex ?? 0) + Int64(buffers.last?.samples.count ?? 0)
+                bufferRange = "\(minIdx)-\(maxIdx)"
+            }
+            let lookupMsg = "LOOKUP: target=\(targetIndex), buffers=\(bufferRange), count=\(buffers.count)"
+            Task { await DiagnosticLogger.shared.log(.aec, lookupMsg) }
+        }
+        
+        // Find buffer containing targetIndex
+        for (index, buffer) in buffers.enumerated() {
+            let bufferEndIndex = buffer.startSampleIndex + Int64(buffer.samples.count)
+            if targetIndex >= buffer.startSampleIndex && targetIndex < bufferEndIndex {
+                // Extract aligned samples starting at targetIndex
+                let offset = Int(targetIndex - buffer.startSampleIndex)
+                let available = buffer.samples.count - offset
+                let count = min(available, sampleCount)
+                
+                var collectedSamples = Array(buffer.samples[offset..<(offset + count)])
+                
+                // Cross-buffer spanning: concatenate from subsequent buffers if needed
+                if count < sampleCount {
+                    var remainingNeeded = sampleCount - count
+                    var nextIndex = index + 1
+                    // Track accumulated end position, not fixed to first buffer
+                    var accumulatedEndIndex = buffer.startSampleIndex + Int64(buffer.samples.count)
+                    
+                    while remainingNeeded > 0 && nextIndex < buffers.count {
+                        let nextBuffer = buffers[nextIndex]
+                        // Verify buffer continuity: next buffer should start where we ended
+                        if nextBuffer.startSampleIndex == accumulatedEndIndex {
+                            let takeFromNext = min(remainingNeeded, nextBuffer.samples.count)
+                            collectedSamples.append(contentsOf: nextBuffer.samples[0..<takeFromNext])
+                            remainingNeeded -= takeFromNext
+                            // Update accumulated position for next iteration
+                            accumulatedEndIndex = nextBuffer.startSampleIndex + Int64(takeFromNext)
+                        } else {
+                            // Gap in buffers - log warning and stop concatenating
+                            let gapMsg = "BUFFER_GAP: expected=\(accumulatedEndIndex), got=\(nextBuffer.startSampleIndex)"
+                            Task { await DiagnosticLogger.shared.log(.aec, gapMsg) }
+                            break
+                        }
+                        nextIndex += 1
+                    }
+                    // If still incomplete, NLMS adapts to partial data (acceptable)
+                }
+                
+                return collectedSamples
             }
         }
         
-        // Only use if time difference is reasonable (within max delay)
-        let maxDelayTime = CMTime(value: Int64(maxDelaySamples), timescale: CMTimeScale(sampleRate))
-        if CMTimeCompare(minTimeDiff, maxDelayTime) <= 0 {
-            return bestMatch?.samples
-        }
-        
+        // No buffer found - mic is ahead of system audio
         return nil
     }
 }

@@ -84,6 +84,9 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     /// Set of downloaded models
     var downloadedModels: Set<ModelSize> = []
     
+    /// Active download tasks (for cancellation support)
+    private var downloadTasks: [ModelSize: Task<Void, Never>] = [:]
+    
     /// Stored paths for downloaded models (persisted to UserDefaults)
     /// Key: model rawValue, Value: actual path returned by WhisperKit.download()
     var modelPaths: [ModelSize: URL] = [:]
@@ -395,54 +398,149 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         let targetDir = modelDirectory
         Self.logger.info("Target directory: \(targetDir.path)")
         
-        do {
-            downloadStates[model] = .downloading(progress: 0)
+        // Create and store the download task for cancellation support
+        let task = Task { @MainActor [weak self] in
+            guard let self = self else { return }
             
-            Self.logger.info("Calling WhisperKit.download with variant=\(model.whisperKitName), downloadBase=\(targetDir.path)")
-            
-            // Use WhisperKit's built-in download functionality with progress tracking
-            let folder = try await WhisperKit.download(
-                variant: model.whisperKitName,
-                downloadBase: targetDir,
-                useBackgroundSession: false,
-                progressCallback: { @Sendable progress in
-                    // Update progress on main thread
-                    Task { @MainActor [weak self] in
-                        self?.downloadStates[model] = .downloading(progress: progress.fractionCompleted)
-                        Self.logger.debug("Download progress for \(model.displayName): \(progress.fractionCompleted * 100, format: .fixed(precision: 1))%")
+            do {
+                self.downloadStates[model] = .downloading(progress: 0)
+                
+                Self.logger.info("Calling WhisperKit.download with variant=\(model.whisperKitName), downloadBase=\(targetDir.path)")
+                
+                // Use WhisperKit's built-in download functionality with progress tracking
+                let folder = try await WhisperKit.download(
+                    variant: model.whisperKitName,
+                    downloadBase: targetDir,
+                    useBackgroundSession: false,
+                    progressCallback: { @Sendable progress in
+                        // Update progress on main thread
+                        Task { @MainActor [weak self] in
+                            // Check if cancelled before updating
+                            guard self?.downloadTasks[model] != nil else { return }
+                            self?.downloadStates[model] = .downloading(progress: progress.fractionCompleted)
+                            Self.logger.debug("Download progress for \(model.displayName): \(progress.fractionCompleted * 100, format: .fixed(precision: 1))%")
+                        }
                     }
+                )
+                
+                // Check for cancellation before completing
+                if Task.isCancelled {
+                    Self.logger.info("Download was cancelled for \(model.displayName)")
+                    return
                 }
-            )
-            
-            Self.logger.info("Download completed successfully for \(model.displayName). Folder: \(folder)")
-            
-            // Store the actual path returned by WhisperKit (it's already a URL)
-            modelPaths[model] = folder
-            Self.logger.info("Stored model path: \(folder.path)")
-            
-            // Mark as downloaded
-            downloadedModels.insert(model)
-            downloadStates[model] = .completed
-            
-            // If no active model, set this as active
-            if activeModel == nil {
-                setActiveModel(model)
+                
+                Self.logger.info("Download completed successfully for \(model.displayName). Folder: \(folder)")
+                
+                // Store the actual path returned by WhisperKit (it's already a URL)
+                self.modelPaths[model] = folder
+                Self.logger.info("Stored model path: \(folder.path)")
+                
+                // Mark as downloaded
+                self.downloadedModels.insert(model)
+                self.downloadStates[model] = .completed
+                
+                // If no active model, set this as active
+                if self.activeModel == nil {
+                    self.setActiveModel(model)
+                }
+                
+                // Persist both downloaded models and paths
+                self.saveDownloadedModels()
+                self.saveModelPaths()
+            } catch {
+                // Check if this was a cancellation
+                if Task.isCancelled {
+                    Self.logger.info("Download was cancelled for \(model.displayName)")
+                    return
+                }
+                
+                Self.logger.error("Download failed for \(model.displayName): \(error.localizedDescription)")
+                Self.logger.error("Error details: \(String(describing: error))")
+                
+                // Log NSError details if available
+                if let nsError = error as NSError? {
+                    Self.logger.error("NSError domain: \(nsError.domain), code: \(nsError.code)")
+                    Self.logger.error("NSError userInfo: \(nsError.userInfo)")
+                }
+                
+                self.downloadStates[model] = .failed(error.localizedDescription)
             }
             
-            // Persist both downloaded models and paths
-            saveDownloadedModels()
-            saveModelPaths()
-        } catch {
-            Self.logger.error("Download failed for \(model.displayName): \(error.localizedDescription)")
-            Self.logger.error("Error details: \(String(describing: error))")
-            
-            // Log NSError details if available
-            if let nsError = error as NSError? {
-                Self.logger.error("NSError domain: \(nsError.domain), code: \(nsError.code)")
-                Self.logger.error("NSError userInfo: \(nsError.userInfo)")
+            // Remove task reference after completion
+            self.downloadTasks.removeValue(forKey: model)
+        }
+        
+        downloadTasks[model] = task
+        await task.value
+    }
+    
+    /// Cancel an in-progress download and clean up partial files
+    @MainActor
+    func cancelDownload(_ model: ModelSize) {
+        guard let task = downloadTasks[model] else {
+            Self.logger.info("No active download to cancel for \(model.displayName)")
+            return
+        }
+        
+        Self.logger.info("Cancelling download for \(model.displayName)")
+        
+        // Cancel the task
+        task.cancel()
+        downloadTasks.removeValue(forKey: model)
+        
+        // Reset state
+        downloadStates[model] = .idle
+        
+        // Clean up partial download files
+        cleanupPartialDownload(model)
+    }
+    
+    /// Clean up partial download files from disk
+    private func cleanupPartialDownload(_ model: ModelSize) {
+        let whisperKitDir = modelDirectory.appendingPathComponent("models/argmaxinc/whisperkit-coreml")
+        
+        // Look for partial model directory
+        guard FileManager.default.fileExists(atPath: whisperKitDir.path),
+              let contents = try? FileManager.default.contentsOfDirectory(
+                  at: whisperKitDir,
+                  includingPropertiesForKeys: [.isDirectoryKey],
+                  options: [.skipsHiddenFiles]
+              ) else {
+            return
+        }
+        
+        // Find and remove the partial model folder
+        for folderURL in contents {
+            let folderName = folderURL.lastPathComponent
+            if folderName.contains(model.rawValue) || folderName == "openai_whisper-\(model.whisperKitName)" {
+                do {
+                    try FileManager.default.removeItem(at: folderURL)
+                    Self.logger.info("Cleaned up partial download at: \(folderURL.path)")
+                    
+                    // Remove stored path if any
+                    modelPaths.removeValue(forKey: model)
+                    saveModelPaths()
+                } catch {
+                    Self.logger.error("Failed to clean up partial download: \(error.localizedDescription)")
+                }
+                break
             }
-            
-            downloadStates[model] = .failed(error.localizedDescription)
+        }
+    }
+    
+    /// Check if a model is currently downloading
+    func isDownloading(_ model: ModelSize) -> Bool {
+        if case .downloading = downloadStates[model] {
+            return true
+        }
+        return false
+    }
+    
+    /// Check if any model is currently downloading
+    var isAnyModelDownloading: Bool {
+        downloadStates.values.contains { state in
+            if case .downloading = state { return true }
+            return false
         }
     }
     

@@ -22,7 +22,7 @@ struct MainWindowView: View {
                 unifiedView
             }
         }
-        .frame(width: targetSize.width, height: targetSize.height)
+        .frame(minWidth: targetSize.width, minHeight: targetSize.height)
         .onChange(of: shouldShowSplitView) { _, newValue in
             withAnimation(.easeInOut(duration: 0.3)) {
                 targetSize = newValue ?

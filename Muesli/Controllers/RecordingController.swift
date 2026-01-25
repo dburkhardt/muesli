@@ -73,6 +73,16 @@ final class RecordingController {
         isMicrophoneMutedLock.withLock { $0 }
     }
     
+    // MARK: - AEC Fallback State (Thread-safe)
+    
+    /// Whether AEC was disabled due to resampling fallback (sample rate mismatch)
+    /// Thread-safe for access from audio callback
+    private let aecDisabledDueToFallbackLock = OSAllocatedUnfairLock(initialState: false)
+    
+    /// Whether the resampling warning has been shown this recording session
+    /// Thread-safe for access from audio callback
+    private let hasShownResamplingWarningLock = OSAllocatedUnfairLock(initialState: false)
+    
     // MARK: - Callbacks
     
     /// Called when a new recording session starts (for ViewModel state sync)
@@ -172,10 +182,13 @@ final class RecordingController {
         let aecService = self.echoCancellationService
         let prefs = self.preferencesManager
         let audioCaptureServiceRef = self.audioCaptureService
+        let warningMgr = self.warningManager
         
         // Capture locks directly to avoid @MainActor isolation in callback
         let muteLock = self.isMicrophoneMutedLock
         let aecLock = prefs.echoCancellationLock
+        let aecDisabledLock = self.aecDisabledDueToFallbackLock
+        let warningShownLock = self.hasShownResamplingWarningLock
         
         await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
                 // Wrap entire handler in error handling for graceful degradation
@@ -205,7 +218,10 @@ final class RecordingController {
                             isAECEnabled: isAECEnabled,
                             fileService: fileService,
                             transcriptionCoordinator: transcriptionCoordinator,
-                            aecService: aecService
+                            aecService: aecService,
+                            aecDisabledLock: aecDisabledLock,
+                            warningShownLock: warningShownLock,
+                            warningManager: warningMgr
                         )
                     }
                     
@@ -259,6 +275,12 @@ final class RecordingController {
     
     // MARK: - Audio Buffer Processing Helpers
     
+    // MARK: - AEC Diagnostic Counters
+    
+    /// Counter for throttling system audio diagnostic logging (every 100th buffer)
+    /// nonisolated(unsafe) is acceptable here - worst case is slightly inaccurate count for diagnostics
+    private nonisolated(unsafe) static var sysBufferDiagCount = 0
+    
     /// Process system audio buffer (extracted for error handling)
     private static nonisolated func handleSystemAudioBuffer(
         _ buffer: CMSampleBuffer,
@@ -268,10 +290,25 @@ final class RecordingController {
         transcriptionCoordinator: TranscriptionCoordinator,
         aecService: EchoCancellationService
     ) throws {
+        // AEC Diagnostic: Log system audio timestamps to verify SCK clock domain
+        // Throttled to every 100th buffer to avoid performance impact
+        sysBufferDiagCount += 1
+        if sysBufferDiagCount % 100 == 0 {
+            let sckTimestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
+            let wallClock = CACurrentMediaTime()
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "SYS: sck=\(String(format: "%.3f", sckTimestamp.seconds))s, " +
+                    "wall=\(String(format: "%.3f", wallClock))s, " +
+                    "delta=\(String(format: "%.3f", wallClock - sckTimestamp.seconds))s")
+            }
+        }
+        
         // Store system audio for AEC reference (if AEC enabled)
+        // Note: timestamp no longer passed - AEC uses sample-count synchronization
         if isAECEnabled {
             if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
-                aecService.storeSystemAudio(samples: systemSamples, timestamp: timestamp)
+                aecService.storeSystemAudio(samples: systemSamples)
             }
         }
         
@@ -299,7 +336,10 @@ final class RecordingController {
         isAECEnabled: Bool,
         fileService: FileOutputService,
         transcriptionCoordinator: TranscriptionCoordinator,
-        aecService: EchoCancellationService
+        aecService: EchoCancellationService,
+        aecDisabledLock: OSAllocatedUnfairLock<Bool>,
+        warningShownLock: OSAllocatedUnfairLock<Bool>,
+        warningManager: WarningManager
     ) throws {
         // Get the actual sample rate from the incoming buffer (may be 44100Hz, 48000Hz, etc.)
         var sourceSampleRate: Int = 48000  // default
@@ -316,6 +356,12 @@ final class RecordingController {
             return
         }
         
+        // Track actual mic sample rate (may differ from 48kHz after fallback)
+        var actualMicRate = 48000
+        
+        // Check if AEC was disabled due to earlier fallback
+        let aecWasDisabled = aecDisabledLock.withLock { $0 }
+        
         // CRITICAL: Resample mic to 48kHz BEFORE AEC for consistent alignment with system audio
         // System audio is always at 48kHz, so AEC must operate at 48kHz
         let micSamples48k: [Float]
@@ -326,13 +372,53 @@ final class RecordingController {
                 targetSampleRate: 48000
             )
             if resampled.isEmpty {
-                // Fallback: use native samples (degraded AEC but no data loss)
-                // Log warning for diagnostics
-                Task { @MainActor in
-                    await DiagnosticLogger.shared.log(.aec,
-                        "Resampling failed for \(sourceSampleRate)Hz mic, using native samples")
-                }
+                // Fallback: use native samples at original rate
                 micSamples48k = micSamplesNative
+                actualMicRate = sourceSampleRate  // Track that we're NOT at 48kHz
+                
+                // CRITICAL: Disable AEC since sample rates don't match (per r7x9 review)
+                // AEC expects both streams at 48kHz - mismatched rates cause:
+                // - Incorrect echo prediction (time alignment breaks)
+                // - Potential buffer overruns/underruns
+                // - Degraded or non-functional echo cancellation
+                let shouldShowWarning = aecDisabledLock.withLock { alreadyDisabled -> Bool in
+                    if !alreadyDisabled {
+                        return true  // First time - need to disable and warn
+                    }
+                    return false
+                }
+                
+                if shouldShowWarning {
+                    aecDisabledLock.withLock { $0 = true }
+                    
+                    // Rate-limited warning (per 9ebe review) - show only once per session
+                    let shouldWarn = warningShownLock.withLock { shown -> Bool in
+                        if !shown {
+                            return true
+                        }
+                        return false
+                    }
+                    
+                    if shouldWarn {
+                        warningShownLock.withLock { $0 = true }
+                        
+                        // Log to diagnostics
+                        Task {
+                            await DiagnosticLogger.shared.log(.aec,
+                                "RESAMPLE_FALLBACK: Disabling AEC - mic at \(sourceSampleRate)Hz, cannot resample to 48kHz")
+                        }
+                        
+                        // Show user warning
+                        Task { @MainActor in
+                            warningManager.addWarning(
+                                .microphone,
+                                message: "Echo cancellation disabled",
+                                details: "Microphone resampling failed (using \(sourceSampleRate)Hz). Echo may be present in recording.",
+                                canRetry: false
+                            )
+                        }
+                    }
+                }
             } else {
                 micSamples48k = resampled
             }
@@ -340,23 +426,27 @@ final class RecordingController {
             micSamples48k = micSamplesNative
         }
         
+        // Determine if AEC should be used for this buffer
+        // AEC is disabled if: user disabled it, OR resampling failed (sample rate mismatch)
+        let effectiveAECEnabled = isAECEnabled && !aecWasDisabled && actualMicRate == 48000
+        
         // Apply AEC at consistent 48kHz (system audio is always 48kHz)
-        let processedSamples48k: [Float]
-        if isAECEnabled {
-            processedSamples48k = aecService.processMicrophoneAudio(
-                microphoneSamples: micSamples48k,
-                micTimestamp: timestamp
+        // Note: timestamp no longer passed - AEC uses sample-count synchronization
+        let processedSamples: [Float]
+        if effectiveAECEnabled {
+            processedSamples = aecService.processMicrophoneAudio(
+                microphoneSamples: micSamples48k
             )
         } else {
-            processedSamples48k = micSamples48k
+            processedSamples = micSamples48k
         }
         
         // Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
-        // Now always at 48kHz after pre-AEC resampling
+        // Use actualMicRate for correct sample rate metadata
         if let processedBuffer = EchoCancellationService.createSampleBuffer(
-            from: processedSamples48k,
+            from: processedSamples,
             timestamp: timestamp,
-            sourceSampleRate: 48000,  // Now always 48kHz after pre-AEC resampling
+            sourceSampleRate: actualMicRate,
             targetSampleRate: 48000
         ) {
             fileService.appendAudioBuffer(processedBuffer, type: .microphone)
@@ -371,10 +461,10 @@ final class RecordingController {
         }
         
         // Feed to transcription coordinator (handles buffering during model load)
-        // Use high-quality AVAudioConverter resampling from 48kHz to 16kHz
+        // Use high-quality AVAudioConverter resampling from actualMicRate to 16kHz
         let resampled = TranscriptionService.resampleSamples(
-            samples: processedSamples48k,
-            sourceSampleRate: 48000,  // Now always 48kHz after pre-AEC resampling
+            samples: processedSamples,
+            sourceSampleRate: Double(actualMicRate),
             sourceChannels: 1,  // Mic is mono
             targetSampleRate: 16000,
             targetChannels: 1,
@@ -464,6 +554,10 @@ final class RecordingController {
     private func startRecordingAsync(for session: RecordingSession) async {
         // Clear any previous warnings at start of new recording
         warningManager.clearAll()
+        
+        // Reset AEC fallback state for new recording session
+        aecDisabledDueToFallbackLock.withLock { $0 = false }
+        hasShownResamplingWarningLock.withLock { $0 = false }
         
         do {
             // Start file output FIRST

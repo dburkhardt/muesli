@@ -29,4 +29,5 @@ OUTPUT (every response after code changes)
 - What changed (brief)
 - Files modified
 - Build/test commands
+- Build timestamp (REQUIRED after builds - user verifies via About page)
 - Phase checkpoint status

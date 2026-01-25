@@ -141,7 +141,8 @@ struct AboutView: View {
             .frame(width: 100)
         }
         .padding(40)
-        .frame(width: 400, height: 600)
+        .frame(width: 400)
+        .fixedSize(horizontal: false, vertical: true)
         .sheet(isPresented: $showUpdateSheet) {
             updateHelper.updateSheet(currentVersion: appVersion)
         }

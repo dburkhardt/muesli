@@ -1,8 +1,8 @@
-import CoreMedia
 import Foundation
 @testable import Muesli
 
 /// Mock implementation of EchoCancellationService for testing
+/// Uses sample-count synchronization instead of timestamps
 final class MockEchoCancellationService: EchoCancellationServiceProtocol, @unchecked Sendable {
     // MARK: - Call Tracking
     
@@ -11,9 +11,7 @@ final class MockEchoCancellationService: EchoCancellationServiceProtocol, @unche
     var resetCallCount: Int = 0
     
     var lastStoredSamples: [Float]?
-    var lastStoredTimestamp: CMTime?
     var lastProcessedSamples: [Float]?
-    var lastProcessedTimestamp: CMTime?
     
     // MARK: - Test Control Properties
     
@@ -22,16 +20,14 @@ final class MockEchoCancellationService: EchoCancellationServiceProtocol, @unche
     
     // MARK: - EchoCancellationServiceProtocol
     
-    func storeSystemAudio(samples: [Float], timestamp: CMTime) {
+    func storeSystemAudio(samples: [Float]) {
         storeSystemAudioCallCount += 1
         lastStoredSamples = samples
-        lastStoredTimestamp = timestamp
     }
     
-    func processMicrophoneAudio(microphoneSamples: [Float], micTimestamp: CMTime) -> [Float] {
+    func processMicrophoneAudio(microphoneSamples: [Float]) -> [Float] {
         processMicrophoneAudioCallCount += 1
         lastProcessedSamples = microphoneSamples
-        lastProcessedTimestamp = micTimestamp
         
         if let override = processedAudioOverride {
             return override
@@ -53,9 +49,7 @@ final class MockEchoCancellationService: EchoCancellationServiceProtocol, @unche
         processMicrophoneAudioCallCount = 0
         resetCallCount = 0
         lastStoredSamples = nil
-        lastStoredTimestamp = nil
         lastProcessedSamples = nil
-        lastProcessedTimestamp = nil
         processedAudioOverride = nil
     }
 }
