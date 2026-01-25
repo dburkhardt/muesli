@@ -244,52 +244,6 @@ if now.timeIntervalSince(startTime) > syncTimeoutSeconds && !streamsSynchronized
 }
 ```
 
-### Post-Warmup Offset Validation (2026-01-25 Fix)
-
-The warmup period can capture transient startup behavior rather than steady-state timing. To catch this, we validate the calculated offset against actual sample counts immediately after warmup:
-
-```swift
-// After offset calculation, before setting streamsSynchronized = true
-let actualDelta = totalSystemSamples - totalMicSamples
-let mismatch = abs(actualDelta - deliveryOffsetSamples)
-let mismatchThreshold: Int64 = 2400  // 50ms at 48kHz (2x typical jitter)
-
-if mismatch > mismatchThreshold {
-    // Offset doesn't match reality - use actual sample difference
-    var correctedOffset = actualDelta
-    correctedOffset = max(-24000, min(24000, correctedOffset))  // Clamp ±500ms
-    deliveryOffsetSamples = correctedOffset
-}
-```
-
-**Threshold Selection**: 50ms (2400 samples) is 2x typical steady-state jitter (10-30ms), avoiding false positives while catching genuine warmup artifacts.
-
-### Bounds Check Fallback
-
-If `targetSysIndex` exceeds available system samples (due to offset issues or timing anomalies), we fall back to pass-through rather than failing:
-
-```swift
-if targetSysIndex > state.totalSystemSamples {
-    boundsCheckFallbackCount += 1
-    // Log first occurrence and every 100th thereafter
-    return (microphoneSamples, nil)  // Pass-through preserves user's voice
-}
-```
-
-**Why pass-through**: Preserves user's voice even if echo is present. Silence would lose data permanently. Echo in output is audible evidence for debugging.
-
-### Periodic Offset Monitoring
-
-Every 60 seconds (2880 buffers at ~20ms/buffer), we log the offset stability:
-
-```swift
-let actualDelta = totalSystemSamples - totalMicSamples
-let offsetError = actualDelta - deliveryOffsetSamples
-// Log: OFFSET_CHECK: claimed=X, actual=Y, mismatch=Z samples
-```
-
-This helps detect drift during long recordings without impacting performance.
-
 ---
 
 ## Buffer Gap Handling and Continuity
@@ -391,9 +345,6 @@ This is safe because the offset calculation uses `CACurrentMediaTime()` timestam
 | `MIC_GAP_DETECTED: N samples` | Mic gap detected (Phase 2 data) |
 | `AEC_RECORDING_END: gaps=N, total=X, max=Y` | Recording summary |
 | `DRIFT_WARNING: X% drift after Ns` | Periodic drift check (every 60s) |
-| `OFFSET_VALIDATION: mismatch=X samples, correcting` | Warmup offset corrected to match reality |
-| `BOUNDS_FALLBACK: target=X > totalSys=Y` | Pass-through used when target exceeds available |
-| `OFFSET_CHECK: claimed=X, actual=Y, mismatch=Z` | Periodic (60s) offset stability check |
 
 ### Testing Gap Detection
 
@@ -767,9 +718,6 @@ AEC logs to `DiagnosticLogger` under the `.aec` category.
 | `MATCH: X/Y (Z%)` | Reference lookup success rate (logged every 100 calls) |
 | `BUFFER_GAP: expected=X, got=Y` | Non-contiguous system audio buffers detected |
 | `SYNC_WARNING: offset exceeds ±500ms, clamping` | Unusually large offset (may indicate clock issues) |
-| `OFFSET_VALIDATION: mismatch=X samples, correcting` | Warmup offset didn't match reality, corrected |
-| `BOUNDS_FALLBACK: target=X > totalSys=Y, occurred N times` | Target index exceeded available samples, pass-through used |
-| `OFFSET_CHECK: claimed=X, actual=Y, mismatch=Z` | Periodic (60s) offset stability check |
 
 ### Healthy Log Pattern
 
@@ -780,25 +728,13 @@ AEC logs to `DiagnosticLogger` under the `.aec` category.
 [AEC] MATCH: 297/300 (99.0%)
 ```
 
-### Unhealthy Log Pattern (Immediate Sync)
+### Unhealthy Log Pattern
 
 ```
 [AEC] SYNC: streams synchronized in 0.031s    ← OLD: immediate sync (bad)
 [AEC] MATCH: 2/100 (2.0%)                      ← Near 0% = streams misaligned
 [AEC] MATCH: 2/200 (1.0%)
 ```
-
-### Unhealthy Log Pattern (Offset Mismatch - 2026-01-25)
-
-```
-[AEC] SYNC_OFFSET: delivery_offset=-19217 samples (-400.4ms), mic_behind
-[AEC] SYNC_STATE: totalSys=53760, totalMic=52800, offset=-19217, ...
-[AEC] INDEX: micStart=52800, acoustic=2400, offset=-19217, target=69617, sysSamples=53760
-[AEC] LOOKUP: target=69617, buffers=0-53760, count=56     ← target > max buffer!
-[AEC] MATCH: 0/100 (0.0%)                                  ← 0% = target unreachable
-```
-
-**Key diagnostic**: Compare `sysSamples - micSamples` (actual difference: 960) vs `abs(offset)` (claimed difference: 19217). Large mismatch indicates offset doesn't reflect reality.
 
 ---
 
@@ -850,39 +786,6 @@ if !state.offsetCalculated {
 - Very unusual audio setup
 
 **Mitigation**: Offset is clamped to ±500ms. AEC may be suboptimal but won't fail catastrophically.
-
-### 5. Target Index Exceeds Buffer Range (2026-01-25)
-
-**Symptom**: 0% match rate with logs showing:
-```
-INDEX: micStart=X, acoustic=Y, offset=Z, target=T, sysSamples=S
-```
-Where `target > sysSamples`.
-
-**Example**:
-```
-SYNC_OFFSET: delivery_offset=-19217 samples (-400.4ms), mic_behind
-INDEX: micStart=52800, acoustic=2400, offset=-19217, target=69617, sysSamples=53760
-LOOKUP: target=69617, buffers=0-53760, count=56
-MATCH: 0/100 (0.0%)
-```
-
-**Diagnosis**: The calculated target (69617) exceeds available system samples (53760).
-
-**Causes**:
-- Large negative offset calculated during warmup doesn't match steady-state behavior
-- Warmup captured transient startup timing, not continuous delivery pattern
-- Offset says system is "ahead" by 400ms, but actual sample counts differ by only 20ms
-
-**Investigation**:
-1. Check if `sysSamples - micSamples` matches `abs(offset)` (they should be close)
-2. If mismatch is large (>10%), offset measurement may be unreliable
-3. Look for signs of startup transient: large offset but similar sample counts
-
-**Workarounds** (pending permanent fix):
-- Add bounds check to return pass-through when target exceeds available samples
-- Implement offset validation against actual sample counts after warmup
-- Consider longer warmup or dynamic offset recalibration
 
 ---
 
@@ -976,83 +879,6 @@ if !state.offsetCalculated && haveEnoughBuffers {
 **Problem**: Using `Date()` or `CFAbsoluteTimeGetCurrent()` could give incorrect measurements if system clock adjusts during recording.
 
 **Solution**: Use `CACurrentMediaTime()` which is based on `mach_absolute_time()` and immune to clock adjustments.
-
-### Lesson 6: targetSysIndex Sign Convention (2026-01-25)
-
-**Problem**: The `targetSysIndex` calculation was adding the delivery offset when it should subtract:
-
-```swift
-// WRONG (original)
-let targetSysIndex = micStartIndex - acousticDelaySamples + deliveryOffsetSamples
-
-// CORRECT (fixed)
-let targetSysIndex = micStartIndex - acousticDelaySamples - deliveryOffsetSamples
-```
-
-**Reasoning**:
-- `deliveryOffsetSamples = avgSysTime - avgMicTime`
-- Positive offset = mic arrived first = mic index is "ahead" for same wall-clock moment
-- When mic is ahead, we need to look at a LOWER system index (subtract positive)
-- When mic is behind (negative offset), we need a HIGHER system index (subtract negative = add)
-
-**The math**:
-- If mic is ahead by N samples, at mic index M, the corresponding system audio is at M - N
-- Formula: `targetSysIndex = micStartIndex - acousticDelay - offset`
-
-**Prevention**: Always reason through both positive and negative offset cases when writing sync formulas.
-
-### Lesson 7: Warmup Offset May Not Match Steady-State (2026-01-25 - FIXED)
-
-**Problem**: During testing, observed 0% match rate despite correct sign fix. The logs revealed:
-
-```
-SYNC_OFFSET: delivery_offset=-19217 samples (-400.4ms), mic_behind
-INDEX: micStart=52800, acoustic=2400, offset=-19217, target=69617, sysSamples=53760
-MATCH: 0/300 (0.0%)
-```
-
-The target (69617) exceeds available system samples (53760).
-
-**Root Cause Analysis**:
-
-The warmup offset measurement captured transient startup behavior, not steady-state:
-- **Measured offset**: -19217 samples (-400ms) suggesting system is ~400ms ahead
-- **Actual difference**: `sysSamples - micSamples = 53760 - 52800 = 960` samples (~20ms)
-
-The warmup period (first 12 buffers, ~1 second) captured timing differences that don't persist in steady state. Possible causes:
-1. AVAudioEngine starts delivering before ScreenCaptureKit is fully initialized
-2. ScreenCaptureKit has variable startup latency that normalizes after warmup
-3. Initial buffer scheduling jitter is much higher than steady-state jitter
-
-**Implications**:
-
-With a large offset that doesn't match reality:
-- `targetSysIndex = micStart - acoustic - offset`
-- When offset is large negative (-19217), subtracting it ADDS, pushing target far ahead
-- Target ends up beyond available system samples → 0% match rate
-
-**Fix Implemented (2026-01-25)**:
-
-1. **Post-Warmup Offset Validation**: Immediately after warmup completes, validate the calculated offset against actual sample counts:
-   ```swift
-   let actualDelta = totalSystemSamples - totalMicSamples
-   let mismatch = abs(actualDelta - deliveryOffsetSamples)
-   if mismatch > 2400 {  // 50ms threshold (2x typical jitter)
-       deliveryOffsetSamples = max(-24000, min(24000, actualDelta))  // Correct and clamp
-   }
-   ```
-
-2. **Bounds Check Fallback**: If `targetSysIndex > totalSystemSamples`, fall back to pass-through:
-   ```swift
-   if targetSysIndex > state.totalSystemSamples {
-       boundsCheckFallbackCount += 1
-       return (microphoneSamples, nil)  // Pass-through preserves user's voice
-   }
-   ```
-
-3. **Periodic Offset Monitoring**: Every 60 seconds, log offset stability to detect drift during long recordings.
-
-**Status**: Fixed. Offset validation catches warmup artifacts, bounds check provides safety net, periodic monitoring enables drift detection.
 
 ---
 
@@ -1163,5 +989,3 @@ This would be a significant undertaking but would provide the best quality. Cons
 | 2026-01-24 | Initial creation based on stream offset fix debugging session | Agent |
 | 2026-01-24 | Added: Parameter tuning guide, testing metrics (ERLE/ERL/MOS), expanded DTD section with simple approaches, VSS-NLMS discussion, standards references | Agent |
 | 2026-01-25 | Added: Buffer Gap Handling and Continuity section documenting wall-clock-based gap detection with silence fill per AEC clock drift fix plan | Agent |
-| 2026-01-25 | Added: Lesson 6 (targetSysIndex sign fix), Lesson 7 (warmup offset vs steady-state mismatch - active investigation), Failure Mode 5 (target exceeds buffer range) | Agent |
-| 2026-01-25 | Implemented: Post-warmup offset validation, bounds check fallback, periodic offset monitoring. Updated Lesson 7 status to FIXED. Added new diagnostic log messages. | Agent |
