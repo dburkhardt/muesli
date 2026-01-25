@@ -127,5 +127,21 @@ enum AudioConfiguration {
     /// Log sampling interval for verbose AEC diagnostics
     /// Logs every Nth buffer to minimize performance impact (~2-3 logs/second at 10)
     static let aecLogSampleInterval: Int = 10
+    
+    /// Enable/disable AEC gap fill for diagnostic testing.
+    /// When disabled, gaps are detected but NOT filled with silence.
+    /// WARNING: Disabling causes sample count drift and may break AEC sync.
+    /// DO NOT SHIP with this disabled - diagnostic use only.
+    /// Enable via: `defaults write com.muesli.app aecEnableGapFill -bool false`
+    static var aecEnableGapFill: Bool {
+        get {
+            // Default to true if not explicitly set
+            if UserDefaults.standard.object(forKey: "aecEnableGapFill") == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: "aecEnableGapFill")
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "aecEnableGapFill") }
+    }
     #endif
 }

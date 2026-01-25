@@ -481,6 +481,27 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         var isNegative: Bool = false
     }
     
+    /// Struct to hold sync-related log messages returned from checkAndSynchronizeStreams
+    private struct SyncLogInfo: Sendable {
+        var syncWarning: String? = nil
+        var offsetValidation: String? = nil
+        var offsetMsg: String? = nil
+        var stateMsg: String? = nil
+        var driftMsg: String? = nil
+        var timeoutMsg: String? = nil
+    }
+    
+    /// Struct to hold processing-related log messages returned from processMicrophoneAudio lock
+    private struct ProcessingLogInfo: Sendable {
+        var micGap: Int64? = nil
+        var offsetCheck: String? = nil
+        var indexDiag: String? = nil
+        var boundsError: String? = nil
+        var matchMsg: String? = nil
+        var lookupMsg: String? = nil
+        var bufferGapMsg: String? = nil
+    }
+    
     /// Store system audio as reference signal for echo cancellation
     /// - Parameter samples: System audio samples (reference signal - what's playing through speakers)
     func storeSystemAudio(samples: [Float]) {
@@ -488,9 +509,10 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         guard !samples.isEmpty else { return }
         
         // Get logging info from lock (values returned, not mutated captures)
-        let logInfo: GapLogInfo = state.withLock { state in
+        let (logInfo, syncLogInfo): (GapLogInfo, SyncLogInfo) = state.withLock { state in
             let now = timeProvider.currentTime()
             var info = GapLogInfo()
+            var syncInfo = SyncLogInfo()
             
             // Record arrival times for first N buffers (for offset averaging)
             if state.systemAudioBufferTimes.count < AECState.kBuffersToAverage {
@@ -499,10 +521,10 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             
             if !state.systemAudioStarted {
                 state.systemAudioStarted = true
-                checkAndSynchronizeStreams(&state)
+                syncInfo = checkAndSynchronizeStreams(&state)
             } else if !state.offsetCalculated {
                 // Keep trying to calculate offset until we have enough samples
-                checkAndSynchronizeStreams(&state)
+                syncInfo = checkAndSynchronizeStreams(&state)
             }
             
             // MARK: - Gap Detection (per plan: AEC clock drift fix)
@@ -532,18 +554,27 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                         gapSamples = maxGapFill       // Clamp for actual fill
                     }
                     
-                    // Use pre-allocated silence (slice, no allocation)
-                    let silenceSamples = Array(preallocatedSilence.prefix(Int(gapSamples)))
+                    // Check if gap fill is enabled (DEBUG-only toggle for diagnostics)
+                    #if DEBUG
+                    let shouldFillGap = AudioConfiguration.aecEnableGapFill
+                    #else
+                    let shouldFillGap = true
+                    #endif
                     
-                    // BUFFER INDEX CONTINUITY: silence starts at current counter
-                    let silenceBuffer = IndexedBuffer(
-                        samples: silenceSamples,
-                        startSampleIndex: state.totalSystemSamples
-                    )
-                    state.systemAudioBuffers.append(silenceBuffer)
-                    state.totalSystemSamples += gapSamples
+                    if shouldFillGap {
+                        // Use pre-allocated silence (slice, no allocation)
+                        let silenceSamples = Array(preallocatedSilence.prefix(Int(gapSamples)))
+                        
+                        // BUFFER INDEX CONTINUITY: silence starts at current counter
+                        let silenceBuffer = IndexedBuffer(
+                            samples: silenceSamples,
+                            startSampleIndex: state.totalSystemSamples
+                        )
+                        state.systemAudioBuffers.append(silenceBuffer)
+                        state.totalSystemSamples += gapSamples
+                    }
                     
-                    // Track statistics
+                    // Track statistics (even if not filling)
                     state.gapLogCount += 1
                     state.totalGapSamples += gapSamples
                     state.maxGapSamples = max(state.maxGapSamples, gapSamples)
@@ -586,7 +617,7 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 state.systemAudioBuffers.removeFirst()
             }
             
-            return info
+            return (info, syncInfo)
         }
         
         // Log OUTSIDE lock (separate paths per v4)
@@ -603,6 +634,26 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                     "SYS_EARLY: buffer \(samples) samples early") }
             }
         }
+        
+        // Log sync messages OUTSIDE lock
+        if let msg = syncLogInfo.syncWarning {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.offsetValidation {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.offsetMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.stateMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.driftMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.timeoutMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
     }
     
     /// Process microphone audio to remove echo
@@ -612,10 +663,11 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         // Empty input guard - avoid unnecessary lock acquisition
         guard !microphoneSamples.isEmpty else { return microphoneSamples }
         
-        // Result tuple: (processed audio, optional mic gap for logging)
-        let (result, micGapInfo): ([Float], Int64?) = state.withLock { state in
+        // Result tuple: (processed audio, log info)
+        let (result, procLogInfo, syncLogInfo): ([Float], ProcessingLogInfo, SyncLogInfo) = state.withLock { state in
             let now = timeProvider.currentTime()
-            var gapToLog: Int64? = nil
+            var logInfo = ProcessingLogInfo()
+            var syncInfo = SyncLogInfo()
             
             // Record arrival times for first N buffers (for offset averaging)
             if state.microphoneBufferTimes.count < AECState.kBuffersToAverage {
@@ -624,10 +676,10 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             
             if !state.microphoneStarted {
                 state.microphoneStarted = true
-                checkAndSynchronizeStreams(&state)
+                syncInfo = checkAndSynchronizeStreams(&state)
             } else if !state.offsetCalculated {
                 // Keep trying to calculate offset until we have enough samples
-                checkAndSynchronizeStreams(&state)
+                syncInfo = checkAndSynchronizeStreams(&state)
             }
             
             // MARK: - Read-Only Mic Gap Detection (Phase 2 data collection)
@@ -640,7 +692,7 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 
                 if abs(gap) > threshold {
                     // Log only - no gap fill (Phase 2 decision data)
-                    gapToLog = gap
+                    logInfo.micGap = gap
                 }
             }
             state.lastMicBufferTime = now
@@ -652,7 +704,7 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             state.totalMicSamples += Int64(microphoneSamples.count)
             
             guard state.streamsSynchronized else {
-                return (microphoneSamples, gapToLog)  // Pass through during warmup
+                return (microphoneSamples, logInfo, syncInfo)  // Pass through during warmup
             }
             
             // MARK: - Periodic Offset Check (per AEC offset validation fix plan)
@@ -661,18 +713,18 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             if state.offsetCheckCounter % 2880 == 0 {
                 let actualDelta = state.totalSystemSamples - state.totalMicSamples
                 let offsetError = actualDelta - state.deliveryOffsetSamples
-                let checkMsg = "OFFSET_CHECK: claimed=\(state.deliveryOffsetSamples), " +
+                // Capture message for logging OUTSIDE lock
+                logInfo.offsetCheck = "OFFSET_CHECK: claimed=\(state.deliveryOffsetSamples), " +
                     "actual=\(actualDelta), mismatch=\(offsetError) samples"
-                Task { await DiagnosticLogger.shared.log(.aec, checkMsg) }
             }
             
             // Diagnostic: Log index calculation (every 500th synced buffer)
             Self.indexDiagCount += 1
             if Self.indexDiagCount % 500 == 1 {
                 let targetSysIdx = micStartIndex - Int64(acousticDelaySamples) - state.deliveryOffsetSamples
-                let indexMsg = "INDEX: micStart=\(micStartIndex), acoustic=\(acousticDelaySamples), " +
+                // Capture message for logging OUTSIDE lock
+                logInfo.indexDiag = "INDEX: micStart=\(micStartIndex), acoustic=\(acousticDelaySamples), " +
                     "offset=\(state.deliveryOffsetSamples), target=\(targetSysIdx), sysSamples=\(state.totalSystemSamples)"
-                Task { await DiagnosticLogger.shared.log(.aec, indexMsg) }
             }
             
             // Account for:
@@ -685,7 +737,7 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             // Handle negative index during initial acoustic delay window
             // This is normal for the first ~50ms of recording
             if targetSysIndex < 0 {
-                return (microphoneSamples, gapToLog)
+                return (microphoneSamples, logInfo, syncInfo)
             }
             
             // MARK: - Bounds Check Fallback (per AEC offset validation fix plan)
@@ -696,21 +748,23 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 
                 // Log first occurrence and every 100th thereafter
                 if state.boundsCheckFallbackCount == 1 || state.boundsCheckFallbackCount % 100 == 0 {
-                    let errorMsg = "BOUNDS_FALLBACK: target=\(targetSysIndex) > totalSys=\(state.totalSystemSamples), " +
+                    // Capture message for logging OUTSIDE lock
+                    logInfo.boundsError = "BOUNDS_FALLBACK: target=\(targetSysIndex) > totalSys=\(state.totalSystemSamples), " +
                         "occurred \(state.boundsCheckFallbackCount) times, using pass-through"
-                    Task { await DiagnosticLogger.shared.log(.aec, errorMsg) }
                 }
                 
-                return (microphoneSamples, gapToLog)  // Pass-through preserves user's voice
+                return (microphoneSamples, logInfo, syncInfo)  // Pass-through preserves user's voice
             }
             
             // Find aligned reference samples with cross-buffer support
+            // Pass logInfo to collect any log messages from the lookup
             guard let referenceSamples = findMatchingSystemAudio(
                 forSampleIndex: targetSysIndex,
                 sampleCount: microphoneSamples.count,
-                in: state.systemAudioBuffers
+                in: state.systemAudioBuffers,
+                logInfo: &logInfo
             ) else {
-                return (microphoneSamples, gapToLog)
+                return (microphoneSamples, logInfo, syncInfo)
             }
             
             // Process samples using NLMS adaptive filter
@@ -752,13 +806,51 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 outputSamples.append(error)
             }
             
-            return (outputSamples, gapToLog)
+            return (outputSamples, logInfo, syncInfo)
         }
         
-        // Log mic gap OUTSIDE lock (Phase 2 data collection, no processing impact)
-        if let gap = micGapInfo {
+        // Log ALL messages OUTSIDE lock
+        if let gap = procLogInfo.micGap {
             Task { await DiagnosticLogger.shared.log(.aec,
                 "MIC_GAP_DETECTED: \(gap) samples - Phase 2 data") }
+        }
+        if let msg = procLogInfo.offsetCheck {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = procLogInfo.indexDiag {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = procLogInfo.boundsError {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = procLogInfo.matchMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = procLogInfo.lookupMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = procLogInfo.bufferGapMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        
+        // Log sync messages OUTSIDE lock
+        if let msg = syncLogInfo.syncWarning {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.offsetValidation {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.offsetMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.stateMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.driftMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
+        }
+        if let msg = syncLogInfo.timeoutMsg {
+            Task { await DiagnosticLogger.shared.log(.aec, msg) }
         }
         
         return result
@@ -866,8 +958,10 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     // MARK: - Private Helpers
     
     /// Synchronize streams when both have started, with timeout handling
-    private func checkAndSynchronizeStreams(_ state: inout AECState) {
+    /// Returns SyncLogInfo containing any messages to log (logged OUTSIDE the lock)
+    private func checkAndSynchronizeStreams(_ state: inout AECState) -> SyncLogInfo {
         let now = Date()
+        var logInfo = SyncLogInfo()
         
         // Calculate offset once we have enough buffer timestamps from both streams
         let kBuffersToAverage = AECState.kBuffersToAverage
@@ -890,10 +984,9 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             // Sanity check: clamp to reasonable range (±500ms = ±24000 samples)
             let maxReasonableOffset: Int64 = 24000
             if abs(offsetSamples) > maxReasonableOffset {
-                // Pre-build log message to avoid Sendable issues
-                let warningMsg = "SYNC_WARNING: offset \(offsetSamples) samples " +
+                // Capture log message to emit OUTSIDE lock
+                logInfo.syncWarning = "SYNC_WARNING: offset \(offsetSamples) samples " +
                     "(\(String(format: "%.1f", offsetSeconds * 1000))ms) exceeds ±500ms, clamping"
-                Task { await DiagnosticLogger.shared.log(.aec, warningMsg) }
                 offsetSamples = max(-maxReasonableOffset, min(maxReasonableOffset, offsetSamples))
             }
             
@@ -914,10 +1007,10 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 // Apply same sanity clamp as initial offset (±500ms)
                 correctedOffset = max(-maxReasonableOffset, min(maxReasonableOffset, correctedOffset))
                 
-                let warnMsg = "OFFSET_VALIDATION: mismatch=\(mismatch) samples " +
+                // Capture log message to emit OUTSIDE lock
+                logInfo.offsetValidation = "OFFSET_VALIDATION: mismatch=\(mismatch) samples " +
                     "(\(String(format: "%.1f", Double(mismatch) / 48.0))ms), " +
                     "correcting offset from \(state.deliveryOffsetSamples) to \(correctedOffset)"
-                Task { await DiagnosticLogger.shared.log(.aec, warnMsg) }
                 
                 state.deliveryOffsetSamples = correctedOffset
             }
@@ -928,13 +1021,12 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             // NOTE: Don't reset sample counts - buffers are already indexed with current counts
             // Resetting would cause index mismatch between buffer indices and expected lookups
             
-            // Log with correct status for all cases (positive/negative/zero)
+            // Capture log messages to emit OUTSIDE lock
             let offsetStatus = offsetSamples > 0 ? "ahead" : (offsetSamples < 0 ? "behind" : "synced")
             let syncDuration = now.timeIntervalSince(state.streamSyncStartTime ?? now)
-            let offsetMsg = "SYNC_OFFSET: delivery_offset=\(offsetSamples) samples " +
+            logInfo.offsetMsg = "SYNC_OFFSET: delivery_offset=\(state.deliveryOffsetSamples) samples " +
                 "(\(String(format: "%.1f", offsetSeconds * 1000))ms), mic_\(offsetStatus), " +
                 "sync_after=\(String(format: "%.3f", syncDuration))s"
-            Task { await DiagnosticLogger.shared.log(.aec, offsetMsg) }
             
             // DIAGNOSTIC: Log full state at sync completion for debugging
             let bufferRange: String
@@ -950,22 +1042,20 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 let totalSamples = state.systemAudioBuffers.reduce(0) { $0 + $1.samples.count }
                 avgSysBufferSize = totalSamples / max(1, state.systemAudioBuffers.count)
             }
-            let stateMsg = "SYNC_STATE: totalSys=\(state.totalSystemSamples), " +
+            logInfo.stateMsg = "SYNC_STATE: totalSys=\(state.totalSystemSamples), " +
                 "totalMic=\(state.totalMicSamples), " +
                 "offset=\(state.deliveryOffsetSamples), " +
                 "bufferCount=\(state.systemAudioBuffers.count), " +
                 "bufferRange=\(bufferRange), " +
                 "avgSysBufSize=\(avgSysBufferSize)"
-            Task { await DiagnosticLogger.shared.log(.aec, stateMsg) }
             
             // Log drift rate diagnostic
             let expectedSamples = Int64(syncDuration * Double(sampleRate))
             let sysDrift = state.totalSystemSamples - expectedSamples
             let micDrift = state.totalMicSamples - expectedSamples
-            let driftMsg = "SYNC_DRIFT: expected=\(expectedSamples) (for \(String(format: "%.3f", syncDuration))s), " +
+            logInfo.driftMsg = "SYNC_DRIFT: expected=\(expectedSamples) (for \(String(format: "%.3f", syncDuration))s), " +
                 "sysDrift=\(sysDrift) (\(String(format: "%.1f", Double(sysDrift)/Double(expectedSamples)*100))%), " +
                 "micDrift=\(micDrift) (\(String(format: "%.1f", Double(micDrift)/Double(expectedSamples)*100))%)"
-            Task { await DiagnosticLogger.shared.log(.aec, driftMsg) }
         }
         
         // Track when first stream started (for timeout detection)
@@ -980,27 +1070,29 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
            !state.streamsSynchronized {
             // NOTE: Don't reset sample counts - buffers are already indexed with current counts
             state.streamsSynchronized = true  // Proceed anyway to avoid indefinite blocking
-            let timeoutMsg = "SYNC_TIMEOUT: streams not synchronized after \(syncTimeoutSeconds)s, using pass-through mode"
-            Task { await DiagnosticLogger.shared.log(.aec, timeoutMsg) }
-            return
+            logInfo.timeoutMsg = "SYNC_TIMEOUT: streams not synchronized after \(syncTimeoutSeconds)s, using pass-through mode"
         }
         
         // REMOVED: Immediate sync when both streams start (was causing sync window gap)
         // Now we only sync after offset is calculated (above) or on timeout (pass-through fallback)
+        return logInfo
     }
     
     /// Find matching system audio for a given sample index with cross-buffer support
     /// Returns aligned samples starting at targetIndex
+    /// Populates logInfo with any diagnostic messages (logged OUTSIDE the lock)
     private func findMatchingSystemAudio(
         forSampleIndex targetIndex: Int64,
         sampleCount: Int,
-        in buffers: [IndexedBuffer]
+        in buffers: [IndexedBuffer],
+        logInfo: inout ProcessingLogInfo
     ) -> [Float]? {
         // Compute result first, then track statistics
         let result = findMatchingSystemAudioImpl(
             forSampleIndex: targetIndex,
             sampleCount: sampleCount,
-            in: buffers
+            in: buffers,
+            logInfo: &logInfo
         )
         
         // Track match statistics (keeping per AGENTS.md)
@@ -1018,18 +1110,20 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         }
         
         if logData.shouldLog {
-            let matchMsg = "MATCH: \(logData.hits)/\(logData.total) (\(String(format: "%.1f", logData.rate))%)"
-            Task { await DiagnosticLogger.shared.log(.aec, matchMsg) }
+            // Capture message for logging OUTSIDE lock
+            logInfo.matchMsg = "MATCH: \(logData.hits)/\(logData.total) (\(String(format: "%.1f", logData.rate))%)"
         }
         
         return result
     }
     
     /// Implementation of findMatchingSystemAudio (separated for statistics tracking)
+    /// Populates logInfo with any diagnostic messages (logged OUTSIDE the lock)
     private func findMatchingSystemAudioImpl(
         forSampleIndex targetIndex: Int64,
         sampleCount: Int,
-        in buffers: [IndexedBuffer]
+        in buffers: [IndexedBuffer],
+        logInfo: inout ProcessingLogInfo
     ) -> [Float]? {
         // Diagnostic: Log buffer range vs requested index (every 500th call)
         Self.lookupDiagCount += 1
@@ -1042,8 +1136,8 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 let maxIdx = (buffers.last?.startSampleIndex ?? 0) + Int64(buffers.last?.samples.count ?? 0)
                 bufferRange = "\(minIdx)-\(maxIdx)"
             }
-            let lookupMsg = "LOOKUP: target=\(targetIndex), buffers=\(bufferRange), count=\(buffers.count)"
-            Task { await DiagnosticLogger.shared.log(.aec, lookupMsg) }
+            // Capture message for logging OUTSIDE lock
+            logInfo.lookupMsg = "LOOKUP: target=\(targetIndex), buffers=\(bufferRange), count=\(buffers.count)"
         }
         
         // Find buffer containing targetIndex
@@ -1074,9 +1168,8 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                             // Update accumulated position for next iteration
                             accumulatedEndIndex = nextBuffer.startSampleIndex + Int64(takeFromNext)
                         } else {
-                            // Gap in buffers - log warning and stop concatenating
-                            let gapMsg = "BUFFER_GAP: expected=\(accumulatedEndIndex), got=\(nextBuffer.startSampleIndex)"
-                            Task { await DiagnosticLogger.shared.log(.aec, gapMsg) }
+                            // Gap in buffers - capture for logging OUTSIDE lock
+                            logInfo.bufferGapMsg = "BUFFER_GAP: expected=\(accumulatedEndIndex), got=\(nextBuffer.startSampleIndex)"
                             break
                         }
                         nextIndex += 1

@@ -464,7 +464,7 @@ final class MuesliViewModel {
             filterLength: AudioConfiguration.aecFilterLength,
             learningRate: AudioConfiguration.aecLearningRate,
             sampleRate: AudioConfiguration.captureSampleRate,
-            maxDelayMs: 3000,  // Allow up to 3s to handle SCK's variable delivery latency
+            maxDelayMs: 100,  // Reverted to 100ms for testing (was 3000ms)
             acousticDelayMs: AudioConfiguration.aecAcousticDelayMs
         )
         
