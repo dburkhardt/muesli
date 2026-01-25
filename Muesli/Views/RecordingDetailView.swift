@@ -1,31 +1,5 @@
 import SwiftUI
 
-// #region agent log
-private func rdvDebugLog(_ message: String, _ data: [String: Any] = [:]) {
-    let logPath = NSHomeDirectory() + "/git-repos/muesli/.cursor/debug.log"
-    let timestamp = Date().timeIntervalSince1970 * 1000
-    var payload: [String: Any] = [
-        "timestamp": timestamp,
-        "location": "RecordingDetailView",
-        "message": message,
-        "sessionId": "debug-session",
-        "hypothesisId": "A-D"
-    ]
-    if !data.isEmpty { payload["data"] = data }
-    if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-       let jsonString = String(data: jsonData, encoding: .utf8) {
-        let line = jsonString + "\n"
-        if let handle = FileHandle(forWritingAtPath: logPath) {
-            handle.seekToEndOfFile()
-            handle.write(line.data(using: .utf8)!)
-            handle.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
-        }
-    }
-}
-// #endregion
-
 /// Detail view showing active recording, completed recording, or historical meeting
 struct RecordingDetailView: View {
     @Bindable var viewModel: MuesliViewModel
@@ -370,15 +344,9 @@ struct RecordingDetailView: View {
     // MARK: - Settings Menu Control (Gear icon with submenus)
     
     private func settingsMenuControl(session: RecordingSession) -> some View {
-        // #region agent log
-        let _ = rdvDebugLog("settingsMenuControl rendered", ["hasToggle": true])
-        // #endregion
-        return Menu {
+        Menu {
             // Submenu 1: Live Transcript
             Menu("Live Transcript") {
-                // #region agent log
-                let _ = rdvDebugLog("Live Transcript submenu content rendered")
-                // #endregion
                 Button(
                     action: {
                         viewModel.transcriptionMode = .live
@@ -412,9 +380,6 @@ struct RecordingDetailView: View {
             
             // Submenu 2: Audio Source (shows current, can change only when not recording)
             Menu("Audio Source") {
-                // #region agent log
-                let _ = rdvDebugLog("Audio Source submenu content rendered")
-                // #endregion
                 // "All System Audio" option
                 Button(
                     action: {
@@ -467,9 +432,6 @@ struct RecordingDetailView: View {
             Divider()
             
             // Echo Cancellation toggle
-            // #region agent log
-            let _ = rdvDebugLog("Echo Cancellation toggle rendered", ["enabled": viewModel.isEchoCancellationEnabled])
-            // #endregion
             Toggle(isOn: $viewModel.isEchoCancellationEnabled) {
                 Text("Echo Cancellation")
             }
@@ -506,9 +468,6 @@ struct RecordingDetailView: View {
         // Use simple string title to match other submenus (Live Transcript, Audio Source)
         // Custom labels with HStack break nested menu rendering
         Menu("Model") {
-            // #region agent log
-            let _ = rdvDebugLog("Model submenu content rendered", ["modelsCount": models.count])
-            // #endregion
             ForEach(models, id: \.self) { model in
                 Button {
                     Task {

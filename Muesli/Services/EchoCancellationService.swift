@@ -237,6 +237,26 @@ extension EchoCancellationService {
     }
 }
 
+/// Statistics for gap tracking, used for recording-end logging
+struct GapStatistics {
+    let gapCount: Int
+    let totalGapSamples: Int64
+    let maxGapSamples: Int64
+    
+    var avgGapMs: Double {
+        guard gapCount > 0 else { return 0 }
+        return Double(totalGapSamples) / Double(gapCount) / 48.0
+    }
+    
+    var totalGapMs: Double {
+        Double(totalGapSamples) / 48.0
+    }
+    
+    var maxGapMs: Double {
+        Double(maxGapSamples) / 48.0
+    }
+}
+
 /// Service for acoustic echo cancellation using adaptive filtering
 /// Uses NLMS (Normalized Least Mean Squares) algorithm to remove echo from microphone audio
 /// Reference signal: System audio (what's playing through speakers)
@@ -253,6 +273,20 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     /// Thread-safe counter for match rate tracking
     /// Uses OSAllocatedUnfairLock per AGENTS.md for audio callback safety
     private static let matchCounterLock = OSAllocatedUnfairLock(initialState: (hits: 0, misses: 0))
+    
+    // MARK: - Gap Detection
+    
+    /// Injectable time provider for testability (default: SystemTimeProvider using CACurrentMediaTime)
+    private let timeProvider: TimeProvider
+    
+    /// Pre-allocated silence buffer to avoid allocation inside lock (500ms max at 48kHz = 24000 samples)
+    private let preallocatedSilence: [Float]
+    
+    /// Drift monitoring task - created when recording starts, cancelled when recording stops
+    private var driftMonitoringTask: Task<Void, Never>?
+    
+    /// Recording start time for drift monitoring (wall-clock)
+    private var recordingStartTime: Double = 0
     
     // MARK: - Configuration
     
@@ -277,9 +311,9 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     private let maxDelaySamples: Int
     
     /// Maximum number of buffers to keep for synchronization
-    /// Increased to 150 to handle ~3 seconds of audio and accommodate clock drift
-    /// between mic and system audio streams (~1-2% drift is common)
-    private let maxBuffers: Int = 150
+    /// Uses AudioConfiguration.maxSystemAudioBuffers to handle ~3 seconds of audio
+    /// and accommodate clock drift between mic and system audio streams (~1-2% drift is common)
+    private let maxBuffers: Int
     
     /// Acoustic delay in samples (DAC + propagation + ADC latency)
     private let acousticDelaySamples: Int
@@ -359,6 +393,25 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         var microphoneBufferTimes: [Double] = []    // CACurrentMediaTime() for first N buffers
         var deliveryOffsetSamples: Int64 = 0        // Positive = mic ahead, negative = system ahead
         var offsetCalculated: Bool = false          // True once we have enough samples to calculate
+        
+        // MARK: - Gap Detection State (per plan: AEC clock drift fix)
+        
+        /// Last wall-clock time when system audio buffer was received
+        var lastSystemBufferTime: Double = 0
+        /// Last wall-clock time when microphone buffer was received
+        var lastMicBufferTime: Double = 0
+        /// Count of system audio buffers received (for first-buffer detection)
+        var systemBufferCount: Int = 0
+        /// Count of microphone buffers received (for first-buffer detection)
+        var micBufferCount: Int = 0
+        /// Number of positive gap events logged (for rate limiting)
+        var gapLogCount: Int = 0
+        /// Number of negative gap (early arrival) events logged (for rate limiting)
+        var negativeGapLogCount: Int = 0
+        /// Total samples added as silence to fill gaps
+        var totalGapSamples: Int64 = 0
+        /// Maximum gap size in samples (for end-of-recording stats)
+        var maxGapSamples: Int64 = 0
     }
     
     /// Thread-safe state using OSAllocatedUnfairLock (AGENTS.md requirement)
@@ -373,18 +426,29 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     ///   - sampleRate: Audio sample rate (default: AudioConfiguration.captureSampleRate)
     ///   - maxDelayMs: Maximum echo delay to handle in milliseconds (default: 100ms)
     ///   - acousticDelayMs: Acoustic delay (DAC + propagation + ADC) in milliseconds (default: AudioConfiguration.aecAcousticDelayMs)
+    ///   - timeProvider: Injectable time source for testing (default: SystemTimeProvider)
+    ///   - maxBuffers: Maximum system audio buffers to retain (default: AudioConfiguration.maxSystemAudioBuffers)
     init(
         filterLength: Int = AudioConfiguration.aecFilterLength,
         learningRate: Float = AudioConfiguration.aecLearningRate,
         sampleRate: Int = AudioConfiguration.captureSampleRate,
         maxDelayMs: Int = 100,
-        acousticDelayMs: Int = AudioConfiguration.aecAcousticDelayMs
+        acousticDelayMs: Int = AudioConfiguration.aecAcousticDelayMs,
+        timeProvider: TimeProvider = SystemTimeProvider(),
+        maxBuffers: Int = AudioConfiguration.maxSystemAudioBuffers
     ) {
         self.filterLength = filterLength
         self.learningRate = learningRate
         self.sampleRate = sampleRate
         self.maxDelaySamples = (sampleRate * maxDelayMs) / 1000
         self.acousticDelaySamples = (sampleRate * acousticDelayMs) / 1000
+        self.timeProvider = timeProvider
+        self.maxBuffers = maxBuffers
+        
+        // Pre-allocate silence buffer for gap filling (avoid allocation inside lock)
+        // Size: 500ms max at 48kHz = 24000 samples
+        let maxGapSamples = AudioConfiguration.aecMaxGapMs * AudioConfiguration.captureSampleRate / 1000
+        self.preallocatedSilence = Array(repeating: Float(0.0), count: maxGapSamples)
         
         // Calculate circular buffer capacity dynamically based on maxDelaySamples:
         // Need: maxDelaySamples + filterLength + maxMicFrameSize (4096) + margin
@@ -400,16 +464,28 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
     
     // MARK: - Public API
     
+    /// Struct to hold gap detection log info returned from lock
+    private struct GapLogInfo: Sendable {
+        var largeGapWarning: Int64? = nil
+        var gapSamples: Int64? = nil
+        var gapMs: Double? = nil
+        var isNegative: Bool = false
+    }
+    
     /// Store system audio as reference signal for echo cancellation
     /// - Parameter samples: System audio samples (reference signal - what's playing through speakers)
     func storeSystemAudio(samples: [Float]) {
         // Empty input guard - avoid unnecessary lock acquisition
         guard !samples.isEmpty else { return }
         
-        state.withLock { state in
+        // Get logging info from lock (values returned, not mutated captures)
+        let logInfo: GapLogInfo = state.withLock { state in
+            let now = timeProvider.currentTime()
+            var info = GapLogInfo()
+            
             // Record arrival times for first N buffers (for offset averaging)
             if state.systemAudioBufferTimes.count < AECState.kBuffersToAverage {
-                state.systemAudioBufferTimes.append(CACurrentMediaTime())
+                state.systemAudioBufferTimes.append(now)
             }
             
             if !state.systemAudioStarted {
@@ -420,10 +496,75 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 checkAndSynchronizeStreams(&state)
             }
             
+            // MARK: - Gap Detection (per plan: AEC clock drift fix)
+            // Reference: https://nonstrict.eu/blog/2024/handling-audio-capture-gaps-on-macos
+            
+            var gapSamples: Int64 = 0
+            
+            // First buffer: initialize timing (NO EARLY RETURN - still store buffer below)
+            if state.systemBufferCount == 0 {
+                state.lastSystemBufferTime = now
+            } else {
+                // Subsequent buffers: check for gap
+                let elapsed = now - state.lastSystemBufferTime
+                let expectedSamples = Int64(elapsed * Double(AudioConfiguration.captureSampleRate))
+                let actualSamples = Int64(samples.count)
+                gapSamples = expectedSamples - actualSamples
+                
+                let gapThreshold = Int64(AudioConfiguration.aecGapThresholdMs) *
+                                  Int64(AudioConfiguration.captureSampleRate) / 1000
+                let maxGapFill = Int64(AudioConfiguration.aecMaxGapMs) *
+                                Int64(AudioConfiguration.captureSampleRate) / 1000
+                
+                if gapSamples > gapThreshold {
+                    // Check for large gap BEFORE clamping (separate variable per v4)
+                    if gapSamples > maxGapFill {
+                        info.largeGapWarning = gapSamples  // Original size for warning
+                        gapSamples = maxGapFill       // Clamp for actual fill
+                    }
+                    
+                    // Use pre-allocated silence (slice, no allocation)
+                    let silenceSamples = Array(preallocatedSilence.prefix(Int(gapSamples)))
+                    
+                    // BUFFER INDEX CONTINUITY: silence starts at current counter
+                    let silenceBuffer = IndexedBuffer(
+                        samples: silenceSamples,
+                        startSampleIndex: state.totalSystemSamples
+                    )
+                    state.systemAudioBuffers.append(silenceBuffer)
+                    state.totalSystemSamples += gapSamples
+                    
+                    // Track statistics
+                    state.gapLogCount += 1
+                    state.totalGapSamples += gapSamples
+                    state.maxGapSamples = max(state.maxGapSamples, gapSamples)
+                    
+                    // Rate-limited logging (separate from large gap warning)
+                    if state.gapLogCount <= 10 || state.gapLogCount % 100 == 0 {
+                        info.gapSamples = gapSamples
+                        info.gapMs = Double(gapSamples) / 48.0
+                    }
+                } else if gapSamples < -gapThreshold {
+                    // Negative gap (early arrival): log but don't adjust
+                    // Use separate counter to avoid log flooding from repeated early arrivals
+                    state.negativeGapLogCount += 1
+                    if state.negativeGapLogCount <= 10 {
+                        info.gapSamples = -gapSamples
+                        info.gapMs = Double(-gapSamples) / 48.0
+                        info.isNegative = true
+                    }
+                }
+                
+                state.lastSystemBufferTime = now
+            }
+            
+            state.systemBufferCount += 1
+            
             // CRITICAL FIX: Always buffer system audio, even during warmup
             // Previously we discarded pre-sync samples, but with deferred sync
             // this caused 0% match rate since there was no reference audio
             // at index 0 when sync finally happened
+            // Per v4: ALWAYS store actual buffer (no early return for first buffer)
             let startIndex = state.totalSystemSamples
             state.systemAudioBuffers.append(IndexedBuffer(
                 samples: samples,
@@ -435,6 +576,23 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             if state.systemAudioBuffers.count > maxBuffers {
                 state.systemAudioBuffers.removeFirst()
             }
+            
+            return info
+        }
+        
+        // Log OUTSIDE lock (separate paths per v4)
+        if let originalSize = logInfo.largeGapWarning {
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "SYS_GAP_LARGE: \(originalSize) samples clamped to \(AudioConfiguration.aecMaxGapMs)ms - possible stream restart") }
+        }
+        if let samples = logInfo.gapSamples, let ms = logInfo.gapMs {
+            if !logInfo.isNegative {
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "SYS_GAP: \(samples) samples (\(String(format: "%.1f", ms))ms)") }
+            } else {
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "SYS_EARLY: buffer \(samples) samples early") }
+            }
         }
     }
     
@@ -445,10 +603,14 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         // Empty input guard - avoid unnecessary lock acquisition
         guard !microphoneSamples.isEmpty else { return microphoneSamples }
         
-        return state.withLock { state in
+        // Result tuple: (processed audio, optional mic gap for logging)
+        let (result, micGapInfo): ([Float], Int64?) = state.withLock { state in
+            let now = timeProvider.currentTime()
+            var gapToLog: Int64? = nil
+            
             // Record arrival times for first N buffers (for offset averaging)
             if state.microphoneBufferTimes.count < AECState.kBuffersToAverage {
-                state.microphoneBufferTimes.append(CACurrentMediaTime())
+                state.microphoneBufferTimes.append(now)
             }
             
             if !state.microphoneStarted {
@@ -459,13 +621,29 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 checkAndSynchronizeStreams(&state)
             }
             
+            // MARK: - Read-Only Mic Gap Detection (Phase 2 data collection)
+            // Per plan: Log only, no gap fill - collect data to decide if mic needs gap handling
+            if state.micBufferCount > 0 {
+                let elapsed = now - state.lastMicBufferTime
+                let expectedSamples = Int64(elapsed * Double(AudioConfiguration.captureSampleRate))
+                let gap = expectedSamples - Int64(microphoneSamples.count)
+                let threshold = Int64(AudioConfiguration.aecGapThresholdMs) * 48
+                
+                if abs(gap) > threshold {
+                    // Log only - no gap fill (Phase 2 decision data)
+                    gapToLog = gap
+                }
+            }
+            state.lastMicBufferTime = now
+            state.micBufferCount += 1
+            
             // CRITICAL: Count mic samples BEFORE sync guard (matching storeSystemAudio behavior)
             // Both streams must count samples during warmup for correct alignment after sync
             let micStartIndex = state.totalMicSamples
             state.totalMicSamples += Int64(microphoneSamples.count)
             
             guard state.streamsSynchronized else {
-                return microphoneSamples  // Pass through during warmup
+                return (microphoneSamples, gapToLog)  // Pass through during warmup
             }
             
             // Diagnostic: Log index calculation (every 500th synced buffer)
@@ -487,7 +665,7 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             // Handle negative index during initial acoustic delay window
             // This is normal for the first ~50ms of recording
             if targetSysIndex < 0 {
-                return microphoneSamples
+                return (microphoneSamples, gapToLog)
             }
             
             // Find aligned reference samples with cross-buffer support
@@ -496,7 +674,7 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 sampleCount: microphoneSamples.count,
                 in: state.systemAudioBuffers
             ) else {
-                return microphoneSamples
+                return (microphoneSamples, gapToLog)
             }
             
             // Process samples using NLMS adaptive filter
@@ -538,13 +716,40 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
                 outputSamples.append(error)
             }
             
-            return outputSamples
+            return (outputSamples, gapToLog)
         }
+        
+        // Log mic gap OUTSIDE lock (Phase 2 data collection, no processing impact)
+        if let gap = micGapInfo {
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "MIC_GAP_DETECTED: \(gap) samples - Phase 2 data") }
+        }
+        
+        return result
     }
     
     /// Reset filter state (call when starting new recording)
     func reset() {
         // Called when recording starts, BEFORE first audio buffers arrive
+        
+        // Log recording-end statistics BEFORE clearing state
+        let stats: GapStatistics? = state.withLock { state in
+            guard state.gapLogCount > 0 else { return nil }
+            return GapStatistics(
+                gapCount: state.gapLogCount,
+                totalGapSamples: state.totalGapSamples,
+                maxGapSamples: state.maxGapSamples
+            )
+        }
+        
+        if let stats = stats {
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "AEC_RECORDING_END: gaps=\(stats.gapCount), total=\(stats.totalGapSamples) (\(String(format: "%.2f", stats.totalGapMs))ms), max=\(stats.maxGapSamples) (\(String(format: "%.1f", stats.maxGapMs))ms), avg=\(String(format: "%.1f", stats.avgGapMs))ms") }
+        }
+        
+        // Stop drift monitoring
+        stopDriftMonitoring()
+        
         state.withLock { state in
             state.filterCoefficients = Array(repeating: 0.0, count: filterLength)
             state.referenceBuffer.reset()
@@ -561,6 +766,55 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
             state.microphoneBufferTimes.removeAll()
             state.deliveryOffsetSamples = 0
             state.offsetCalculated = false
+            
+            // Clear gap detection state
+            state.lastSystemBufferTime = 0
+            state.lastMicBufferTime = 0
+            state.systemBufferCount = 0
+            state.micBufferCount = 0
+            state.gapLogCount = 0
+            state.negativeGapLogCount = 0
+            state.totalGapSamples = 0
+            state.maxGapSamples = 0
+        }
+    }
+    
+    /// Start drift monitoring when recording begins
+    /// Call this after reset() when starting a new recording
+    func startDriftMonitoring() {
+        recordingStartTime = timeProvider.currentTime()
+        
+        driftMonitoringTask = Task { [weak self] in
+            while !Task.isCancelled {
+                // Wait 60 seconds
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard !Task.isCancelled, let self = self else { break }
+                
+                await self.checkDrift()
+            }
+        }
+    }
+    
+    /// Stop drift monitoring when recording ends (called by reset())
+    func stopDriftMonitoring() {
+        driftMonitoringTask?.cancel()
+        driftMonitoringTask = nil
+    }
+    
+    /// Check cumulative drift (called every 60 seconds by drift monitoring task)
+    private func checkDrift() async {
+        let (expected, actual, duration) = state.withLock { state in
+            let duration = timeProvider.currentTime() - recordingStartTime
+            let expected = Int64(duration * Double(AudioConfiguration.captureSampleRate))
+            return (expected, state.totalSystemSamples, duration)
+        }
+        
+        guard expected > 0 else { return }
+        let driftPercent = abs(Double(actual - expected)) / Double(expected) * 100
+        
+        if driftPercent > 1.0 {
+            await DiagnosticLogger.shared.log(.aec,
+                "DRIFT_WARNING: \(String(format: "%.2f", driftPercent))% drift after \(String(format: "%.0f", duration))s")
         }
     }
     
@@ -769,5 +1023,47 @@ final class EchoCancellationService: @unchecked Sendable, EchoCancellationServic
         
         // No buffer found - mic is ahead of system audio
         return nil
+    }
+    
+    // MARK: - Test Accessors (internal for @testable import)
+    
+    /// Get buffer indices for verifying index continuity after gap fill
+    /// Returns array of (start, end) sample indices for each buffer
+    func getBufferIndices() -> [(start: Int64, end: Int64)] {
+        state.withLock { state in
+            state.systemAudioBuffers.map { buf in
+                (buf.startSampleIndex, buf.startSampleIndex + Int64(buf.samples.count))
+            }
+        }
+    }
+    
+    /// Get current system buffer count (for testing)
+    var systemBufferCount: Int {
+        state.withLock { $0.systemBufferCount }
+    }
+    
+    /// Get total system samples (for testing)
+    var totalSystemSamples: Int64 {
+        state.withLock { $0.totalSystemSamples }
+    }
+    
+    /// Get total gap samples filled (for testing)
+    var totalGapSamples: Int64 {
+        state.withLock { $0.totalGapSamples }
+    }
+    
+    /// Get max gap size in samples (for testing)
+    var maxGapSamples: Int64 {
+        state.withLock { $0.maxGapSamples }
+    }
+    
+    /// Get gap log count (for testing)
+    var gapLogCount: Int {
+        state.withLock { $0.gapLogCount }
+    }
+    
+    /// Get current buffer count (for testing buffer pruning)
+    var bufferCount: Int {
+        state.withLock { $0.systemAudioBuffers.count }
     }
 }

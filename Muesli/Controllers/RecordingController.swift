@@ -585,6 +585,7 @@ final class RecordingController {
             session.state = .recording
             session.startDisplayTimer()
             echoCancellationService.reset()
+            echoCancellationService.startDriftMonitoring()
             
             // Mark initialization as completing audio setup
             session.isInitializing = false

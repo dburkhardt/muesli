@@ -74,6 +74,7 @@
 		F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000002241D1A1D00000080 /* AudioConfiguration.swift */; };
 		114BBE69396045369DA85097 /* ClipboardHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 114BBE69396045369DA85098 /* ClipboardHelper.swift */; };
 		3BB14EFAA1A14BA98612D5AC /* TimeFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BB14EFAA1A14BA98612D5ACA /* TimeFormatting.swift */; };
+		TP00001241D1A1D00000105 /* TimeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = TP00002241D1A1D00000105 /* TimeProvider.swift */; };
 		B1000001241D1A1D00000040 /* MuesliViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000002241D1A1D00000040 /* MuesliViewModelTests.swift */; };
 		B1000003241D1A1D00000040 /* ServiceProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000004241D1A1D00000040 /* ServiceProtocols.swift */; };
 		B1000005241D1A1D00000040 /* MockAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000006241D1A1D00000040 /* MockAudioCaptureService.swift */; };
@@ -86,6 +87,7 @@
 		B1000013241D1A1D00000040 /* MockModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000014241D1A1D00000040 /* MockModelManager.swift */; };
 		B1000015241D1A1D00000040 /* MockLLMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000016241D1A1D00000040 /* MockLLMManager.swift */; };
 		B1000017241D1A1D00000040 /* MockEchoCancellationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */; };
+		MTP0001241D1A1D00000106 /* MockTimeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = MTP0002241D1A1D00000106 /* MockTimeProvider.swift */; };
 		B1000020241D1A1D00000041 /* RecordingControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000021241D1A1D00000041 /* RecordingControllerTests.swift */; };
 		B1000023241D1A1D00000042 /* TranscriptionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */; };
 		B0613F64BBAA48E09FA64C49 /* TimeFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0613F64BBAA48E09FA64C49A /* TimeFormattingTests.swift */; };
@@ -172,6 +174,7 @@
 		B1000014241D1A1D00000040 /* MockModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockModelManager.swift; sourceTree = "<group>"; };
 		B1000016241D1A1D00000040 /* MockLLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockLLMManager.swift; sourceTree = "<group>"; };
 		B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockEchoCancellationService.swift; sourceTree = "<group>"; };
+		MTP0002241D1A1D00000106 /* MockTimeProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTimeProvider.swift; sourceTree = "<group>"; };
 		B1000021241D1A1D00000041 /* RecordingControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingControllerTests.swift; sourceTree = "<group>"; };
 		B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionCoordinatorTests.swift; sourceTree = "<group>"; };
 		B0613F64BBAA48E09FA64C49A /* TimeFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeFormattingTests.swift; sourceTree = "<group>"; };
@@ -194,6 +197,7 @@
 		F1000002241D1A1D00000080 /* AudioConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioConfiguration.swift; sourceTree = "<group>"; };
 		114BBE69396045369DA85098 /* ClipboardHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHelper.swift; sourceTree = "<group>"; };
 		3BB14EFAA1A14BA98612D5ACA /* TimeFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeFormatting.swift; sourceTree = "<group>"; };
+		TP00002241D1A1D00000105 /* TimeProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeProvider.swift; sourceTree = "<group>"; };
 		V1000001241D1A1D00000090 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -376,6 +380,7 @@
 				F1000002241D1A1D00000080 /* AudioConfiguration.swift */,
 				114BBE69396045369DA85098 /* ClipboardHelper.swift */,
 				3BB14EFAA1A14BA98612D5ACA /* TimeFormatting.swift */,
+				TP00002241D1A1D00000105 /* TimeProvider.swift */,
 				UC00002241D1A1D00000099 /* UpdateChecker.swift */,
 			);
 			path = Utilities;
@@ -427,6 +432,7 @@
 				B1000014241D1A1D00000040 /* MockModelManager.swift */,
 				B1000016241D1A1D00000040 /* MockLLMManager.swift */,
 				B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */,
+				MTP0002241D1A1D00000106 /* MockTimeProvider.swift */,
 			);
 			path = Mocks;
 			sourceTree = "<group>";
@@ -669,6 +675,7 @@
 				F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */,
 				114BBE69396045369DA85097 /* ClipboardHelper.swift in Sources */,
 				3BB14EFAA1A14BA98612D5AC /* TimeFormatting.swift in Sources */,
+				TP00001241D1A1D00000105 /* TimeProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -688,6 +695,7 @@
 				B1000013241D1A1D00000040 /* MockModelManager.swift in Sources */,
 				B1000015241D1A1D00000040 /* MockLLMManager.swift in Sources */,
 				B1000017241D1A1D00000040 /* MockEchoCancellationService.swift in Sources */,
+				MTP0001241D1A1D00000106 /* MockTimeProvider.swift in Sources */,
 				B1000020241D1A1D00000041 /* RecordingControllerTests.swift in Sources */,
 				B1000023241D1A1D00000042 /* TranscriptionCoordinatorTests.swift in Sources */,
 				B0613F64BBAA48E09FA64C49 /* TimeFormattingTests.swift in Sources */,

@@ -8,17 +8,18 @@ This document is the authoritative reference for AEC in Muesli. It covers theory
 2. [Theory: How AEC Works](#theory-how-aec-works)
 3. [Muesli's AEC Architecture](#mueslis-aec-architecture)
 4. [Stream Synchronization](#stream-synchronization)
-5. [The NLMS Algorithm](#the-nlms-algorithm)
-6. [Configuration Parameters](#configuration-parameters)
-7. [Parameter Tuning Guide](#parameter-tuning-guide)
-8. [Testing and Quality Metrics](#testing-and-quality-metrics)
-9. [Double-Talk Detection (DTD)](#double-talk-detection-dtd)
-10. [Diagnostic Logging](#diagnostic-logging)
-11. [Common Failure Modes](#common-failure-modes)
-12. [Debugging Checklist](#debugging-checklist)
-13. [Lessons Learned](#lessons-learned)
-14. [Future Improvements](#future-improvements)
-15. [References and Standards](#references-and-standards)
+5. [Buffer Gap Handling and Continuity](#buffer-gap-handling-and-continuity)
+6. [The NLMS Algorithm](#the-nlms-algorithm)
+7. [Configuration Parameters](#configuration-parameters)
+8. [Parameter Tuning Guide](#parameter-tuning-guide)
+9. [Testing and Quality Metrics](#testing-and-quality-metrics)
+10. [Double-Talk Detection (DTD)](#double-talk-detection-dtd)
+11. [Diagnostic Logging](#diagnostic-logging)
+12. [Common Failure Modes](#common-failure-modes)
+13. [Debugging Checklist](#debugging-checklist)
+14. [Lessons Learned](#lessons-learned)
+15. [Future Improvements](#future-improvements)
+16. [References and Standards](#references-and-standards)
 
 ---
 
@@ -245,6 +246,134 @@ if now.timeIntervalSince(startTime) > syncTimeoutSeconds && !streamsSynchronized
 
 ---
 
+## Buffer Gap Handling and Continuity
+
+### The Problem: ScreenCaptureKit Buffer Gaps
+
+ScreenCaptureKit on macOS can drop audio buffers under certain conditions, causing gaps in the audio stream. This is a [known macOS issue](https://nonstrict.eu/blog/2024/handling-audio-capture-gaps-on-macos). Without compensation, these gaps cause:
+
+1. **Sample count drift**: System audio accumulates samples slower than wall-clock time
+2. **Index mismatch**: `targetSysIndex` calculation drifts outside the valid buffer range
+3. **Match rate degradation**: AEC match rate drops from ~95% to <10% over time
+
+### The Solution: Wall-Clock-Based Gap Detection
+
+We use `CACurrentMediaTime()` (monotonic, immune to clock adjustments) to detect gaps between buffer deliveries. When a gap exceeds the threshold, we fill it with silence samples.
+
+```
+Buffer 1 arrives at t=0     → Store samples [0-960]
+Buffer 2 arrives at t=120ms → Expected: 5760 samples elapsed
+                             → Actual: 960 samples delivered
+                             → Gap: 4800 samples (100ms)
+                             → Fill: Insert 4800 silence samples
+                             → Store actual buffer [5760-6720]
+```
+
+### Gap Detection Algorithm
+
+```swift
+// Wall-clock gap detection (simplified)
+let elapsed = CACurrentMediaTime() - lastBufferTime
+let expectedSamples = Int64(elapsed * 48000)
+let actualSamples = Int64(samples.count)
+let gapSamples = expectedSamples - actualSamples
+
+if gapSamples > gapThreshold {  // 50ms = 2400 samples
+    // Fill gap with silence
+    let silenceBuffer = IndexedBuffer(
+        samples: Array(repeating: 0.0, count: Int(gapSamples)),
+        startSampleIndex: totalSystemSamples
+    )
+    systemAudioBuffers.append(silenceBuffer)
+    totalSystemSamples += gapSamples
+}
+
+// Always store actual buffer after gap fill
+systemAudioBuffers.append(IndexedBuffer(
+    samples: samples,
+    startSampleIndex: totalSystemSamples
+))
+totalSystemSamples += Int64(samples.count)
+```
+
+### Configuration Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `aecGapThresholdMs` | 50ms | Minimum gap size to trigger silence fill |
+| `aecMaxGapMs` | 500ms | Maximum gap to fill (larger gaps clamped) |
+| `maxSystemAudioBuffers` | 150 | Maximum buffers retained (~3s of audio) |
+
+### Why 50ms Threshold?
+
+ScreenCaptureKit typically delivers buffers every ~20ms. Normal jitter is 10-30ms. A 50ms threshold:
+- Ignores normal delivery variance (false positives)
+- Catches actual dropped buffers (gaps >50ms)
+- Matches typical buffer drop patterns observed in production
+
+### Why 500ms Maximum?
+
+Gaps larger than 500ms likely indicate a stream restart rather than dropped buffers. Clamping prevents:
+- Memory spikes from very large gaps
+- Filling gaps that don't represent continuous audio
+
+When gaps exceed 500ms, we log a warning for investigation.
+
+### Silence Fill Rationale
+
+Why fill with silence instead of interpolation?
+- **Acoustically correct**: No system audio played during gap = no echo
+- **Simple**: Zero samples = zero predicted echo = clean pass-through
+- **Safe**: No risk of introducing artifacts from bad interpolation
+
+### Integration with Stream Synchronization
+
+Gap detection runs **during warmup** (before offset calculation completes):
+1. Delivery offset uses wall-clock arrival times, not sample counts
+2. Gap fills ensure sample indices remain continuous from recording start
+3. When sync completes, `totalSystemSamples` accurately reflects real-time progression
+
+This is safe because the offset calculation uses `CACurrentMediaTime()` timestamps, which are independent of the gap fill logic.
+
+### Diagnostic Logging
+
+| Log Message | Meaning |
+|-------------|---------|
+| `SYS_GAP: N samples (Xms)` | Gap detected and filled with silence |
+| `SYS_GAP_LARGE: N samples clamped to 500ms` | Gap exceeded max, clamped |
+| `SYS_EARLY: buffer N samples early` | Negative gap (logged, no action) |
+| `MIC_GAP_DETECTED: N samples` | Mic gap detected (Phase 2 data) |
+| `AEC_RECORDING_END: gaps=N, total=X, max=Y` | Recording summary |
+| `DRIFT_WARNING: X% drift after Ns` | Periodic drift check (every 60s) |
+
+### Testing Gap Detection
+
+Unit tests use `MockTimeProvider` for deterministic timing:
+```swift
+func testGapFillsWithSilence() {
+    mockTime.time = 0.0
+    sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+    
+    mockTime.time = 0.12  // 100ms gap
+    sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+    
+    XCTAssertEqual(sut.totalGapSamples, 4800)  // 100ms = 4800 samples
+}
+```
+
+### Edge Cases
+
+| Scenario | Handling |
+|----------|----------|
+| First buffer | Initialize timing, store buffer (no gap check) |
+| Negative gap (early arrival) | Log debug, store normally (no counter decrement) |
+| Large gap (>500ms) | Clamp to 500ms, log warning |
+| Gap during warmup | Fill immediately (safe per above) |
+| Rapid delivery after gap | Only first buffer triggers fill |
+| Mic stream gaps | Logged only (Phase 2 - no fill currently) |
+
+---
+
 ## The NLMS Algorithm
 
 ### Algorithm Overview
@@ -319,10 +448,32 @@ All AEC parameters are in `AudioConfiguration.swift`:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `kBuffersToAverage` | 50 | Buffers to average for offset calculation |
-| `maxBuffers` | 50 | Maximum system audio buffers to retain |
+| `maxDelayMs` | 3000ms | Ring buffer capacity for variable delivery latency |
+| `kBuffersToAverage` | 12 | Buffers to average for offset calculation (~1 second) |
+| `maxSystemAudioBuffers` | 150 | Maximum system audio buffers to retain (~3 seconds) |
 | `syncTimeoutSeconds` | 5.0 | Timeout before fallback to pass-through |
 | `maxReasonableOffset` | ±24000 samples | Sanity clamp (±500ms) |
+
+### Important: `maxDelayMs` vs `acousticDelayMs`
+
+These two parameters serve **different purposes** and are not interchangeable:
+
+| Parameter | Purpose | Typical Value |
+|-----------|---------|---------------|
+| `acousticDelayMs` | Expected acoustic propagation delay (DAC → speakers → room → microphone → ADC) | 15-50ms |
+| `maxDelayMs` | Ring buffer capacity to handle ScreenCaptureKit's variable delivery latency | 3000ms |
+
+**Why `maxDelayMs` is much larger than `acousticDelayMs`:**
+
+- ScreenCaptureKit and AVAudioEngine deliver audio buffers with different and variable latencies
+- The microphone stream typically arrives 250-350ms before the corresponding system audio
+- During the warmup period (~50 buffers), timing jitter can exceed 500ms
+- `maxDelayMs: 3000` provides a generous 3-second buffer to ensure reference audio is available even in worst-case delivery scenarios
+
+**Tuning Note (2026-01-25):** The current parameters are intentional but may need real-world tuning:
+- If AEC shows 0% match rate, the issue is likely stream synchronization (delivery offset), not these parameters
+- If echo remains after warmup with good match rate, consider increasing `acousticDelayMs` for setups with external speakers
+- The large `maxDelayMs` is a safety margin and has minimal memory cost at 48kHz (3s ≈ 576KB)
 
 ---
 
@@ -837,3 +988,4 @@ This would be a significant undertaking but would provide the best quality. Cons
 |------|--------|--------|
 | 2026-01-24 | Initial creation based on stream offset fix debugging session | Agent |
 | 2026-01-24 | Added: Parameter tuning guide, testing metrics (ERLE/ERL/MOS), expanded DTD section with simple approaches, VSS-NLMS discussion, standards references | Agent |
+| 2026-01-25 | Added: Buffer Gap Handling and Continuity section documenting wall-clock-based gap detection with silence fill per AEC clock drift fix plan | Agent |

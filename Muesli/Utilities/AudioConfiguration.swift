@@ -96,6 +96,22 @@ enum AudioConfiguration {
     /// Typical range: 0.1-0.5
     static let aecLearningRate: Float = 0.2
     
+    /// AEC gap detection threshold (milliseconds).
+    /// Gaps larger than this are filled with silence to maintain sample count continuity.
+    /// Default: 50ms (above typical ScreenCaptureKit jitter of ~10-30ms)
+    /// Reference: https://nonstrict.eu/blog/2024/handling-audio-capture-gaps-on-macos
+    static let aecGapThresholdMs: Int = 50
+    
+    /// Maximum gap to fill with silence (milliseconds).
+    /// Larger gaps are clamped and logged as warnings (may indicate stream restart).
+    /// Default: 500ms = 24000 samples @ 48kHz (96KB max allocation)
+    static let aecMaxGapMs: Int = 500
+    
+    /// Maximum number of system audio buffers to keep for AEC reference lookup.
+    /// At ~20ms per buffer, 150 buffers covers ~3 seconds of audio.
+    /// This accommodates clock drift between mic and system audio streams (~1-2% drift is common).
+    static let maxSystemAudioBuffers: Int = 150
+    
     // MARK: - AEC Debugging (Debug Builds Only)
     
     #if DEBUG

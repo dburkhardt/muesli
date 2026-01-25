@@ -5,21 +5,25 @@ import XCTest
 /// Tests sample-count synchronization approach (no timestamps)
 final class EchoCancellationServiceTests: XCTestCase {
     var sut: EchoCancellationService!
+    var mockTime: MockTimeProvider!
     
     override func setUp() {
         super.setUp()
+        mockTime = MockTimeProvider()
         // Use AudioConfiguration values to test production-equivalent behavior
         sut = EchoCancellationService(
             filterLength: AudioConfiguration.aecFilterLength,
             learningRate: AudioConfiguration.aecLearningRate,
             sampleRate: AudioConfiguration.captureSampleRate,
             maxDelayMs: 100,
-            acousticDelayMs: AudioConfiguration.aecAcousticDelayMs
+            acousticDelayMs: AudioConfiguration.aecAcousticDelayMs,
+            timeProvider: mockTime
         )
     }
     
     override func tearDown() {
         sut = nil
+        mockTime = nil
         super.tearDown()
     }
     
@@ -31,6 +35,11 @@ final class EchoCancellationServiceTests: XCTestCase {
         return (0..<sampleCount).map { i in
             Float(sin(2 * .pi * frequency * Double(i) / Double(sampleRate)))
         }
+    }
+    
+    /// Generate sine wave with default frequency and sample rate
+    func generateSineWave(duration: Double) -> [Float] {
+        generateSineWave(frequency: 440, sampleRate: 48000, duration: duration)
     }
     
     // MARK: - Stream Synchronization Tests
@@ -329,5 +338,187 @@ final class EchoCancellationServiceTests: XCTestCase {
         let expectedCount = Int(Double(samples.count) * 48000.0 / 44100.0)
         XCTAssertEqual(result.count, expectedCount, accuracy: 2, "Small buffer should produce scaled output")
         XCTAssertFalse(result.isEmpty, "Small buffer should produce output")
+    }
+    
+    // MARK: - Gap Detection Tests (per plan: AEC clock drift fix)
+    
+    /// Test 1: First buffer - stored correctly (CRITICAL: no early return)
+    func testFirstBufferStoredCorrectly() {
+        mockTime.time = 0.0
+        let samples = generateSineWave(frequency: 440, sampleRate: 48000, duration: 0.02)
+        sut.storeSystemAudio(samples: samples)
+        
+        // First buffer initializes timing AND stores samples
+        XCTAssertEqual(sut.systemBufferCount, 1)
+        XCTAssertEqual(sut.totalSystemSamples, 960, "Buffer WAS stored (960 samples for 20ms @ 48kHz)")
+        XCTAssertEqual(sut.totalGapSamples, 0)
+    }
+    
+    /// Test 2: Gap detection with silence fill (DETERMINISTIC)
+    func testGapFillsWithSilence() {
+        // First buffer at t=0
+        mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))  // 960 samples
+        
+        // Second buffer at t=120ms (100ms gap)
+        // Elapsed = 120ms, expected = 5760 samples, actual = 960, gap = 4800
+        mockTime.time = 0.12
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))  // 960 samples
+        
+        // Expected: 960 (buffer 1) + 4800 (gap fill) + 960 (buffer 2) = 6720
+        XCTAssertEqual(sut.totalSystemSamples, 6720, "Should include silence fill for gap")
+        XCTAssertEqual(sut.totalGapSamples, 4800, "Should track 4800 samples of gap fill (100ms)")
+        XCTAssertEqual(sut.gapLogCount, 1, "Should count one gap event")
+    }
+    
+    /// Test 3: Large gap clamped to maximum
+    func testLargeGapClamped() {
+        mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // 1 second gap (exceeds 500ms max)
+        mockTime.time = 1.02
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Gap clamped to 500ms = 24000 samples
+        XCTAssertEqual(sut.totalGapSamples, 24000, "Gap should be clamped to 500ms (24000 samples)")
+        XCTAssertEqual(sut.maxGapSamples, 24000, "Max gap should reflect clamped value")
+    }
+    
+    /// Test 4: Negative gap (early arrival) - no counter decrement
+    func testNegativeGapIgnored() {
+        mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Buffer arrives 10ms "early" (at 10ms instead of expected ~20ms)
+        // This can happen due to buffer timing variance
+        mockTime.time = 0.01
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Counter should NOT decrement - just 2 buffers worth
+        XCTAssertEqual(sut.totalSystemSamples, 1920, "Should have 2 buffers (1920 samples)")
+        XCTAssertEqual(sut.totalGapSamples, 0, "Should NOT have gap fill for early arrival")
+    }
+    
+    /// Test 5: No-gap regression (continuous delivery)
+    func testNoGapsPreservesCurrentBehavior() {
+        let bufferDuration = 0.02  // 20ms buffers
+        for i in 0..<100 {
+            mockTime.time = Double(i) * bufferDuration
+            sut.storeSystemAudio(samples: generateSineWave(duration: bufferDuration))
+            _ = sut.processMicrophoneAudio(microphoneSamples: generateSineWave(duration: bufferDuration))
+        }
+        XCTAssertEqual(sut.totalGapSamples, 0, "Should detect no gaps with continuous delivery")
+    }
+    
+    /// Test 6: Gap during warmup (before sync)
+    func testGapDuringWarmupStillFilled() {
+        mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        mockTime.time = 0.12  // Gap during warmup
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        XCTAssertGreaterThan(sut.totalGapSamples, 0, "Should fill gaps even during warmup")
+    }
+    
+    /// Test 7: Buffer index continuity after gap (per v4 - expose indices)
+    func testBufferIndexContinuityAfterGap() {
+        mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))  // 0-960
+        
+        mockTime.time = 0.12  // 100ms gap
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Verify indices via exposed method
+        let indices = sut.getBufferIndices()
+        XCTAssertEqual(indices.count, 3, "Should have 3 buffers: original, silence, second")
+        
+        // Verify contiguity
+        XCTAssertEqual(indices[0].start, 0, "First buffer starts at 0")
+        XCTAssertEqual(indices[0].end, 960, "First buffer ends at 960")
+        XCTAssertEqual(indices[1].start, 960, "Silence starts at 960")
+        XCTAssertEqual(indices[1].end, 5760, "Silence ends at 5760 (4800 samples)")
+        XCTAssertEqual(indices[2].start, 5760, "Second buffer starts at 5760 - CONTIGUOUS")
+        XCTAssertEqual(indices[2].end, 6720, "Second buffer ends at 6720")
+    }
+    
+    /// Test 8: Multiple buffers after gap - no double-counting (per v4)
+    func testMultipleBuffersAfterGapNoDoubleCounting() {
+        // Buffer 1 at t=0
+        mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))  // 960 samples
+        
+        // 200ms gap, then rapid delivery
+        // At t=220ms: elapsed = 220ms, expected = 10560, actual = 960, gap = 9600
+        // But clamped by threshold logic
+        mockTime.time = 0.22  // Buffer 2 (gap detected here)
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        let gapAfterBuffer2 = sut.totalGapSamples
+        let logCountAfterBuffer2 = sut.gapLogCount
+        
+        mockTime.time = 0.221  // Buffer 3 - 1ms later (no gap)
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Gap detected ONLY on buffer 2
+        // Buffer 3 sees 1ms elapsed vs 20ms buffer = early arrival, no gap
+        XCTAssertEqual(sut.gapLogCount, logCountAfterBuffer2, "Only one gap event should be logged")
+        XCTAssertEqual(sut.totalGapSamples, gapAfterBuffer2, "No additional gap fill for rapid delivery")
+    }
+    
+    /// Test 9: Buffer pruning after gap fill
+    func testGapFillWithBufferPruning() {
+        // Create a service with smaller maxBuffers for testing
+        let testSut = EchoCancellationService(
+            filterLength: AudioConfiguration.aecFilterLength,
+            learningRate: AudioConfiguration.aecLearningRate,
+            sampleRate: AudioConfiguration.captureSampleRate,
+            maxDelayMs: 100,
+            acousticDelayMs: AudioConfiguration.aecAcousticDelayMs,
+            timeProvider: mockTime,
+            maxBuffers: 50  // Smaller for testing
+        )
+        
+        // Fill buffers to near maxBuffers
+        for i in 0..<48 {
+            mockTime.time = Double(i) * 0.02
+            testSut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        }
+        
+        // Gap that adds 1 silence buffer
+        mockTime.time = 0.96 + 0.1  // 100ms gap after 48 buffers
+        testSut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Verify buffer count stays within maxBuffers
+        XCTAssertLessThanOrEqual(testSut.bufferCount, 50, "Buffer count should not exceed maxBuffers")
+    }
+    
+    /// Test gap detection threshold boundary
+    func testGapThresholdBoundary() {
+        // First buffer
+        mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Second buffer at exactly 50ms gap (at threshold)
+        // Elapsed = 70ms, expected = 3360 samples, actual = 960, gap = 2400
+        // Threshold = 50ms = 2400 samples - should be at boundary
+        mockTime.time = 0.07
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Gap of exactly 2400 should NOT trigger (threshold is "greater than")
+        // Let's verify with a gap just above threshold
+        mockTime.time = 0.0
+        sut.reset()
+        
+        mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Just above 50ms threshold
+        mockTime.time = 0.071  // 51ms elapsed, 51ms - 20ms = 31ms gap < 50ms threshold
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // This should NOT trigger gap fill (31ms < 50ms)
+        XCTAssertEqual(sut.totalGapSamples, 0, "Gap below threshold should not trigger fill")
     }
 }

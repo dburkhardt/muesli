@@ -92,7 +92,7 @@ struct MuesliApp: App {
                 .environment(viewModel)
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentMinSize)
+        .windowResizability(.contentSize)
         .defaultPosition(.center)
 
         // Completed meeting window (for viewing while recording)
@@ -108,7 +108,7 @@ struct MuesliApp: App {
             }
         }
         .defaultSize(width: 600, height: 500)
-        .windowResizability(.contentMinSize)
+        .windowResizability(.contentSize)
 
         // Main window - SINGLE window for recordings (not WindowGroup)
         Window(Self.appDisplayName, id: "main") {
@@ -119,7 +119,7 @@ struct MuesliApp: App {
                 .environment(refinementCoordinator)
         }
         .defaultSize(width: 420, height: 600)
-        .windowResizability(.contentMinSize)
+        .windowResizability(.contentSize)
 
         // Preferences window - accessible via Cmd+,
         Settings {
