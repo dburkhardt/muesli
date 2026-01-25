@@ -381,27 +381,30 @@ final class RecordingController {
                 // - Incorrect echo prediction (time alignment breaks)
                 // - Potential buffer overruns/underruns
                 // - Degraded or non-functional echo cancellation
+                //
+                // Atomic check-and-set to prevent TOCTOU race condition:
+                // Multiple audio callback threads could otherwise observe the same state
+                // and trigger duplicate warnings.
                 let shouldShowWarning = aecDisabledLock.withLock { alreadyDisabled -> Bool in
                     if !alreadyDisabled {
-                        return true  // First time - need to disable and warn
+                        alreadyDisabled = true  // Atomically mark as disabled
+                        return true  // First time - need to warn
                     }
                     return false
                 }
                 
                 if shouldShowWarning {
-                    aecDisabledLock.withLock { $0 = true }
-                    
                     // Rate-limited warning (per 9ebe review) - show only once per session
+                    // Atomic check-and-set to prevent duplicate warnings from concurrent threads
                     let shouldWarn = warningShownLock.withLock { shown -> Bool in
                         if !shown {
+                            shown = true  // Atomically mark as warned
                             return true
                         }
                         return false
                     }
                     
                     if shouldWarn {
-                        warningShownLock.withLock { $0 = true }
-                        
                         // Log to diagnostics
                         Task {
                             await DiagnosticLogger.shared.log(.aec,
