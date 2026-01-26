@@ -52,7 +52,7 @@ enum EchoCancellationServiceFactory {
     
     /// Create an NLMS-based echo cancellation service with default parameters
     private static func createNLMS() -> EchoCancellationServiceProtocol {
-        return EchoCancellationService(
+        return EchoCancellationServiceNLMS(
             filterLength: AudioConfiguration.aecFilterLength,
             learningRate: AudioConfiguration.aecLearningRate,
             sampleRate: AudioConfiguration.captureSampleRate,
@@ -64,7 +64,7 @@ enum EchoCancellationServiceFactory {
 
 // MARK: - Helper Extensions
 
-extension EchoCancellationService {
+extension EchoCancellationServiceNLMS {
     /// Extract Float32 samples from CMSampleBuffer at original sample rate
     /// - Parameter sampleBuffer: The audio sample buffer
     /// - Returns: Mono Float32 samples, or nil if extraction fails
@@ -315,17 +315,20 @@ struct GapStatistics {
     }
 }
 
-/// Service for acoustic echo cancellation using adaptive filtering
+/// Service for acoustic echo cancellation using adaptive filtering (NLMS implementation)
 /// Uses NLMS (Normalized Least Mean Squares) algorithm to remove echo from microphone audio
 /// Reference signal: System audio (what's playing through speakers)
 /// Input signal: Microphone audio (may contain echo)
 /// Output: Clean microphone audio (echo removed)
 ///
+/// Note: This is the legacy NLMS implementation, preserved as a fallback option.
+/// WebRTC AEC3 (EchoCancellationServiceWebRTC) is the default and provides better performance.
+///
 /// Known limitations:
 /// - No Double-Talk Detection (DTD): Algorithm assumes speaker and listener don't talk simultaneously
 /// - No NLP (Non-Linear Processing): Uses linear NLMS only, no residual echo suppression
 /// - Filter length constraint: Echo path must be shorter than filterLength * samplePeriod
-final class EchoCancellationService: @unchecked Sendable, EchoCancellationServiceProtocol {
+final class EchoCancellationServiceNLMS: @unchecked Sendable, EchoCancellationServiceProtocol {
     // MARK: - AEC Diagnostic Counters
     
     /// Thread-safe counter for match rate tracking

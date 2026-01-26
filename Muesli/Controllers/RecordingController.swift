@@ -350,7 +350,7 @@ final class RecordingController {
         isAECEnabled: Bool,
         fileService: FileOutputService,
         transcriptionCoordinator: TranscriptionCoordinator,
-        aecService: EchoCancellationService
+        aecService: EchoCancellationServiceProtocol
     ) throws {
         let callbackStart = CACurrentMediaTime()
         var timing = CallbackTiming()
@@ -373,7 +373,7 @@ final class RecordingController {
         let extractStart = CACurrentMediaTime()
         var systemSamples: [Float]?
         if isAECEnabled {
-            systemSamples = EchoCancellationService.extractSamples(from: buffer)
+            systemSamples = EchoCancellationServiceNLMS.extractSamples(from: buffer)
         }
         timing.extract = CACurrentMediaTime() - extractStart
         
@@ -442,7 +442,7 @@ final class RecordingController {
         isAECEnabled: Bool,
         fileService: FileOutputService,
         transcriptionCoordinator: TranscriptionCoordinator,
-        aecService: EchoCancellationService,
+        aecService: EchoCancellationServiceProtocol,
         aecDisabledLock: OSAllocatedUnfairLock<Bool>,
         warningShownLock: OSAllocatedUnfairLock<Bool>,
         warningManager: WarningManager
@@ -459,7 +459,7 @@ final class RecordingController {
         
         // TIMING: Extract microphone samples at native rate (NOT necessarily 48kHz!)
         let extractStart = CACurrentMediaTime()
-        let micSamplesNative = EchoCancellationService.extractSamples(from: buffer)
+        let micSamplesNative = EchoCancellationServiceNLMS.extractSamples(from: buffer)
         timing.extract = CACurrentMediaTime() - extractStart
         
         guard let micSamplesNative = micSamplesNative else {
@@ -478,7 +478,7 @@ final class RecordingController {
         // System audio is always at 48kHz, so AEC must operate at 48kHz
         let micSamples48k: [Float]
         if sourceSampleRate != 48000 {
-            let resampled = EchoCancellationService.resampleFloat32Public(
+            let resampled = EchoCancellationServiceNLMS.resampleFloat32Public(
                 samples: micSamplesNative,
                 sourceSampleRate: sourceSampleRate,
                 targetSampleRate: 48000
@@ -497,7 +497,7 @@ final class RecordingController {
                 // Atomic check-and-set to prevent TOCTOU race condition:
                 // Multiple audio callback threads could otherwise observe the same state
                 // and trigger duplicate warnings.
-                let shouldShowWarning = aecDisabledLock.withLock { alreadyDisabled -> Bool in
+                let shouldShowWarning = aecDisabledLock.withLock { alreadyDisabled in
                     if !alreadyDisabled {
                         alreadyDisabled = true  // Atomically mark as disabled
                         return true  // First time - need to warn
@@ -508,7 +508,7 @@ final class RecordingController {
                 if shouldShowWarning {
                     // Rate-limited warning (per 9ebe review) - show only once per session
                     // Atomic check-and-set to prevent duplicate warnings from concurrent threads
-                    let shouldWarn = warningShownLock.withLock { shown -> Bool in
+                    let shouldWarn = warningShownLock.withLock { shown in
                         if !shown {
                             shown = true  // Atomically mark as warned
                             return true
@@ -561,7 +561,7 @@ final class RecordingController {
         // TIMING: Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
         // Use actualMicRate for correct sample rate metadata
         let fileStart = CACurrentMediaTime()
-        if let processedBuffer = EchoCancellationService.createSampleBuffer(
+        if let processedBuffer = EchoCancellationServiceNLMS.createSampleBuffer(
             from: processedSamples,
             timestamp: timestamp,
             sourceSampleRate: actualMicRate,

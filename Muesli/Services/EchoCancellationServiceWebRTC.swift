@@ -83,17 +83,16 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         self.state = OSAllocatedUnfairLock(initialState: SyncState(bufferCapacity: 24000))
         
         // Initialize WebRTC bridge
-        var error: NSError?
-        self.aecBridge = WebRTCAECBridge(sampleRate: Int32(sampleRate),
-                                          channels: 1,
-                                          error: &error)
-        if let error = error {
-            self.initializationError = error
-            Task { await DiagnosticLogger.shared.log(.aec,
-                "WEBRTC_INIT_FAILED: \(error.localizedDescription)") }
-        } else {
+        // In Swift, ObjC methods with NSError** are translated to throwing initializers
+        do {
+            self.aecBridge = try WebRTCAECBridge(sampleRate: Int32(sampleRate), channels: 1)
             Task { await DiagnosticLogger.shared.log(.aec,
                 "WEBRTC_INIT_SUCCESS: AEC3 ready, frameSize=480") }
+        } catch {
+            self.aecBridge = nil
+            self.initializationError = error as NSError
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "WEBRTC_INIT_FAILED: \(error.localizedDescription)") }
         }
     }
     
@@ -166,7 +165,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         var currentOffset: Int64 = 0
         var offsetReady = false
         
-        state.withLock { state in
+        let offsetInfo = state.withLock { state in
             // Track timing for warmup
             if state.micBufferTimes.count < SyncState.kBuffersToAverage {
                 state.micBufferTimes.append(now)
@@ -195,12 +194,17 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 if mismatch > 2400 {  // >50ms drift
                     let oldOffset = state.deliveryOffsetSamples
                     state.deliveryOffsetSamples = max(-24000, min(24000, actualDelta))
+                    // Capture values before Task to avoid capturing inout state (Swift 6)
+                    let newOffset = state.deliveryOffsetSamples
                     Task { await DiagnosticLogger.shared.log(.aec,
-                        "WEBRTC_OFFSET_CORRECTION: \(oldOffset)→\(state.deliveryOffsetSamples)") }
+                        "WEBRTC_OFFSET_CORRECTION: \(oldOffset)→\(newOffset)") }
                 }
                 
+                // Capture values before Task to avoid capturing inout state (Swift 6)
+                let logOffset = state.deliveryOffsetSamples
+                let logMs = String(format: "%.1f", offsetSeconds * 1000)
                 Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_OFFSET: \(state.deliveryOffsetSamples) samples (\(String(format: "%.1f", offsetSeconds * 1000))ms)") }
+                    "WEBRTC_OFFSET: \(logOffset) samples (\(logMs)ms)") }
             }
             
             // LESSON 7: Periodic offset validation
@@ -212,14 +216,18 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 if mismatch > 2400 {  // >50ms drift
                     let oldOffset = state.deliveryOffsetSamples
                     state.deliveryOffsetSamples = max(-24000, min(24000, actualDelta))
+                    // Capture values before Task to avoid capturing inout state (Swift 6)
+                    let newOffset = state.deliveryOffsetSamples
                     Task { await DiagnosticLogger.shared.log(.aec,
-                        "WEBRTC_OFFSET_CORRECTION: \(oldOffset)→\(state.deliveryOffsetSamples)") }
+                        "WEBRTC_OFFSET_CORRECTION: \(oldOffset)→\(newOffset)") }
                 }
             }
             
-            currentOffset = state.deliveryOffsetSamples
-            offsetReady = state.offsetCalculated
+            // Return values from withLock instead of mutating captured vars (Swift 6 compliance)
+            return (state.deliveryOffsetSamples, state.offsetCalculated)
         }
+        currentOffset = offsetInfo.0
+        offsetReady = offsetInfo.1
         
         // Step 2: Process in 10ms frames with ACTUAL ALIGNMENT
         var outputSamples: [Float] = []
@@ -227,49 +235,19 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         
         // Process frames (outside lock to avoid blocking)
         while true {
-            // Try to get one frame of mic audio
-            let gotMicFrame = state.withLock { state in
-                state.micRingBuffer.available >= frameSize
-            }
-            guard gotMicFrame else { break }
-            
-            // Extract mic frame under lock
-            var micFrameData = captureFrame  // Use pre-allocated buffer
-            let extracted = state.withLock { state in
-                micFrameData.withUnsafeMutableBufferPointer { ptr in
-                    state.micRingBuffer.popInto(ptr, count: frameSize)
-                }
-            }
-            guard extracted else { break }
+            // Extract mic frame (Swift 6 compliant - returns new array or nil)
+            guard let micFrameData = extractMicFrame() else { break }
             
             // Find MATCHING system audio using offset (THIS IS THE KEY FIX)
-            var renderFrameData = renderFrame
-            var gotRenderFrame = false
-            
+            let renderFrameData: [Float]?
             if offsetReady {
-                gotRenderFrame = state.withLock { state in
-                    // Calculate where to read from in system buffer (offset from head)
-                    // Positive offset: system arrives later → read older system samples
-                    // Negative offset: system arrives earlier → read newer system samples
-                    let available = state.systemRingBuffer.available
-                    let targetOffset: Int
-                    if currentOffset >= 0 {
-                        targetOffset = max(0, Int(currentOffset) - frameSize)
-                    } else {
-                        // Use tail-aligned read when system leads (negative offset)
-                        targetOffset = max(0, available - frameSize + Int(currentOffset))
-                    }
-                    if available >= targetOffset + frameSize {
-                        return renderFrameData.withUnsafeMutableBufferPointer { ptr in
-                            state.systemRingBuffer.read(at: targetOffset, count: frameSize, into: ptr)
-                        }
-                    }
-                    return false
-                }
+                renderFrameData = extractRenderFrame(offset: currentOffset)
+            } else {
+                renderFrameData = nil
             }
             
             // LESSON 7: Bounds check fallback - pass through if no matching system audio
-            if !gotRenderFrame {
+            guard let renderFrame = renderFrameData else {
                 // No matching system audio - pass through original mic audio
                 outputSamples.append(contentsOf: micFrameData.prefix(frameSize))
                 continue
@@ -279,7 +257,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             var processedFrame = outputFrame
             
             // Process render (system) frame first
-            let renderSuccess = renderFrameData.withUnsafeBufferPointer { ptr in
+            let renderSuccess = renderFrame.withUnsafeBufferPointer { ptr in
                 aecBridge?.processRenderFrame(ptr.baseAddress!) ?? false
             }
             
@@ -350,6 +328,43 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     /// Start drift monitoring - no-op for WebRTC (we do periodic offset validation in processMicrophoneAudio)
     func startDriftMonitoring() {
         // No-op - offset validation is built into the processing loop
+    }
+    
+    // MARK: - Private Helpers
+    
+    /// Extract mic frame (returns nil if not enough data)
+    private func extractMicFrame() -> [Float]? {
+        return state.withLock { state in
+            guard state.micRingBuffer.available >= frameSize else { return nil }
+            var buffer = [Float](repeating: 0, count: frameSize)
+            let success = buffer.withUnsafeMutableBufferPointer { ptr in
+                state.micRingBuffer.popInto(ptr, count: frameSize)
+            }
+            return success ? buffer : nil
+        }
+    }
+    
+    /// Extract render frame from system buffer at given offset (returns nil if not enough data)
+    private func extractRenderFrame(offset: Int64) -> [Float]? {
+        return state.withLock { state in
+            // Calculate where to read from in system buffer (offset from head)
+            // Positive offset: system arrives later → read older system samples
+            // Negative offset: system arrives earlier → read newer system samples
+            let available = state.systemRingBuffer.available
+            let targetOffset: Int
+            if offset >= 0 {
+                targetOffset = max(0, Int(offset) - frameSize)
+            } else {
+                // Use tail-aligned read when system leads (negative offset)
+                targetOffset = max(0, available - frameSize + Int(offset))
+            }
+            guard available >= targetOffset + frameSize else { return nil }
+            var buffer = [Float](repeating: 0, count: frameSize)
+            let success = buffer.withUnsafeMutableBufferPointer { ptr in
+                state.systemRingBuffer.read(at: targetOffset, count: frameSize, into: ptr)
+            }
+            return success ? buffer : nil
+        }
     }
     
     // MARK: - Diagnostics

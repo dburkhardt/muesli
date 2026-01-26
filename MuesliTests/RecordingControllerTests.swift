@@ -19,7 +19,7 @@ final class RecordingControllerTests: XCTestCase {
             modelManager: modelManager
         )
         // Use AudioConfiguration values to test production-equivalent behavior
-        let echoCancellationService = EchoCancellationService(
+        let echoCancellationService = EchoCancellationServiceNLMS(
             filterLength: AudioConfiguration.aecFilterLength,
             learningRate: AudioConfiguration.aecLearningRate,
             sampleRate: AudioConfiguration.captureSampleRate,
@@ -149,7 +149,7 @@ final class RecordingControllerTests: XCTestCase {
         
         // Verify we can convert mono samples to stereo buffer
         let timestamp = CMTime(value: 0, timescale: CMTimeScale(sampleRate))
-        guard let stereoBuffer = EchoCancellationService.createSampleBuffer(
+        guard let stereoBuffer = EchoCancellationServiceNLMS.createSampleBuffer(
             from: monoSamples,
             timestamp: timestamp
         ) else {

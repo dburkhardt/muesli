@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		WR00001241D1A1D00000200 /* WebRTCAECBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = WR00002241D1A1D00000201 /* WebRTCAECBridge.mm */; };
+		WR00003241D1A1D00000202 /* EchoCancellationServiceWebRTC.swift in Sources */ = {isa = PBXBuildFile; fileRef = WR00004241D1A1D00000203 /* EchoCancellationServiceWebRTC.swift */; };
+		WR00005241D1A1D00000204 /* AudioRingBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = WR00006241D1A1D00000205 /* AudioRingBuffer.swift */; };
 		BI00001241D1A1D00000103 /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = BI00002241D1A1D00000103 /* BuildInfo.swift */; };
 		DL00001241D1A1D00000100 /* DiagnosticLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = DL00002241D1A1D00000100 /* DiagnosticLogger.swift */; };
 		DI00001241D1A1D00000101 /* DebugInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DI00002241D1A1D00000101 /* DebugInfoView.swift */; };
@@ -109,6 +112,11 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		WR00007241D1A1D00000206 /* WebRTCAECBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WebRTCAECBridge.h; sourceTree = "<group>"; };
+		WR00002241D1A1D00000201 /* WebRTCAECBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WebRTCAECBridge.mm; sourceTree = "<group>"; };
+		WR00004241D1A1D00000203 /* EchoCancellationServiceWebRTC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoCancellationServiceWebRTC.swift; sourceTree = "<group>"; };
+		WR00006241D1A1D00000205 /* AudioRingBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRingBuffer.swift; sourceTree = "<group>"; };
+		WR00008241D1A1D00000207 /* Muesli-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Muesli-Bridging-Header.h"; sourceTree = "<group>"; };
 		A1000009241D1A1D00000001 /* Muesli.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Muesli.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000002241D1A1D00000001 /* MuesliApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliApp.swift; sourceTree = "<group>"; };
 		A1000006241D1A1D00000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -246,6 +254,7 @@
 				A1000002241D1A1D00000001 /* MuesliApp.swift */,
 				A1000006241D1A1D00000001 /* Assets.xcassets */,
 				A100000A241D1A1D00000001 /* Muesli.entitlements */,
+				WR00008241D1A1D00000207 /* Muesli-Bridging-Header.h */,
 				A100000F241D1A1D00000001 /* Models */,
 				A1000010241D1A1D00000001 /* ViewModels */,
 				A1000011241D1A1D00000001 /* Views */,
@@ -362,8 +371,20 @@
 				A1000084241D1A1D00000022 /* LLMStitchingService.swift */,
 				A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */,
 				A1000097241D1A1D00000028 /* EchoCancellationService.swift */,
+				WR00004241D1A1D00000203 /* EchoCancellationServiceWebRTC.swift */,
+				WR00006241D1A1D00000205 /* AudioRingBuffer.swift */,
+				WR00009241D1A1D00000208 /* WebRTCAEC */,
 			);
 			path = Services;
+			sourceTree = "<group>";
+		};
+		WR00009241D1A1D00000208 /* WebRTCAEC */ = {
+			isa = PBXGroup;
+			children = (
+				WR00007241D1A1D00000206 /* WebRTCAECBridge.h */,
+				WR00002241D1A1D00000201 /* WebRTCAECBridge.mm */,
+			);
+			path = WebRTCAEC;
 			sourceTree = "<group>";
 		};
 		A1000013241D1A1D00000001 /* Utilities */ = {
@@ -659,6 +680,9 @@
 				A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */,
 				A1000090241D1A1D00000025 /* TranscriptRefinementService.swift in Sources */,
 				A1000096241D1A1D00000028 /* EchoCancellationService.swift in Sources */,
+				WR00003241D1A1D00000202 /* EchoCancellationServiceWebRTC.swift in Sources */,
+				WR00005241D1A1D00000204 /* AudioRingBuffer.swift in Sources */,
+				WR00001241D1A1D00000200 /* WebRTCAECBridge.mm in Sources */,
 				A1000092241D1A1D00000026 /* RefineTranscriptSheet.swift in Sources */,
 				A1000094241D1A1D00000027 /* ResumeControlPane.swift in Sources */,
 				C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */,
@@ -864,6 +888,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
 				PRODUCT_NAME = Muesli;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Muesli/Muesli-Bridging-Header.h";
 				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
@@ -894,6 +919,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
 				PRODUCT_NAME = Muesli;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Muesli/Muesli-Bridging-Header.h";
 				SWIFT_VERSION = 6.0;
 			};
 			name = Release;

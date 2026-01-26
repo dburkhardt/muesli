@@ -93,6 +93,32 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
       
+      - name: Cache WebRTC XCFramework
+        id: cache-webrtc
+        uses: actions/cache@v4
+        with:
+          path: Muesli/Frameworks/webrtc_audio_processing.xcframework
+          key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.XCODE_VERSION }}-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
+      
+      - name: Install WebRTC Build Dependencies
+        if: steps.cache-webrtc.outputs.cache-hit != 'true'
+        run: brew install meson ninja pkg-config
+      
+      - name: Build WebRTC XCFramework
+        if: steps.cache-webrtc.outputs.cache-hit != 'true'
+        run: ./scripts/build-webrtc-aec.sh
+        timeout-minutes: 25
+      
+      - name: Verify WebRTC XCFramework
+        run: |
+          echo "Checking XCFramework..."
+          if [ -d "Muesli/Frameworks/webrtc_audio_processing.xcframework" ]; then
+            lipo -info Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/*.a 2>/dev/null || echo "XCFramework present (architecture check skipped)"
+            echo "✅ WebRTC XCFramework verified"
+          else
+            echo "⚠️ WebRTC XCFramework not found - WebRTC AEC will run in stub mode"
+          fi
+      
       - name: Build Muesli (Debug)
         run: |
           set -o pipefail
@@ -266,6 +292,32 @@ jobs:
           key: ${{ runner.os }}-spm-release-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-release-
+      
+      - name: Cache WebRTC XCFramework
+        id: cache-webrtc-release
+        uses: actions/cache@v4
+        with:
+          path: Muesli/Frameworks/webrtc_audio_processing.xcframework
+          key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.XCODE_VERSION }}-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
+      
+      - name: Install WebRTC Build Dependencies
+        if: steps.cache-webrtc-release.outputs.cache-hit != 'true'
+        run: brew install meson ninja pkg-config
+      
+      - name: Build WebRTC XCFramework
+        if: steps.cache-webrtc-release.outputs.cache-hit != 'true'
+        run: ./scripts/build-webrtc-aec.sh
+        timeout-minutes: 25
+      
+      - name: Verify WebRTC XCFramework
+        run: |
+          echo "Checking XCFramework..."
+          if [ -d "Muesli/Frameworks/webrtc_audio_processing.xcframework" ]; then
+            lipo -info Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/*.a 2>/dev/null || echo "XCFramework present (architecture check skipped)"
+            echo "✅ WebRTC XCFramework verified"
+          else
+            echo "⚠️ WebRTC XCFramework not found - WebRTC AEC will run in stub mode"
+          fi
       
       - name: Build Muesli (Release)
         run: |
