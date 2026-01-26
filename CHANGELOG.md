@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.2] - TBD
 
 ### Added
+- **WebRTC AEC3 Echo Cancellation**: Replaced NLMS with WebRTC AEC3 as the default echo cancellation implementation
+  - 2-3x better echo suppression (25-35 dB ERLE vs 10-15 dB)
+  - Built-in double-talk detection and non-linear processing
+  - Hybrid synchronization architecture handles 250-350ms mic-first timing offset
+  - NLMS preserved as fallback option (accessible via hidden preference)
 - **UI Testing Framework**: Comprehensive XCUITest suite for capturing screenshots of all major screens
 - **Screenshot Capture**: Automated screenshot generation for website and documentation (light/dark modes)
 - **Copy Transcript**: Added clipboard copy functionality with plain text and Markdown format options

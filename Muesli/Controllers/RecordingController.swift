@@ -21,7 +21,7 @@ final class RecordingController {
     private let fileOutputService: FileOutputService
     private let transcriptionService: TranscriptionService
     private let transcriptionCoordinator: TranscriptionCoordinator
-    private let echoCancellationService: EchoCancellationService
+    private let echoCancellationService: EchoCancellationServiceProtocol
     private let preferencesManager: PreferencesManager
     private let microphoneManager: MicrophoneManager
     private let exportService: ExportService
@@ -108,7 +108,7 @@ final class RecordingController {
         fileOutputService: FileOutputService,
         transcriptionService: TranscriptionService,
         transcriptionCoordinator: TranscriptionCoordinator,
-        echoCancellationService: EchoCancellationService,
+        echoCancellationService: EchoCancellationServiceProtocol,
         preferencesManager: PreferencesManager,
         microphoneManager: MicrophoneManager,
         exportService: ExportService,

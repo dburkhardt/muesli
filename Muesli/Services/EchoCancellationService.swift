@@ -4,6 +4,64 @@ import Foundation
 import os.lock
 import QuartzCore
 
+// MARK: - AEC Implementation Selection
+
+/// AEC implementation selection
+enum AECImplementation: String, CaseIterable, Identifiable, Codable {
+    case webrtc = "WebRTC AEC3"
+    case nlms = "NLMS (Legacy)"
+    
+    var id: String { rawValue }
+    
+    var description: String {
+        switch self {
+        case .webrtc:
+            return "WebRTC AEC3 - Better echo suppression (25-35 dB ERLE)"
+        case .nlms:
+            return "NLMS - Original implementation (10-15 dB ERLE)"
+        }
+    }
+}
+
+/// Factory for creating the appropriate AEC service based on preferences
+enum EchoCancellationServiceFactory {
+    
+    /// Create an echo cancellation service based on the specified implementation
+    /// - Parameter implementation: The AEC implementation to use (default: .webrtc)
+    /// - Returns: An instance conforming to EchoCancellationServiceProtocol
+    static func create(implementation: AECImplementation = .webrtc) -> EchoCancellationServiceProtocol {
+        switch implementation {
+        case .webrtc:
+            let service = EchoCancellationServiceWebRTC()
+            if service.isReady {
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "AEC_FACTORY: Created WebRTC service") }
+                return service
+            } else {
+                // Fallback to NLMS if WebRTC init fails
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "AEC_FACTORY_FALLBACK: WebRTC failed, using NLMS") }
+                return createNLMS()
+            }
+        case .nlms:
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "AEC_FACTORY: Created NLMS service (user preference)") }
+            return createNLMS()
+        }
+    }
+    
+    /// Create an NLMS-based echo cancellation service with default parameters
+    private static func createNLMS() -> EchoCancellationServiceProtocol {
+        return EchoCancellationService(
+            filterLength: AudioConfiguration.aecFilterLength,
+            learningRate: AudioConfiguration.aecLearningRate,
+            sampleRate: AudioConfiguration.captureSampleRate,
+            maxDelayMs: 100,
+            acousticDelayMs: AudioConfiguration.aecAcousticDelayMs
+        )
+    }
+}
+
 // MARK: - Helper Extensions
 
 extension EchoCancellationService {

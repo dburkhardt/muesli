@@ -173,6 +173,12 @@ protocol EchoCancellationServiceProtocol: Sendable {
     func storeSystemAudio(samples: [Float])
     func processMicrophoneAudio(microphoneSamples: [Float]) -> [Float]
     func reset()
+    func startDriftMonitoring()
+}
+
+extension EchoCancellationServiceProtocol {
+    /// Default no-op implementation for drift monitoring
+    func startDriftMonitoring() { /* default no-op */ }
 }
 
 // MARK: - ExportServiceProtocol

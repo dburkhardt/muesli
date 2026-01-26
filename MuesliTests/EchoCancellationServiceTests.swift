@@ -1,7 +1,308 @@
 @testable import Muesli
 import XCTest
 
-/// Tests for EchoCancellationService
+// MARK: - WebRTC AEC3 Tests
+
+/// Tests for EchoCancellationServiceWebRTC
+/// Tests hybrid synchronization approach with coarse alignment in Swift, fine-grained in WebRTC
+final class EchoCancellationServiceWebRTCTests: XCTestCase {
+    
+    var sut: EchoCancellationServiceWebRTC!
+    
+    override func setUp() {
+        super.setUp()
+        sut = EchoCancellationServiceWebRTC()
+    }
+    
+    override func tearDown() {
+        sut = nil
+        super.tearDown()
+    }
+    
+    // MARK: - Test Helpers
+    
+    func generateSineWave(frequency: Double = 440, sampleRate: Int = 48000, duration: Double) -> [Float] {
+        let sampleCount = Int(Double(sampleRate) * duration)
+        return (0..<sampleCount).map { i in
+            Float(sin(2 * .pi * frequency * Double(i) / Double(sampleRate)))
+        }
+    }
+    
+    // MARK: - Initialization Tests
+    
+    func testWebRTCInitialization() {
+        // Service should initialize (in stub mode if WebRTC library not available)
+        XCTAssertTrue(sut.isReady, "WebRTC service should initialize successfully")
+    }
+    
+    // MARK: - Frame Accumulation Tests
+    
+    func testFrameAccumulationPartialFrame() {
+        // Feed 100 samples (less than 480 frame size)
+        let smallBuffer = [Float](repeating: 0.1, count: 100)
+        let result = sut.processMicrophoneAudio(microphoneSamples: smallBuffer)
+        
+        // Should return original (not enough for frame)
+        XCTAssertEqual(result.count, smallBuffer.count)
+    }
+    
+    func testFrameAccumulationFullFrame() {
+        // First, feed system audio to allow alignment
+        let systemAudio = [Float](repeating: 0.1, count: 2400)  // 50ms
+        for _ in 0..<12 {
+            sut.storeSystemAudio(samples: Array(systemAudio.prefix(200)))
+        }
+        
+        // Now feed mic audio
+        let micBuffer = [Float](repeating: 0.1, count: 480)
+        for _ in 0..<12 {
+            _ = sut.processMicrophoneAudio(microphoneSamples: Array(micBuffer.prefix(40)))
+        }
+        
+        // Feed one full frame
+        let result = sut.processMicrophoneAudio(microphoneSamples: micBuffer)
+        
+        // Should process at least some output
+        XCTAssertFalse(result.isEmpty)
+    }
+    
+    // MARK: - Alignment Tests (CRITICAL - v3 fix)
+    
+    func testOffsetCalculation() {
+        // Simulate mic arriving first (real-world scenario)
+        // Feed 12 mic buffers first
+        for _ in 0..<12 {
+            let micBuffer = [Float](repeating: 0.1, count: 480)
+            _ = sut.processMicrophoneAudio(microphoneSamples: micBuffer)
+        }
+        
+        // Then feed 12 system buffers (arriving 300ms later - simulated via timing)
+        for _ in 0..<12 {
+            let sysBuffer = [Float](repeating: 0.2, count: 480)
+            sut.storeSystemAudio(samples: sysBuffer)
+        }
+        
+        // Service should still be ready after offset calculation
+        XCTAssertTrue(sut.isReady)
+    }
+    
+    func testBoundsCheckFallback() {
+        // Feed mic audio WITHOUT any system audio
+        let micBuffer = [Float](repeating: 0.5, count: 480)
+        let result = sut.processMicrophoneAudio(microphoneSamples: micBuffer)
+        
+        // Should pass through original (Lesson 7 bounds check)
+        XCTAssertEqual(result, micBuffer, "Should pass through when no matching system audio")
+    }
+    
+    // MARK: - Thread Safety Tests
+    
+    func testConcurrentAccess() {
+        let expectation = XCTestExpectation(description: "Concurrent access completes")
+        expectation.expectedFulfillmentCount = 100
+        
+        // Simulate concurrent system and mic audio
+        DispatchQueue.concurrentPerform(iterations: 100) { i in
+            let samples = [Float](repeating: Float(i) / 100, count: 480)
+            
+            if i % 2 == 0 {
+                self.sut.storeSystemAudio(samples: samples)
+            } else {
+                _ = self.sut.processMicrophoneAudio(microphoneSamples: samples)
+            }
+            expectation.fulfill()
+        }
+        
+        wait(for: [expectation], timeout: 5.0)
+        XCTAssertTrue(sut.isReady, "Service should remain ready after concurrent access")
+    }
+    
+    // MARK: - Error Handling Tests
+    
+    func testEmptyInputHandling() {
+        // Empty system audio
+        sut.storeSystemAudio(samples: [])
+        
+        // Empty mic audio
+        let result = sut.processMicrophoneAudio(microphoneSamples: [])
+        XCTAssertTrue(result.isEmpty)
+    }
+    
+    // MARK: - Reset Tests
+    
+    func testResetClearsState() {
+        // Process some audio
+        let samples = [Float](repeating: 0.5, count: 960)
+        sut.storeSystemAudio(samples: samples)
+        _ = sut.processMicrophoneAudio(microphoneSamples: samples)
+        
+        // Reset
+        sut.reset()
+        
+        // Verify service is still ready
+        XCTAssertTrue(sut.isReady)
+    }
+    
+    // MARK: - Factory Tests
+    
+    func testFactoryCreatesWebRTC() {
+        let service = EchoCancellationServiceFactory.create(implementation: .webrtc)
+        // Should create WebRTC service (or NLMS fallback if WebRTC fails)
+        XCTAssertNotNil(service)
+    }
+    
+    func testFactoryCreatesNLMS() {
+        let service = EchoCancellationServiceFactory.create(implementation: .nlms)
+        XCTAssertTrue(service is EchoCancellationService)
+    }
+    
+    // MARK: - Ring Buffer Wraparound Tests
+    
+    func testRingBufferWraparound() {
+        // Fill ring buffer to capacity, then push more to trigger wraparound
+        let largeBuffer = [Float](repeating: 0.5, count: 25000)  // > 24000 capacity
+        sut.storeSystemAudio(samples: largeBuffer)
+        
+        // Process mic audio to trigger read() with wraparound
+        let micBuffer = [Float](repeating: 0.3, count: 480)
+        _ = sut.processMicrophoneAudio(microphoneSamples: micBuffer)
+        
+        // Service should still work correctly after wraparound
+        XCTAssertTrue(sut.isReady)
+    }
+    
+    func testNegativeOffsetHandling() {
+        // Simulate system audio arriving BEFORE mic (unusual but possible)
+        // Feed system audio first
+        for _ in 0..<12 {
+            let sysBuffer = [Float](repeating: 0.2, count: 480)
+            sut.storeSystemAudio(samples: sysBuffer)
+        }
+        
+        // Then feed mic audio (system arrived first)
+        for _ in 0..<12 {
+            let micBuffer = [Float](repeating: 0.1, count: 480)
+            _ = sut.processMicrophoneAudio(microphoneSamples: micBuffer)
+        }
+        
+        // Service should handle negative offset gracefully
+        XCTAssertTrue(sut.isReady)
+    }
+    
+    func testFactoryFallbackOnInitFailure() {
+        // Verify factory handles initialization gracefully
+        let service = EchoCancellationServiceFactory.create(implementation: .webrtc)
+        // Factory should return either WebRTC or NLMS (never nil via crash)
+        XCTAssertNotNil(service)
+    }
+}
+
+// MARK: - Audio Ring Buffer Tests
+
+/// Tests for AudioRingBuffer
+final class AudioRingBufferTests: XCTestCase {
+    
+    func testBasicPushAndPop() {
+        var buffer = AudioRingBuffer(capacity: 100)
+        let samples: [Float] = [1.0, 2.0, 3.0, 4.0, 5.0]
+        buffer.push(samples)
+        
+        XCTAssertEqual(buffer.available, 5)
+        
+        var output = [Float](repeating: 0, count: 5)
+        let success = output.withUnsafeMutableBufferPointer { ptr in
+            buffer.popInto(ptr, count: 5)
+        }
+        
+        XCTAssertTrue(success)
+        XCTAssertEqual(output, samples)
+        XCTAssertEqual(buffer.available, 0)
+    }
+    
+    func testOverflowBehavior() {
+        var buffer = AudioRingBuffer(capacity: 5)
+        
+        // Push 3 samples
+        buffer.push([1.0, 2.0, 3.0])
+        XCTAssertEqual(buffer.available, 3)
+        
+        // Push 4 more (total 7, capacity 5 - should overflow)
+        buffer.push([4.0, 5.0, 6.0, 7.0])
+        XCTAssertEqual(buffer.available, 5, "Should be capped at capacity")
+        
+        // Read should give the most recent 5 samples (overflow drops oldest)
+        var output = [Float](repeating: 0, count: 5)
+        _ = output.withUnsafeMutableBufferPointer { ptr in
+            buffer.popInto(ptr, count: 5)
+        }
+        
+        // Should have [3.0, 4.0, 5.0, 6.0, 7.0] (oldest 1.0, 2.0 were dropped)
+        XCTAssertEqual(output, [3.0, 4.0, 5.0, 6.0, 7.0])
+    }
+    
+    func testWraparoundRead() {
+        var buffer = AudioRingBuffer(capacity: 10)
+        
+        // Push 8 samples, pop 5 (leaving 3 at end of buffer)
+        buffer.push([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        var temp = [Float](repeating: 0, count: 5)
+        _ = temp.withUnsafeMutableBufferPointer { ptr in
+            buffer.popInto(ptr, count: 5)
+        }
+        XCTAssertEqual(buffer.available, 3)
+        
+        // Push 5 more (wraps around to beginning)
+        buffer.push([9.0, 10.0, 11.0, 12.0, 13.0])
+        XCTAssertEqual(buffer.available, 8)
+        
+        // Read at offset should handle wraparound
+        var output = [Float](repeating: 0, count: 4)
+        let success = output.withUnsafeMutableBufferPointer { ptr in
+            buffer.read(at: 2, count: 4, into: ptr)  // Starting from 8.0
+        }
+        
+        XCTAssertTrue(success)
+        XCTAssertEqual(output, [8.0, 9.0, 10.0, 11.0])
+    }
+    
+    func testClear() {
+        var buffer = AudioRingBuffer(capacity: 10)
+        buffer.push([1.0, 2.0, 3.0])
+        XCTAssertEqual(buffer.available, 3)
+        
+        buffer.clear()
+        XCTAssertEqual(buffer.available, 0)
+    }
+    
+    func testDiscard() {
+        var buffer = AudioRingBuffer(capacity: 10)
+        buffer.push([1.0, 2.0, 3.0, 4.0, 5.0])
+        
+        let success = buffer.discard(2)
+        XCTAssertTrue(success)
+        XCTAssertEqual(buffer.available, 3)
+        
+        // Remaining should be [3.0, 4.0, 5.0]
+        var output = [Float](repeating: 0, count: 3)
+        _ = output.withUnsafeMutableBufferPointer { ptr in
+            buffer.popInto(ptr, count: 3)
+        }
+        XCTAssertEqual(output, [3.0, 4.0, 5.0])
+    }
+    
+    func testDiscardMoreThanAvailable() {
+        var buffer = AudioRingBuffer(capacity: 10)
+        buffer.push([1.0, 2.0, 3.0])
+        
+        let success = buffer.discard(5)
+        XCTAssertFalse(success, "Should fail when discarding more than available")
+        XCTAssertEqual(buffer.available, 3, "Buffer should be unchanged")
+    }
+}
+
+// MARK: - NLMS Echo Cancellation Tests (Legacy)
+
+/// Tests for EchoCancellationService (NLMS implementation)
 /// Tests sample-count synchronization approach (no timestamps)
 final class EchoCancellationServiceTests: XCTestCase {
     var sut: EchoCancellationService!
@@ -494,31 +795,139 @@ final class EchoCancellationServiceTests: XCTestCase {
         XCTAssertLessThanOrEqual(testSut.bufferCount, 50, "Buffer count should not exceed maxBuffers")
     }
     
+    // MARK: - Offset Validation Tests (per AEC offset validation fix plan)
+    
+    /// Test 1: Offset validation catches mismatch between calculated offset and actual sample difference
+    /// When warmup calculates an offset that doesn't match steady-state reality, it should be corrected
+    func testOffsetValidationCatchesMismatch() {
+        // This test simulates the scenario where warmup measures a large offset
+        // but actual sample counts show the streams are nearly aligned
+        
+        // We need a custom service to inject timing that creates the mismatch scenario
+        // The mismatch is detected when abs(actualDelta - deliveryOffset) > 2400 samples (50ms)
+        
+        // Feed enough buffers to trigger warmup completion (kBuffersToAverage = 12)
+        // With controlled timing to create a known offset
+        let bufferDuration = 0.02  // 20ms buffers
+        
+        for i in 0..<12 {
+            // System audio arrives 100ms "late" relative to mic
+            // This should calculate deliveryOffsetSamples as negative (system ahead)
+            mockTime.time = Double(i) * bufferDuration + 0.1  // Sys delayed by 100ms
+            sut.storeSystemAudio(samples: generateSineWave(duration: bufferDuration))
+            
+            mockTime.time = Double(i) * bufferDuration  // Mic on time
+            _ = sut.processMicrophoneAudio(microphoneSamples: generateSineWave(duration: bufferDuration))
+        }
+        
+        // At this point, streams should be synchronized
+        // The offset validation should have run during warmup completion
+        XCTAssertTrue(sut.streamsSynchronized, "Streams should be synchronized after warmup")
+        
+        // The test verifies the mechanism exists - specific offset values depend on timing
+        // In production, this catches scenarios like the -400ms warmup offset issue
+    }
+    
+    /// Test 2: Bounds check fallback triggers when target exceeds available samples
+    /// When targetSysIndex > totalSystemSamples, should pass-through instead of failing
+    func testBoundsCheckFallback() {
+        // Create a scenario where mic is processed but system audio hasn't caught up
+        // This happens when offset is miscalculated or system audio is delayed
+        
+        // First, sync the streams with minimal warmup
+        for i in 0..<12 {
+            mockTime.time = Double(i) * 0.02
+            sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+            _ = sut.processMicrophoneAudio(microphoneSamples: generateSineWave(duration: 0.02))
+        }
+        
+        XCTAssertTrue(sut.streamsSynchronized, "Should be synchronized")
+        
+        // Now process mic audio without adding more system audio
+        // This should trigger bounds check if target exceeds available samples
+        for _ in 0..<20 {
+            let micSamples = generateSineWave(duration: 0.02)
+            let result = sut.processMicrophoneAudio(microphoneSamples: micSamples)
+            
+            // Should return valid output (either processed or pass-through)
+            XCTAssertEqual(result.count, micSamples.count, "Should return valid output")
+            XCTAssertFalse(result.contains(where: { $0.isNaN }), "Should not contain NaN")
+        }
+        
+        // If bounds check was triggered, count should be > 0
+        // The exact count depends on offset calculation and acoustic delay
+        // This test verifies the fallback mechanism doesn't crash
+    }
+    
+    /// Test 3: Verify corrected offset is used after recalibration
+    /// After offset validation corrects a bad offset, subsequent lookups should succeed
+    func testOffsetRecalibrationApplied() {
+        // Complete warmup with system and mic audio interleaved
+        for i in 0..<15 {
+            mockTime.time = Double(i) * 0.02
+            sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+            _ = sut.processMicrophoneAudio(microphoneSamples: generateSineWave(duration: 0.02))
+        }
+        
+        XCTAssertTrue(sut.streamsSynchronized, "Streams should be synchronized")
+        
+        // After recalibration (if any), offset should be reasonable
+        // A "reasonable" offset is within ±500ms (24000 samples)
+        let offset = sut.deliveryOffsetSamples
+        XCTAssertLessThanOrEqual(abs(offset), 24000, "Offset should be within ±500ms bounds")
+        
+        // Continue processing - should work with corrected offset
+        for _ in 0..<50 {
+            mockTime.time += 0.02
+            sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+            let result = sut.processMicrophoneAudio(microphoneSamples: generateSineWave(duration: 0.02))
+            
+            XCTAssertEqual(result.count, 960, "Should process 960 samples per buffer")
+            XCTAssertFalse(result.contains(where: { $0.isNaN }), "Should not contain NaN")
+        }
+    }
+    
     /// Test gap detection threshold boundary
+    /// Gap formula: gapSamples = (elapsed_time × sample_rate) - buffer_size
+    /// Threshold: 50ms = 2400 samples @ 48kHz
     func testGapThresholdBoundary() {
-        // First buffer
+        // For a 20ms buffer (960 samples), to get gap below 2400 (50ms threshold):
+        // elapsed × 48000 - 960 < 2400
+        // elapsed < (2400 + 960) / 48000 = 0.07s (70ms)
+        
+        // Test: gap just below threshold (should NOT trigger)
         mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))  // 960 samples
+        
+        // Elapsed = 69ms → expected = 3312, actual = 960, gap = 2352 < 2400
+        mockTime.time = 0.069
         sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
         
-        // Second buffer at exactly 50ms gap (at threshold)
-        // Elapsed = 70ms, expected = 3360 samples, actual = 960, gap = 2400
-        // Threshold = 50ms = 2400 samples - should be at boundary
-        mockTime.time = 0.07
-        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        XCTAssertEqual(sut.totalGapSamples, 0, "Gap of 2352 samples (49ms) should not trigger fill")
         
-        // Gap of exactly 2400 should NOT trigger (threshold is "greater than")
-        // Let's verify with a gap just above threshold
-        mockTime.time = 0.0
+        // Reset and test gap at threshold boundary
         sut.reset()
         
         mockTime.time = 0.0
         sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
         
-        // Just above 50ms threshold
-        mockTime.time = 0.071  // 51ms elapsed, 51ms - 20ms = 31ms gap < 50ms threshold
+        // Elapsed = 70ms → expected = 3360, actual = 960, gap = 2400 (exactly at threshold)
+        // The code uses ">" not ">=", so exactly at threshold should NOT trigger
+        mockTime.time = 0.070
         sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
         
-        // This should NOT trigger gap fill (31ms < 50ms)
-        XCTAssertEqual(sut.totalGapSamples, 0, "Gap below threshold should not trigger fill")
+        XCTAssertEqual(sut.totalGapSamples, 0, "Gap exactly at threshold (2400) should not trigger fill")
+        
+        // Reset and test gap just above threshold (should trigger)
+        sut.reset()
+        
+        mockTime.time = 0.0
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        // Elapsed = 71ms → expected = 3408, actual = 960, gap = 2448 > 2400
+        mockTime.time = 0.071
+        sut.storeSystemAudio(samples: generateSineWave(duration: 0.02))
+        
+        XCTAssertGreaterThan(sut.totalGapSamples, 0, "Gap of 2448 samples (51ms) should trigger fill")
     }
 }

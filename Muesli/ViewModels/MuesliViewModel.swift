@@ -129,7 +129,8 @@ final class MuesliViewModel {
     private let exportService: ExportService
     
     // Echo cancellation service (optional - can be enabled/disabled)
-    private let echoCancellationService: EchoCancellationService
+    // Uses protocol type to support both WebRTC and NLMS implementations
+    private let echoCancellationService: EchoCancellationServiceProtocol
     
     // Transcription coordinator (manages model lifecycle and audio buffering)
     private let transcriptionCoordinator: TranscriptionCoordinator
@@ -441,7 +442,7 @@ final class MuesliViewModel {
         permissionManager: PermissionManager? = nil,
         microphoneManager: MicrophoneManager? = nil,
         meetingHistoryService: MeetingHistoryService? = nil,
-        echoCancellationService: EchoCancellationService? = nil,
+        echoCancellationService: EchoCancellationServiceProtocol? = nil,
         llmManager: LLMManager? = nil,
         exportService: ExportService? = nil,
         skipInitialLoad: Bool = false
@@ -460,12 +461,9 @@ final class MuesliViewModel {
         self.microphoneManager = microphoneManager ?? MicrophoneManager()
         self.meetingHistoryService = meetingHistoryService ?? MeetingHistoryService()
         self.exportService = exportService ?? ExportService()
-        self.echoCancellationService = echoCancellationService ?? EchoCancellationService(
-            filterLength: AudioConfiguration.aecFilterLength,
-            learningRate: AudioConfiguration.aecLearningRate,
-            sampleRate: AudioConfiguration.captureSampleRate,
-            maxDelayMs: 100,  // Reverted to 100ms for testing (was 3000ms)
-            acousticDelayMs: AudioConfiguration.aecAcousticDelayMs
+        // Use factory to create AEC service based on preferences (WebRTC default, NLMS fallback)
+        self.echoCancellationService = echoCancellationService ?? EchoCancellationServiceFactory.create(
+            implementation: preferencesManager.aecImplementationType
         )
         
         // Initialize managers (skip scanning during tests to avoid file system/Documents prompts)

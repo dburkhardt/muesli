@@ -1,0 +1,11 @@
+[host_machine]
+system = 'darwin'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
+
+[built-in options]
+cpp_args = ['-arch', 'arm64', '-mmacosx-version-min=13.0', '-stdlib=libc++']
+cpp_link_args = ['-arch', 'arm64', '-mmacosx-version-min=13.0']
+c_args = ['-arch', 'arm64', '-mmacosx-version-min=13.0']
+c_link_args = ['-arch', 'arm64', '-mmacosx-version-min=13.0']

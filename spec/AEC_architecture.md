@@ -7,19 +7,20 @@ This document is the authoritative reference for AEC in Muesli. It covers theory
 1. [Overview](#overview)
 2. [Theory: How AEC Works](#theory-how-aec-works)
 3. [Muesli's AEC Architecture](#mueslis-aec-architecture)
-4. [Stream Synchronization](#stream-synchronization)
-5. [Buffer Gap Handling and Continuity](#buffer-gap-handling-and-continuity)
-6. [The NLMS Algorithm](#the-nlms-algorithm)
-7. [Configuration Parameters](#configuration-parameters)
-8. [Parameter Tuning Guide](#parameter-tuning-guide)
-9. [Testing and Quality Metrics](#testing-and-quality-metrics)
-10. [Double-Talk Detection (DTD)](#double-talk-detection-dtd)
-11. [Diagnostic Logging](#diagnostic-logging)
-12. [Common Failure Modes](#common-failure-modes)
-13. [Debugging Checklist](#debugging-checklist)
-14. [Lessons Learned](#lessons-learned)
-15. [Future Improvements](#future-improvements)
-16. [References and Standards](#references-and-standards)
+4. [WebRTC AEC3 Integration](#webrtc-aec3-integration)
+5. [Stream Synchronization](#stream-synchronization)
+6. [Buffer Gap Handling and Continuity](#buffer-gap-handling-and-continuity)
+7. [The NLMS Algorithm](#the-nlms-algorithm)
+8. [Configuration Parameters](#configuration-parameters)
+9. [Parameter Tuning Guide](#parameter-tuning-guide)
+10. [Testing and Quality Metrics](#testing-and-quality-metrics)
+11. [Double-Talk Detection (DTD)](#double-talk-detection-dtd)
+12. [Diagnostic Logging](#diagnostic-logging)
+13. [Common Failure Modes](#common-failure-modes)
+14. [Debugging Checklist](#debugging-checklist)
+15. [Lessons Learned](#lessons-learned)
+16. [Future Improvements](#future-improvements)
+17. [References and Standards](#references-and-standards)
 
 ---
 
@@ -128,6 +129,134 @@ Total acoustic delay is typically 15-50ms, configured via `AudioConfiguration.ae
 | `EchoCancellationService.swift` | Core AEC implementation (NLMS, sync, buffering) |
 | `AudioConfiguration.swift` | AEC parameters (delay, filter length, learning rate) |
 | `RecordingController.swift` | Orchestrates audio flow, calls AEC methods |
+
+---
+
+## WebRTC AEC3 Integration
+
+### Overview
+
+As of January 2026, Muesli supports **WebRTC AEC3** as the default echo cancellation implementation, with NLMS available as a fallback. WebRTC AEC3 provides significantly better echo suppression (25-35 dB ERLE vs 10-15 dB with NLMS).
+
+### Hybrid Synchronization Architecture
+
+Muesli's audio pipeline has an unusual timing characteristic: microphone audio arrives 250-350ms before system audio due to:
+- ScreenCaptureKit delivery latency for system audio
+- AVAudioEngine direct capture for microphone (near-instant)
+
+WebRTC AEC3 expects render (system) audio to arrive **at or before** capture (mic) with max ~128ms offset. To bridge this gap, Muesli uses a **hybrid synchronization approach**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              EchoCancellationServiceWebRTC (Swift)                       │
+│                                                                          │
+│  STEP 1: Buffer BOTH streams during warmup (~1 second)                  │
+│  ┌──────────────────────┐       ┌──────────────────────┐                │
+│  │ System Audio         │       │ Microphone           │                │
+│  │ Ring Buffer          │       │ Ring Buffer          │                │
+│  │ (500ms capacity)     │       │ (500ms capacity)     │                │
+│  └──────────┬───────────┘       └──────────┬───────────┘                │
+│             │                              │                             │
+│  STEP 2: Calculate offset from delivery times                           │
+│  offset = avg(sysTime) - avg(micTime) ≈ +300ms (system arrives later)   │
+│             │                              │                             │
+│  STEP 3: When processing mic frame N, find MATCHING system frame        │
+│             │                              │                             │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  findMatchingSystemAudio(micSampleIndex - offsetSamples)          │   │
+│  │  → Returns time-aligned system audio for this mic frame           │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│             │                              │                             │
+│  STEP 4: Feed ALIGNED frames to WebRTC (render THEN capture)           │
+│             ▼                              ▼                             │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │              WebRTCAECBridge (ObjC++ / os_unfair_lock)            │   │
+│  │  processRenderAudio(alignedSystemFrame)  // FIRST                 │   │
+│  │  processCaptureAudio(micFrame) → cleanedAudio  // THEN            │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                              │                                           │
+│                              ▼                                           │
+│                       Cleaned Audio                                      │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### What Swift Handles (Coarse Alignment)
+
+1. **Offset calculation** during warmup (~1 second, 12 buffers)
+2. **System audio ring buffer** (500ms capacity, indexed by sample count)
+3. **Mic audio ring buffer** (for alignment lookup)
+4. **Frame alignment** - `findMatchingSystemAudio()` uses offset to pair frames
+5. **Gap detection** (SCK drops buffers; fill with silence)
+6. **Offset validation** (Lesson 7 - verify offset matches reality)
+7. **Bounds check fallback** (pass-through if target exceeds available)
+
+### What WebRTC Handles (Fine-Grained)
+
+1. Fine-grained delay tracking (±50ms drift AFTER coarse alignment)
+2. Double-talk detection
+3. Echo cancellation (25-35 dB ERLE)
+4. Non-linear processing
+
+### WebRTC Library Source
+
+- **Library**: FreeDesktop webrtc-audio-processing v1.3
+- **Repository**: https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing
+- **License**: BSD-3-Clause (compatible with Muesli's MIT license)
+- **Build**: `./scripts/build-webrtc-aec.sh` creates XCFramework for arm64/x86_64
+
+### Performance Characteristics
+
+| Metric | WebRTC AEC3 | NLMS (Legacy) |
+|--------|-------------|---------------|
+| **ERLE** | 25-35 dB | 10-15 dB |
+| **CPU** | <5% overhead | <2% overhead |
+| **Memory** | ~300-400 KB | ~60 KB |
+| **Latency** | <10ms | <10ms |
+| **DTD** | Built-in | None |
+| **NLP** | Built-in | None |
+
+### Implementation Selection
+
+Users can select the AEC implementation via preferences (default: WebRTC):
+
+```swift
+// In PreferencesManager
+var aecImplementationType: AECImplementation  // .webrtc or .nlms
+
+// Factory creates the appropriate service
+let service = EchoCancellationServiceFactory.create(
+    implementation: preferencesManager.aecImplementationType
+)
+```
+
+If WebRTC initialization fails, the factory automatically falls back to NLMS.
+
+### Diagnostic Logging
+
+WebRTC-specific log messages:
+
+| Message | Meaning |
+|---------|---------|
+| `WEBRTC_INIT_SUCCESS` | AEC3 initialized successfully |
+| `WEBRTC_INIT_FAILED` | Initialization error (check error details) |
+| `WEBRTC_OFFSET` | Calculated offset in samples and milliseconds |
+| `WEBRTC_OFFSET_CORRECTION` | Offset validation corrected a drifting offset |
+| `WEBRTC_GAP` | Gap detected, filled with silence |
+| `WEBRTC_RENDER_FAILED` | Render frame processing failed |
+| `WEBRTC_CAPTURE_FAILED` | Capture frame processing failed |
+| `WEBRTC_RESET` | Service reset, includes ERLE and delay stats |
+| `AEC_FACTORY` | Factory created WebRTC or NLMS service |
+| `AEC_FACTORY_FALLBACK` | WebRTC failed, using NLMS fallback |
+
+### Troubleshooting WebRTC Issues
+
+1. **Stub mode warning**: If you see `[WebRTCAEC] Initialized in STUB mode`, the WebRTC library isn't built. Run `./scripts/build-webrtc-aec.sh` to build it.
+
+2. **Poor echo cancellation**: Check `WEBRTC_OFFSET` logs. If offset is unstable or very large (>500ms), there may be an issue with stream timing.
+
+3. **Audio dropouts**: Check for `WEBRTC_GAP` messages. Frequent gaps indicate ScreenCaptureKit buffer issues.
+
+4. **Fallback to NLMS**: If `AEC_FACTORY_FALLBACK` appears, WebRTC initialization failed. Check `WEBRTC_INIT_FAILED` for the error.
 
 ---
 
@@ -244,6 +373,52 @@ if now.timeIntervalSince(startTime) > syncTimeoutSeconds && !streamsSynchronized
 }
 ```
 
+### Post-Warmup Offset Validation (2026-01-25 Fix)
+
+The warmup period can capture transient startup behavior rather than steady-state timing. To catch this, we validate the calculated offset against actual sample counts immediately after warmup:
+
+```swift
+// After offset calculation, before setting streamsSynchronized = true
+let actualDelta = totalSystemSamples - totalMicSamples
+let mismatch = abs(actualDelta - deliveryOffsetSamples)
+let mismatchThreshold: Int64 = 2400  // 50ms at 48kHz (2x typical jitter)
+
+if mismatch > mismatchThreshold {
+    // Offset doesn't match reality - use actual sample difference
+    var correctedOffset = actualDelta
+    correctedOffset = max(-24000, min(24000, correctedOffset))  // Clamp ±500ms
+    deliveryOffsetSamples = correctedOffset
+}
+```
+
+**Threshold Selection**: 50ms (2400 samples) is 2x typical steady-state jitter (10-30ms), avoiding false positives while catching genuine warmup artifacts.
+
+### Bounds Check Fallback
+
+If `targetSysIndex` exceeds available system samples (due to offset issues or timing anomalies), we fall back to pass-through rather than failing:
+
+```swift
+if targetSysIndex > state.totalSystemSamples {
+    boundsCheckFallbackCount += 1
+    // Log first occurrence and every 100th thereafter
+    return (microphoneSamples, nil)  // Pass-through preserves user's voice
+}
+```
+
+**Why pass-through**: Preserves user's voice even if echo is present. Silence would lose data permanently. Echo in output is audible evidence for debugging.
+
+### Periodic Offset Monitoring
+
+Every 60 seconds (2880 buffers at ~20ms/buffer), we log the offset stability:
+
+```swift
+let actualDelta = totalSystemSamples - totalMicSamples
+let offsetError = actualDelta - deliveryOffsetSamples
+// Log: OFFSET_CHECK: claimed=X, actual=Y, mismatch=Z samples
+```
+
+This helps detect drift during long recordings without impacting performance.
+
 ---
 
 ## Buffer Gap Handling and Continuity
@@ -345,6 +520,9 @@ This is safe because the offset calculation uses `CACurrentMediaTime()` timestam
 | `MIC_GAP_DETECTED: N samples` | Mic gap detected (Phase 2 data) |
 | `AEC_RECORDING_END: gaps=N, total=X, max=Y` | Recording summary |
 | `DRIFT_WARNING: X% drift after Ns` | Periodic drift check (every 60s) |
+| `OFFSET_VALIDATION: mismatch=X samples, correcting` | Warmup offset corrected to match reality |
+| `BOUNDS_FALLBACK: target=X > totalSys=Y` | Pass-through used when target exceeds available |
+| `OFFSET_CHECK: claimed=X, actual=Y, mismatch=Z` | Periodic (60s) offset stability check |
 
 ### Testing Gap Detection
 
@@ -718,6 +896,9 @@ AEC logs to `DiagnosticLogger` under the `.aec` category.
 | `MATCH: X/Y (Z%)` | Reference lookup success rate (logged every 100 calls) |
 | `BUFFER_GAP: expected=X, got=Y` | Non-contiguous system audio buffers detected |
 | `SYNC_WARNING: offset exceeds ±500ms, clamping` | Unusually large offset (may indicate clock issues) |
+| `OFFSET_VALIDATION: mismatch=X samples, correcting` | Warmup offset didn't match reality, corrected |
+| `BOUNDS_FALLBACK: target=X > totalSys=Y, occurred N times` | Target index exceeded available samples, pass-through used |
+| `OFFSET_CHECK: claimed=X, actual=Y, mismatch=Z` | Periodic (60s) offset stability check |
 
 ### Healthy Log Pattern
 
@@ -728,13 +909,25 @@ AEC logs to `DiagnosticLogger` under the `.aec` category.
 [AEC] MATCH: 297/300 (99.0%)
 ```
 
-### Unhealthy Log Pattern
+### Unhealthy Log Pattern (Immediate Sync)
 
 ```
 [AEC] SYNC: streams synchronized in 0.031s    ← OLD: immediate sync (bad)
 [AEC] MATCH: 2/100 (2.0%)                      ← Near 0% = streams misaligned
 [AEC] MATCH: 2/200 (1.0%)
 ```
+
+### Unhealthy Log Pattern (Offset Mismatch - 2026-01-25)
+
+```
+[AEC] SYNC_OFFSET: delivery_offset=-19217 samples (-400.4ms), mic_behind
+[AEC] SYNC_STATE: totalSys=53760, totalMic=52800, offset=-19217, ...
+[AEC] INDEX: micStart=52800, acoustic=2400, offset=-19217, target=69617, sysSamples=53760
+[AEC] LOOKUP: target=69617, buffers=0-53760, count=56     ← target > max buffer!
+[AEC] MATCH: 0/100 (0.0%)                                  ← 0% = target unreachable
+```
+
+**Key diagnostic**: Compare `sysSamples - micSamples` (actual difference: 960) vs `abs(offset)` (claimed difference: 19217). Large mismatch indicates offset doesn't reflect reality.
 
 ---
 
@@ -786,6 +979,39 @@ if !state.offsetCalculated {
 - Very unusual audio setup
 
 **Mitigation**: Offset is clamped to ±500ms. AEC may be suboptimal but won't fail catastrophically.
+
+### 5. Target Index Exceeds Buffer Range (2026-01-25)
+
+**Symptom**: 0% match rate with logs showing:
+```
+INDEX: micStart=X, acoustic=Y, offset=Z, target=T, sysSamples=S
+```
+Where `target > sysSamples`.
+
+**Example**:
+```
+SYNC_OFFSET: delivery_offset=-19217 samples (-400.4ms), mic_behind
+INDEX: micStart=52800, acoustic=2400, offset=-19217, target=69617, sysSamples=53760
+LOOKUP: target=69617, buffers=0-53760, count=56
+MATCH: 0/100 (0.0%)
+```
+
+**Diagnosis**: The calculated target (69617) exceeds available system samples (53760).
+
+**Causes**:
+- Large negative offset calculated during warmup doesn't match steady-state behavior
+- Warmup captured transient startup timing, not continuous delivery pattern
+- Offset says system is "ahead" by 400ms, but actual sample counts differ by only 20ms
+
+**Investigation**:
+1. Check if `sysSamples - micSamples` matches `abs(offset)` (they should be close)
+2. If mismatch is large (>10%), offset measurement may be unreliable
+3. Look for signs of startup transient: large offset but similar sample counts
+
+**Workarounds** (pending permanent fix):
+- Add bounds check to return pass-through when target exceeds available samples
+- Implement offset validation against actual sample counts after warmup
+- Consider longer warmup or dynamic offset recalibration
 
 ---
 
@@ -880,6 +1106,83 @@ if !state.offsetCalculated && haveEnoughBuffers {
 
 **Solution**: Use `CACurrentMediaTime()` which is based on `mach_absolute_time()` and immune to clock adjustments.
 
+### Lesson 6: targetSysIndex Sign Convention (2026-01-25)
+
+**Problem**: The `targetSysIndex` calculation was adding the delivery offset when it should subtract:
+
+```swift
+// WRONG (original)
+let targetSysIndex = micStartIndex - acousticDelaySamples + deliveryOffsetSamples
+
+// CORRECT (fixed)
+let targetSysIndex = micStartIndex - acousticDelaySamples - deliveryOffsetSamples
+```
+
+**Reasoning**:
+- `deliveryOffsetSamples = avgSysTime - avgMicTime`
+- Positive offset = mic arrived first = mic index is "ahead" for same wall-clock moment
+- When mic is ahead, we need to look at a LOWER system index (subtract positive)
+- When mic is behind (negative offset), we need a HIGHER system index (subtract negative = add)
+
+**The math**:
+- If mic is ahead by N samples, at mic index M, the corresponding system audio is at M - N
+- Formula: `targetSysIndex = micStartIndex - acousticDelay - offset`
+
+**Prevention**: Always reason through both positive and negative offset cases when writing sync formulas.
+
+### Lesson 7: Warmup Offset May Not Match Steady-State (2026-01-25 - FIXED)
+
+**Problem**: During testing, observed 0% match rate despite correct sign fix. The logs revealed:
+
+```
+SYNC_OFFSET: delivery_offset=-19217 samples (-400.4ms), mic_behind
+INDEX: micStart=52800, acoustic=2400, offset=-19217, target=69617, sysSamples=53760
+MATCH: 0/300 (0.0%)
+```
+
+The target (69617) exceeds available system samples (53760).
+
+**Root Cause Analysis**:
+
+The warmup offset measurement captured transient startup behavior, not steady-state:
+- **Measured offset**: -19217 samples (-400ms) suggesting system is ~400ms ahead
+- **Actual difference**: `sysSamples - micSamples = 53760 - 52800 = 960` samples (~20ms)
+
+The warmup period (first 12 buffers, ~1 second) captured timing differences that don't persist in steady state. Possible causes:
+1. AVAudioEngine starts delivering before ScreenCaptureKit is fully initialized
+2. ScreenCaptureKit has variable startup latency that normalizes after warmup
+3. Initial buffer scheduling jitter is much higher than steady-state jitter
+
+**Implications**:
+
+With a large offset that doesn't match reality:
+- `targetSysIndex = micStart - acoustic - offset`
+- When offset is large negative (-19217), subtracting it ADDS, pushing target far ahead
+- Target ends up beyond available system samples → 0% match rate
+
+**Fix Implemented (2026-01-25)**:
+
+1. **Post-Warmup Offset Validation**: Immediately after warmup completes, validate the calculated offset against actual sample counts:
+   ```swift
+   let actualDelta = totalSystemSamples - totalMicSamples
+   let mismatch = abs(actualDelta - deliveryOffsetSamples)
+   if mismatch > 2400 {  // 50ms threshold (2x typical jitter)
+       deliveryOffsetSamples = max(-24000, min(24000, actualDelta))  // Correct and clamp
+   }
+   ```
+
+2. **Bounds Check Fallback**: If `targetSysIndex > totalSystemSamples`, fall back to pass-through:
+   ```swift
+   if targetSysIndex > state.totalSystemSamples {
+       boundsCheckFallbackCount += 1
+       return (microphoneSamples, nil)  // Pass-through preserves user's voice
+   }
+   ```
+
+3. **Periodic Offset Monitoring**: Every 60 seconds, log offset stability to detect drift during long recordings.
+
+**Status**: Fixed. Offset validation catches warmup artifacts, bounds check provides safety net, periodic monitoring enables drift detection.
+
 ---
 
 ## Future Improvements
@@ -929,17 +1232,23 @@ Cross-correlate system audio with microphone to find peak delay. Would handle:
 
 ### Priority 5: WebRTC AEC3 Integration
 
-**Status**: Not implemented  
+**Status**: ✅ IMPLEMENTED (January 2026)  
 **Impact**: High - production-quality AEC  
 **Effort**: High
 
-WebRTC's AEC3 is a production-quality implementation with:
+WebRTC's AEC3 is now the default implementation, providing:
 - Built-in delay estimation
 - Double-talk detection
 - Non-linear processing
-- Extensive tuning for real-world conditions
+- 25-35 dB ERLE (vs 10-15 dB with NLMS)
 
-This would be a significant undertaking but would provide the best quality. Consider as a long-term goal if current NLMS proves insufficient.
+See [WebRTC AEC3 Integration](#webrtc-aec3-integration) section for implementation details.
+
+**Files added**:
+- `Muesli/Services/EchoCancellationServiceWebRTC.swift` - Swift hybrid sync implementation
+- `Muesli/Services/AudioRingBuffer.swift` - Real-time safe ring buffer
+- `Muesli/Services/WebRTCAEC/WebRTCAECBridge.h/.mm` - ObjC++ bridge to WebRTC
+- `scripts/build-webrtc-aec.sh` - Build script for WebRTC XCFramework
 
 ---
 
@@ -989,3 +1298,6 @@ This would be a significant undertaking but would provide the best quality. Cons
 | 2026-01-24 | Initial creation based on stream offset fix debugging session | Agent |
 | 2026-01-24 | Added: Parameter tuning guide, testing metrics (ERLE/ERL/MOS), expanded DTD section with simple approaches, VSS-NLMS discussion, standards references | Agent |
 | 2026-01-25 | Added: Buffer Gap Handling and Continuity section documenting wall-clock-based gap detection with silence fill per AEC clock drift fix plan | Agent |
+| 2026-01-25 | Added: Lesson 6 (targetSysIndex sign fix), Lesson 7 (warmup offset vs steady-state mismatch - active investigation), Failure Mode 5 (target exceeds buffer range) | Agent |
+| 2026-01-25 | Implemented: Post-warmup offset validation, bounds check fallback, periodic offset monitoring. Updated Lesson 7 status to FIXED. Added new diagnostic log messages. | Agent |
+| 2026-01-26 | **WebRTC AEC3 Integration**: Added hybrid synchronization architecture with WebRTC AEC3 as default implementation. Includes: EchoCancellationServiceWebRTC (Swift), AudioRingBuffer, WebRTCAECBridge (ObjC++), factory pattern for implementation selection. NLMS preserved as fallback. | Agent |

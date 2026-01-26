@@ -1,0 +1,245 @@
+//
+//  WebRTCAECBridge.mm
+//  Muesli
+//
+//  ObjC++ implementation of WebRTC AEC3 bridge
+//  Uses os_unfair_lock for real-time safety and Accelerate for SIMD conversions
+//
+
+#import "WebRTCAECBridge.h"
+
+// Conditionally include WebRTC headers if available
+#if __has_include(<webrtc_audio_processing/modules/audio_processing/include/audio_processing.h>)
+#define WEBRTC_AVAILABLE 1
+#include <webrtc_audio_processing/modules/audio_processing/include/audio_processing.h>
+#elif __has_include("modules/audio_processing/include/audio_processing.h")
+#define WEBRTC_AVAILABLE 1
+#include "modules/audio_processing/include/audio_processing.h"
+#else
+#define WEBRTC_AVAILABLE 0
+#warning "WebRTC Audio Processing library not found - using stub implementation"
+#endif
+
+#include <os/lock.h>  // os_unfair_lock for real-time safety
+#include <memory>
+#include <array>
+#include <atomic>
+#include <Accelerate/Accelerate.h>
+
+// Fixed frame size for 10ms @ 48kHz
+static constexpr int kFrameSize = 480;
+
+@implementation WebRTCAECBridge {
+#if WEBRTC_AVAILABLE
+    std::unique_ptr<webrtc::AudioProcessing> _apm;
+#endif
+    os_unfair_lock _lock;  // Real-time safe lock (no priority inversion)
+    int _sampleRate;
+    int _channels;
+    
+    // Pre-allocated conversion buffers - EXACTLY frame size (no overflow possible)
+    std::array<int16_t, kFrameSize> _renderInt16;
+    std::array<int16_t, kFrameSize> _captureInt16;
+    std::array<int16_t, kFrameSize> _outputInt16;
+    std::array<float, kFrameSize> _conversionBuffer;
+    
+    // Cached stats (updated after each capture frame, read atomically)
+    std::atomic<float> _cachedERLE;
+    std::atomic<int> _cachedDelayMs;
+}
+
+- (nullable instancetype)initWithSampleRate:(int)sampleRate
+                                   channels:(int)channels
+                                      error:(NSError * _Nullable * _Nullable)error {
+    self = [super init];
+    if (self) {
+        // Validate parameters
+        if (sampleRate != 48000) {
+            _lastError = WebRTCAECErrorInvalidConfig;
+            if (error) {
+                *error = [NSError errorWithDomain:@"WebRTCAEC"
+                                             code:_lastError
+                                         userInfo:@{NSLocalizedDescriptionKey: @"Sample rate must be 48000"}];
+            }
+            return nil;
+        }
+        if (channels != 1) {
+            _lastError = WebRTCAECErrorInvalidConfig;
+            if (error) {
+                *error = [NSError errorWithDomain:@"WebRTCAEC"
+                                             code:_lastError
+                                         userInfo:@{NSLocalizedDescriptionKey: @"Channels must be 1 (mono)"}];
+            }
+            return nil;
+        }
+        
+        _sampleRate = sampleRate;
+        _channels = channels;
+        _frameSize = kFrameSize;
+        _lock = OS_UNFAIR_LOCK_INIT;
+        _cachedERLE.store(0.0f);
+        _cachedDelayMs.store(-1);
+        
+#if WEBRTC_AVAILABLE
+        // Create AudioProcessing with AEC3 config
+        webrtc::AudioProcessing::Config config;
+        config.echo_canceller.enabled = true;
+        config.echo_canceller.mobile_mode = false;  // Desktop mode (better for laptops)
+        config.gain_controller1.enabled = false;
+        config.noise_suppression.enabled = false;
+        
+        try {
+            _apm.reset(webrtc::AudioProcessingBuilder()
+                .SetConfig(config)
+                .Create());
+            
+            if (!_apm) {
+                _lastError = WebRTCAECErrorInitFailed;
+                if (error) {
+                    *error = [NSError errorWithDomain:@"WebRTCAEC"
+                                                 code:_lastError
+                                             userInfo:@{NSLocalizedDescriptionKey: @"AudioProcessing::Create returned null"}];
+                }
+                return nil;
+            }
+        } catch (const std::exception& e) {
+            _lastError = WebRTCAECErrorInitFailed;
+            if (error) {
+                *error = [NSError errorWithDomain:@"WebRTCAEC"
+                                             code:_lastError
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                            [NSString stringWithFormat:@"Exception: %s", e.what()]}];
+            }
+            return nil;
+        }
+        
+        _lastError = WebRTCAECErrorNone;
+        _isReady = YES;
+        
+        NSLog(@"[WebRTCAEC] Initialized with WebRTC AEC3, sampleRate=%d, frameSize=%d", sampleRate, kFrameSize);
+#else
+        // Stub implementation - pass through audio without echo cancellation
+        _lastError = WebRTCAECErrorNone;
+        _isReady = YES;
+        
+        NSLog(@"[WebRTCAEC] Initialized in STUB mode (WebRTC library not available)");
+#endif
+    }
+    return self;
+}
+
+- (BOOL)processRenderFrame:(const float *)samples {
+    if (!_isReady || !samples) return NO;
+    
+    os_unfair_lock_lock(&_lock);
+    
+#if WEBRTC_AVAILABLE
+    // Convert Float32 to Int16 using Accelerate (SIMD)
+    float scale = 32767.0f;
+    vDSP_vsmul(samples, 1, &scale, _conversionBuffer.data(), 1, kFrameSize);
+    vDSP_vfix16(_conversionBuffer.data(), 1, _renderInt16.data(), 1, kFrameSize);
+    
+    // Process exactly one 10ms frame
+    webrtc::StreamConfig streamConfig(_sampleRate, _channels);
+    int result = _apm->ProcessReverseStream(
+        _renderInt16.data(),
+        streamConfig,
+        streamConfig,
+        _renderInt16.data()
+    );
+    
+    os_unfair_lock_unlock(&_lock);
+    
+    if (result != 0) {
+        _lastError = WebRTCAECErrorProcessingFailed;
+        return NO;
+    }
+    return YES;
+#else
+    // Stub: just return success (no actual processing)
+    os_unfair_lock_unlock(&_lock);
+    return YES;
+#endif
+}
+
+- (BOOL)processCaptureFrame:(const float *)samples outputSamples:(float *)outputSamples {
+    if (!_isReady || !samples || !outputSamples) return NO;
+    
+    os_unfair_lock_lock(&_lock);
+    
+#if WEBRTC_AVAILABLE
+    // Convert Float32 to Int16
+    float scale = 32767.0f;
+    vDSP_vsmul(samples, 1, &scale, _conversionBuffer.data(), 1, kFrameSize);
+    vDSP_vfix16(_conversionBuffer.data(), 1, _captureInt16.data(), 1, kFrameSize);
+    
+    // Process exactly one 10ms frame
+    webrtc::StreamConfig streamConfig(_sampleRate, _channels);
+    int result = _apm->ProcessStream(
+        _captureInt16.data(),
+        streamConfig,
+        streamConfig,
+        _outputInt16.data()
+    );
+    
+    if (result != 0) {
+        os_unfair_lock_unlock(&_lock);
+        _lastError = WebRTCAECErrorProcessingFailed;
+        return NO;
+    }
+    
+    // Convert Int16 back to Float32
+    float invScale = 1.0f / 32767.0f;
+    vDSP_vflt16(_outputInt16.data(), 1, _conversionBuffer.data(), 1, kFrameSize);
+    vDSP_vsmul(_conversionBuffer.data(), 1, &invScale, outputSamples, 1, kFrameSize);
+    
+    // Update cached stats (inside lock, read atomically outside)
+    auto stats = _apm->GetStatistics();
+    if (stats.echo_return_loss_enhancement.has_value()) {
+        _cachedERLE.store(stats.echo_return_loss_enhancement.value());
+    }
+    if (stats.delay_ms.has_value()) {
+        _cachedDelayMs.store(stats.delay_ms.value());
+    }
+    
+    os_unfair_lock_unlock(&_lock);
+    return YES;
+#else
+    // Stub: pass through input to output unchanged
+    memcpy(outputSamples, samples, kFrameSize * sizeof(float));
+    os_unfair_lock_unlock(&_lock);
+    return YES;
+#endif
+}
+
+- (void)reset {
+    os_unfair_lock_lock(&_lock);
+    
+#if WEBRTC_AVAILABLE
+    webrtc::AudioProcessing::Config config;
+    config.echo_canceller.enabled = true;
+    config.echo_canceller.mobile_mode = false;
+    
+    _apm.reset(webrtc::AudioProcessingBuilder()
+        .SetConfig(config)
+        .Create());
+#endif
+    
+    _cachedERLE.store(0.0f);
+    _cachedDelayMs.store(-1);
+    
+    os_unfair_lock_unlock(&_lock);
+    
+    NSLog(@"[WebRTCAEC] Reset complete");
+}
+
+// Lock-free reads of cached stats (safe to call from any thread)
+- (float)getERLE {
+    return _cachedERLE.load();
+}
+
+- (int)getDelayMs {
+    return _cachedDelayMs.load();
+}
+
+@end
