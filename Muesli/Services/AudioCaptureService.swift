@@ -219,7 +219,29 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         }
     }
     
+    /// Track callback timing for diagnostics
+    private nonisolated(unsafe) static var lastMicTapTime: Double = 0
+    private nonisolated(unsafe) static var micTapCount = 0
+    private nonisolated(unsafe) static var micTapGapTotal: Double = 0
+    
     private func handleAudioBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
+        let tapStart = CACurrentMediaTime()
+        
+        // Track gap between tap callbacks (before any processing)
+        let tapGap = Self.lastMicTapTime > 0 ? tapStart - Self.lastMicTapTime : 0
+        Self.lastMicTapTime = tapStart
+        Self.micTapCount += 1
+        Self.micTapGapTotal += tapGap
+        
+        // Log tap timing every 50 callbacks
+        if Self.micTapCount % 50 == 0 {
+            let avgGap = Self.micTapGapTotal / Double(Self.micTapCount)
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_TAP: count=\(Self.micTapCount), lastGap=\(String(format: "%.3f", tapGap))s, avgGap=\(String(format: "%.3f", avgGap))s")
+            }
+        }
+        
         guard let floatChannelData = buffer.floatChannelData else { return }
         
         let frameLength = Int(buffer.frameLength)
@@ -237,8 +259,38 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         levelHandler?(level)
         
         // Convert AVAudioPCMBuffer to CMSampleBuffer for compatibility
+        let convertStart = CACurrentMediaTime()
         if let sampleBuffer = createCMSampleBuffer(from: buffer, time: time) {
+            let convertTime = CACurrentMediaTime() - convertStart
+            
+            // Log if conversion takes too long (>10ms)
+            if convertTime > 0.01 {
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "MIC_CONVERT_SLOW: \(String(format: "%.1f", convertTime * 1000))ms")
+                }
+            }
+            
+            let handlerStart = CACurrentMediaTime()
             bufferHandler?(sampleBuffer)
+            let handlerTime = CACurrentMediaTime() - handlerStart
+            
+            // Log if handler takes too long (>50ms)
+            if handlerTime > 0.05 {
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "MIC_HANDLER_SLOW: \(String(format: "%.1f", handlerTime * 1000))ms")
+                }
+            }
+        }
+        
+        let totalTime = CACurrentMediaTime() - tapStart
+        // Log if total tap processing takes too long (>100ms)
+        if totalTime > 0.1 {
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_TAP_SLOW: total=\(String(format: "%.1f", totalTime * 1000))ms")
+            }
         }
     }
     
