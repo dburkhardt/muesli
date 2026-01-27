@@ -16,11 +16,12 @@ This document is the authoritative reference for AEC in Muesli. It covers theory
 10. [Testing and Quality Metrics](#testing-and-quality-metrics)
 11. [Double-Talk Detection (DTD)](#double-talk-detection-dtd)
 12. [Diagnostic Logging](#diagnostic-logging)
-13. [Common Failure Modes](#common-failure-modes)
-14. [Debugging Checklist](#debugging-checklist)
-15. [Lessons Learned](#lessons-learned)
-16. [Future Improvements](#future-improvements)
-17. [References and Standards](#references-and-standards)
+13. [2026-01-27 Investigation: WebRTC AEC3 Not Converging](#2026-01-27-investigation-webrtc-aec3-not-converging)
+14. [Common Failure Modes](#common-failure-modes)
+15. [Debugging Checklist](#debugging-checklist)
+16. [Lessons Learned](#lessons-learned)
+17. [Future Improvements](#future-improvements)
+18. [References and Standards](#references-and-standards)
 
 ---
 
@@ -257,6 +258,48 @@ WebRTC-specific log messages:
 3. **Audio dropouts**: Check for `WEBRTC_GAP` messages. Frequent gaps indicate ScreenCaptureKit buffer issues.
 
 4. **Fallback to NLMS**: If `AEC_FACTORY_FALLBACK` appears, WebRTC initialization failed. Check `WEBRTC_INIT_FAILED` for the error.
+
+---
+
+## 2026-01-27 Investigation: WebRTC AEC3 Not Converging
+
+This section summarizes the latest quantitative findings from the AEC3 regression investigation (builds around commit `35455b6`). The key symptom is persistent low ERLE (~0.2 dB) and delay estimate stuck at 0 ms, even when system audio is present and transcription is accurate.
+
+### Key Quantitative Observations (Logs)
+
+From diagnostic logs recorded during the 04:02, 04:08, and 04:11 sessions:
+
+1. **Mic starts after system, but with material delay**
+   - `MIC_FIRST_BUFFER` occurs ~200-316 ms after `SYSTEM_FIRST_BUFFER`.
+   - Example: `deltaFromSystemMs=209.5` to `316.4`.
+
+2. **Render stays ahead of capture**
+   - `WEBRTC_SYNC_STATUS` shows `sampleDelta=100-300 ms` (e.g. 5760 samples = 120 ms, 14400 samples = 300 ms).
+   - `sysAvail=24000 (500.0 ms)` consistently indicates the system ring buffer stays full, while `micAvail=0`.
+
+3. **System extraction is not consistently silent**
+   - `SYS_EXTRACT_RMS` ranges from about `-16 dB` to `-35 dB` during steady playback.
+   - Intermittent `-100 dB` samples occur early or during quiet segments.
+
+4. **Render RMS matches system extraction**
+   - `WEBRTC_RENDER_RMS` is `-100 dB` for the first few hundred frames, then tracks system audio levels (e.g. `-12 dB` to `-35 dB`).
+   - This confirms render audio is reaching AEC and is not permanently zero.
+
+5. **AEC still does not converge**
+   - `WEBRTC_CAPTURE_SENT` stays near `ERLE=0.2 dB`, `delay=0 ms` across runs.
+   - Mic input levels are typically `-48 dB` to `-53 dB`.
+
+### Interpretation
+
+The investigation rules out a permanently silent render reference. The render reference is present and at reasonable levels, but AEC3 still does not estimate delay or converge. The persistent render lead (100-300 ms, with system buffer held at 500 ms available) suggests AEC3 may need explicit stream delay or tighter render lead control. This aligns with the hypothesis that AEC3 is seeing a large, steady lead without a proper delay model.
+
+### Why Transcription Can Still Work
+
+Transcription uses the same system audio path (ScreenCaptureKit -> resample -> WhisperKit), so transcripts can be accurate while AEC fails. AEC depends on time-aligned correlation between render and capture; transcription does not.
+
+### Next Diagnostic Step
+
+Correlation instrumentation (`AEC_CORR`) is now added to measure the normalized correlation between the latest render frame and the current capture frame, along with render/mic dB and lead. This will confirm whether the capture contains echo correlated with the render reference at the observed delay.
 
 ---
 
@@ -1301,3 +1344,4 @@ See [WebRTC AEC3 Integration](#webrtc-aec3-integration) section for implementati
 | 2026-01-25 | Added: Lesson 6 (targetSysIndex sign fix), Lesson 7 (warmup offset vs steady-state mismatch - active investigation), Failure Mode 5 (target exceeds buffer range) | Agent |
 | 2026-01-25 | Implemented: Post-warmup offset validation, bounds check fallback, periodic offset monitoring. Updated Lesson 7 status to FIXED. Added new diagnostic log messages. | Agent |
 | 2026-01-26 | **WebRTC AEC3 Integration**: Added hybrid synchronization architecture with WebRTC AEC3 as default implementation. Includes: EchoCancellationServiceWebRTC (Swift), AudioRingBuffer, WebRTCAECBridge (ObjC++), factory pattern for implementation selection. NLMS preserved as fallback. | Agent |
+| 2026-01-27 | Added: Quantitative analysis of AEC3 non-convergence, render/mic RMS findings, and correlation instrumentation context. | Agent |

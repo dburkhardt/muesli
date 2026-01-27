@@ -48,6 +48,7 @@ BUILD_LOG="/tmp/muesli-build-${TIMESTAMP}-xcodebuild.txt"
 # Use --preserve-caches if you want to keep DerivedData/Launch Services/module caches
 ALWAYS_CLEAN=true
 DEEP_CLEAN=true
+PRESERVE_CACHES=false
 BUILD_ONLY=false
 DRY_RUN=false
 ENABLE_LOGGING=true
@@ -94,6 +95,8 @@ for arg in "$@"; do
             # Only use if you're certain caches are valid and need faster rebuilds
             # Stale caches are a common source of confusing build issues
             DEEP_CLEAN=false
+            PRESERVE_CACHES=true
+            ALWAYS_CLEAN=false
             shift
             ;;
         --build-only)
@@ -302,7 +305,7 @@ if [ "$STALE_DD_COUNT" -gt 0 ]; then
         print_info "Found $STALE_DD_COUNT stale Muesli folder(s) in Xcode DerivedData (will be cleaned)"
     else
         print_warning "Found $STALE_DD_COUNT stale Muesli folder(s) in ~/Library/Developer/Xcode/DerivedData"
-        print_info "These may contain old builds. Default behavior will clean them."
+        print_info "These may contain old builds. This run will NOT clean them."
     fi
 fi
 
@@ -388,6 +391,30 @@ if [ "$DEEP_CLEAN" = true ]; then
         else
             print_warning "lsregister not found - skipping Launch Services cleanup"
         fi
+    fi
+    echo ""
+fi
+
+# ============================================================================
+# Preserve caches cleanup (opt-in via --preserve-caches)
+# ============================================================================
+
+if [ "$PRESERVE_CACHES" = true ]; then
+    print_step "Preserving caches (removing app bundles only)..."
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would keep: $DERIVED_DATA/Build/Intermediates.noindex"
+        print_info "[DRY RUN] Would remove: $DERIVED_DATA/Build/Products/Debug/*.app"
+        print_info "[DRY RUN] Would preserve: Swift PM cache and Xcode module cache"
+    else
+        # Keep DerivedData intermediates for fast rebuilds
+        if [ -d "$DERIVED_DATA/Build/Products/Debug" ]; then
+            rm -rf "$DERIVED_DATA/Build/Products/Debug"/*.app 2>/dev/null || true
+            print_success "Removed app bundles from Build/Products/Debug"
+        else
+            print_info "No Build/Products/Debug directory to clean"
+        fi
+        print_info "DerivedData intermediates preserved for incremental builds"
     fi
     echo ""
 fi

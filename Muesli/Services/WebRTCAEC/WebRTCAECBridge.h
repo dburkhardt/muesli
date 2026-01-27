@@ -53,6 +53,11 @@ typedef NS_ENUM(NSInteger, WebRTCAECError) {
 - (BOOL)processCaptureFrame:(const float *)samples
               outputSamples:(float *)outputSamples;
 
+/// Set the estimated stream delay (render to capture) in milliseconds
+/// @param delayMs Estimated delay between render and capture in milliseconds
+/// @return YES if successful, NO if error
+- (BOOL)setStreamDelayMs:(int)delayMs;
+
 /// Reset the AEC state (call when starting new recording)
 - (void)reset;
 

@@ -220,6 +220,25 @@ static constexpr int kFrameSize = 480;
 #endif
 }
 
+- (BOOL)setStreamDelayMs:(int)delayMs {
+    if (!_isReady) return NO;
+
+    os_unfair_lock_lock(&_lock);
+
+#if WEBRTC_AVAILABLE
+    int result = _apm->set_stream_delay_ms(delayMs);
+    os_unfair_lock_unlock(&_lock);
+    if (result != 0) {
+        _lastError = WebRTCAECErrorProcessingFailed;
+        return NO;
+    }
+    return YES;
+#else
+    os_unfair_lock_unlock(&_lock);
+    return YES;
+#endif
+}
+
 - (void)reset {
     os_unfair_lock_lock(&_lock);
     
