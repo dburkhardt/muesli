@@ -66,6 +66,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         // Ring buffers for coarse alignment (pre-allocated, no runtime allocations)
         var systemRingBuffer: AudioRingBuffer
         var micRingBuffer: AudioRingBuffer
+        var processedMicRingBuffer: AudioRingBuffer
         
         // Sample counters for alignment
         var totalSystemSamples: Int64 = 0
@@ -96,6 +97,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         init(bufferCapacity: Int, frameSize: Int) {
             systemRingBuffer = AudioRingBuffer(capacity: bufferCapacity)
             micRingBuffer = AudioRingBuffer(capacity: bufferCapacity)
+            processedMicRingBuffer = AudioRingBuffer(capacity: bufferCapacity)
             silenceScratch = [Float](repeating: 0, count: bufferCapacity / 4)
             lastRenderFrame = [Float](repeating: 0, count: frameSize)
             sweepScratch = [Float](repeating: 0, count: frameSize)
@@ -128,6 +130,32 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
 
     // Track last applied stream delay (ms) to avoid excessive updates
     private var lastStreamDelayMs: Int?
+    private var smoothedLeadMs: Double?
+    private let useAlignedRenderFeed = false
+    private let usePacedProcessing = true
+
+    // Pre-allocated aligned render frame for deterministic render feed
+    private var alignedRenderFrame = [Float](repeating: 0, count: 480)
+    private var pacedRenderFrame = [Float](repeating: 0, count: 480)
+    private var pacedCaptureFrame = [Float](repeating: 0, count: 480)
+    private var pacedOutputFrame = [Float](repeating: 0, count: 480)
+    private var pacedSilenceFrame = [Float](repeating: 0, count: 480)
+
+    private struct CadenceState {
+        var lastTime: Double?
+        var logCount: Int = 0
+    }
+    private let renderCadenceState = OSAllocatedUnfairLock(initialState: CadenceState())
+    private let captureCadenceState = OSAllocatedUnfairLock(initialState: CadenceState())
+
+    private let processingQueue = DispatchQueue(label: "muesli.aec.processing", qos: .userInitiated)
+    private var processingTimer: DispatchSourceTimer?
+
+    private struct PacedStats {
+        var renderUnderruns: Int = 0
+        var delayUpdates: Int = 0
+    }
+    private let pacedStatsLock = OSAllocatedUnfairLock(initialState: PacedStats())
     
     // #region agent log - Debug log throttle counter
     private var debugLogCounter: Int = 0
@@ -144,6 +172,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             self.aecBridge = try WebRTCAECBridge(sampleRate: Int32(sampleRate), channels: 1)
             Task { await DiagnosticLogger.shared.log(.aec,
                 "WEBRTC_INIT_SUCCESS: AEC3 ready, frameSize=480") }
+            let externalDelayEnabled = aecBridge?.externalDelayEstimatorEnabled ?? false
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "WEBRTC_AEC3_CONFIG: externalDelayEstimator=\(externalDelayEnabled)") }
         } catch {
             self.aecBridge = nil
             self.initializationError = error as NSError
@@ -161,6 +192,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     func storeSystemAudio(samples: [Float]) {
         guard !samples.isEmpty else { return }
         guard aecBridge?.isReady == true else { return }
+        if usePacedProcessing {
+            startPacedProcessingIfNeeded()
+        }
         
         // Protocol signature matches existing protocol (no timestamps)
         // Implementation uses CACurrentMediaTime() internally for timing
@@ -232,7 +266,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         }
         
         // Send render frames to WebRTC
-        accumulateAndProcessRender(monoSamples)
+        if !useAlignedRenderFeed && !usePacedProcessing {
+            accumulateAndProcessRender(monoSamples)
+        }
     }
     
     /// Accumulate system audio samples and process complete 10ms frames through WebRTC
@@ -247,6 +283,10 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             // Process all complete frames
             var framesProcessed = 0
             var lastRenderRms: Float?
+            var batchFrames = 0
+            var firstDeltaMs: Double?
+            var minInterFrameMs: Double?
+            var maxInterFrameMs: Double?
             while accumulator.count >= frameSize {
                 // Extract frame
                 let frame = Array(accumulator.prefix(frameSize))
@@ -259,12 +299,28 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 
                 if success {
                     framesProcessed += 1
+                    batchFrames += 1
                     state.withLock { state in
                         state.lastRenderFrame = frame
                     }
                     // Track RMS for diagnostics (last processed frame)
                     let rms = sqrt(frame.map { $0 * $0 }.reduce(0, +) / Float(frame.count))
                     lastRenderRms = rms
+
+                    let now = CACurrentMediaTime()
+                    let deltaMs = renderCadenceState.withLock { cadence -> Double? in
+                        let delta = cadence.lastTime.map { (now - $0) * 1000 }
+                        cadence.lastTime = now
+                        return delta
+                    }
+                    if let deltaMs {
+                        if batchFrames == 1 {
+                            firstDeltaMs = deltaMs
+                        } else {
+                            minInterFrameMs = minInterFrameMs.map { min($0, deltaMs) } ?? deltaMs
+                            maxInterFrameMs = maxInterFrameMs.map { max($0, deltaMs) } ?? deltaMs
+                        }
+                    }
                 } else {
                     // Log error but continue - don't block audio callback
                     let errorCode = aecBridge?.lastError.rawValue ?? -1
@@ -304,6 +360,295 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 Task { await DiagnosticLogger.shared.log(.aec,
                     "WEBRTC_RENDER_SENT: frames=\(framesProcessedLog), time=\(String(format: "%.3f", timestamp))") }
             }
+
+            if batchFrames > 1 {
+                let shouldLog = renderCadenceState.withLock { cadence -> Bool in
+                    cadence.logCount += 1
+                    return cadence.logCount % 10 == 0
+                }
+                if shouldLog {
+                    let firstDelta = firstDeltaMs ?? -1
+                    let minInter = minInterFrameMs ?? -1
+                    let maxInter = maxInterFrameMs ?? -1
+                    Task { await DiagnosticLogger.shared.log(.aec,
+                        "WEBRTC_RENDER_CADENCE: batchFrames=\(batchFrames), firstDeltaMs=\(String(format: "%.2f", firstDelta)), minInterMs=\(String(format: "%.2f", minInter)), maxInterMs=\(String(format: "%.2f", maxInter))") }
+                }
+            }
+        }
+    }
+
+    private func startPacedProcessingIfNeeded() {
+        guard processingTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: processingQueue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(10), leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in
+            self?.processPacedTick()
+        }
+        processingTimer = timer
+        timer.resume()
+        Task { await DiagnosticLogger.shared.log(.aec, "WEBRTC_PACED_START: intervalMs=10") }
+    }
+
+    private var pacedTickCounter: Int = 0
+    
+    private func processPacedTick() {
+        guard aecBridge?.isReady == true else { return }
+        
+        pacedTickCounter += 1
+        let shouldLogThisTick = pacedTickCounter % 100 == 0  // ~1 Hz throttle (100 ticks * 10ms = 1s)
+
+        // Feed render at a steady 10ms cadence to preserve internal delay estimation.
+        let (renderSuccess, sysAvailBefore): (Bool, Int) = state.withLock { state in
+            let avail = state.systemRingBuffer.available
+            guard avail >= frameSize else { return (false, avail) }
+            let success = pacedRenderFrame.withUnsafeMutableBufferPointer { ptr in
+                state.systemRingBuffer.popInto(ptr, count: frameSize)
+            }
+            return (success, avail)
+        }
+        
+        // Calculate render RMS at pop time (for WEBRTC_PACED_RENDER_RMS)
+        var renderRmsAtPop: Float = 0
+        var renderDbAtPop: Float = -100
+        if renderSuccess {
+            _ = pacedRenderFrame.withUnsafeBufferPointer { ptr in
+                aecBridge?.processRenderFrame(ptr.baseAddress!) ?? false
+            }
+            state.withLock { state in
+                state.totalRenderFrames += 1
+                state.lastRenderFrame = pacedRenderFrame
+            }
+            // RMS = sqrt(sum(x^2) / N)
+            let sumSquares = pacedRenderFrame.reduce(0) { $0 + $1 * $1 }
+            renderRmsAtPop = sqrt(sumSquares / Float(frameSize))
+            renderDbAtPop = renderRmsAtPop > 0 ? 20 * log10(renderRmsAtPop) : -100
+        } else {
+            _ = pacedSilenceFrame.withUnsafeBufferPointer { ptr in
+                aecBridge?.processRenderFrame(ptr.baseAddress!) ?? false
+            }
+            let shouldLogUnderrun = pacedStatsLock.withLock { stats -> Bool in
+                stats.renderUnderruns += 1
+                return stats.renderUnderruns % 100 == 0
+            }
+            if shouldLogUnderrun {
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "WEBRTC_PACED_RENDER_UNDERRUN: count=\(pacedStatsLock.withLock { $0.renderUnderruns })") }
+            }
+        }
+        
+        // Log WEBRTC_PACED_RENDER_RMS (throttled to ~1 Hz)
+        if shouldLogThisTick {
+            let underrunCount = pacedStatsLock.withLock { $0.renderUnderruns }
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "WEBRTC_PACED_RENDER_RMS: db=\(String(format: "%.1f", renderDbAtPop)), available=\(sysAvailBefore), underrunCount=\(underrunCount)") }
+        }
+
+        // Process one capture frame per tick if available.
+        guard let (micFrameData, micFrameStartIndex) = extractMicFrameWithIndex() else { return }
+        let sampleDelta = state.withLock { state in
+            state.totalSystemSamples - state.totalMicSamples
+        }
+        let leadMs = Double(sampleDelta) / Double(sampleRate) * 1000
+        if let currentSmoothed = smoothedLeadMs {
+            smoothedLeadMs = (currentSmoothed * 0.8) + (leadMs * 0.2)
+        } else {
+            smoothedLeadMs = leadMs
+        }
+        let smoothedLead = smoothedLeadMs ?? leadMs
+        let delayMs = max(0, min(500, Int(round(smoothedLead))))
+        if lastStreamDelayMs == nil || abs(delayMs - (lastStreamDelayMs ?? 0)) >= 5 {
+            let success = aecBridge?.setStreamDelayMs(Int32(delayMs)) ?? false
+            lastStreamDelayMs = delayMs
+            let sysAvailForLog = state.withLock { $0.systemRingBuffer.available }
+            let shouldLogDelay = pacedStatsLock.withLock { stats -> Bool in
+                stats.delayUpdates += 1
+                return stats.delayUpdates % 10 == 0
+            }
+            if shouldLogDelay {
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "WEBRTC_STREAM_DELAY_SET: delayMs=\(delayMs), sampleDelta=\(sampleDelta), sysAvail=\(sysAvailForLog), leadMs=\(String(format: "%.1f", leadMs)), smoothedLeadMs=\(String(format: "%.1f", smoothedLead)), success=\(success)") }
+            }
+        }
+        
+        // Log WEBRTC_PACED_EXPECTED_RMS (non-destructive read at expected lag, throttled to ~1 Hz)
+        // This validates that render data is available at the expected lag position
+        if shouldLogThisTick {
+            let expectedLagMs = leadMs
+            let expectedLagSamples = Int(round(expectedLagMs / 1000.0 * Double(sampleRate)))
+            let (systemStartIndex, systemAvailable) = state.withLock { state in
+                let available = state.systemRingBuffer.available
+                let startIndex = state.totalSystemSamples - Int64(available)
+                return (startIndex, available)
+            }
+            let expectedTargetIndex = micFrameStartIndex + Int64(expectedLagSamples)
+            let expectedOffset = Int(expectedTargetIndex - systemStartIndex)
+            
+            var expectedRmsDb: Float = -100
+            var expectedValid = false
+            
+            // Guard bounds before read: expectedOffset >= 0 and expectedOffset + frameSize <= systemAvailable
+            if expectedOffset >= 0, expectedOffset + frameSize <= systemAvailable {
+                let (readSuccess, rmsValue) = state.withLock { state -> (Bool, Float) in
+                    let readSuccess = state.sweepScratch.withUnsafeMutableBufferPointer { ptr in
+                        state.systemRingBuffer.read(at: expectedOffset, count: frameSize, into: ptr)
+                    }
+                    guard readSuccess else { return (false, 0) }
+                    // RMS = sqrt(sum(x^2) / N)
+                    var sumSquares: Float = 0
+                    for idx in 0..<frameSize {
+                        sumSquares += state.sweepScratch[idx] * state.sweepScratch[idx]
+                    }
+                    let rms = sqrt(sumSquares / Float(frameSize))
+                    return (true, rms)
+                }
+                if readSuccess {
+                    expectedValid = true
+                    expectedRmsDb = rmsValue > 0 ? 20 * log10(rmsValue) : -100
+                }
+            }
+            
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "WEBRTC_PACED_EXPECTED_RMS: db=\(String(format: "%.1f", expectedRmsDb)), expectedLagMs=\(String(format: "%.1f", expectedLagMs)), valid=\(expectedValid), sysAvail=\(systemAvailable), sampleDelta=\(sampleDelta)") }
+        }
+        
+        let micRMSBefore = sqrt(micFrameData.map { $0 * $0 }.reduce(0, +) / Float(micFrameData.count))
+        let captureSuccess = micFrameData.withUnsafeBufferPointer { inputPtr in
+            pacedOutputFrame.withUnsafeMutableBufferPointer { outputPtr in
+                aecBridge?.processCaptureFrame(inputPtr.baseAddress!, outputSamples: outputPtr.baseAddress!) ?? false
+            }
+        }
+        if captureSuccess {
+            let processedCopy = pacedOutputFrame
+            state.withLock { state in
+                state.processedMicRingBuffer.push(processedCopy)
+                state.totalCaptureFrames += 1
+            }
+        }
+
+        // Log AEC effect periodically (every ~1 second).
+        let shouldLog = state.withLock { state -> Bool in
+            return state.totalCaptureFrames % 100 == 0 && state.totalCaptureFrames > 0
+        }
+        if shouldLog, captureSuccess {
+            let outputRMS = sqrt(pacedOutputFrame.prefix(frameSize).map { $0 * $0 }.reduce(0, +) / Float(frameSize))
+            let inputDB = micRMSBefore > 0 ? 20 * log10(micRMSBefore) : -100
+            let outputDB = outputRMS > 0 ? 20 * log10(outputRMS) : -100
+            let reductionDB = inputDB - outputDB
+            let erle = aecBridge?.getERLE() ?? 0
+            let delayMs = aecBridge?.getDelayMs() ?? -1
+            let timestamp = CACurrentMediaTime()
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "WEBRTC_CAPTURE_SENT: time=\(String(format: "%.3f", timestamp)), ERLE=\(String(format: "%.1f", erle))dB, delay=\(delayMs)ms, inputDb=\(String(format: "%.1f", inputDB))dB, reduction=\(String(format: "%.1f", reductionDB))dB") }
+
+            let (renderFrame, sampleDelta, systemStartIndex, systemAvailable) = state.withLock { state in
+                let available = state.systemRingBuffer.available
+                let startIndex = state.totalSystemSamples - Int64(available)
+                return (state.lastRenderFrame, state.totalSystemSamples - state.totalMicSamples, startIndex, available)
+            }
+            let renderRms = sqrt(renderFrame.map { $0 * $0 }.reduce(0, +) / Float(renderFrame.count))
+            let renderDb = renderRms > 0 ? 20 * log10(renderRms) : -100
+            let micDb = inputDB
+            let denom = renderRms * micRMSBefore
+            let corr: Double
+            if denom > 0 {
+                var dot: Double = 0
+                for idx in 0..<frameSize {
+                    dot += Double(renderFrame[idx] * micFrameData[idx])
+                }
+                corr = dot / Double(renderRms * micRMSBefore * Float(frameSize))
+            } else {
+                corr = 0
+            }
+            let leadMs = Double(sampleDelta) / Double(sampleRate) * 1000
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "AEC_CORR: corr=\(String(format: "%.3f", corr)), renderDb=\(String(format: "%.1f", renderDb))dB, micDb=\(String(format: "%.1f", micDb))dB, leadMs=\(String(format: "%.1f", leadMs))") }
+
+            var bestCorr: Double = 0
+            var bestLagMs: Double = 0
+            var bestRenderDb: Double = -100
+            var validCount = 0
+            var expectedCorr: Double = 0
+            var expectedRenderDb: Double = -100
+            var expectedValid = false
+            let micRms = Double(micRMSBefore)
+            if micRms > 0 {
+                let expectedLagMs = leadMs
+                let expectedLagSamples = Int(round(expectedLagMs / 1000.0 * Double(sampleRate)))
+                let expectedTargetIndex = micFrameStartIndex + Int64(expectedLagSamples)
+                let expectedOffset = Int(expectedTargetIndex - systemStartIndex)
+                if expectedOffset >= 0, expectedOffset + frameSize <= systemAvailable {
+                    let expectedResult = state.withLock { state -> (Bool, Double, Double) in
+                        let readSuccess = state.sweepScratch.withUnsafeMutableBufferPointer { ptr in
+                            state.systemRingBuffer.read(at: expectedOffset, count: frameSize, into: ptr)
+                        }
+                        guard readSuccess else { return (false, 0, 0) }
+                        var dot: Double = 0
+                        var renderPower: Double = 0
+                        for idx in 0..<frameSize {
+                            let r = Double(state.sweepScratch[idx])
+                            dot += r * Double(micFrameData[idx])
+                            renderPower += r * r
+                        }
+                        return (true, dot, renderPower)
+                    }
+                    if expectedResult.0, expectedResult.2 > 0 {
+                        let renderRmsExpected = sqrt(expectedResult.2 / Double(frameSize))
+                        expectedCorr = expectedResult.1 / (micRms * renderRmsExpected * Double(frameSize))
+                        expectedRenderDb = renderRmsExpected > 0 ? 20 * log10(renderRmsExpected) : -100
+                        expectedValid = true
+                    }
+                }
+
+                for step in -20...20 {
+                    let lagSamples = step * frameSize
+                    let targetIndex = micFrameStartIndex + Int64(lagSamples)
+                    let offset = Int(targetIndex - systemStartIndex)
+                    if offset < 0 || offset + frameSize > systemAvailable {
+                        continue
+                    }
+                    let (readSuccess, dot, renderPower) = state.withLock { state -> (Bool, Double, Double) in
+                        let readSuccess = state.sweepScratch.withUnsafeMutableBufferPointer { ptr in
+                            state.systemRingBuffer.read(at: offset, count: frameSize, into: ptr)
+                        }
+                        guard readSuccess else { return (false, 0, 0) }
+                        var dot: Double = 0
+                        var renderPower: Double = 0
+                        for idx in 0..<frameSize {
+                            let r = Double(state.sweepScratch[idx])
+                            dot += r * Double(micFrameData[idx])
+                            renderPower += r * r
+                        }
+                        return (true, dot, renderPower)
+                    }
+                    guard readSuccess, renderPower > 0 else { continue }
+                    let renderRmsSweep = sqrt(renderPower / Double(frameSize))
+                    let corrSweep = dot / (micRms * renderRmsSweep * Double(frameSize))
+                    if abs(corrSweep) > abs(bestCorr) {
+                        bestCorr = corrSweep
+                        bestLagMs = Double(lagSamples) / Double(sampleRate) * 1000
+                        bestRenderDb = renderRmsSweep > 0 ? 20 * log10(renderRmsSweep) : -100
+                    }
+                    validCount += 1
+                }
+            }
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "AEC_CORR_SWEEP: peakCorr=\(String(format: "%.3f", bestCorr)), peakLagMs=\(String(format: "%.1f", bestLagMs)), renderDb=\(String(format: "%.1f", bestRenderDb))dB, micDb=\(String(format: "%.1f", micDb))dB, leadMs=\(String(format: "%.1f", leadMs)), valid=\(validCount)") }
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "AEC_CORR_EXPECTED: corr=\(String(format: "%.3f", expectedCorr)), renderDb=\(String(format: "%.1f", expectedRenderDb))dB, expectedLagMs=\(String(format: "%.1f", leadMs)), valid=\(expectedValid)") }
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "AEC_CORR_ENERGY: renderDbExpected=\(String(format: "%.1f", expectedRenderDb))dB, renderDbPeak=\(String(format: "%.1f", bestRenderDb))dB, expectedLagMs=\(String(format: "%.1f", leadMs)), peakLagMs=\(String(format: "%.1f", bestLagMs)), expectedValid=\(expectedValid)") }
+        }
+
+        let shouldLogCadence = renderCadenceState.withLock { cadence -> Bool in
+            cadence.logCount += 1
+            return cadence.logCount % 100 == 0
+        }
+        if shouldLogCadence {
+            let (sysAvail, micAvail, outAvail) = state.withLock { state in
+                (state.systemRingBuffer.available, state.micRingBuffer.available, state.processedMicRingBuffer.available)
+            }
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "WEBRTC_PACED_STATUS: sysAvail=\(sysAvail), micAvail=\(micAvail), outAvail=\(outAvail)") }
         }
     }
     
@@ -381,14 +726,45 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             "AEC_MIC_INPUT: samples=\(microphoneSamples.count), micBufBefore=\(micAvailBefore), sysBuf=\(sysAvailBefore), totalMic=\(totalMicBefore), totalSys=\(totalSysBefore)") }
         // #endregion
         
+        if usePacedProcessing {
+            startPacedProcessingIfNeeded()
+        }
+
         var outputSamples: [Float] = []
         outputSamples.reserveCapacity(microphoneSamples.count)
         
+        if usePacedProcessing {
+            let (availableProcessed, sysAvail, micAvail) = state.withLock { state in
+                (state.processedMicRingBuffer.available, state.systemRingBuffer.available, state.micRingBuffer.available)
+            }
+            let countToPop = min(availableProcessed, microphoneSamples.count)
+            if countToPop > 0 {
+                let processed = state.withLock { state -> [Float]? in
+                    var buffer = [Float](repeating: 0, count: countToPop)
+                    let popSuccess = state.processedMicRingBuffer.popIntoArray(&buffer, count: countToPop)
+                    return popSuccess ? buffer : nil
+                }
+                if let processed {
+                    outputSamples.append(contentsOf: processed)
+                }
+            }
+            if outputSamples.count < microphoneSamples.count {
+                outputSamples.append(contentsOf: microphoneSamples.suffix(microphoneSamples.count - outputSamples.count))
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "AEC_OUTPUT_FALLBACK: processed=\(outputSamples.count), input=\(microphoneSamples.count), availableProcessed=\(availableProcessed), sysAvail=\(sysAvail), micAvail=\(micAvail)") }
+            }
+            return outputSamples
+        }
+
         // Process frames (outside lock to avoid blocking)
         // TIMING FIX (2026-01-27): Only call processCaptureFrame() here.
         // processRenderFrame() is now called in storeSystemAudio() when system audio arrives,
         // giving WebRTC the natural frame arrival timing it needs for delay estimation.
         var framesExtracted = 0
+        var batchFrames = 0
+        var firstDeltaMs: Double?
+        var minInterFrameMs: Double?
+        var maxInterFrameMs: Double?
         while true {
             // Extract mic frame with absolute start index (Swift 6 compliant - returns new array or nil)
             guard let (micFrameData, micFrameStartIndex) = extractMicFrameWithIndex() else {
@@ -402,18 +778,57 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 break
             }
             framesExtracted += 1
+            batchFrames += 1
 
             // Apply explicit stream delay for AEC3 based on measured lead
             let sampleDelta = state.withLock { state in
                 state.totalSystemSamples - state.totalMicSamples
             }
             let leadMs = Double(sampleDelta) / Double(sampleRate) * 1000
-            let delayMs = max(0, min(500, Int(round(leadMs))))
+            if let currentSmoothed = smoothedLeadMs {
+                smoothedLeadMs = (currentSmoothed * 0.8) + (leadMs * 0.2)
+            } else {
+                smoothedLeadMs = leadMs
+            }
+            let smoothedLead = smoothedLeadMs ?? leadMs
+            let delayMs = max(0, min(500, Int(round(smoothedLead))))
             if lastStreamDelayMs == nil || abs(delayMs - (lastStreamDelayMs ?? 0)) >= 5 {
                 let success = aecBridge?.setStreamDelayMs(Int32(delayMs)) ?? false
                 lastStreamDelayMs = delayMs
                 Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_STREAM_DELAY_SET: delayMs=\(delayMs), leadMs=\(String(format: "%.1f", leadMs)), success=\(success)") }
+                    "WEBRTC_STREAM_DELAY_SET: delayMs=\(delayMs), leadMs=\(String(format: "%.1f", leadMs)), smoothedLeadMs=\(String(format: "%.1f", smoothedLead)), success=\(success)") }
+            }
+
+            // Deterministic render feed aligned to expected lag
+            if useAlignedRenderFeed {
+                let (systemStartIndex, systemAvailable) = state.withLock { state in
+                    let available = state.systemRingBuffer.available
+                    let startIndex = state.totalSystemSamples - Int64(available)
+                    return (startIndex, available)
+                }
+                let expectedLagSamples = Int(round(smoothedLead / 1000.0 * Double(sampleRate)))
+                let expectedTargetIndex = micFrameStartIndex + Int64(expectedLagSamples)
+                let expectedOffset = Int(expectedTargetIndex - systemStartIndex)
+                let readSuccess = state.withLock { state in
+                    guard expectedOffset >= 0, expectedOffset + frameSize <= systemAvailable else { return false }
+                    return alignedRenderFrame.withUnsafeMutableBufferPointer { ptr in
+                        state.systemRingBuffer.read(at: expectedOffset, count: frameSize, into: ptr)
+                    }
+                }
+                if readSuccess {
+                    let renderSuccess = alignedRenderFrame.withUnsafeBufferPointer { ptr in
+                        aecBridge?.processRenderFrame(ptr.baseAddress!) ?? false
+                    }
+                    if framesExtracted % 100 == 1 {
+                        let renderRms = sqrt(alignedRenderFrame.map { $0 * $0 }.reduce(0, +) / Float(frameSize))
+                        let renderDb = renderRms > 0 ? 20 * log10(renderRms) : -100
+                        Task { await DiagnosticLogger.shared.log(.aec,
+                            "WEBRTC_RENDER_ALIGNED: lagMs=\(String(format: "%.1f", smoothedLead)), renderDb=\(String(format: "%.1f", renderDb))dB, success=\(renderSuccess)") }
+                    }
+                } else if framesExtracted % 100 == 1 {
+                    Task { await DiagnosticLogger.shared.log(.aec,
+                        "WEBRTC_RENDER_ALIGNED_MISS: lagMs=\(String(format: "%.1f", smoothedLead)), sysAvail=\(systemAvailable)") }
+                }
             }
             
             // Pre-allocate output buffer
@@ -429,6 +844,21 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             let captureSuccess = micFrameData.withUnsafeBufferPointer { inputPtr in
                 processedFrame.withUnsafeMutableBufferPointer { outputPtr in
                     aecBridge?.processCaptureFrame(inputPtr.baseAddress!, outputSamples: outputPtr.baseAddress!) ?? false
+                }
+            }
+
+            let now = CACurrentMediaTime()
+            let deltaMs = captureCadenceState.withLock { cadence -> Double? in
+                let delta = cadence.lastTime.map { (now - $0) * 1000 }
+                cadence.lastTime = now
+                return delta
+            }
+            if let deltaMs {
+                if batchFrames == 1 {
+                    firstDeltaMs = deltaMs
+                } else {
+                    minInterFrameMs = minInterFrameMs.map { min($0, deltaMs) } ?? deltaMs
+                    maxInterFrameMs = maxInterFrameMs.map { max($0, deltaMs) } ?? deltaMs
                 }
             }
             
@@ -552,6 +982,8 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                         "AEC_CORR_SWEEP: peakCorr=\(String(format: "%.3f", bestCorrLog)), peakLagMs=\(String(format: "%.1f", bestLagLog)), renderDb=\(String(format: "%.1f", bestRenderDbLog))dB, micDb=\(String(format: "%.1f", micDb))dB, leadMs=\(String(format: "%.1f", leadMs)), valid=\(validCountLog)") }
                     Task { await DiagnosticLogger.shared.log(.aec,
                         "AEC_CORR_EXPECTED: corr=\(String(format: "%.3f", expectedCorrLog)), renderDb=\(String(format: "%.1f", expectedRenderDbLog))dB, expectedLagMs=\(String(format: "%.1f", expectedLagLog)), valid=\(expectedValidLog)") }
+                    Task { await DiagnosticLogger.shared.log(.aec,
+                        "AEC_CORR_ENERGY: renderDbExpected=\(String(format: "%.1f", expectedRenderDbLog))dB, renderDbPeak=\(String(format: "%.1f", bestRenderDbLog))dB, expectedLagMs=\(String(format: "%.1f", expectedLagLog)), peakLagMs=\(String(format: "%.1f", bestLagLog)), expectedValid=\(expectedValidLog)") }
                 }
                 outputSamples.append(contentsOf: processedFrame.prefix(frameSize))
             } else {
@@ -563,6 +995,20 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             }
         }
         
+        if batchFrames > 1 {
+            let shouldLog = captureCadenceState.withLock { cadence -> Bool in
+                cadence.logCount += 1
+                return cadence.logCount % 10 == 0
+            }
+            if shouldLog {
+                let firstDelta = firstDeltaMs ?? -1
+                let minInter = minInterFrameMs ?? -1
+                let maxInter = maxInterFrameMs ?? -1
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "WEBRTC_CAPTURE_CADENCE: batchFrames=\(batchFrames), firstDeltaMs=\(String(format: "%.2f", firstDelta)), minInterMs=\(String(format: "%.2f", minInter)), maxInterMs=\(String(format: "%.2f", maxInter))") }
+            }
+        }
+
         // Update capture frame count and log sync state periodically
         if framesExtracted > 0 {
             let framesExtractedCount = framesExtracted
@@ -632,6 +1078,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         state.withLock { state in
             state.systemRingBuffer.clear()
             state.micRingBuffer.clear()
+            state.processedMicRingBuffer.clear()
             state.totalSystemSamples = 0
             state.totalMicSamples = 0
             state.deliveryOffsetSamples = 0
@@ -650,6 +1097,19 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         renderAccumulatorLock.withLock { $0.removeAll() }
         systemHasStartedLock.withLock { $0 = false }
         lastStreamDelayMs = nil
+        smoothedLeadMs = nil
+        renderCadenceState.withLock { cadence in
+            cadence.lastTime = nil
+            cadence.logCount = 0
+        }
+        captureCadenceState.withLock { cadence in
+            cadence.lastTime = nil
+            cadence.logCount = 0
+        }
+        pacedStatsLock.withLock { stats in
+            stats.renderUnderruns = 0
+            stats.delayUpdates = 0
+        }
         
         aecBridge?.reset()
     }
