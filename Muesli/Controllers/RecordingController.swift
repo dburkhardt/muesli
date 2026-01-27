@@ -371,6 +371,22 @@ final class RecordingController {
             systemSamples = EchoCancellationServiceNLMS.extractSamples(from: buffer)
         }
         timing.extract = CACurrentMediaTime() - extractStart
+
+        if shouldLogSysDiag {
+            if let samples = systemSamples {
+                let rms = sqrt(samples.map { $0 * $0 }.reduce(0, +) / Float(samples.count))
+                let inputDb = rms > 0 ? 20 * log10(rms) : -100
+                let sampleCount = samples.count
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "SYS_EXTRACT_RMS: samples=\(sampleCount), inputDb=\(String(format: "%.1f", inputDb))")
+                }
+            } else {
+                Task {
+                    await DiagnosticLogger.shared.log(.aec, "SYS_EXTRACT_FAILED")
+                }
+            }
+        }
         
         // TIMING: Store system audio for AEC reference (if AEC enabled)
         let aecStart = CACurrentMediaTime()

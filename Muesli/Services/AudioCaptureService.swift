@@ -515,6 +515,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     private var micStartFallbackTask: Task<Void, Never>?
     private var firstSystemBufferTime: Double?
     private var firstMicStartTime: Double?
+    private var firstMicBufferTime: Double?
     
     // Audio configuration (using centralized AudioConfiguration)
     private let sampleRate: Int = AudioConfiguration.captureSampleRate
@@ -675,6 +676,18 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         let micLevelHandler = levelHandler
         let micEngine = MicrophoneCaptureEngine(
             bufferHandler: { buffer in
+                if self.firstMicBufferTime == nil {
+                    self.firstMicBufferTime = CACurrentMediaTime()
+                    let systemTime = self.firstSystemBufferTime
+                    let micStartTime = self.firstMicStartTime
+                    let systemDeltaMs = systemTime != nil ? (self.firstMicBufferTime! - systemTime!) * 1000 : nil
+                    let micStartDeltaMs = micStartTime != nil ? (self.firstMicBufferTime! - micStartTime!) * 1000 : nil
+                    let systemText = systemDeltaMs != nil ? String(format: "%.1f", systemDeltaMs!) : "n/a"
+                    let micStartText = micStartDeltaMs != nil ? String(format: "%.1f", micStartDeltaMs!) : "n/a"
+                    let systemState = systemTime != nil ? "after-system" : "before-system"
+                    Task { await DiagnosticLogger.shared.log(.aec,
+                        "MIC_FIRST_BUFFER: time=\(String(format: "%.3f", self.firstMicBufferTime ?? 0)), deltaFromSystemMs=\(systemText), deltaFromMicStartMs=\(micStartText), systemState=\(systemState)") }
+                }
                 micHandler?(buffer, .microphone)
             },
             levelHandler: { level in
@@ -686,6 +699,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         didSeeSystemBuffer = false
         firstSystemBufferTime = nil
         firstMicStartTime = nil
+        firstMicBufferTime = nil
         
         // Fallback: start mic after 2s if no system audio arrives
         micStartFallbackTask?.cancel()
@@ -713,6 +727,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         didSeeSystemBuffer = false
         firstSystemBufferTime = nil
         firstMicStartTime = nil
+        firstMicBufferTime = nil
         micStartFallbackTask?.cancel()
         micStartFallbackTask = nil
         
@@ -740,6 +755,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         didSeeSystemBuffer = false
         firstSystemBufferTime = nil
         firstMicStartTime = nil
+        firstMicBufferTime = nil
         micStartFallbackTask?.cancel()
         micStartFallbackTask = nil
         

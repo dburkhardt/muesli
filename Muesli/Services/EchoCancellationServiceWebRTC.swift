@@ -72,6 +72,10 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         var totalMicSamples: Int64 = 0
         var deliveryOffsetSamples: Int64 = 0
         var offsetCalculated: Bool = false
+
+        // Frame counters for diagnostics
+        var totalRenderFrames: Int64 = 0
+        var totalCaptureFrames: Int64 = 0
         
         // Warmup tracking
         var systemBufferTimes: [Double] = []
@@ -233,6 +237,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             
             // Process all complete frames
             var framesProcessed = 0
+            var lastRenderRms: Float?
             while accumulator.count >= frameSize {
                 // Extract frame
                 let frame = Array(accumulator.prefix(frameSize))
@@ -245,6 +250,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 
                 if success {
                     framesProcessed += 1
+                    // Track RMS for diagnostics (last processed frame)
+                    let rms = sqrt(frame.map { $0 * $0 }.reduce(0, +) / Float(frame.count))
+                    lastRenderRms = rms
                 } else {
                     // Log error but continue - don't block audio callback
                     let errorCode = aecBridge?.lastError.rawValue ?? -1
@@ -253,11 +261,36 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 }
             }
             
+            // Update render frame count for diagnostics
+            if framesProcessed > 0 {
+                let framesProcessedCount = framesProcessed
+                let renderStats = state.withLock { state -> (shouldLog: Bool, totalRenderFrames: Int64) in
+                    state.totalRenderFrames += Int64(framesProcessedCount)
+                    let shouldLog = state.totalRenderFrames % 100 == 0
+                    return (shouldLog, state.totalRenderFrames)
+                }
+                if renderStats.shouldLog, let rms = lastRenderRms {
+                    let inputDb = rms > 0 ? 20 * log10(rms) : -100
+                    let inputDbLog = inputDb
+                    let totalRenderFramesLog = renderStats.totalRenderFrames
+                    Task { await DiagnosticLogger.shared.log(.aec,
+                        "WEBRTC_RENDER_RMS: frames=\(totalRenderFramesLog), inputDb=\(String(format: "%.1f", inputDbLog))") }
+                }
+            }
+
+            // Log if render backlog grows unusually large
+            if accumulator.count >= frameSize * 5 {
+                let backlog = accumulator.count
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "WEBRTC_RENDER_BACKLOG: samples=\(backlog)") }
+            }
+
             // Log timing for verification (every 100 frames ≈ 1 second)
             if framesProcessed > 0 {
+                let framesProcessedLog = framesProcessed
                 let timestamp = CACurrentMediaTime()
                 Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_RENDER_SENT: frames=\(framesProcessed), time=\(String(format: "%.3f", timestamp))") }
+                    "WEBRTC_RENDER_SENT: frames=\(framesProcessedLog), time=\(String(format: "%.3f", timestamp))") }
             }
         }
     }
@@ -301,8 +334,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 // Log offset for diagnostics (WebRTC handles this internally now)
                 let logOffset = state.deliveryOffsetSamples
                 let logTimingMs = String(format: "%.1f", timingOffsetSeconds * 1000)
+                let logDeltaMs = Double(logOffset) / Double(sampleRate) * 1000
                 Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_STREAM_SYNC: sampleDelta=\(logOffset), callbackOffset=\(logTimingMs)ms (WebRTC handles delay internally)") }
+                    "WEBRTC_STREAM_SYNC: sampleDelta=\(logOffset) (\(String(format: "%.1f", logDeltaMs))ms), callbackOffset=\(logTimingMs)ms (WebRTC handles delay internally)") }
             }
             
             // Periodic drift monitoring (for diagnostics)
@@ -383,8 +417,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                     let erle = aecBridge?.getERLE() ?? 0
                     let delayMs = aecBridge?.getDelayMs() ?? -1
                     let timestamp = CACurrentMediaTime()
+                    let inputDbLog = inputDB
                     Task { await DiagnosticLogger.shared.log(.aec,
-                        "WEBRTC_CAPTURE_SENT: time=\(String(format: "%.3f", timestamp)), ERLE=\(String(format: "%.1f", erle))dB, delay=\(delayMs)ms, reduction=\(String(format: "%.1f", reductionDB))dB") }
+                        "WEBRTC_CAPTURE_SENT: time=\(String(format: "%.3f", timestamp)), ERLE=\(String(format: "%.1f", erle))dB, delay=\(delayMs)ms, inputDb=\(String(format: "%.1f", inputDbLog))dB, reduction=\(String(format: "%.1f", reductionDB))dB") }
                 }
                 outputSamples.append(contentsOf: processedFrame.prefix(frameSize))
             } else {
@@ -396,6 +431,24 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             }
         }
         
+        // Update capture frame count and log sync state periodically
+        if framesExtracted > 0 {
+            let framesExtractedCount = framesExtracted
+            let stats = state.withLock { state -> (shouldLog: Bool, captureFrames: Int64, renderFrames: Int64, sampleDelta: Int64, sysAvail: Int, micAvail: Int) in
+                state.totalCaptureFrames += Int64(framesExtractedCount)
+                let shouldLog = state.totalCaptureFrames % 100 == 0
+                let sampleDelta = state.totalSystemSamples - state.totalMicSamples
+                return (shouldLog, state.totalCaptureFrames, state.totalRenderFrames, sampleDelta, state.systemRingBuffer.available, state.micRingBuffer.available)
+            }
+            if stats.shouldLog {
+                let leadMs = Double(stats.sampleDelta) / Double(sampleRate) * 1000
+                let sysAvailMs = Double(stats.sysAvail) / Double(sampleRate) * 1000
+                let micAvailMs = Double(stats.micAvail) / Double(sampleRate) * 1000
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "WEBRTC_SYNC_STATUS: renderFrames=\(stats.renderFrames), captureFrames=\(stats.captureFrames), sampleDelta=\(stats.sampleDelta) (\(String(format: "%.1f", leadMs))ms), sysAvail=\(stats.sysAvail) (\(String(format: "%.1f", sysAvailMs))ms), micAvail=\(stats.micAvail) (\(String(format: "%.1f", micAvailMs))ms)") }
+            }
+        }
+
         // CRITICAL FIX: Always return processed samples from buffer.
         // If outputSamples is empty, it means extractMicFrame returned nil immediately,
         // which shouldn't happen if we just pushed samples (unless microphoneSamples.count < frameSize).
@@ -451,6 +504,8 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             state.totalMicSamples = 0
             state.deliveryOffsetSamples = 0
             state.offsetCalculated = false
+            state.totalRenderFrames = 0
+            state.totalCaptureFrames = 0
             state.systemBufferTimes.removeAll()
             state.micBufferTimes.removeAll()
             state.lastSystemBufferTime = 0
