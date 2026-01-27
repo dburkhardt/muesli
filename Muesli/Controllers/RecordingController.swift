@@ -497,9 +497,9 @@ final class RecordingController {
                 // Atomic check-and-set to prevent TOCTOU race condition:
                 // Multiple audio callback threads could otherwise observe the same state
                 // and trigger duplicate warnings.
-                let shouldShowWarning = aecDisabledLock.withLock { alreadyDisabled in
-                    if !alreadyDisabled {
-                        alreadyDisabled = true  // Atomically mark as disabled
+                let shouldShowWarning = aecDisabledLock.withLock {
+                    if !$0 {
+                        $0 = true  // Atomically mark as disabled
                         return true  // First time - need to warn
                     }
                     return false
@@ -508,9 +508,9 @@ final class RecordingController {
                 if shouldShowWarning {
                     // Rate-limited warning (per 9ebe review) - show only once per session
                     // Atomic check-and-set to prevent duplicate warnings from concurrent threads
-                    let shouldWarn = warningShownLock.withLock { shown in
-                        if !shown {
-                            shown = true  // Atomically mark as warned
+                    let shouldWarn = warningShownLock.withLock {
+                        if !$0 {
+                            $0 = true  // Atomically mark as warned
                             return true
                         }
                         return false

@@ -219,7 +219,6 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             
             // Calculate offset once we have enough timing data
             // Using 12 buffers (~1 second) instead of 50 buffers for faster sync.
-            // Offset is validated periodically (every 100 frames) to catch warmup artifacts.
             if !state.offsetCalculated &&
                state.systemBufferTimes.count >= SyncState.kBuffersToAverage &&
                state.micBufferTimes.count >= SyncState.kBuffersToAverage {
@@ -230,9 +229,19 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 state.deliveryOffsetSamples = Int64(offsetSeconds * Double(sampleRate))
                 state.offsetCalculated = true
                 
-                // Immediate validation after warmup
+                // CRITICAL FIX (2026-01-27): The timing-based offset captures REAL audio latency.
+                // Don't "correct" it to sample-count delta unless it exceeds buffer capacity.
+                //
+                // Example from debug logs:
+                // - Timing offset: -432ms (system callbacks arrive before mic = real latency)
+                // - Sample delta: 0 (both streams delivered same sample count)
+                // - Old code: corrected -432ms to 0ms (WRONG - destroyed latency info)
+                // - WebRTC reported: delay=344ms (close to 432ms, validating timing estimate)
+                //
+                // Only clamp to buffer bounds, don't replace with sample delta.
                 let actualDelta = state.totalSystemSamples - state.totalMicSamples
-                let mismatch = abs(actualDelta - state.deliveryOffsetSamples)
+                let clampedOffset = max(-Int64(maxBufferSamples), min(Int64(maxBufferSamples), state.deliveryOffsetSamples))
+                let wasClampedToBounds = clampedOffset != state.deliveryOffsetSamples
                 
                 // #region agent log - H1: Log offset calculation details
                 debugLog("OFFSET_CALCULATED", hypothesisId: "H1", data: [
@@ -244,18 +253,17 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                     "totalSystemSamples": state.totalSystemSamples,
                     "totalMicSamples": state.totalMicSamples,
                     "actualDelta": actualDelta,
-                    "mismatch": mismatch,
-                    "willCorrect": mismatch > 2400
+                    "clampedOffset": clampedOffset,
+                    "wasClampedToBounds": wasClampedToBounds
                 ])
                 // #endregion
                 
-                if mismatch > 2400 {  // >50ms drift
+                if wasClampedToBounds {
                     let oldOffset = state.deliveryOffsetSamples
-                    state.deliveryOffsetSamples = max(-24000, min(24000, actualDelta))
-                    // Capture values before Task to avoid capturing inout state (Swift 6)
+                    state.deliveryOffsetSamples = clampedOffset
                     let newOffset = state.deliveryOffsetSamples
                     Task { await DiagnosticLogger.shared.log(.aec,
-                        "WEBRTC_OFFSET_CORRECTION: \(oldOffset)→\(newOffset)") }
+                        "WEBRTC_OFFSET_CLAMPED: \(oldOffset)→\(newOffset) (exceeded buffer bounds)") }
                 }
                 
                 // Capture values before Task to avoid capturing inout state (Swift 6)
@@ -265,19 +273,18 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                     "WEBRTC_OFFSET: \(logOffset) samples (\(logMs)ms)") }
             }
             
-            // LESSON 7: Periodic offset validation
+            // LESSON 7: Periodic offset validation - only clamp to buffer bounds
+            // Don't replace timing-based offset with sample-count delta (see CRITICAL FIX above)
             state.offsetValidationCount += 1
             if state.offsetCalculated && state.offsetValidationCount >= SyncState.kOffsetValidationInterval {
                 state.offsetValidationCount = 0
-                let actualDelta = state.totalSystemSamples - state.totalMicSamples
-                let mismatch = abs(actualDelta - state.deliveryOffsetSamples)
-                if mismatch > 2400 {  // >50ms drift
+                let clampedOffset = max(-Int64(maxBufferSamples), min(Int64(maxBufferSamples), state.deliveryOffsetSamples))
+                if clampedOffset != state.deliveryOffsetSamples {
                     let oldOffset = state.deliveryOffsetSamples
-                    state.deliveryOffsetSamples = max(-24000, min(24000, actualDelta))
-                    // Capture values before Task to avoid capturing inout state (Swift 6)
+                    state.deliveryOffsetSamples = clampedOffset
                     let newOffset = state.deliveryOffsetSamples
                     Task { await DiagnosticLogger.shared.log(.aec,
-                        "WEBRTC_OFFSET_CORRECTION: \(oldOffset)→\(newOffset)") }
+                        "WEBRTC_OFFSET_CLAMPED: \(oldOffset)→\(newOffset) (exceeded buffer bounds)") }
                 }
             }
             

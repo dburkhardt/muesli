@@ -746,9 +746,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             let inputBufferRef = inputBuffer  // Capture for closure
             var inputProvided = OSAllocatedUnfairLock(initialState: false)
             let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-                let wasProvided = inputProvided.withLock { provided in
-                    if !provided {
-                        provided = true
+                let wasProvided = inputProvided.withLock {
+                    if !$0 {
+                        $0 = true
                         return false
                     }
                     return true
