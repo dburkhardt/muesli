@@ -732,6 +732,13 @@ final class RecordingController {
         aecDisabledDueToFallbackLock.withLock { $0 = false }
         hasShownResamplingWarningLock.withLock { $0 = false }
         
+        // Reset timing diagnostics for new recording session
+        // This ensures each recording logs timing stats every ~2 seconds from the start
+        Self.sysTimingFlushCount = 0
+        Self.micTimingFlushCount = 0
+        Self.systemTimings.removeAll(keepingCapacity: true)
+        Self.micTimings.removeAll(keepingCapacity: true)
+        
         do {
             // Start file output FIRST
             session.outputDirectory = try fileOutputService.startWriting()

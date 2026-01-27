@@ -632,7 +632,27 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         let output = StreamOutput(handler: bufferHandler, levelHandler: levelHandler)
         try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
         
-        // Start AVAudioEngine for microphone capture (instead of SCK's captureMicrophone)
+        // CRITICAL FIX (2026-01-27): Start system audio FIRST, then microphone.
+        // WebRTC AEC expects render (system) audio to arrive BEFORE capture (mic) audio.
+        // Previously, we started mic first which caused a 300-500ms callback offset inversion.
+        //
+        // Correct order:
+        // 1. Start ScreenCaptureKit stream (system audio)
+        // 2. Wait for it to initialize
+        // 3. Then start AVAudioEngine (microphone)
+        
+        // Start the ScreenCaptureKit stream FIRST
+        do {
+            try await stream.startCapture()
+        } catch {
+            throw CaptureError.streamStartFailed(underlying: error)
+        }
+        
+        // Small delay to ensure SCK has started delivering buffers
+        // SCK needs time to initialize its audio pipeline after startCapture returns
+        try await Task.sleep(for: .milliseconds(50))
+        
+        // NOW start AVAudioEngine for microphone capture
         let micHandler = bufferHandler
         let micLevelHandler = levelHandler
         let micEngine = MicrophoneCaptureEngine(
@@ -661,13 +681,6 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
                 You can select a different microphone in preferences and try again.
                 """
             warningHandler?("Microphone unavailable", details, true)
-        }
-        
-        // Start the stream
-        do {
-            try await stream.startCapture()
-        } catch {
-            throw CaptureError.streamStartFailed(underlying: error)
         }
         
         self.stream = stream

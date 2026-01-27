@@ -33,25 +33,20 @@ private func debugLog(_ message: String, hypothesisId: String, data: [String: An
 }
 // #endregion
 
-/// WebRTC AEC3 implementation with hybrid synchronization:
-/// - Swift handles coarse timing alignment (250-350ms offset)
-/// - WebRTC handles fine-grained delay estimation and echo cancellation
+/// WebRTC AEC3 implementation for acoustic echo cancellation.
 ///
-/// CRITICAL: This implementation ACTUALLY USES the calculated offset to align
-/// render/capture frames before feeding to WebRTC.
-///
-/// Architecture:
+/// Architecture (after startup order fix 2026-01-27):
 /// ```
-/// Mic (AVAudioEngine):    ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━┃
-///                         ↑ Arrives first
+/// System Audio (SCK):     ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━┃
+///                         ↑ Starts FIRST (AudioCaptureService ensures this)
 ///
-/// System Audio (SCK):                 ┃━━━━━━━━━━━━━━━━┃
-///                                     ↑ Arrives 250-350ms LATER
+/// Mic (AVAudioEngine):        ┃━━━━━━━━━━━━━━━━━━━━━━━━┃
+///                             ↑ Starts ~50ms later
 /// ```
 ///
-/// WebRTC AEC3 expects render (system) before capture (mic) with max ~128ms offset.
-/// The hybrid approach lets Swift handle the coarse alignment while WebRTC handles
-/// fine-grained delay estimation and actual echo cancellation.
+/// WebRTC AEC3 expects render (system) before capture (mic), which is now guaranteed
+/// by starting ScreenCaptureKit before AVAudioEngine in AudioCaptureService.
+/// This allows WebRTC's internal delay estimation to work correctly.
 final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellationServiceProtocol {
     
     // MARK: - Configuration
@@ -117,10 +112,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     // Protected by its own lock since storeSystemAudio() runs on SCK's thread
     private let renderAccumulatorLock = OSAllocatedUnfairLock(initialState: [Float]())
     
-    // Flag to track whether mic audio has started (to prevent render frame accumulation before capture)
-    // WebRTC can only handle ~300ms delay, but our callback offset is 250-350ms.
-    // If we send render frames before mic starts, WebRTC accumulates too many and exceeds its capacity.
-    private let micHasStartedLock = OSAllocatedUnfairLock(initialState: false)
+    // Flag to track whether system audio has started (for diagnostic logging)
+    // With the AudioCaptureService startup order fix, system audio should arrive first now.
+    private let systemHasStartedLock = OSAllocatedUnfairLock(initialState: false)
     
     // #region agent log - Debug log throttle counter
     private var debugLogCounter: Int = 0
@@ -207,18 +201,25 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             // #endregion
         }
         
-        // TIMING FIX v2 (2026-01-27): Only send render frames to WebRTC AFTER mic audio has started.
-        // WebRTC can only handle ~300ms delay internally (kMaxApiCallsJitterBlocks = 30 blocks).
-        // Our callback offset is 250-350ms, so if we send render frames before mic starts,
-        // WebRTC accumulates too many frames and the delay exceeds its capacity (observed: 464ms).
-        //
-        // Solution: Wait for mic audio to start, then send render frames with natural timing.
-        // This keeps the delay within WebRTC's handling capacity while still giving it
-        // accurate frame arrival timing for delay estimation.
-        let micStarted = micHasStartedLock.withLock { $0 }
-        if micStarted {
-            accumulateAndProcessRender(monoSamples)
+        // Send render frames to WebRTC as they arrive.
+        // With the AudioCaptureService startup order fix (2026-01-27), system audio
+        // now starts BEFORE mic audio, giving WebRTC the correct frame ordering.
+        
+        // Track when system audio starts (for diagnostic logging)
+        let wasStarted = systemHasStartedLock.withLock { started -> Bool in
+            let was = started
+            if !started {
+                started = true
+            }
+            return was
         }
+        if !wasStarted {
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "WEBRTC_SYSTEM_STARTED: Mic processing will now begin") }
+        }
+        
+        // Send render frames to WebRTC
+        accumulateAndProcessRender(monoSamples)
     }
     
     /// Accumulate system audio samples and process complete 10ms frames through WebRTC
@@ -267,19 +268,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         guard !microphoneSamples.isEmpty else { return microphoneSamples }
         guard aecBridge?.isReady == true else { return microphoneSamples }
         
-        // Mark mic as started - this allows storeSystemAudio() to begin sending render frames to WebRTC
-        // We do this BEFORE processing to ensure render frames start arriving promptly
-        let wasStarted = micHasStartedLock.withLock { started -> Bool in
-            let was = started
-            if !started {
-                started = true
-            }
-            return was
-        }
-        if !wasStarted {
-            Task { await DiagnosticLogger.shared.log(.aec,
-                "WEBRTC_MIC_STARTED: Render frames will now be sent to WebRTC") }
-        }
+        // With the AudioCaptureService startup order fix (2026-01-27), system audio
+        // now starts BEFORE mic audio, so render frames should already be arriving.
+        // Just process capture frames as they come - WebRTC handles the timing.
         
         // Protocol signature matches existing protocol (no timestamps)
         // Implementation uses CACurrentMediaTime() internally for timing
@@ -468,9 +459,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             state.offsetValidationCount = 0
         }
         
-        // Clear render accumulator and reset mic started flag
+        // Clear render accumulator and reset system started flag
         renderAccumulatorLock.withLock { $0.removeAll() }
-        micHasStartedLock.withLock { $0 = false }
+        systemHasStartedLock.withLock { $0 = false }
         
         aecBridge?.reset()
     }

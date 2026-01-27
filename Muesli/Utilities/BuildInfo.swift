@@ -15,19 +15,19 @@ import Foundation
 /// - `isDirty`: Whether there were uncommitted changes
 enum BuildInfo {
     /// Short git commit SHA (e.g., "abc1234")
-    static let gitCommit = "7bb47f1"
+    static let gitCommit = "ff94d6e"
     
     /// Git branch name (e.g., "main", "feature/foo", or "detached")
     static let gitBranch = "feature/improved-aec"
     
     /// Build timestamp in UTC (ISO 8601 format)
-    static let buildTimestamp = "2026-01-27T07:17:39Z"
+    static let buildTimestamp = "2026-01-27T10:57:43Z"
     
     /// Build configuration: "DEV" (Debug) or "RELEASE"
     static let buildType = "DEV"
     
     /// True if there were uncommitted changes when built
-    static let isDirty = false
+    static let isDirty = true
     
     /// True if built on CI (GitHub Actions)
     static let isCIBuild = false
