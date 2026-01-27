@@ -3,6 +3,34 @@ import Foundation
 /// Centralized UserDefaults keys for the entire app
 /// Using this enum ensures consistency and prevents typos in key names
 enum AppStorageKeys {
+    // MARK: - Onboarding Mode
+    
+    /// Mode for onboarding window - first-time setup vs permission recovery
+    enum OnboardingMode: Equatable {
+        case firstTime
+        case permissionRecovery(missingScreen: Bool, missingMic: Bool)
+        
+        var isRecoveryMode: Bool {
+            if case .permissionRecovery = self { return true }
+            return false
+        }
+        
+        var skipWelcome: Bool {
+            isRecoveryMode
+        }
+        
+        var skipModelSetup: Bool {
+            isRecoveryMode
+        }
+        
+        var windowTitle: String {
+            switch self {
+            case .firstTime: return "Welcome to Muesli"
+            case .permissionRecovery: return "Permissions Required"
+            }
+        }
+    }
+    
     // MARK: - Onboarding
     
     /// Whether onboarding has been completed

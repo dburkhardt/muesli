@@ -1,10 +1,13 @@
 import SwiftUI
 
-/// Multi-step onboarding flow for first-run setup
+/// Multi-step onboarding flow for first-run setup and permission recovery
 struct OnboardingView: View {
     @Bindable var viewModel: MuesliViewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
+    
+    /// Mode for this onboarding session (first-time vs permission recovery)
+    let mode: AppStorageKeys.OnboardingMode
     
     /// Use the viewModel's modelManager so state is shared
     private var modelManager: ModelManager {
@@ -17,6 +20,9 @@ struct OnboardingView: View {
     }
     @State private var currentStep: OnboardingStep
     @State private var showFilePicker = false
+    
+    /// Alert shown when user tries to close recovery window
+    @State private var showQuitAlert = false
     
     // MARK: - Model Compilation State
     
@@ -58,11 +64,33 @@ struct OnboardingView: View {
         case llmSetup = 4
     }
     
-    init(viewModel: MuesliViewModel) {
+    init(viewModel: MuesliViewModel, mode: AppStorageKeys.OnboardingMode = .firstTime) {
         self.viewModel = viewModel
-        // Restore saved step, defaulting to welcome
-        let savedStep = UserDefaults.standard.integer(forKey: AppStorageKeys.onboardingCurrentStep)
-        _currentStep = State(initialValue: OnboardingStep(rawValue: savedStep) ?? .welcome)
+        self.mode = mode
+        
+        // In recovery mode: start at the first missing permission step
+        // In first-time mode: restore from UserDefaults or start at welcome
+        if mode.isRecoveryMode {
+            // Calculate starting step based on which permissions are missing
+            switch mode {
+            case .permissionRecovery(let missingScreen, let missingMic):
+                if missingScreen {
+                    _currentStep = State(initialValue: .screenRecording)
+                } else if missingMic {
+                    _currentStep = State(initialValue: .microphone)
+                } else {
+                    // Fallback - shouldn't happen
+                    _currentStep = State(initialValue: .screenRecording)
+                }
+            case .firstTime:
+                // This case won't be reached due to the if condition
+                _currentStep = State(initialValue: .welcome)
+            }
+        } else {
+            // First-time mode: restore saved step, defaulting to welcome
+            let savedStep = UserDefaults.standard.integer(forKey: AppStorageKeys.onboardingCurrentStep)
+            _currentStep = State(initialValue: OnboardingStep(rawValue: savedStep) ?? .welcome)
+        }
     }
     
     var body: some View {
@@ -130,6 +158,27 @@ struct OnboardingView: View {
             allowsMultipleSelection: false
         ) { result in
             handleFileSelection(result)
+        }
+        // Handle exit command (Cmd+W, Cmd+Q) in recovery mode
+        .onExitCommand {
+            if mode.isRecoveryMode {
+                showQuitAlert = true
+            }
+        }
+        // Alert shown when user tries to close recovery window
+        .alert("Permissions Required", isPresented: $showQuitAlert) {
+            Button("Continue Setup") { }
+            Button("Quit \(appName)", role: .destructive) {
+                Task {
+                    await DiagnosticLogger.shared.log(
+                        .permission,
+                        "User chose to quit during permission recovery"
+                    )
+                }
+                NSApplication.shared.terminate(nil)
+            }
+        } message: {
+            Text("\(appName) requires Screen Recording and Microphone permissions to function. Please grant the permissions or quit the app.")
         }
     }
     
@@ -957,6 +1006,22 @@ struct OnboardingView: View {
     /// Advance to appropriate step based on current permissions
     /// Skips past already-completed permission steps when user returns to the app
     private func advanceBasedOnPermissions() {
+        // Handle recovery mode differently
+        if mode.isRecoveryMode {
+            // In recovery mode, check if both permissions are now granted
+            if viewModel.hasScreenRecordingPermission && viewModel.hasMicrophonePermission {
+                // Both permissions granted - complete recovery
+                completeOnboardingForRecovery()
+                return
+            } else if viewModel.hasScreenRecordingPermission && currentStep == .screenRecording {
+                // Screen recording granted, but mic still missing - advance to mic
+                setStep(.microphone)
+            }
+            // If still on mic step and mic not granted, stay there
+            return
+        }
+        
+        // First-time onboarding mode
         // Determine the appropriate step based on current permissions
         let targetStep: OnboardingStep
         
@@ -983,6 +1048,29 @@ struct OnboardingView: View {
         if targetStep.rawValue > currentStep.rawValue {
             setStep(targetStep)
         }
+    }
+    
+    /// Complete onboarding after permission recovery
+    /// Verifies model exists before completing; redirects to model setup if missing
+    private func completeOnboardingForRecovery() {
+        // Verify model exists before completing
+        if !modelManager.hasModel {
+            // Edge case: models were deleted after initial onboarding
+            Task {
+                await DiagnosticLogger.shared.log(
+                    .onboarding,
+                    "Recovery: No model found, redirecting to model setup"
+                )
+            }
+            // In recovery mode, we need to show model setup
+            // This changes recovery to essentially require model setup completion
+            withAnimation { setStep(.modelSetup) }
+            return
+        }
+        
+        // Close onboarding and show main window (don't call completeOnboarding()
+        // since hasCompletedOnboarding is already true)
+        AppDelegate.shared?.exitPermissionRecovery()
     }
     
     // MARK: - Complete Onboarding
