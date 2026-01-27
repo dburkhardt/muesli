@@ -234,25 +234,22 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         let tapStart = CACurrentMediaTime()
         
         // Track gap between tap callbacks (before any processing)
-        var tapGap: Double = 0
-        var tapCount: Int = 0
-        var avgGap: Double = 0
-        var shouldLog = false
-        Self.micTapLock.withLock { state in
-            tapGap = state.lastMicTapTime > 0 ? tapStart - state.lastMicTapTime : 0
+        let tapStats = Self.micTapLock.withLock { state -> (tapGap: Double, tapCount: Int, avgGap: Double, shouldLog: Bool) in
+            let tapGap = state.lastMicTapTime > 0 ? tapStart - state.lastMicTapTime : 0
             state.lastMicTapTime = tapStart
             state.micTapCount += 1
             state.micTapGapTotal += tapGap
-            tapCount = state.micTapCount
-            avgGap = state.micTapGapTotal / Double(state.micTapCount)
-            shouldLog = state.micTapCount % 50 == 0
+            let tapCount = state.micTapCount
+            let avgGap = state.micTapGapTotal / Double(state.micTapCount)
+            let shouldLog = state.micTapCount % 50 == 0
+            return (tapGap, tapCount, avgGap, shouldLog)
         }
         
         // Log tap timing every 50 callbacks
-        if shouldLog {
+        if tapStats.shouldLog {
             Task {
                 await DiagnosticLogger.shared.log(.aec,
-                    "MIC_TAP: count=\(tapCount), lastGap=\(String(format: "%.3f", tapGap))s, avgGap=\(String(format: "%.3f", avgGap))s")
+                    "MIC_TAP: count=\(tapStats.tapCount), lastGap=\(String(format: "%.3f", tapStats.tapGap))s, avgGap=\(String(format: "%.3f", tapStats.avgGap))s")
             }
         }
         

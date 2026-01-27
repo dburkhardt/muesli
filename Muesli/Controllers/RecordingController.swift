@@ -406,21 +406,20 @@ final class RecordingController {
         
         // Collect timing (no allocation if within capacity)
         // Collect timing and flush every 100 buffers (~2 seconds) - NOT per-buffer
-        var sysTimingSnapshot: [CallbackTiming] = []
-        let shouldFlushSys = timingStateLock.withLock { state -> Bool in
+        let sysFlush = timingStateLock.withLock { state -> (shouldFlush: Bool, snapshot: [CallbackTiming]) in
             if state.systemTimings.count < 200 {
                 state.systemTimings.append(timing)
             }
             state.sysTimingFlushCount += 1
             if state.sysTimingFlushCount % 100 == 0 {
-                sysTimingSnapshot = state.systemTimings
+                let snapshot = state.systemTimings
                 state.systemTimings.removeAll(keepingCapacity: true)
-                return true
+                return (true, snapshot)
             }
-            return false
+            return (false, [])
         }
-        if shouldFlushSys {
-            let stats = computeTimingStats(sysTimingSnapshot)
+        if sysFlush.shouldFlush {
+            let stats = computeTimingStats(sysFlush.snapshot)
             Task {
                 await DiagnosticLogger.shared.log(.aec,
                     "SYS_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
@@ -479,64 +478,70 @@ final class RecordingController {
         // System audio is always at 48kHz, so AEC must operate at 48kHz
         let micSamples48k: [Float]
         if sourceSampleRate != 48000 {
-            let resampled = EchoCancellationServiceNLMS.resampleFloat32Public(
-                samples: micSamplesNative,
-                sourceSampleRate: sourceSampleRate,
-                targetSampleRate: 48000
-            )
-            if resampled.isEmpty {
-                // Fallback: use native samples at original rate
+            if micSamplesNative.isEmpty {
+                // Empty input buffer: don't treat as resample failure
                 micSamples48k = micSamplesNative
-                actualMicRate = sourceSampleRate  // Track that we're NOT at 48kHz
-                
-                // CRITICAL: Disable AEC since sample rates don't match (per r7x9 review)
-                // AEC expects both streams at 48kHz - mismatched rates cause:
-                // - Incorrect echo prediction (time alignment breaks)
-                // - Potential buffer overruns/underruns
-                // - Degraded or non-functional echo cancellation
-                //
-                // Atomic check-and-set to prevent TOCTOU race condition:
-                // Multiple audio callback threads could otherwise observe the same state
-                // and trigger duplicate warnings.
-                let shouldShowWarning = aecDisabledLock.withLock {
-                    if !$0 {
-                        $0 = true  // Atomically mark as disabled
-                        return true  // First time - need to warn
-                    }
-                    return false
-                }
-                
-                if shouldShowWarning {
-                    // Rate-limited warning (per 9ebe review) - show only once per session
-                    // Atomic check-and-set to prevent duplicate warnings from concurrent threads
-                    let shouldWarn = warningShownLock.withLock {
+                actualMicRate = sourceSampleRate
+            } else {
+                let resampled = EchoCancellationServiceNLMS.resampleFloat32Public(
+                    samples: micSamplesNative,
+                    sourceSampleRate: sourceSampleRate,
+                    targetSampleRate: 48000
+                )
+                if resampled.isEmpty {
+                    // Fallback: use native samples at original rate
+                    micSamples48k = micSamplesNative
+                    actualMicRate = sourceSampleRate  // Track that we're NOT at 48kHz
+                    
+                    // CRITICAL: Disable AEC since sample rates don't match (per r7x9 review)
+                    // AEC expects both streams at 48kHz - mismatched rates cause:
+                    // - Incorrect echo prediction (time alignment breaks)
+                    // - Potential buffer overruns/underruns
+                    // - Degraded or non-functional echo cancellation
+                    //
+                    // Atomic check-and-set to prevent TOCTOU race condition:
+                    // Multiple audio callback threads could otherwise observe the same state
+                    // and trigger duplicate warnings.
+                    let shouldShowWarning = aecDisabledLock.withLock {
                         if !$0 {
-                            $0 = true  // Atomically mark as warned
-                            return true
+                            $0 = true  // Atomically mark as disabled
+                            return true  // First time - need to warn
                         }
                         return false
                     }
                     
-                    if shouldWarn {
-                        // Log to diagnostics
-                        Task {
-                            await DiagnosticLogger.shared.log(.aec,
-                                "RESAMPLE_FALLBACK: Disabling AEC - mic at \(sourceSampleRate)Hz, cannot resample to 48kHz")
+                    if shouldShowWarning {
+                        // Rate-limited warning (per 9ebe review) - show only once per session
+                        // Atomic check-and-set to prevent duplicate warnings from concurrent threads
+                        let shouldWarn = warningShownLock.withLock {
+                            if !$0 {
+                                $0 = true  // Atomically mark as warned
+                                return true
+                            }
+                            return false
                         }
                         
-                        // Show user warning
-                        Task { @MainActor in
-                            warningManager.addWarning(
-                                .microphone,
-                                message: "Echo cancellation disabled",
-                                details: "Microphone resampling failed (using \(sourceSampleRate)Hz). Echo may be present in recording.",
-                                canRetry: false
-                            )
+                        if shouldWarn {
+                            // Log to diagnostics
+                            Task {
+                                await DiagnosticLogger.shared.log(.aec,
+                                    "RESAMPLE_FALLBACK: Disabling AEC - mic at \(sourceSampleRate)Hz, cannot resample to 48kHz")
+                            }
+                            
+                            // Show user warning
+                            Task { @MainActor in
+                                warningManager.addWarning(
+                                    .microphone,
+                                    message: "Echo cancellation disabled",
+                                    details: "Microphone resampling failed (using \(sourceSampleRate)Hz). Echo may be present in recording.",
+                                    canRetry: false
+                                )
+                            }
                         }
                     }
+                } else {
+                    micSamples48k = resampled
                 }
-            } else {
-                micSamples48k = resampled
             }
         } else {
             micSamples48k = micSamplesNative
@@ -580,21 +585,20 @@ final class RecordingController {
         if isMicMuted {
             // Still record timing for muted case
             timing.total = CACurrentMediaTime() - callbackStart
-            var micTimingSnapshot: [CallbackTiming] = []
-            let shouldFlushMic = timingStateLock.withLock { state -> Bool in
+            let micFlush = timingStateLock.withLock { state -> (shouldFlush: Bool, snapshot: [CallbackTiming]) in
                 if state.micTimings.count < 200 {
                     state.micTimings.append(timing)
                 }
                 state.micTimingFlushCount += 1
                 if state.micTimingFlushCount % 100 == 0 {
-                    micTimingSnapshot = state.micTimings
+                    let snapshot = state.micTimings
                     state.micTimings.removeAll(keepingCapacity: true)
-                    return true
+                    return (true, snapshot)
                 }
-                return false
+                return (false, [])
             }
-            if shouldFlushMic {
-                let stats = computeTimingStats(micTimingSnapshot)
+            if micFlush.shouldFlush {
+                let stats = computeTimingStats(micFlush.snapshot)
                 Task {
                     await DiagnosticLogger.shared.log(.aec,
                         "MIC_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
@@ -636,21 +640,20 @@ final class RecordingController {
         timing.total = CACurrentMediaTime() - callbackStart
         
         // Collect timing (no allocation if within capacity)
-        var micTimingSnapshot: [CallbackTiming] = []
-        let shouldFlushMic = timingStateLock.withLock { state -> Bool in
+        let micFlush = timingStateLock.withLock { state -> (shouldFlush: Bool, snapshot: [CallbackTiming]) in
             if state.micTimings.count < 200 {
                 state.micTimings.append(timing)
             }
             state.micTimingFlushCount += 1
             if state.micTimingFlushCount % 100 == 0 {
-                micTimingSnapshot = state.micTimings
+                let snapshot = state.micTimings
                 state.micTimings.removeAll(keepingCapacity: true)
-                return true
+                return (true, snapshot)
             }
-            return false
+            return (false, [])
         }
-        if shouldFlushMic {
-            let stats = computeTimingStats(micTimingSnapshot)
+        if micFlush.shouldFlush {
+            let stats = computeTimingStats(micFlush.snapshot)
             Task {
                 await DiagnosticLogger.shared.log(.aec,
                     "MIC_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
