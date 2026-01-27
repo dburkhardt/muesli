@@ -19,7 +19,8 @@
 # - Logs all output to /tmp/muesli-build-TIMESTAMP.log by default
 # - Uses deterministic DerivedData path (no wildcards)
 # - Prevents parallel builds with a lock file
-# - Clears ALL caches by default (DerivedData, Launch Services, Swift PM, module caches)
+# - Clears project caches by default (DerivedData, Launch Services, module caches)
+# - Preserves Swift PM cache (expensive deps like MLX are not rebuilt each time)
 # - TCC permissions persist across builds (use --reset-tcc for onboarding testing)
 # - Verifies the app was just built (modification time check)
 # - Uses full path with open -a to bypass Launch Services
@@ -130,7 +131,8 @@ for arg in "$@"; do
             echo ""
             echo "Default behavior (DEEP CLEAN):"
             echo "  - Logs all output to /tmp/muesli-build-TIMESTAMP.log"
-            echo "  - Removes ALL caches (DerivedData, Launch Services, Swift PM, module caches)"
+            echo "  - Removes project caches (DerivedData, Launch Services, module caches)"
+            echo "  - Preserves Swift PM cache (expensive deps like MLX are not rebuilt)"
             echo "  - Does a clean build to ensure all code changes are compiled"
             echo "  - TCC permissions persist across builds (use --reset-tcc for onboarding testing)"
             echo "  - Verifies correct app version is launched"
@@ -340,7 +342,8 @@ if [ "$DEEP_CLEAN" = true ]; then
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY RUN] Would remove: $DERIVED_DATA"
         print_info "[DRY RUN] Would remove: ~/Library/Developer/Xcode/DerivedData/Muesli-*"
-        print_info "[DRY RUN] Would remove: Swift module caches"
+        print_info "[DRY RUN] Would preserve: Swift PM cache (MLX, WhisperKit, etc.)"
+        print_info "[DRY RUN] Would remove: Xcode module caches"
         print_info "[DRY RUN] Would clear Launch Services for: $BUNDLE_ID"
     else
         # Remove local DerivedData
@@ -359,11 +362,10 @@ if [ "$DEEP_CLEAN" = true ]; then
             print_success "Removed $STALE_COUNT stale Muesli folder(s) from Xcode DerivedData"
         fi
         
-        # Clear Swift Package Manager caches
-        if [ -d ~/Library/Caches/org.swift.swiftpm ]; then
-            rm -rf ~/Library/Caches/org.swift.swiftpm
-            print_success "Cleared Swift Package Manager cache"
-        fi
+        # Swift Package Manager cache is preserved by default
+        # This cache contains expensive-to-build dependencies like MLX that rarely change
+        # To force a full SPM rebuild, manually run: rm -rf ~/Library/Caches/org.swift.swiftpm
+        print_info "Swift Package Manager cache preserved (MLX, WhisperKit, etc.)"
         
         # Clear Xcode's module cache for this project
         if [ -d ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex ]; then
