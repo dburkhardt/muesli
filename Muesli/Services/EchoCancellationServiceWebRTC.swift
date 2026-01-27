@@ -512,27 +512,39 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     }
     
     /// Extract render frame from system buffer at given offset (returns nil if not enough data)
+    ///
+    /// CRITICAL FIX (2026-01-27): The offset represents how far AHEAD the system buffer is
+    /// relative to mic in sample count. To find the matching system samples for the current
+    /// mic frame, we need to read from near the END of the buffer (newest data), not the
+    /// beginning (oldest data).
+    ///
+    /// Example:
+    /// - offset = 1920 (system is 40ms ahead in sample count)
+    /// - available = 24000 (500ms buffer)
+    /// - To get system samples from 40ms ago: read from position (available - offset - frameSize)
+    ///   = 24000 - 1920 - 480 = 21600 (45ms from oldest = ~40ms from newest) ✓
+    ///
+    /// Previous WRONG calculation read from position (offset - frameSize) = 1440, which was
+    /// reading data from 470ms ago instead of 40ms ago!
     private func extractRenderFrame(offset: Int64) -> [Float]? {
         return state.withLock { state in
-            // Calculate where to read from in system buffer (offset from head/readIndex)
-            // The ring buffer's read() method reads from readIndex + offset
-            // Positive offset: system arrives later → read older system samples (further from head)
-            // Negative offset: system arrives earlier → read older system samples (closer to head)
             let available = state.systemRingBuffer.available
             let targetOffset: Int
+            
             if offset >= 0 {
-                // System arrives later: read samples that are 'offset' samples behind current mic position
-                // Offset from head: readIndex + (offset - frameSize) to get the right alignment
-                targetOffset = max(0, Int(offset) - frameSize)
+                // System has more samples than mic (system callbacks started earlier or are faster)
+                // The "extra" system samples are the NEWEST ones
+                // We need to skip those and read older samples that match current mic timing
+                // Read from: available - offset - frameSize (near the newest data, but offset back)
+                targetOffset = max(0, available - Int(offset) - frameSize)
             } else {
-                // System arrives earlier: we need system samples from the past relative to mic
-                // If offset is -960, mic is 960 samples ahead of system temporally
-                // We need system samples that are 960 samples OLDER than current mic
-                // Those are closer to the head (readIndex), so use a small positive offset
-                // But we need at least frameSize samples, so ensure we have enough
-                // For negative offsets, read from near the head (oldest available samples)
-                targetOffset = max(0, -Int(offset))
+                // System has fewer samples than mic (mic callbacks started earlier)
+                // Mic is "ahead" - we need even newer system samples than we have
+                // Read from the newest available data (end of buffer)
+                // Add |offset| to account for the timing difference
+                targetOffset = max(0, available - frameSize + Int(offset))
             }
+            
             let requiredSamples = targetOffset + frameSize
             
             guard available >= requiredSamples else {
