@@ -61,12 +61,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     private let maxBufferMs: Int = 500  // 500ms = 24000 samples
     private let maxBufferSamples: Int = 24000
     
-    // ACOUSTIC ECHO DELAY: Time for sound to travel from speaker to mic
-    // This is DIFFERENT from callback timing or sample count offsets!
-    // Typical values: 30-100ms for laptop speakers/mic, 50-150ms for external speakers
-    // This offset ensures we read OLDER render samples to match the echo in current mic
-    private let acousticEchoDelayMs: Int = 60  // 60ms default - adjust if needed
-    private var acousticEchoDelaySamples: Int { acousticEchoDelayMs * sampleRate / 1000 }
+    // NOTE: Acoustic echo delay is now handled internally by WebRTC AEC3.
+    // WebRTC uses frame arrival timing (from separate processRenderFrame/processCaptureFrame calls)
+    // to estimate the acoustic delay automatically. No manual configuration needed.
     
     // MARK: - State (Thread-Safe)
     
@@ -114,6 +111,11 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     private var renderFrame = [Float](repeating: 0, count: 480)
     private var captureFrame = [Float](repeating: 0, count: 480)
     private var outputFrame = [Float](repeating: 0, count: 480)
+    
+    // Frame accumulation buffer for system audio (thread-safe via lock)
+    // ScreenCaptureKit delivers variable-sized buffers; we accumulate until 480 samples (10ms)
+    // Protected by its own lock since storeSystemAudio() runs on SCK's thread
+    private let renderAccumulatorLock = OSAllocatedUnfairLock(initialState: [Float]())
     
     // #region agent log - Debug log throttle counter
     private var debugLogCounter: Int = 0
@@ -200,8 +202,51 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             // #endregion
         }
         
-        // NOTE: We do NOT send render frames to WebRTC here anymore.
-        // Instead, we find and send the ALIGNED frame in processMicrophoneAudio.
+        // TIMING FIX (2026-01-27): Send render frames to WebRTC IMMEDIATELY when system audio arrives.
+        // This gives WebRTC the natural frame arrival timing it needs for delay estimation.
+        // Previously we batched render+capture calls together in processMicrophoneAudio(), which
+        // made WebRTC see delay ≈ 0ms (defeating its internal delay estimator).
+        accumulateAndProcessRender(monoSamples)
+    }
+    
+    /// Accumulate system audio samples and process complete 10ms frames through WebRTC
+    /// This is called from storeSystemAudio() on the ScreenCaptureKit callback thread
+    private func accumulateAndProcessRender(_ samples: [Float]) {
+        guard aecBridge?.isReady == true else { return }
+        
+        // Accumulate samples until we have a full 10ms frame (480 samples)
+        renderAccumulatorLock.withLock { accumulator in
+            accumulator.append(contentsOf: samples)
+            
+            // Process all complete frames
+            var framesProcessed = 0
+            while accumulator.count >= frameSize {
+                // Extract frame
+                let frame = Array(accumulator.prefix(frameSize))
+                accumulator.removeFirst(frameSize)
+                
+                // Send to WebRTC (outside of lock would be better but we need accumulator access)
+                let success = frame.withUnsafeBufferPointer { ptr in
+                    aecBridge?.processRenderFrame(ptr.baseAddress!) ?? false
+                }
+                
+                if success {
+                    framesProcessed += 1
+                } else {
+                    // Log error but continue - don't block audio callback
+                    let errorCode = aecBridge?.lastError.rawValue ?? -1
+                    Task { await DiagnosticLogger.shared.log(.aec,
+                        "WEBRTC_RENDER_FAILED: error=\(errorCode)") }
+                }
+            }
+            
+            // Log timing for verification (every 100 frames ≈ 1 second)
+            if framesProcessed > 0 {
+                let timestamp = CACurrentMediaTime()
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "WEBRTC_RENDER_SENT: frames=\(framesProcessed), time=\(String(format: "%.3f", timestamp))") }
+            }
+        }
     }
     
     /// Process microphone audio to remove echo
@@ -214,18 +259,17 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         // Implementation uses CACurrentMediaTime() internally for timing
         let now = CACurrentMediaTime()
         
-        // Step 1: Calculate offset if not yet done
-        var currentOffset: Int64 = 0
-        var offsetReady = false
-        
-        let offsetInfo = state.withLock { state in
+        // Step 1: Update stream timing statistics (for diagnostic logging and drift detection)
+        // NOTE: Offset calculation is kept for drift monitoring, but no longer used for
+        // render frame extraction. WebRTC handles delay estimation internally using
+        // frame arrival timing from separate processRenderFrame/processCaptureFrame calls.
+        state.withLock { state in
             // Track timing for warmup
             if state.micBufferTimes.count < SyncState.kBuffersToAverage {
                 state.micBufferTimes.append(now)
             }
             
-            // Calculate offset once we have enough timing data
-            // Using 12 buffers (~1 second) instead of 50 buffers for faster sync.
+            // Calculate offset once we have enough timing data (for diagnostic logging)
             if !state.offsetCalculated &&
                state.systemBufferTimes.count >= SyncState.kBuffersToAverage &&
                state.micBufferTimes.count >= SyncState.kBuffersToAverage {
@@ -233,74 +277,30 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 let avgSysTime = state.systemBufferTimes.reduce(0, +) / Double(SyncState.kBuffersToAverage)
                 let avgMicTime = state.micBufferTimes.reduce(0, +) / Double(SyncState.kBuffersToAverage)
                 let timingOffsetSeconds = avgSysTime - avgMicTime
-                let timingOffsetSamples = Int64(timingOffsetSeconds * Double(sampleRate))
-                
-                // CRITICAL FIX (2026-01-27): Use SAMPLE-COUNT offset, not TIMING offset!
-                //
-                // The timing offset measures callback DELIVERY latency (~400ms), not audio timing.
-                // Both streams capture "now" audio and deliver it with their own latency.
-                // Sample counts being equal confirms the audio is temporally synchronized.
-                //
-                // Debug evidence:
-                // - Timing offset: -422ms (callback delivery latency)
-                // - Sample delta: ~0 (both streams delivered same amount = synchronized)
-                // - Using timing offset reads audio from 433ms ago = WRONG alignment
-                // - Using sample delta keeps streams aligned = WebRTC can find echo internally
-                //
-                // WebRTC AEC3 can handle up to ~500ms delay internally via its adaptive filter.
-                // Our job is just to keep the streams sample-count synchronized.
                 let actualDelta = state.totalSystemSamples - state.totalMicSamples
-                state.deliveryOffsetSamples = max(-Int64(maxBufferSamples), min(Int64(maxBufferSamples), actualDelta))
+                state.deliveryOffsetSamples = actualDelta
                 state.offsetCalculated = true
                 
-                // #region agent log - H1: Log offset calculation details
-                debugLog("OFFSET_CALCULATED", hypothesisId: "H1", data: [
-                    "avgSysTime": String(format: "%.6f", avgSysTime),
-                    "avgMicTime": String(format: "%.6f", avgMicTime),
-                    "timingOffsetMs": String(format: "%.1f", timingOffsetSeconds * 1000),
-                    "timingOffsetSamples": timingOffsetSamples,
-                    "sampleDelta": actualDelta,
-                    "usedOffset": state.deliveryOffsetSamples,
-                    "totalSystemSamples": state.totalSystemSamples,
-                    "totalMicSamples": state.totalMicSamples
-                ])
-                // #endregion
-                
-                // Capture values before Task to avoid capturing inout state (Swift 6)
+                // Log offset for diagnostics (WebRTC handles this internally now)
                 let logOffset = state.deliveryOffsetSamples
                 let logTimingMs = String(format: "%.1f", timingOffsetSeconds * 1000)
                 Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_OFFSET: \(logOffset) samples (timing was \(logTimingMs)ms, using sample delta)") }
+                    "WEBRTC_STREAM_SYNC: sampleDelta=\(logOffset), callbackOffset=\(logTimingMs)ms (WebRTC handles delay internally)") }
             }
             
-            // LESSON 7: Periodic offset validation using sample-count delta
+            // Periodic drift monitoring (for diagnostics)
             state.offsetValidationCount += 1
             if state.offsetCalculated && state.offsetValidationCount >= SyncState.kOffsetValidationInterval {
                 state.offsetValidationCount = 0
                 let actualDelta = state.totalSystemSamples - state.totalMicSamples
-                let newOffset = max(-Int64(maxBufferSamples), min(Int64(maxBufferSamples), actualDelta))
-                if abs(newOffset - state.deliveryOffsetSamples) > 480 {  // >10ms drift
+                if abs(actualDelta - state.deliveryOffsetSamples) > 480 {  // >10ms drift
                     let oldOffset = state.deliveryOffsetSamples
-                    state.deliveryOffsetSamples = newOffset
+                    state.deliveryOffsetSamples = actualDelta
                     Task { await DiagnosticLogger.shared.log(.aec,
-                        "WEBRTC_OFFSET_DRIFT: \(oldOffset)→\(newOffset) samples") }
+                        "WEBRTC_STREAM_DRIFT: \(oldOffset)→\(actualDelta) samples") }
                 }
             }
-            
-            // Return values from withLock instead of mutating captured vars (Swift 6 compliance)
-            return (state.deliveryOffsetSamples, state.offsetCalculated)
         }
-        currentOffset = offsetInfo.0
-        offsetReady = offsetInfo.1
-        
-        // #region agent log (async, non-blocking) - track offset usage
-        if offsetReady {
-            let logOffset = currentOffset
-            let logOffsetReady = offsetReady
-            Task { await DiagnosticLogger.shared.log(.aec,
-                "AEC_OFFSET_USED: offset=\(logOffset) samples (\(String(format: "%.1f", Double(logOffset) / 48.0))ms), ready=\(logOffsetReady)") }
-        }
-        // #endregion
         
         // Step 2: Process in 10ms frames with ACTUAL ALIGNMENT
         // CRITICAL FIX: Push samples to buffer FIRST, then extract and process frames.
@@ -322,7 +322,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         outputSamples.reserveCapacity(microphoneSamples.count)
         
         // Process frames (outside lock to avoid blocking)
-        // Try to extract and process all available frames from buffer
+        // TIMING FIX (2026-01-27): Only call processCaptureFrame() here.
+        // processRenderFrame() is now called in storeSystemAudio() when system audio arrives,
+        // giving WebRTC the natural frame arrival timing it needs for delay estimation.
         var framesExtracted = 0
         while true {
             // Extract mic frame (Swift 6 compliant - returns new array or nil)
@@ -338,67 +340,16 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             }
             framesExtracted += 1
             
-            // Find MATCHING system audio using offset (THIS IS THE KEY FIX)
-            let renderFrameData: [Float]?
-            if offsetReady {
-                renderFrameData = extractRenderFrame(offset: currentOffset)
-            } else {
-                renderFrameData = nil
-            }
-            
-            // LESSON 7: Bounds check fallback - pass through if no matching system audio
-            guard let renderFrame = renderFrameData else {
-                // No matching system audio - pass through original mic audio
-                // #region agent log (async, non-blocking)
-                let logOffset = currentOffset
-                let logOffsetReady = offsetReady
-                let logFrame = framesExtracted
-                Task { await DiagnosticLogger.shared.log(.aec,
-                    "AEC_NO_RENDER: offset=\(logOffset), offsetReady=\(logOffsetReady), frame=\(logFrame)") }
-                // #endregion
-                outputSamples.append(contentsOf: micFrameData.prefix(frameSize))
-                continue
-            }
-            
-            // Feed ALIGNED frames to WebRTC (render BEFORE capture)
+            // Pre-allocate output buffer
             var processedFrame = outputFrame
             
-            // #region agent log - H3: Calculate RMS BEFORE WebRTC processing
-            let renderRMSBefore = sqrt(renderFrame.map { $0 * $0 }.reduce(0, +) / Float(renderFrame.count))
+            // Calculate RMS for diagnostic logging
             let micRMSBefore = sqrt(micFrameData.map { $0 * $0 }.reduce(0, +) / Float(micFrameData.count))
-            // #endregion
             
-            // Process render (system) frame first
-            let renderSuccess = renderFrame.withUnsafeBufferPointer { ptr in
-                aecBridge?.processRenderFrame(ptr.baseAddress!) ?? false
-            }
-            
-            if !renderSuccess {
-                // Render processing failed - log error and pass through
-                let logError = aecBridge?.lastError.rawValue ?? -1
-                let logOffset = currentOffset
-                Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_RENDER_FAILED: error=\(logError), offset=\(logOffset)") }
-                outputSamples.append(contentsOf: micFrameData.prefix(frameSize))
-                continue
-            }
-            
-            // #region agent log (async, non-blocking) - track successful frame pairs with RMS levels
-            if framesExtracted % 100 == 1 {  // Log first frame of every 100 (every ~1 second)
-                let logFrame = framesExtracted
-                let logOffset = currentOffset
-                let acousticDelayMs = acousticEchoDelayMs
-                let renderRMS = sqrt(renderFrame.map { $0 * $0 }.reduce(0, +) / Float(renderFrame.count))
-                let micRMS = sqrt(micFrameData.map { $0 * $0 }.reduce(0, +) / Float(micFrameData.count))
-                // Convert to dB for easier interpretation (0 dB = full scale, -60 dB = very quiet)
-                let renderDB = renderRMS > 0 ? 20 * log10(renderRMS) : -100
-                let micDB = micRMS > 0 ? 20 * log10(micRMS) : -100
-                Task { await DiagnosticLogger.shared.log(.aec,
-                    "AEC_FRAME_RMS: renderRMS=\(String(format: "%.4f", renderRMS)) (\(String(format: "%.1f", renderDB))dB), micRMS=\(String(format: "%.4f", micRMS)) (\(String(format: "%.1f", micDB))dB), offset=\(logOffset), acousticDelay=\(acousticDelayMs)ms") }
-            }
-            // #endregion
-            
-            // Then process capture (mic) frame
+            // Process capture (mic) frame through WebRTC AEC
+            // NOTE: Render frames were already sent to WebRTC in storeSystemAudio()
+            // with their natural arrival timing. WebRTC's internal delay estimator
+            // uses the timing difference to find the echo.
             let captureSuccess = micFrameData.withUnsafeBufferPointer { inputPtr in
                 processedFrame.withUnsafeMutableBufferPointer { outputPtr in
                     aecBridge?.processCaptureFrame(inputPtr.baseAddress!, outputSamples: outputPtr.baseAddress!) ?? false
@@ -406,16 +357,18 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             }
             
             if captureSuccess {
-                // #region agent log - Log AEC effect (input vs output RMS)
-                let outputRMS = sqrt(processedFrame.prefix(frameSize).map { $0 * $0 }.reduce(0, +) / Float(frameSize))
-                if framesExtracted % 100 == 1 {  // Log every ~1 second
+                // Log AEC effect periodically (every ~1 second)
+                if framesExtracted % 100 == 1 {
+                    let outputRMS = sqrt(processedFrame.prefix(frameSize).map { $0 * $0 }.reduce(0, +) / Float(frameSize))
                     let inputDB = micRMSBefore > 0 ? 20 * log10(micRMSBefore) : -100
                     let outputDB = outputRMS > 0 ? 20 * log10(outputRMS) : -100
                     let reductionDB = inputDB - outputDB  // Positive = AEC reduced the signal
+                    let erle = aecBridge?.getERLE() ?? 0
+                    let delayMs = aecBridge?.getDelayMs() ?? -1
+                    let timestamp = CACurrentMediaTime()
                     Task { await DiagnosticLogger.shared.log(.aec,
-                        "AEC_OUTPUT: inputRMS=\(String(format: "%.4f", micRMSBefore)) (\(String(format: "%.1f", inputDB))dB) → outputRMS=\(String(format: "%.4f", outputRMS)) (\(String(format: "%.1f", outputDB))dB), reduction=\(String(format: "%.1f", reductionDB))dB") }
+                        "WEBRTC_CAPTURE_SENT: time=\(String(format: "%.3f", timestamp)), ERLE=\(String(format: "%.1f", erle))dB, delay=\(delayMs)ms, reduction=\(String(format: "%.1f", reductionDB))dB") }
                 }
-                // #endregion
                 outputSamples.append(contentsOf: processedFrame.prefix(frameSize))
             } else {
                 // Processing failed - log specific error and pass through original
@@ -424,11 +377,6 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                     "WEBRTC_CAPTURE_FAILED: error=\(errorCode)") }
                 outputSamples.append(contentsOf: micFrameData.prefix(frameSize))
             }
-            
-            // DON'T consume system audio here! (Consensus from v5 reviewers)
-            // The ring buffer's overflow behavior (overwrite oldest when full) naturally
-            // evicts old samples. We always read at a fixed offset from the head, and
-            // the buffer maintains itself as a sliding window.
         }
         
         // CRITICAL FIX: Always return processed samples from buffer.
@@ -494,6 +442,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             state.offsetValidationCount = 0
         }
         
+        // Clear render accumulator
+        renderAccumulatorLock.withLock { $0.removeAll() }
+        
         aecBridge?.reset()
     }
     
@@ -516,59 +467,10 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         }
     }
     
-    /// Extract render frame from system buffer at given offset (returns nil if not enough data)
-    ///
-    /// CRITICAL FIX (2026-01-27): We need to account for TWO different delays:
-    /// 1. Sample-count offset: synchronization between streams (typically ~0)
-    /// 2. Acoustic echo delay: time for sound to travel speaker → room → mic (~30-100ms)
-    ///
-    /// When processing mic audio, we need render audio from EARLIER in time:
-    /// - Mic captures echo at time T
-    /// - That echo came from audio played at time T - acousticEchoDelay
-    /// - We need to read render samples from that earlier time
-    ///
-    /// Formula: targetOffset = available - sampleCountOffset - acousticEchoDelay - frameSize
-    private func extractRenderFrame(offset: Int64) -> [Float]? {
-        return state.withLock { state in
-            let available = state.systemRingBuffer.available
-            
-            // Total offset = sample-count offset + acoustic echo delay
-            // Both push us toward reading OLDER samples
-            let totalOffset = Int(offset) + acousticEchoDelaySamples
-            
-            // Calculate position to read from (older samples = smaller targetOffset)
-            let targetOffset: Int
-            if totalOffset >= 0 {
-                // Normal case: read from position that accounts for both offsets
-                targetOffset = max(0, available - totalOffset - frameSize)
-            } else {
-                // Unusual case: mic significantly ahead of system (shouldn't happen normally)
-                targetOffset = max(0, available - frameSize)
-            }
-            
-            let requiredSamples = targetOffset + frameSize
-            
-            guard available >= requiredSamples else {
-                // #region agent log - Log buffer underrun
-                debugLog("extractRenderFrame_UNDERRUN", hypothesisId: "H4", data: [
-                    "sampleOffset": offset,
-                    "acousticDelay": acousticEchoDelaySamples,
-                    "totalOffset": totalOffset,
-                    "targetOffset": targetOffset,
-                    "available": available,
-                    "requiredSamples": requiredSamples
-                ])
-                // #endregion
-                return nil
-            }
-            
-            var buffer = [Float](repeating: 0, count: frameSize)
-            let success = buffer.withUnsafeMutableBufferPointer { ptr in
-                state.systemRingBuffer.read(at: targetOffset, count: frameSize, into: ptr)
-            }
-            return success ? buffer : nil
-        }
-    }
+    // NOTE: extractRenderFrame() was removed in the timing fix (2026-01-27).
+    // Render frames are now sent directly to WebRTC in storeSystemAudio() via
+    // accumulateAndProcessRender(), giving WebRTC natural frame arrival timing
+    // for its internal delay estimation.
     
     // MARK: - Diagnostics
     
