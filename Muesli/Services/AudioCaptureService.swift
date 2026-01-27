@@ -488,11 +488,20 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     
     // AVAudioEngine-based microphone capture (replaces SCK's captureMicrophone)
     private var microphoneEngine: MicrophoneCaptureEngine?
+    private var pendingMicrophoneEngine: MicrophoneCaptureEngine?
     
     /// Selected microphone device ID (set before starting capture)
     private var selectedMicrophoneDeviceID: String?
     
     private(set) var isRecording = false
+
+    // MARK: - Startup Sync (System-first gating)
+    // ScreenCaptureKit can take hundreds of ms to deliver its first audio buffer.
+    // To guarantee render arrives before capture for WebRTC AEC, we start the mic
+    // ONLY after the first system buffer arrives (with a timeout fallback).
+    private var didStartMicrophone = false
+    private var didSeeSystemBuffer = false
+    private var micStartFallbackTask: Task<Void, Never>?
     
     // Audio configuration (using centralized AudioConfiguration)
     private let sampleRate: Int = AudioConfiguration.captureSampleRate
@@ -628,18 +637,18 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // Create the stream
         let stream = SCStream(filter: filter, configuration: configuration, delegate: delegate)
         
-        // Create and add stream output for system audio
-        let output = StreamOutput(handler: bufferHandler, levelHandler: levelHandler)
-        try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
+        // Create a wrapped handler to detect first system audio buffer
+        let captureHandler = bufferHandler
+        let wrappedHandler: AudioBufferHandler = { [weak self] buffer, type in
+            if type == .system {
+                Task { await self?.handleFirstSystemBuffer() }
+            }
+            captureHandler?(buffer, type)
+        }
         
-        // CRITICAL FIX (2026-01-27): Start system audio FIRST, then microphone.
-        // WebRTC AEC expects render (system) audio to arrive BEFORE capture (mic) audio.
-        // Previously, we started mic first which caused a 300-500ms callback offset inversion.
-        //
-        // Correct order:
-        // 1. Start ScreenCaptureKit stream (system audio)
-        // 2. Wait for it to initialize
-        // 3. Then start AVAudioEngine (microphone)
+        // Create and add stream output for system audio
+        let output = StreamOutput(handler: wrappedHandler, levelHandler: levelHandler)
+        try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
         
         // Start the ScreenCaptureKit stream FIRST
         do {
@@ -648,12 +657,8 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
             throw CaptureError.streamStartFailed(underlying: error)
         }
         
-        // Small delay to ensure SCK has started delivering buffers
-        // SCK needs time to initialize its audio pipeline after startCapture returns
-        try await Task.sleep(for: .milliseconds(50))
-        
-        // NOW start AVAudioEngine for microphone capture
-        let micHandler = bufferHandler
+        // Prepare microphone engine but DO NOT start until system audio arrives
+        let micHandler = captureHandler
         let micLevelHandler = levelHandler
         let micEngine = MicrophoneCaptureEngine(
             bufferHandler: { buffer in
@@ -663,24 +668,15 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
                 micLevelHandler?(level, .microphone)
             }
         )
+        pendingMicrophoneEngine = micEngine
+        didStartMicrophone = false
+        didSeeSystemBuffer = false
         
-        do {
-            try micEngine.start(deviceID: selectedMicrophoneDeviceID)
-            self.microphoneEngine = micEngine
-        } catch {
-            // Continue without mic capture - system audio will still work
-            logger.warning("Microphone capture failed to start: \(error.localizedDescription)")
-            
-            // Propagate warning to UI via callback
-            let details = """
-                Microphone capture failed to start.
-                Error: \(error.localizedDescription)
-                Device ID: \(selectedMicrophoneDeviceID ?? "system default")
-                
-                System audio is still being recorded.
-                You can select a different microphone in preferences and try again.
-                """
-            warningHandler?("Microphone unavailable", details, true)
+        // Fallback: start mic after 1s if no system audio arrives
+        micStartFallbackTask?.cancel()
+        micStartFallbackTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            await self?.startMicrophoneIfNeeded(reason: "timeout")
         }
         
         self.stream = stream
@@ -697,6 +693,11 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // Stop microphone engine
         microphoneEngine?.stop()
         microphoneEngine = nil
+        pendingMicrophoneEngine = nil
+        didStartMicrophone = false
+        didSeeSystemBuffer = false
+        micStartFallbackTask?.cancel()
+        micStartFallbackTask = nil
         
         // Mark as not recording
         self.isRecording = false
@@ -717,6 +718,11 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // Stop microphone engine first
         microphoneEngine?.stop()
         microphoneEngine = nil
+        pendingMicrophoneEngine = nil
+        didStartMicrophone = false
+        didSeeSystemBuffer = false
+        micStartFallbackTask?.cancel()
+        micStartFallbackTask = nil
         
         try await stream.stopCapture()
         
@@ -724,6 +730,44 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         self.streamOutput = nil
         self.streamDelegate = nil
         self.isRecording = false
+    }
+
+    // MARK: - Startup Sync Helpers
+    
+    private func handleFirstSystemBuffer() async {
+        guard !didSeeSystemBuffer else { return }
+        didSeeSystemBuffer = true
+        logger.info("System audio first buffer arrived; starting mic capture")
+        await startMicrophoneIfNeeded(reason: "system-first-buffer")
+    }
+    
+    private func startMicrophoneIfNeeded(reason: String) async {
+        guard !didStartMicrophone else { return }
+        guard let micEngine = pendingMicrophoneEngine else { return }
+        
+        didStartMicrophone = true
+        micStartFallbackTask?.cancel()
+        micStartFallbackTask = nil
+        
+        do {
+            try micEngine.start(deviceID: selectedMicrophoneDeviceID)
+            self.microphoneEngine = micEngine
+            logger.info("Microphone capture started (\(reason))")
+        } catch {
+            // Continue without mic capture - system audio will still work
+            logger.warning("Microphone capture failed to start: \(error.localizedDescription)")
+            
+            // Propagate warning to UI via callback
+            let details = """
+                Microphone capture failed to start.
+                Error: \(error.localizedDescription)
+                Device ID: \(selectedMicrophoneDeviceID ?? "system default")
+                
+                System audio is still being recorded.
+                You can select a different microphone in preferences and try again.
+                """
+            warningHandler?("Microphone unavailable", details, true)
+        }
     }
 }
 
