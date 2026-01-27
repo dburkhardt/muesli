@@ -117,6 +117,11 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     // Protected by its own lock since storeSystemAudio() runs on SCK's thread
     private let renderAccumulatorLock = OSAllocatedUnfairLock(initialState: [Float]())
     
+    // Flag to track whether mic audio has started (to prevent render frame accumulation before capture)
+    // WebRTC can only handle ~300ms delay, but our callback offset is 250-350ms.
+    // If we send render frames before mic starts, WebRTC accumulates too many and exceeds its capacity.
+    private let micHasStartedLock = OSAllocatedUnfairLock(initialState: false)
+    
     // #region agent log - Debug log throttle counter
     private var debugLogCounter: Int = 0
     // #endregion
@@ -202,11 +207,18 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             // #endregion
         }
         
-        // TIMING FIX (2026-01-27): Send render frames to WebRTC IMMEDIATELY when system audio arrives.
-        // This gives WebRTC the natural frame arrival timing it needs for delay estimation.
-        // Previously we batched render+capture calls together in processMicrophoneAudio(), which
-        // made WebRTC see delay ≈ 0ms (defeating its internal delay estimator).
-        accumulateAndProcessRender(monoSamples)
+        // TIMING FIX v2 (2026-01-27): Only send render frames to WebRTC AFTER mic audio has started.
+        // WebRTC can only handle ~300ms delay internally (kMaxApiCallsJitterBlocks = 30 blocks).
+        // Our callback offset is 250-350ms, so if we send render frames before mic starts,
+        // WebRTC accumulates too many frames and the delay exceeds its capacity (observed: 464ms).
+        //
+        // Solution: Wait for mic audio to start, then send render frames with natural timing.
+        // This keeps the delay within WebRTC's handling capacity while still giving it
+        // accurate frame arrival timing for delay estimation.
+        let micStarted = micHasStartedLock.withLock { $0 }
+        if micStarted {
+            accumulateAndProcessRender(monoSamples)
+        }
     }
     
     /// Accumulate system audio samples and process complete 10ms frames through WebRTC
@@ -254,6 +266,20 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     func processMicrophoneAudio(microphoneSamples: [Float]) -> [Float] {
         guard !microphoneSamples.isEmpty else { return microphoneSamples }
         guard aecBridge?.isReady == true else { return microphoneSamples }
+        
+        // Mark mic as started - this allows storeSystemAudio() to begin sending render frames to WebRTC
+        // We do this BEFORE processing to ensure render frames start arriving promptly
+        let wasStarted = micHasStartedLock.withLock { started -> Bool in
+            let was = started
+            if !started {
+                started = true
+            }
+            return was
+        }
+        if !wasStarted {
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "WEBRTC_MIC_STARTED: Render frames will now be sent to WebRTC") }
+        }
         
         // Protocol signature matches existing protocol (no timestamps)
         // Implementation uses CACurrentMediaTime() internally for timing
@@ -442,8 +468,9 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             state.offsetValidationCount = 0
         }
         
-        // Clear render accumulator
+        // Clear render accumulator and reset mic started flag
         renderAccumulatorLock.withLock { $0.removeAll() }
+        micHasStartedLock.withLock { $0 = false }
         
         aecBridge?.reset()
     }
