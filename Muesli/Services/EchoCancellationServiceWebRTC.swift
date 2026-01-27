@@ -61,6 +61,13 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     private let maxBufferMs: Int = 500  // 500ms = 24000 samples
     private let maxBufferSamples: Int = 24000
     
+    // ACOUSTIC ECHO DELAY: Time for sound to travel from speaker to mic
+    // This is DIFFERENT from callback timing or sample count offsets!
+    // Typical values: 30-100ms for laptop speakers/mic, 50-150ms for external speakers
+    // This offset ensures we read OLDER render samples to match the echo in current mic
+    private let acousticEchoDelayMs: Int = 60  // 60ms default - adjust if needed
+    private var acousticEchoDelaySamples: Int { acousticEchoDelayMs * sampleRate / 1000 }
+    
     // MARK: - State (Thread-Safe)
     
     private struct SyncState {
@@ -380,13 +387,14 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             if framesExtracted % 100 == 1 {  // Log first frame of every 100 (every ~1 second)
                 let logFrame = framesExtracted
                 let logOffset = currentOffset
+                let acousticDelayMs = acousticEchoDelayMs
                 let renderRMS = sqrt(renderFrame.map { $0 * $0 }.reduce(0, +) / Float(renderFrame.count))
                 let micRMS = sqrt(micFrameData.map { $0 * $0 }.reduce(0, +) / Float(micFrameData.count))
                 // Convert to dB for easier interpretation (0 dB = full scale, -60 dB = very quiet)
                 let renderDB = renderRMS > 0 ? 20 * log10(renderRMS) : -100
                 let micDB = micRMS > 0 ? 20 * log10(micRMS) : -100
                 Task { await DiagnosticLogger.shared.log(.aec,
-                    "AEC_FRAME_RMS: renderRMS=\(String(format: "%.4f", renderRMS)) (\(String(format: "%.1f", renderDB))dB), micRMS=\(String(format: "%.4f", micRMS)) (\(String(format: "%.1f", micDB))dB), offset=\(logOffset)") }
+                    "AEC_FRAME_RMS: renderRMS=\(String(format: "%.4f", renderRMS)) (\(String(format: "%.1f", renderDB))dB), micRMS=\(String(format: "%.4f", micRMS)) (\(String(format: "%.1f", micDB))dB), offset=\(logOffset), acousticDelay=\(acousticDelayMs)ms") }
             }
             // #endregion
             
@@ -510,52 +518,50 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     
     /// Extract render frame from system buffer at given offset (returns nil if not enough data)
     ///
-    /// CRITICAL FIX (2026-01-27): The offset represents how far AHEAD the system buffer is
-    /// relative to mic in sample count. To find the matching system samples for the current
-    /// mic frame, we need to read from near the END of the buffer (newest data), not the
-    /// beginning (oldest data).
+    /// CRITICAL FIX (2026-01-27): We need to account for TWO different delays:
+    /// 1. Sample-count offset: synchronization between streams (typically ~0)
+    /// 2. Acoustic echo delay: time for sound to travel speaker → room → mic (~30-100ms)
     ///
-    /// Example:
-    /// - offset = 1920 (system is 40ms ahead in sample count)
-    /// - available = 24000 (500ms buffer)
-    /// - To get system samples from 40ms ago: read from position (available - offset - frameSize)
-    ///   = 24000 - 1920 - 480 = 21600 (45ms from oldest = ~40ms from newest) ✓
+    /// When processing mic audio, we need render audio from EARLIER in time:
+    /// - Mic captures echo at time T
+    /// - That echo came from audio played at time T - acousticEchoDelay
+    /// - We need to read render samples from that earlier time
     ///
-    /// Previous WRONG calculation read from position (offset - frameSize) = 1440, which was
-    /// reading data from 470ms ago instead of 40ms ago!
+    /// Formula: targetOffset = available - sampleCountOffset - acousticEchoDelay - frameSize
     private func extractRenderFrame(offset: Int64) -> [Float]? {
         return state.withLock { state in
             let available = state.systemRingBuffer.available
-            let targetOffset: Int
             
-            if offset >= 0 {
-                // System has more samples than mic (system callbacks started earlier or are faster)
-                // The "extra" system samples are the NEWEST ones
-                // We need to skip those and read older samples that match current mic timing
-                // Read from: available - offset - frameSize (near the newest data, but offset back)
-                targetOffset = max(0, available - Int(offset) - frameSize)
+            // Total offset = sample-count offset + acoustic echo delay
+            // Both push us toward reading OLDER samples
+            let totalOffset = Int(offset) + acousticEchoDelaySamples
+            
+            // Calculate position to read from (older samples = smaller targetOffset)
+            let targetOffset: Int
+            if totalOffset >= 0 {
+                // Normal case: read from position that accounts for both offsets
+                targetOffset = max(0, available - totalOffset - frameSize)
             } else {
-                // System has fewer samples than mic (mic callbacks started earlier)
-                // Mic is "ahead" - we need even newer system samples than we have
-                // Read from the newest available data (end of buffer)
-                // Add |offset| to account for the timing difference
-                targetOffset = max(0, available - frameSize + Int(offset))
+                // Unusual case: mic significantly ahead of system (shouldn't happen normally)
+                targetOffset = max(0, available - frameSize)
             }
             
             let requiredSamples = targetOffset + frameSize
             
             guard available >= requiredSamples else {
-                // #region agent log - H2/H4: Log buffer underrun (important - always log)
+                // #region agent log - Log buffer underrun
                 debugLog("extractRenderFrame_UNDERRUN", hypothesisId: "H4", data: [
-                    "offset": offset,
+                    "sampleOffset": offset,
+                    "acousticDelay": acousticEchoDelaySamples,
+                    "totalOffset": totalOffset,
                     "targetOffset": targetOffset,
                     "available": available,
-                    "requiredSamples": requiredSamples,
-                    "shortfall": requiredSamples - available
+                    "requiredSamples": requiredSamples
                 ])
                 // #endregion
                 return nil
             }
+            
             var buffer = [Float](repeating: 0, count: frameSize)
             let success = buffer.withUnsafeMutableBufferPointer { ptr in
                 state.systemRingBuffer.read(at: targetOffset, count: frameSize, into: ptr)
