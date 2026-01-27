@@ -77,6 +77,13 @@ struct AudioRingBuffer {
         self.count -= requestedCount
         return true
     }
+
+    /// Pop samples into an array (uses UnsafeMutableBufferPointer internally)
+    mutating func popIntoArray(_ destination: inout [Float], count requestedCount: Int) -> Bool {
+        return destination.withUnsafeMutableBufferPointer { ptr in
+            popInto(ptr, count: requestedCount)
+        }
+    }
     
     /// Pop and discard samples (for consumption without copying)
     mutating func discard(_ discardCount: Int) -> Bool {

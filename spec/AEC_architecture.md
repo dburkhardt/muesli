@@ -17,11 +17,12 @@ This document is the authoritative reference for AEC in Muesli. It covers theory
 11. [Double-Talk Detection (DTD)](#double-talk-detection-dtd)
 12. [Diagnostic Logging](#diagnostic-logging)
 13. [2026-01-27 Investigation: WebRTC AEC3 Not Converging](#2026-01-27-investigation-webrtc-aec3-not-converging)
-14. [Common Failure Modes](#common-failure-modes)
-15. [Debugging Checklist](#debugging-checklist)
-16. [Lessons Learned](#lessons-learned)
-17. [Future Improvements](#future-improvements)
-18. [References and Standards](#references-and-standards)
+14. [2026-01-27 Follow-up: External Delay Estimator Unsupported](#2026-01-27-follow-up-external-delay-estimator-unsupported)
+15. [Common Failure Modes](#common-failure-modes)
+16. [Debugging Checklist](#debugging-checklist)
+17. [Lessons Learned](#lessons-learned)
+18. [Future Improvements](#future-improvements)
+19. [References and Standards](#references-and-standards)
 
 ---
 
@@ -300,6 +301,45 @@ Transcription uses the same system audio path (ScreenCaptureKit -> resample -> W
 ### Next Diagnostic Step
 
 Correlation instrumentation (`AEC_CORR`) is now added to measure the normalized correlation between the latest render frame and the current capture frame, along with render/mic dB and lead. This will confirm whether the capture contains echo correlated with the render reference at the observed delay.
+
+---
+
+## 2026-01-27 Follow-up: External Delay Estimator Unsupported
+
+This follow-up captures the findings from the 04:50 run after adding aligned render feed and explicit delay hints.
+
+### Key Findings
+
+1. **External delay estimator is unavailable in the current WebRTC XCFramework**
+   - Log shows `WEBRTC_AEC3_CONFIG: externalDelayEstimator=false` at app launch.
+   - The bundled headers lack `EchoCanceller3Config::identifier`, so `webrtc::Config::Set(...)` cannot be used.
+   - As a result, `set_stream_delay_ms` is not honored by AEC3 in this build.
+
+2. **Aligned render feed removes the timing signal**
+   - Aligned render is injected at capture time (expected lag), so render/capture arrive together.
+   - With internal delay estimation only, AEC3 sees ~0 ms delay and does not converge.
+   - Observed in logs: `WEBRTC_CAPTURE_SENT` delay remains `0 ms` and ERLE stays ~`0.2 dB`.
+
+3. **Render energy is present but cancellation does not improve**
+   - `WEBRTC_RENDER_ALIGNED` shows render levels (e.g., `-15 dB` to `-47 dB`) once playback is active.
+   - `AEC_CORR_ENERGY` frequently reports `expectedValid=true`, confirming render is present at the expected lag.
+   - Despite this, ERLE remains flat because delay estimation is disabled or starved of timing.
+
+### Interpretation
+
+The current WebRTC XCFramework cannot enable the external delay estimator, so the only usable delay signal is the natural arrival timing of render vs capture frames. The aligned-feed mode removes that signal and therefore cannot converge in this build.
+
+### Validation Plan (Internal Estimator in Intended Mode)
+
+1. **Revert to arrival-timed render feed** (use `storeSystemAudio → processRenderFrame` only).
+2. **Confirm internal estimator is active**:
+   - `WEBRTC_AEC3_CONFIG: externalDelayEstimator=false` (expected for current framework).
+3. **Check convergence metrics**:
+   - `WEBRTC_CAPTURE_SENT` delay should move away from 0 ms.
+   - ERLE should increase above ~10 dB during steady playback.
+4. **If still flat**:
+   - Upgrade the WebRTC XCFramework (headers + binaries) to support external delay.
+   - Or add a small fixed capture delay buffer to stabilize render lead without external delay.
 
 ---
 

@@ -10,7 +10,15 @@
 
 // Conditionally include WebRTC headers if available
 // Check various possible header paths based on how the XCFramework is configured
-#if __has_include(<webrtc-audio-processing-1/modules/audio_processing/include/audio_processing.h>)
+#if __has_include(<webrtc-audio-processing-2/modules/audio_processing/include/audio_processing.h>)
+#define WEBRTC_AVAILABLE 1
+#define WEBRTC_AEC3_EXTERNAL_DELAY_FORCED 1
+#include <webrtc-audio-processing-2/modules/audio_processing/include/audio_processing.h>
+#elif __has_include("webrtc-audio-processing-2/modules/audio_processing/include/audio_processing.h")
+#define WEBRTC_AVAILABLE 1
+#define WEBRTC_AEC3_EXTERNAL_DELAY_FORCED 1
+#include "webrtc-audio-processing-2/modules/audio_processing/include/audio_processing.h"
+#elif __has_include(<webrtc-audio-processing-1/modules/audio_processing/include/audio_processing.h>)
 #define WEBRTC_AVAILABLE 1
 #include <webrtc-audio-processing-1/modules/audio_processing/include/audio_processing.h>
 #elif __has_include("webrtc-audio-processing-1/modules/audio_processing/include/audio_processing.h")
@@ -32,9 +40,31 @@
 #include <array>
 #include <atomic>
 #include <Accelerate/Accelerate.h>
+#include <type_traits>
 
 // Fixed frame size for 10ms @ 48kHz
 static constexpr int kFrameSize = 480;
+
+namespace {
+template <typename T, typename = int>
+struct HasIdentifier : std::false_type {};
+template <typename T>
+struct HasIdentifier<T, decltype((void) T::identifier, 0)> : std::true_type {};
+
+template <typename T>
+inline std::unique_ptr<webrtc::AudioProcessing> CreateApmWithExternalDelay() {
+    if constexpr (HasIdentifier<T>::value) {
+        webrtc::Config apmConfig;
+        webrtc::EchoCanceller3Config aec3Config;
+        aec3Config.delay.use_external_delay_estimator = true;
+        webrtc::EchoCanceller3Config::Validate(&aec3Config);
+        apmConfig.Set(new webrtc::EchoCanceller3Config(aec3Config));
+        return std::unique_ptr<webrtc::AudioProcessing>(webrtc::AudioProcessingBuilder().Create(apmConfig));
+    } else {
+        return std::unique_ptr<webrtc::AudioProcessing>(webrtc::AudioProcessingBuilder().Create());
+    }
+}
+}  // namespace
 
 @implementation WebRTCAECBridge {
 #if WEBRTC_AVAILABLE
@@ -53,6 +83,7 @@ static constexpr int kFrameSize = 480;
     // Cached stats (updated after each capture frame, read atomically)
     std::atomic<float> _cachedERLE;
     std::atomic<int> _cachedDelayMs;
+    std::atomic<bool> _externalDelayEnabled;
 }
 
 - (nullable instancetype)initWithSampleRate:(int)sampleRate
@@ -86,11 +117,17 @@ static constexpr int kFrameSize = 480;
         _lock = OS_UNFAIR_LOCK_INIT;
         _cachedERLE.store(0.0f);
         _cachedDelayMs.store(-1);
+        _externalDelayEnabled.store(false);
         
 #if WEBRTC_AVAILABLE
         // Create AudioProcessing instance first, then apply config
         try {
-            _apm.reset(webrtc::AudioProcessingBuilder().Create());
+            _apm = CreateApmWithExternalDelay<webrtc::EchoCanceller3Config>();
+#ifdef WEBRTC_AEC3_EXTERNAL_DELAY_FORCED
+            _externalDelayEnabled.store(true);
+#else
+            _externalDelayEnabled.store(HasIdentifier<webrtc::EchoCanceller3Config>::value);
+#endif
             
             if (!_apm) {
                 _lastError = WebRTCAECErrorInitFailed;
@@ -124,7 +161,8 @@ static constexpr int kFrameSize = 480;
         _lastError = WebRTCAECErrorNone;
         _isReady = YES;
         
-        NSLog(@"[WebRTCAEC] Initialized with WebRTC AEC3, sampleRate=%d, frameSize=%d", sampleRate, kFrameSize);
+            NSLog(@"[WebRTCAEC] Initialized with WebRTC AEC3, sampleRate=%d, frameSize=%d, external_delay=%s",
+                  sampleRate, kFrameSize, _externalDelayEnabled.load() ? "true" : "unsupported");
 #else
         // Stub implementation - pass through audio without echo cancellation
         _lastError = WebRTCAECErrorNone;
@@ -244,7 +282,12 @@ static constexpr int kFrameSize = 480;
     
 #if WEBRTC_AVAILABLE
     // Recreate AudioProcessing instance and apply config
-    _apm.reset(webrtc::AudioProcessingBuilder().Create());
+    _apm = CreateApmWithExternalDelay<webrtc::EchoCanceller3Config>();
+#ifdef WEBRTC_AEC3_EXTERNAL_DELAY_FORCED
+    _externalDelayEnabled.store(true);
+#else
+    _externalDelayEnabled.store(HasIdentifier<webrtc::EchoCanceller3Config>::value);
+#endif
     if (_apm) {
         webrtc::AudioProcessing::Config config;
         config.echo_canceller.enabled = true;
@@ -268,6 +311,10 @@ static constexpr int kFrameSize = 480;
 
 - (int)getDelayMs {
     return _cachedDelayMs.load();
+}
+
+- (BOOL)externalDelayEstimatorEnabled {
+    return _externalDelayEnabled.load();
 }
 
 @end

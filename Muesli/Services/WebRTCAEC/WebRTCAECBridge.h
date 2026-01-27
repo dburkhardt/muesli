@@ -75,6 +75,9 @@ typedef NS_ENUM(NSInteger, WebRTCAECError) {
 /// Last error code
 @property (nonatomic, readonly) WebRTCAECError lastError;
 
+/// Whether external delay estimator is enabled for AEC3
+@property (nonatomic, readonly) BOOL externalDelayEstimatorEnabled;
+
 /// Frame size (always 480 for 10ms @ 48kHz)
 @property (nonatomic, readonly) int frameSize;
 

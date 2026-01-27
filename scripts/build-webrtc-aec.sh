@@ -13,7 +13,7 @@
 #
 set -euo pipefail
 
-WEBRTC_VERSION="v1.3"
+WEBRTC_VERSION="v2.1"
 WEBRTC_REPO="https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing.git"
 BUILD_DIR="/tmp/webrtc-audio-processing-build"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -56,6 +56,37 @@ else
 fi
 
 cd "$BUILD_DIR"
+
+# 2.1 Patch: force external delay estimator for AEC3
+# The public API doesn't expose EchoCanceller3Config, so we patch the
+# AudioProcessingImpl default config to enable external delay estimation.
+PATCH_TARGET="$BUILD_DIR/webrtc/modules/audio_processing/audio_processing_impl.cc"
+python3 - << 'PY'
+from pathlib import Path
+
+path = Path("/tmp/webrtc-audio-processing-build/webrtc/modules/audio_processing/audio_processing_impl.cc")
+text = path.read_text()
+
+marker = "EchoCanceller3Config config;"
+literal_insertion = "EchoCanceller3Config config;\\n      config.delay.use_external_delay_estimator = true;\\n"
+insertion = "EchoCanceller3Config config;\\n      config.delay.use_external_delay_estimator = true;\\n".encode("utf-8").decode("unicode_escape")
+
+# Fix accidental literal "\n" insertion from earlier script runs.
+if literal_insertion in text:
+    text = text.replace(literal_insertion, insertion)
+    path.write_text(text)
+    print("Fixed external delay estimator patch formatting.")
+    raise SystemExit(0)
+
+if insertion.strip() in text:
+    print("External delay estimator patch already applied.")
+else:
+    if marker not in text:
+        raise SystemExit("ERROR: Expected EchoCanceller3Config config marker not found.")
+    text = text.replace(marker, insertion, 1)
+    path.write_text(text)
+    print("Applied external delay estimator patch.")
+PY
 
 # 3. Create cross-compilation files for macOS
 echo ""
