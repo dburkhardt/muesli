@@ -10,7 +10,15 @@
 
 // Conditionally include WebRTC headers if available
 // Check various possible header paths based on how the XCFramework is configured
-#if __has_include(<webrtc-audio-processing-2/modules/audio_processing/include/audio_processing.h>)
+#if __has_include(<modules/audio_processing/include/audio_processing.h>)
+#define WEBRTC_AVAILABLE 1
+#define WEBRTC_AEC3_EXTERNAL_DELAY_FORCED 1
+#include <modules/audio_processing/include/audio_processing.h>
+#elif __has_include("modules/audio_processing/include/audio_processing.h")
+#define WEBRTC_AVAILABLE 1
+#define WEBRTC_AEC3_EXTERNAL_DELAY_FORCED 1
+#include "modules/audio_processing/include/audio_processing.h"
+#elif __has_include(<webrtc-audio-processing-2/modules/audio_processing/include/audio_processing.h>)
 #define WEBRTC_AVAILABLE 1
 #define WEBRTC_AEC3_EXTERNAL_DELAY_FORCED 1
 #include <webrtc-audio-processing-2/modules/audio_processing/include/audio_processing.h>

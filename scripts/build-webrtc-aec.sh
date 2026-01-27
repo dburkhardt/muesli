@@ -196,9 +196,12 @@ echo ""
 echo "Creating XCFramework..."
 rm -rf webrtc_audio_processing.xcframework
 
+# Use versioned include root so api/ paths resolve (api/audio/..., rtc_base/...)
+INCLUDE_ROOT="universal/include/webrtc-audio-processing-2"
+
 xcodebuild -create-xcframework \
     -library "universal/lib/libwebrtc-audio-all.a" \
-    -headers universal/include \
+    -headers "$INCLUDE_ROOT" \
     -output webrtc_audio_processing.xcframework
 
 # 8. Verify build
