@@ -225,66 +225,58 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 
                 let avgSysTime = state.systemBufferTimes.reduce(0, +) / Double(SyncState.kBuffersToAverage)
                 let avgMicTime = state.micBufferTimes.reduce(0, +) / Double(SyncState.kBuffersToAverage)
-                let offsetSeconds = avgSysTime - avgMicTime
-                state.deliveryOffsetSamples = Int64(offsetSeconds * Double(sampleRate))
-                state.offsetCalculated = true
+                let timingOffsetSeconds = avgSysTime - avgMicTime
+                let timingOffsetSamples = Int64(timingOffsetSeconds * Double(sampleRate))
                 
-                // CRITICAL FIX (2026-01-27): The timing-based offset captures REAL audio latency.
-                // Don't "correct" it to sample-count delta unless it exceeds buffer capacity.
+                // CRITICAL FIX (2026-01-27): Use SAMPLE-COUNT offset, not TIMING offset!
                 //
-                // Example from debug logs:
-                // - Timing offset: -432ms (system callbacks arrive before mic = real latency)
-                // - Sample delta: 0 (both streams delivered same sample count)
-                // - Old code: corrected -432ms to 0ms (WRONG - destroyed latency info)
-                // - WebRTC reported: delay=344ms (close to 432ms, validating timing estimate)
+                // The timing offset measures callback DELIVERY latency (~400ms), not audio timing.
+                // Both streams capture "now" audio and deliver it with their own latency.
+                // Sample counts being equal confirms the audio is temporally synchronized.
                 //
-                // Only clamp to buffer bounds, don't replace with sample delta.
+                // Debug evidence:
+                // - Timing offset: -422ms (callback delivery latency)
+                // - Sample delta: ~0 (both streams delivered same amount = synchronized)
+                // - Using timing offset reads audio from 433ms ago = WRONG alignment
+                // - Using sample delta keeps streams aligned = WebRTC can find echo internally
+                //
+                // WebRTC AEC3 can handle up to ~500ms delay internally via its adaptive filter.
+                // Our job is just to keep the streams sample-count synchronized.
                 let actualDelta = state.totalSystemSamples - state.totalMicSamples
-                let clampedOffset = max(-Int64(maxBufferSamples), min(Int64(maxBufferSamples), state.deliveryOffsetSamples))
-                let wasClampedToBounds = clampedOffset != state.deliveryOffsetSamples
+                state.deliveryOffsetSamples = max(-Int64(maxBufferSamples), min(Int64(maxBufferSamples), actualDelta))
+                state.offsetCalculated = true
                 
                 // #region agent log - H1: Log offset calculation details
                 debugLog("OFFSET_CALCULATED", hypothesisId: "H1", data: [
                     "avgSysTime": String(format: "%.6f", avgSysTime),
                     "avgMicTime": String(format: "%.6f", avgMicTime),
-                    "offsetSeconds": String(format: "%.6f", offsetSeconds),
-                    "offsetSamples": state.deliveryOffsetSamples,
-                    "offsetMs": String(format: "%.1f", offsetSeconds * 1000),
+                    "timingOffsetMs": String(format: "%.1f", timingOffsetSeconds * 1000),
+                    "timingOffsetSamples": timingOffsetSamples,
+                    "sampleDelta": actualDelta,
+                    "usedOffset": state.deliveryOffsetSamples,
                     "totalSystemSamples": state.totalSystemSamples,
-                    "totalMicSamples": state.totalMicSamples,
-                    "actualDelta": actualDelta,
-                    "clampedOffset": clampedOffset,
-                    "wasClampedToBounds": wasClampedToBounds
+                    "totalMicSamples": state.totalMicSamples
                 ])
                 // #endregion
                 
-                if wasClampedToBounds {
-                    let oldOffset = state.deliveryOffsetSamples
-                    state.deliveryOffsetSamples = clampedOffset
-                    let newOffset = state.deliveryOffsetSamples
-                    Task { await DiagnosticLogger.shared.log(.aec,
-                        "WEBRTC_OFFSET_CLAMPED: \(oldOffset)→\(newOffset) (exceeded buffer bounds)") }
-                }
-                
                 // Capture values before Task to avoid capturing inout state (Swift 6)
                 let logOffset = state.deliveryOffsetSamples
-                let logMs = String(format: "%.1f", offsetSeconds * 1000)
+                let logTimingMs = String(format: "%.1f", timingOffsetSeconds * 1000)
                 Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_OFFSET: \(logOffset) samples (\(logMs)ms)") }
+                    "WEBRTC_OFFSET: \(logOffset) samples (timing was \(logTimingMs)ms, using sample delta)") }
             }
             
-            // LESSON 7: Periodic offset validation - only clamp to buffer bounds
-            // Don't replace timing-based offset with sample-count delta (see CRITICAL FIX above)
+            // LESSON 7: Periodic offset validation using sample-count delta
             state.offsetValidationCount += 1
             if state.offsetCalculated && state.offsetValidationCount >= SyncState.kOffsetValidationInterval {
                 state.offsetValidationCount = 0
-                let clampedOffset = max(-Int64(maxBufferSamples), min(Int64(maxBufferSamples), state.deliveryOffsetSamples))
-                if clampedOffset != state.deliveryOffsetSamples {
+                let actualDelta = state.totalSystemSamples - state.totalMicSamples
+                let newOffset = max(-Int64(maxBufferSamples), min(Int64(maxBufferSamples), actualDelta))
+                if abs(newOffset - state.deliveryOffsetSamples) > 480 {  // >10ms drift
                     let oldOffset = state.deliveryOffsetSamples
-                    state.deliveryOffsetSamples = clampedOffset
-                    let newOffset = state.deliveryOffsetSamples
+                    state.deliveryOffsetSamples = newOffset
                     Task { await DiagnosticLogger.shared.log(.aec,
-                        "WEBRTC_OFFSET_CLAMPED: \(oldOffset)→\(newOffset) (exceeded buffer bounds)") }
+                        "WEBRTC_OFFSET_DRIFT: \(oldOffset)→\(newOffset) samples") }
                 }
             }
             
@@ -384,14 +376,17 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 continue
             }
             
-            // #region agent log (async, non-blocking) - track successful frame pairs
-            if framesExtracted % 50 == 0 {
+            // #region agent log (async, non-blocking) - track successful frame pairs with RMS levels
+            if framesExtracted % 100 == 1 {  // Log first frame of every 100 (every ~1 second)
                 let logFrame = framesExtracted
                 let logOffset = currentOffset
                 let renderRMS = sqrt(renderFrame.map { $0 * $0 }.reduce(0, +) / Float(renderFrame.count))
                 let micRMS = sqrt(micFrameData.map { $0 * $0 }.reduce(0, +) / Float(micFrameData.count))
+                // Convert to dB for easier interpretation (0 dB = full scale, -60 dB = very quiet)
+                let renderDB = renderRMS > 0 ? 20 * log10(renderRMS) : -100
+                let micDB = micRMS > 0 ? 20 * log10(micRMS) : -100
                 Task { await DiagnosticLogger.shared.log(.aec,
-                    "AEC_FRAME_PAIR: frame=\(logFrame), offset=\(logOffset), renderRMS=\(renderRMS), micRMS=\(micRMS)") }
+                    "AEC_FRAME_RMS: renderRMS=\(String(format: "%.4f", renderRMS)) (\(String(format: "%.1f", renderDB))dB), micRMS=\(String(format: "%.4f", micRMS)) (\(String(format: "%.1f", micDB))dB), offset=\(logOffset)") }
             }
             // #endregion
             
@@ -403,19 +398,14 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             }
             
             if captureSuccess {
-                // #region agent log - H3/H5: Log RMS before and after processing
+                // #region agent log - Log AEC effect (input vs output RMS)
                 let outputRMS = sqrt(processedFrame.prefix(frameSize).map { $0 * $0 }.reduce(0, +) / Float(frameSize))
-                let rmsReduction = micRMSBefore > 0 ? (micRMSBefore - outputRMS) / micRMSBefore * 100 : 0
-                if framesExtracted % 20 == 0 {
-                    debugLog("AEC_FRAME_PROCESSED", hypothesisId: "H3_H5", data: [
-                        "frame": framesExtracted,
-                        "renderRMS": String(format: "%.6f", renderRMSBefore),
-                        "micRMS": String(format: "%.6f", micRMSBefore),
-                        "outputRMS": String(format: "%.6f", outputRMS),
-                        "rmsReductionPct": String(format: "%.1f", rmsReduction),
-                        "renderIsSilent": renderRMSBefore < 0.001,
-                        "micIsSilent": micRMSBefore < 0.001
-                    ])
+                if framesExtracted % 100 == 1 {  // Log every ~1 second
+                    let inputDB = micRMSBefore > 0 ? 20 * log10(micRMSBefore) : -100
+                    let outputDB = outputRMS > 0 ? 20 * log10(outputRMS) : -100
+                    let reductionDB = inputDB - outputDB  // Positive = AEC reduced the signal
+                    Task { await DiagnosticLogger.shared.log(.aec,
+                        "AEC_OUTPUT: inputRMS=\(String(format: "%.4f", micRMSBefore)) (\(String(format: "%.1f", inputDB))dB) → outputRMS=\(String(format: "%.4f", outputRMS)) (\(String(format: "%.1f", outputDB))dB), reduction=\(String(format: "%.1f", reductionDB))dB") }
                 }
                 // #endregion
                 outputSamples.append(contentsOf: processedFrame.prefix(frameSize))
