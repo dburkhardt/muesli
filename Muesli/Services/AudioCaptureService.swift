@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreMedia
 import Foundation
+import os.lock
 import os.log
 @preconcurrency import ScreenCaptureKit
 
@@ -219,26 +220,39 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         }
     }
     
-    /// Track callback timing for diagnostics
-    private nonisolated(unsafe) static var lastMicTapTime: Double = 0
-    private nonisolated(unsafe) static var micTapCount = 0
-    private nonisolated(unsafe) static var micTapGapTotal: Double = 0
+    /// Track callback timing for diagnostics (thread-safe)
+    private struct MicTapState {
+        var lastMicTapTime: Double = 0
+        var micTapCount: Int = 0
+        var micTapGapTotal: Double = 0
+    }
+    private nonisolated(unsafe) static let micTapLock = OSAllocatedUnfairLock(
+        initialState: MicTapState()
+    )
     
     private func handleAudioBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
         let tapStart = CACurrentMediaTime()
         
         // Track gap between tap callbacks (before any processing)
-        let tapGap = Self.lastMicTapTime > 0 ? tapStart - Self.lastMicTapTime : 0
-        Self.lastMicTapTime = tapStart
-        Self.micTapCount += 1
-        Self.micTapGapTotal += tapGap
+        var tapGap: Double = 0
+        var tapCount: Int = 0
+        var avgGap: Double = 0
+        var shouldLog = false
+        Self.micTapLock.withLock { state in
+            tapGap = state.lastMicTapTime > 0 ? tapStart - state.lastMicTapTime : 0
+            state.lastMicTapTime = tapStart
+            state.micTapCount += 1
+            state.micTapGapTotal += tapGap
+            tapCount = state.micTapCount
+            avgGap = state.micTapGapTotal / Double(state.micTapCount)
+            shouldLog = state.micTapCount % 50 == 0
+        }
         
         // Log tap timing every 50 callbacks
-        if Self.micTapCount % 50 == 0 {
-            let avgGap = Self.micTapGapTotal / Double(Self.micTapCount)
+        if shouldLog {
             Task {
                 await DiagnosticLogger.shared.log(.aec,
-                    "MIC_TAP: count=\(Self.micTapCount), lastGap=\(String(format: "%.3f", tapGap))s, avgGap=\(String(format: "%.3f", avgGap))s")
+                    "MIC_TAP: count=\(tapCount), lastGap=\(String(format: "%.3f", tapGap))s, avgGap=\(String(format: "%.3f", avgGap))s")
             }
         }
         
@@ -747,7 +761,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         didSeeSystemBuffer = true
         firstSystemBufferTime = CACurrentMediaTime()
         Task { await DiagnosticLogger.shared.log(.aec,
-            "SYSTEM_FIRST_BUFFER: time=\(String(format: \"%.3f\", firstSystemBufferTime ?? 0))") }
+            "SYSTEM_FIRST_BUFFER: time=\(String(format: "%.3f", firstSystemBufferTime ?? 0))") }
         logger.info("System audio first buffer arrived; starting mic capture")
         await startMicrophoneIfNeeded(reason: "system-first-buffer")
     }
@@ -764,7 +778,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         let deltaMs = systemTime != nil ? (firstMicStartTime! - systemTime!) * 1000 : nil
         let deltaText = deltaMs != nil ? String(format: "%.1f", deltaMs!) : "n/a"
         Task { await DiagnosticLogger.shared.log(.aec,
-            "MIC_START: reason=\(reason), time=\(String(format: \"%.3f\", firstMicStartTime ?? 0)), deltaMs=\(deltaText)") }
+            "MIC_START: reason=\(reason), time=\(String(format: "%.3f", firstMicStartTime ?? 0)), deltaMs=\(deltaText)") }
         
         do {
             try micEngine.start(deviceID: selectedMicrophoneDeviceID)

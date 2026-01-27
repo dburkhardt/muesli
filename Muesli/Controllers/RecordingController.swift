@@ -198,10 +198,9 @@ final class RecordingController {
                     let isMicMuted = muteLock.withLock { $0 }
                     let isAECEnabled = aecLock.withLock { $0 }
                     
-                    let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
-                    
                     switch type {
                     case .system:
+                        let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
                         try RecordingController.handleSystemAudioBuffer(
                             buffer,
                             timestamp: timestamp,
@@ -214,7 +213,6 @@ final class RecordingController {
                     case .microphone:
                         try RecordingController.handleMicrophoneAudioBuffer(
                             buffer,
-                            timestamp: timestamp,
                             isMicMuted: isMicMuted,
                             isAECEnabled: isAECEnabled,
                             fileService: fileService,
@@ -278,10 +276,6 @@ final class RecordingController {
     
     // MARK: - AEC Diagnostic Counters
     
-    /// Counter for throttling system audio diagnostic logging (every 100th buffer)
-    /// nonisolated(unsafe) is acceptable here - worst case is slightly inaccurate count for diagnostics
-    private nonisolated(unsafe) static var sysBufferDiagCount = 0
-    
     // MARK: - Callback Performance Instrumentation
     
     /// Component timing breakdown for callback performance analysis
@@ -294,26 +288,24 @@ final class RecordingController {
         var total: TimeInterval = 0
     }
     
-    /// Pre-allocated timing buffer to avoid allocation in hot path (capacity: 200)
-    /// nonisolated(unsafe) is acceptable - worst case is slightly inaccurate timing data
-    private nonisolated(unsafe) static var systemTimings: [CallbackTiming] = {
-        var arr = [CallbackTiming]()
-        arr.reserveCapacity(200)
-        return arr
-    }()
+    /// Thread-safe timing state shared across audio callbacks
+    private struct TimingState {
+        var sysBufferDiagCount: Int = 0
+        var systemTimings: [CallbackTiming] = []
+        var micTimings: [CallbackTiming] = []
+        var sysTimingFlushCount: Int = 0
+        var micTimingFlushCount: Int = 0
+        
+        init() {
+            systemTimings.reserveCapacity(200)
+            micTimings.reserveCapacity(200)
+        }
+    }
     
-    /// Pre-allocated timing buffer for microphone callbacks
-    private nonisolated(unsafe) static var micTimings: [CallbackTiming] = {
-        var arr = [CallbackTiming]()
-        arr.reserveCapacity(200)
-        return arr
-    }()
-    
-    /// Counter for system buffer timing flush (every 100 buffers)
-    private nonisolated(unsafe) static var sysTimingFlushCount = 0
-    
-    /// Counter for microphone buffer timing flush (every 100 buffers)
-    private nonisolated(unsafe) static var micTimingFlushCount = 0
+    /// Lock to protect timing buffers and counters across audio threads
+    private nonisolated(unsafe) static let timingStateLock = OSAllocatedUnfairLock(
+        initialState: TimingState()
+    )
     
     /// Compute timing statistics from buffer (min, p50, p95, max)
     private static nonisolated func computeTimingStats(_ timings: [CallbackTiming]) -> (
@@ -357,8 +349,11 @@ final class RecordingController {
         
         // AEC Diagnostic: Log system audio timestamps to verify SCK clock domain
         // Throttled to every 100th buffer to avoid performance impact
-        sysBufferDiagCount += 1
-        if sysBufferDiagCount % 100 == 0 {
+        let shouldLogSysDiag = timingStateLock.withLock { state -> Bool in
+            state.sysBufferDiagCount += 1
+            return state.sysBufferDiagCount % 100 == 0
+        }
+        if shouldLogSysDiag {
             let sckTimestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
             let wallClock = CACurrentMediaTime()
             Task {
@@ -410,14 +405,22 @@ final class RecordingController {
         timing.total = CACurrentMediaTime() - callbackStart
         
         // Collect timing (no allocation if within capacity)
-        if systemTimings.count < 200 {
-            systemTimings.append(timing)
+        // Collect timing and flush every 100 buffers (~2 seconds) - NOT per-buffer
+        var sysTimingSnapshot: [CallbackTiming] = []
+        let shouldFlushSys = timingStateLock.withLock { state -> Bool in
+            if state.systemTimings.count < 200 {
+                state.systemTimings.append(timing)
+            }
+            state.sysTimingFlushCount += 1
+            if state.sysTimingFlushCount % 100 == 0 {
+                sysTimingSnapshot = state.systemTimings
+                state.systemTimings.removeAll(keepingCapacity: true)
+                return true
+            }
+            return false
         }
-        
-        // Flush every 100 buffers (~2 seconds) - NOT per-buffer
-        sysTimingFlushCount += 1
-        if sysTimingFlushCount % 100 == 0 {
-            let stats = computeTimingStats(systemTimings)
+        if shouldFlushSys {
+            let stats = computeTimingStats(sysTimingSnapshot)
             Task {
                 await DiagnosticLogger.shared.log(.aec,
                     "SYS_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
@@ -430,14 +433,12 @@ final class RecordingController {
                     "resample=\(String(format: "%.2f", stats.resample))ms, " +
                     "transcription=\(String(format: "%.2f", stats.transcription))ms)")
             }
-            systemTimings.removeAll(keepingCapacity: true)
         }
     }
     
     /// Process microphone audio buffer (extracted for error handling)
     private static nonisolated func handleMicrophoneAudioBuffer(
         _ buffer: CMSampleBuffer,
-        timestamp: CMTime,
         isMicMuted: Bool,
         isAECEnabled: Bool,
         fileService: FileOutputService,
@@ -561,6 +562,7 @@ final class RecordingController {
         // TIMING: Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
         // Use actualMicRate for correct sample rate metadata
         let fileStart = CACurrentMediaTime()
+        let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
         if let processedBuffer = EchoCancellationServiceNLMS.createSampleBuffer(
             from: processedSamples,
             timestamp: timestamp,
@@ -578,12 +580,21 @@ final class RecordingController {
         if isMicMuted {
             // Still record timing for muted case
             timing.total = CACurrentMediaTime() - callbackStart
-            if micTimings.count < 200 {
-                micTimings.append(timing)
+            var micTimingSnapshot: [CallbackTiming] = []
+            let shouldFlushMic = timingStateLock.withLock { state -> Bool in
+                if state.micTimings.count < 200 {
+                    state.micTimings.append(timing)
+                }
+                state.micTimingFlushCount += 1
+                if state.micTimingFlushCount % 100 == 0 {
+                    micTimingSnapshot = state.micTimings
+                    state.micTimings.removeAll(keepingCapacity: true)
+                    return true
+                }
+                return false
             }
-            micTimingFlushCount += 1
-            if micTimingFlushCount % 100 == 0 {
-                let stats = computeTimingStats(micTimings)
+            if shouldFlushMic {
+                let stats = computeTimingStats(micTimingSnapshot)
                 Task {
                     await DiagnosticLogger.shared.log(.aec,
                         "MIC_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
@@ -596,7 +607,6 @@ final class RecordingController {
                         "resample=\(String(format: "%.2f", stats.resample))ms, " +
                         "transcription=\(String(format: "%.2f", stats.transcription))ms)")
                 }
-                micTimings.removeAll(keepingCapacity: true)
             }
             return
         }
@@ -626,14 +636,21 @@ final class RecordingController {
         timing.total = CACurrentMediaTime() - callbackStart
         
         // Collect timing (no allocation if within capacity)
-        if micTimings.count < 200 {
-            micTimings.append(timing)
+        var micTimingSnapshot: [CallbackTiming] = []
+        let shouldFlushMic = timingStateLock.withLock { state -> Bool in
+            if state.micTimings.count < 200 {
+                state.micTimings.append(timing)
+            }
+            state.micTimingFlushCount += 1
+            if state.micTimingFlushCount % 100 == 0 {
+                micTimingSnapshot = state.micTimings
+                state.micTimings.removeAll(keepingCapacity: true)
+                return true
+            }
+            return false
         }
-        
-        // Flush every 100 buffers (~2 seconds) - NOT per-buffer
-        micTimingFlushCount += 1
-        if micTimingFlushCount % 100 == 0 {
-            let stats = computeTimingStats(micTimings)
+        if shouldFlushMic {
+            let stats = computeTimingStats(micTimingSnapshot)
             Task {
                 await DiagnosticLogger.shared.log(.aec,
                     "MIC_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
@@ -646,7 +663,6 @@ final class RecordingController {
                     "resample=\(String(format: "%.2f", stats.resample))ms, " +
                     "transcription=\(String(format: "%.2f", stats.transcription))ms)")
             }
-            micTimings.removeAll(keepingCapacity: true)
         }
     }
     
@@ -734,10 +750,13 @@ final class RecordingController {
         
         // Reset timing diagnostics for new recording session
         // This ensures each recording logs timing stats every ~2 seconds from the start
-        Self.sysTimingFlushCount = 0
-        Self.micTimingFlushCount = 0
-        Self.systemTimings.removeAll(keepingCapacity: true)
-        Self.micTimings.removeAll(keepingCapacity: true)
+        Self.timingStateLock.withLock { state in
+            state.sysBufferDiagCount = 0
+            state.sysTimingFlushCount = 0
+            state.micTimingFlushCount = 0
+            state.systemTimings.removeAll(keepingCapacity: true)
+            state.micTimings.removeAll(keepingCapacity: true)
+        }
         
         do {
             // Start file output FIRST
