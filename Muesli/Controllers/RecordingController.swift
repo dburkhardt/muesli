@@ -403,12 +403,13 @@ final class RecordingController {
         timing.transcription = CACurrentMediaTime() - transcriptionStart
         
         timing.total = CACurrentMediaTime() - callbackStart
+        let timingSnapshot = timing
         
         // Collect timing (no allocation if within capacity)
         // Collect timing and flush every 100 buffers (~2 seconds) - NOT per-buffer
         let sysFlush = timingStateLock.withLock { state -> (shouldFlush: Bool, snapshot: [CallbackTiming]) in
             if state.systemTimings.count < 200 {
-                state.systemTimings.append(timing)
+                state.systemTimings.append(timingSnapshot)
             }
             state.sysTimingFlushCount += 1
             if state.sysTimingFlushCount % 100 == 0 {
@@ -480,8 +481,8 @@ final class RecordingController {
         if sourceSampleRate != 48000 {
             if micSamplesNative.isEmpty {
                 // Empty input buffer: don't treat as resample failure
+                // Keep actualMicRate at 48kHz so AEC isn't disabled for the session
                 micSamples48k = micSamplesNative
-                actualMicRate = sourceSampleRate
             } else {
                 let resampled = EchoCancellationServiceNLMS.resampleFloat32Public(
                     samples: micSamplesNative,
@@ -585,9 +586,10 @@ final class RecordingController {
         if isMicMuted {
             // Still record timing for muted case
             timing.total = CACurrentMediaTime() - callbackStart
+            let timingSnapshot = timing
             let micFlush = timingStateLock.withLock { state -> (shouldFlush: Bool, snapshot: [CallbackTiming]) in
                 if state.micTimings.count < 200 {
-                    state.micTimings.append(timing)
+                    state.micTimings.append(timingSnapshot)
                 }
                 state.micTimingFlushCount += 1
                 if state.micTimingFlushCount % 100 == 0 {
@@ -638,11 +640,12 @@ final class RecordingController {
         timing.transcription = CACurrentMediaTime() - transcriptionStart
         
         timing.total = CACurrentMediaTime() - callbackStart
+        let timingSnapshot = timing
         
         // Collect timing (no allocation if within capacity)
         let micFlush = timingStateLock.withLock { state -> (shouldFlush: Bool, snapshot: [CallbackTiming]) in
             if state.micTimings.count < 200 {
-                state.micTimings.append(timing)
+                state.micTimings.append(timingSnapshot)
             }
             state.micTimingFlushCount += 1
             if state.micTimingFlushCount % 100 == 0 {
