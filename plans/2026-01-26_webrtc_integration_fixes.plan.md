@@ -314,7 +314,7 @@ final class EchoCancellationWebRTCIntegrationTests: XCTestCase {
 ### 6a. Build and Launch
 
 ```bash
-nohup ./scripts/build-and-launch.sh > /dev/null 2>&1 &
+./scripts/build-and-launch.sh
 # Wait for build...
 tail -30 "$(ls -t /tmp/muesli-build-*.log | head -1)"
 ```

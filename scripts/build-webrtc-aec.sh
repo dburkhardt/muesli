@@ -196,12 +196,17 @@ echo ""
 echo "Creating XCFramework..."
 rm -rf webrtc_audio_processing.xcframework
 
-# Use versioned include root so api/ paths resolve (api/audio/..., rtc_base/...)
-INCLUDE_ROOT="universal/include/webrtc-audio-processing-2"
+# Stage headers so "api/..." and "absl/..." resolve from one include root.
+HEADER_ROOT="universal/include"
+STAGED_HEADERS="$BUILD_DIR/headers-stage"
+rm -rf "$STAGED_HEADERS"
+mkdir -p "$STAGED_HEADERS"
+cp -R "$HEADER_ROOT/webrtc-audio-processing-2/"* "$STAGED_HEADERS/"
+cp -R "$HEADER_ROOT/absl" "$STAGED_HEADERS/"
 
 xcodebuild -create-xcframework \
     -library "universal/lib/libwebrtc-audio-all.a" \
-    -headers "$INCLUDE_ROOT" \
+    -headers "$STAGED_HEADERS" \
     -output webrtc_audio_processing.xcframework
 
 # 8. Verify build

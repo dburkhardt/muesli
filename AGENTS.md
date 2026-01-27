@@ -59,11 +59,11 @@ Detailed description of the feature or improvement.
 
 **Build & Launch** (recommended):
 
-The build takes 5-8 minutes. **Run with `nohup`** and monitor via log file:
+The build takes 5-8 minutes. Run the script and monitor via log file:
 
 ```bash
-# Step 1: Start the build with nohup (REQUIRED for long builds)
-nohup ./scripts/build-and-launch.sh > /dev/null 2>&1 &
+# Step 1: Start the build
+./scripts/build-and-launch.sh
 
 # Step 2: Check if build is still running
 cat /tmp/muesli-build.lock  # Shows PID if running, missing if done

@@ -2,9 +2,9 @@
 # Build and launch Muesli with verification to prevent stale build issues
 #
 # ┌─────────────────────────────────────────────────────────────────────────┐
-# │  BUILD TIME: 5-8 minutes. Run with nohup and monitor via log file!     │
+# │  BUILD TIME: 5-8 minutes. Run the script and monitor via log file.     │
 # │                                                                         │
-# │  1. Start:   nohup ./scripts/build-and-launch.sh > /dev/null 2>&1 &    │
+# │  1. Start:   ./scripts/build-and-launch.sh                              │
 # │  2. Running: cat /tmp/muesli-build.lock                                 │
 # │  3. Monitor: tail -30 "$(ls -t /tmp/muesli-build-*.log | head -1)"      │
 # │  4. Done:    grep "Build & Launch Complete" /tmp/muesli-build-*.log     │
