@@ -348,6 +348,25 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         }
     }
     
+    // MARK: - Decoding Options
+    
+    /// Build optimized DecodingOptions for transcription
+    /// Configures language, temperature fallback, and quality thresholds
+    private func buildDecodingOptions() -> DecodingOptions {
+        DecodingOptions(
+            language: "en",                          // Explicit English - no auto-detect overhead
+            temperature: 0.0,                        // Greedy decoding (default)
+            temperatureIncrementOnFallback: 0.2,     // Retry with higher temp on failures
+            temperatureFallbackCount: 3,             // Limit retries
+            usePrefillPrompt: true,
+            usePrefillCache: true,
+            suppressBlank: true,                     // Prevent "[BLANK_AUDIO]" hallucinations
+            compressionRatioThreshold: 2.4,          // Detect repetitive hallucinations
+            logProbThreshold: -1.0,                  // Reject low-confidence outputs
+            noSpeechThreshold: 0.6                   // Better silence detection
+        )
+    }
+    
     private func transcribeChunk(
         _ samples: [Float],
         speaker: TranscriptSegment.Speaker,
@@ -356,8 +375,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         offset: Int = 0
     ) async {
         do {
-            // Transcribe the audio chunk
-            let results = try await whisperKit.transcribe(audioArray: samples)
+            // Transcribe the audio chunk with optimized decoding options
+            let options = buildDecodingOptions()
+            let results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
             
             guard let result = results.first,
                   !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -537,7 +557,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             "Dedup started: chunks=\(chunks.count), speaker=\(speaker.rawValue), effectiveDuration=\(effectiveChunkDuration)s") }
         
         for (index, chunk) in chunks.enumerated() {
-            let results = try await whisperKit.transcribe(audioArray: chunk.samples)
+            let options = buildDecodingOptions()
+            let results = try await whisperKit.transcribe(audioArray: chunk.samples, decodeOptions: options)
             
             // Log chunk results
             Task { await DiagnosticLogger.shared.log(.transcription,

@@ -119,13 +119,23 @@ cat /tmp/muesli-build-timestamp.txt
 - Test: `xcodebuild ... test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"`
 - Test with coverage: `./scripts/generate-coverage.sh`
 - Clean: `xcodebuild ... clean`
-- Reset permissions: `tccutil reset ScreenCapture com.muesli.app && tccutil reset Microphone com.muesli.app`
+- Reset permissions (onboarding testing only): `./scripts/test-onboarding.sh` or `./scripts/build-and-launch.sh --reset-tcc`
 - Uninstall completely (interactive): `./scripts/uninstall.sh`
 - Generate changelog: `git-cliff --latest --strip header,footer > CHANGELOG.md`
 - Create DMG (modern): `./scripts/create-dmg-modern.sh [VERSION]`
 - Create DMG (legacy): `./scripts/create-dmg.sh [VERSION]`
 
 **Efficient workflows**: Save build/test output once with `| tee` to `/tmp/`, then grep the file. Never re-run to extract different info.
+
+**TCC Permission Persistence**: With stable code signing (`DEVELOPMENT_TEAM`), TCC permissions persist across builds. You only need to grant permissions once after a fresh clone. Use `--reset-tcc` or `test-onboarding.sh` only when testing the onboarding flow.
+
+**First Build After Clone**: 
+New developers cloning the repo will need to grant Screen Recording and Microphone permissions once when first launching the app. This is expected behavior:
+1. Build and launch: `./scripts/build-and-launch.sh`
+2. Grant permissions when prompted in System Settings
+3. Subsequent builds will preserve these permissions (no re-granting needed)
+
+**Per-bundle-ID permissions**: Each worktree branch with a different bundle ID has separate TCC permissions. You'll grant permissions once per worktree.
 
 ## Code Coverage
 
@@ -184,6 +194,8 @@ CI builds use the **same Developer ID certificate** as release builds. This ensu
 - External contributor PRs from forks will fail CI (no access to signing secrets)
   - This is expected behavior; maintainers must check out and test fork PRs locally
 - The `lint` job does not require signing (only runs SwiftLint)
+
+**CI TCC Behavior**: CI builds do not require TCC resets—GitHub Actions runners have no TCC database access, and unit tests don't require screen recording or microphone permissions. If automated UI/onboarding tests are added in the future, use the `--reset-tcc` flag in the test setup.
 
 ## Release Process
 
@@ -485,6 +497,12 @@ Recordings saved to: `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD
 - `CGPreflightScreenCaptureAccess()` — Now reliable with stable signing. Used as a gate in `AudioCaptureService` before `SCShareableContent` calls.
 - `PermissionManager.checkScreenRecordingPermissionAsync()` — Uses `SCShareableContent` for authoritative check. Includes 5-minute caching to reduce prompt frequency.
 - Do NOT use `SCShareableContent` for meeting app detection (triggers prompt). Use `NSWorkspace.shared.runningApplications` instead.
+
+**If TCC Permissions Reset Unexpectedly**:
+1. Verify stable signing: `codesign -d -r- ./DerivedData/.../Muesli.app | grep "subject.OU"`
+2. Check DEVELOPMENT_TEAM in project.pbxproj: `grep DEVELOPMENT_TEAM Muesli.xcodeproj/project.pbxproj`
+3. Temporary workaround: Use `--reset-tcc` on every build until signing is fixed
+4. See [plans/code_signing.md](plans/code_signing.md) for full troubleshooting guide
 
 ### Audio Sample Rates (CRITICAL)
 **If transcription outputs gibberish, check sample rates first!** WhisperKit requires 16kHz. Both system audio (ScreenCaptureKit) and microphone (AVAudioEngine) capture at 48kHz. Use `TranscriptionService.resampleToWhisperFormat()`:

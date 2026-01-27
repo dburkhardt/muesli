@@ -2,6 +2,37 @@ import Foundation
 import os.lock
 import QuartzCore
 
+// #region agent log - Debug file logging helper
+private func debugLog(_ message: String, hypothesisId: String, data: [String: Any] = [:]) {
+    let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
+    let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+    let location = "EchoCancellationServiceWebRTC.swift"
+    var payload: [String: Any] = [
+        "timestamp": timestamp,
+        "location": location,
+        "message": message,
+        "sessionId": "debug-session",
+        "hypothesisId": hypothesisId
+    ]
+    if !data.isEmpty {
+        payload["data"] = data
+    }
+    if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+       let jsonString = String(data: jsonData, encoding: .utf8) {
+        let line = jsonString + "\n"
+        if let handle = FileHandle(forWritingAtPath: logPath) {
+            handle.seekToEndOfFile()
+            if let data = line.data(using: .utf8) {
+                handle.write(data)
+            }
+            handle.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
+        }
+    }
+}
+// #endregion
+
 /// WebRTC AEC3 implementation with hybrid synchronization:
 /// - Swift handles coarse timing alignment (250-350ms offset)
 /// - WebRTC handles fine-grained delay estimation and echo cancellation
@@ -77,6 +108,10 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     private var captureFrame = [Float](repeating: 0, count: 480)
     private var outputFrame = [Float](repeating: 0, count: 480)
     
+    // #region agent log - Debug log throttle counter
+    private var debugLogCounter: Int = 0
+    // #endregion
+    
     // MARK: - Initialization
     
     init() {
@@ -145,6 +180,17 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             // Store in ring buffer
             state.systemRingBuffer.push(monoSamples)
             state.totalSystemSamples += Int64(monoSamples.count)
+            
+            // #region agent log (async, non-blocking) - periodic sample count tracking
+            if state.systemBufferCount % 100 == 0 {
+                let totalSys = state.totalSystemSamples
+                let totalMic = state.totalMicSamples
+                let sysAvail = state.systemRingBuffer.available
+                let micAvail = state.micRingBuffer.available
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "AEC_SAMPLE_COUNTS: sysTotal=\(totalSys), micTotal=\(totalMic), diff=\(totalSys - totalMic), sysAvail=\(sysAvail), micAvail=\(micAvail)") }
+            }
+            // #endregion
         }
         
         // NOTE: We do NOT send render frames to WebRTC here anymore.
@@ -171,10 +217,6 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 state.micBufferTimes.append(now)
             }
             
-            // Store mic samples
-            state.micRingBuffer.push(microphoneSamples)
-            state.totalMicSamples += Int64(microphoneSamples.count)
-            
             // Calculate offset once we have enough timing data
             // Using 12 buffers (~1 second) instead of 50 buffers for faster sync.
             // Offset is validated periodically (every 100 frames) to catch warmup artifacts.
@@ -191,6 +233,22 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 // Immediate validation after warmup
                 let actualDelta = state.totalSystemSamples - state.totalMicSamples
                 let mismatch = abs(actualDelta - state.deliveryOffsetSamples)
+                
+                // #region agent log - H1: Log offset calculation details
+                debugLog("OFFSET_CALCULATED", hypothesisId: "H1", data: [
+                    "avgSysTime": String(format: "%.6f", avgSysTime),
+                    "avgMicTime": String(format: "%.6f", avgMicTime),
+                    "offsetSeconds": String(format: "%.6f", offsetSeconds),
+                    "offsetSamples": state.deliveryOffsetSamples,
+                    "offsetMs": String(format: "%.1f", offsetSeconds * 1000),
+                    "totalSystemSamples": state.totalSystemSamples,
+                    "totalMicSamples": state.totalMicSamples,
+                    "actualDelta": actualDelta,
+                    "mismatch": mismatch,
+                    "willCorrect": mismatch > 2400
+                ])
+                // #endregion
+                
                 if mismatch > 2400 {  // >50ms drift
                     let oldOffset = state.deliveryOffsetSamples
                     state.deliveryOffsetSamples = max(-24000, min(24000, actualDelta))
@@ -229,14 +287,50 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         currentOffset = offsetInfo.0
         offsetReady = offsetInfo.1
         
+        // #region agent log (async, non-blocking) - track offset usage
+        if offsetReady {
+            let logOffset = currentOffset
+            let logOffsetReady = offsetReady
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "AEC_OFFSET_USED: offset=\(logOffset) samples (\(String(format: "%.1f", Double(logOffset) / 48.0))ms), ready=\(logOffsetReady)") }
+        }
+        // #endregion
+        
         // Step 2: Process in 10ms frames with ACTUAL ALIGNMENT
+        // CRITICAL FIX: Push samples to buffer FIRST, then extract and process frames.
+        // If we can't extract frames (buffer underrun), we must handle the samples we just pushed.
+        let (micAvailBefore, sysAvailBefore, totalMicBefore, totalSysBefore) = state.withLock { state in
+            let micAvail = state.micRingBuffer.available
+            let sysAvail = state.systemRingBuffer.available
+            state.micRingBuffer.push(microphoneSamples)
+            state.totalMicSamples += Int64(microphoneSamples.count)
+            return (micAvail, sysAvail, state.totalMicSamples, state.totalSystemSamples)
+        }
+        
+        // #region agent log (async, non-blocking)
+        Task { await DiagnosticLogger.shared.log(.aec,
+            "AEC_MIC_INPUT: samples=\(microphoneSamples.count), micBufBefore=\(micAvailBefore), sysBuf=\(sysAvailBefore), totalMic=\(totalMicBefore), totalSys=\(totalSysBefore)") }
+        // #endregion
+        
         var outputSamples: [Float] = []
         outputSamples.reserveCapacity(microphoneSamples.count)
         
         // Process frames (outside lock to avoid blocking)
+        // Try to extract and process all available frames from buffer
+        var framesExtracted = 0
         while true {
             // Extract mic frame (Swift 6 compliant - returns new array or nil)
-            guard let micFrameData = extractMicFrame() else { break }
+            guard let micFrameData = extractMicFrame() else {
+                // #region agent log (async, non-blocking)
+                if framesExtracted == 0 {
+                    let micAvailNow = state.withLock { $0.micRingBuffer.available }
+                    Task { await DiagnosticLogger.shared.log(.aec,
+                        "AEC_MIC_UNDERRUN: pushed=\(microphoneSamples.count), available=\(micAvailNow), framesExtracted=0") }
+                }
+                // #endregion
+                break
+            }
+            framesExtracted += 1
             
             // Find MATCHING system audio using offset (THIS IS THE KEY FIX)
             let renderFrameData: [Float]?
@@ -249,12 +343,24 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             // LESSON 7: Bounds check fallback - pass through if no matching system audio
             guard let renderFrame = renderFrameData else {
                 // No matching system audio - pass through original mic audio
+                // #region agent log (async, non-blocking)
+                let logOffset = currentOffset
+                let logOffsetReady = offsetReady
+                let logFrame = framesExtracted
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "AEC_NO_RENDER: offset=\(logOffset), offsetReady=\(logOffsetReady), frame=\(logFrame)") }
+                // #endregion
                 outputSamples.append(contentsOf: micFrameData.prefix(frameSize))
                 continue
             }
             
             // Feed ALIGNED frames to WebRTC (render BEFORE capture)
             var processedFrame = outputFrame
+            
+            // #region agent log - H3: Calculate RMS BEFORE WebRTC processing
+            let renderRMSBefore = sqrt(renderFrame.map { $0 * $0 }.reduce(0, +) / Float(renderFrame.count))
+            let micRMSBefore = sqrt(micFrameData.map { $0 * $0 }.reduce(0, +) / Float(micFrameData.count))
+            // #endregion
             
             // Process render (system) frame first
             let renderSuccess = renderFrame.withUnsafeBufferPointer { ptr in
@@ -263,11 +369,24 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             
             if !renderSuccess {
                 // Render processing failed - log error and pass through
+                let logError = aecBridge?.lastError.rawValue ?? -1
+                let logOffset = currentOffset
                 Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_RENDER_FAILED: \(aecBridge?.lastError.rawValue ?? -1)") }
+                    "WEBRTC_RENDER_FAILED: error=\(logError), offset=\(logOffset)") }
                 outputSamples.append(contentsOf: micFrameData.prefix(frameSize))
                 continue
             }
+            
+            // #region agent log (async, non-blocking) - track successful frame pairs
+            if framesExtracted % 50 == 0 {
+                let logFrame = framesExtracted
+                let logOffset = currentOffset
+                let renderRMS = sqrt(renderFrame.map { $0 * $0 }.reduce(0, +) / Float(renderFrame.count))
+                let micRMS = sqrt(micFrameData.map { $0 * $0 }.reduce(0, +) / Float(micFrameData.count))
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "AEC_FRAME_PAIR: frame=\(logFrame), offset=\(logOffset), renderRMS=\(renderRMS), micRMS=\(micRMS)") }
+            }
+            // #endregion
             
             // Then process capture (mic) frame
             let captureSuccess = micFrameData.withUnsafeBufferPointer { inputPtr in
@@ -277,6 +396,21 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             }
             
             if captureSuccess {
+                // #region agent log - H3/H5: Log RMS before and after processing
+                let outputRMS = sqrt(processedFrame.prefix(frameSize).map { $0 * $0 }.reduce(0, +) / Float(frameSize))
+                let rmsReduction = micRMSBefore > 0 ? (micRMSBefore - outputRMS) / micRMSBefore * 100 : 0
+                if framesExtracted % 20 == 0 {
+                    debugLog("AEC_FRAME_PROCESSED", hypothesisId: "H3_H5", data: [
+                        "frame": framesExtracted,
+                        "renderRMS": String(format: "%.6f", renderRMSBefore),
+                        "micRMS": String(format: "%.6f", micRMSBefore),
+                        "outputRMS": String(format: "%.6f", outputRMS),
+                        "rmsReductionPct": String(format: "%.1f", rmsReduction),
+                        "renderIsSilent": renderRMSBefore < 0.001,
+                        "micIsSilent": micRMSBefore < 0.001
+                    ])
+                }
+                // #endregion
                 outputSamples.append(contentsOf: processedFrame.prefix(frameSize))
             } else {
                 // Processing failed - log specific error and pass through original
@@ -292,16 +426,49 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             // the buffer maintains itself as a sliding window.
         }
         
-        // Return processed samples, or original if nothing was processed
-        return outputSamples.isEmpty ? microphoneSamples : outputSamples
+        // CRITICAL FIX: Always return processed samples from buffer.
+        // If outputSamples is empty, it means extractMicFrame returned nil immediately,
+        // which shouldn't happen if we just pushed samples (unless microphoneSamples.count < frameSize).
+        // In that case, return the original samples - they're in the buffer and will be
+        // processed when combined with samples from the next callback.
+        // NOTE: This could cause slight timing issues but ensures no samples are lost.
+        let result = outputSamples.isEmpty ? microphoneSamples : outputSamples
+        
+        // #region agent log (async, non-blocking)
+        let logInputCount = microphoneSamples.count
+        let logOutputCount = result.count
+        let logFramesExtracted = framesExtracted
+        if outputSamples.isEmpty {
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "AEC_MIC_PASSTHROUGH: input=\(logInputCount), output=\(logOutputCount), framesExtracted=\(logFramesExtracted)") }
+        } else {
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "AEC_MIC_PROCESSED: input=\(logInputCount), output=\(logOutputCount), framesExtracted=\(logFramesExtracted)") }
+        }
+        // #endregion
+        
+        return result
     }
     
     /// Reset the AEC state (call when starting new recording)
     func reset() {
         // Log stats before reset
-        let (gapSamples, erle, delayMs) = state.withLock { state in
-            (state.totalGapSamples, aecBridge?.getERLE() ?? 0, aecBridge?.getDelayMs() ?? -1)
+        let (gapSamples, erle, delayMs, totalSys, totalMic, offset) = state.withLock { state in
+            (state.totalGapSamples, aecBridge?.getERLE() ?? 0, aecBridge?.getDelayMs() ?? -1,
+             state.totalSystemSamples, state.totalMicSamples, state.deliveryOffsetSamples)
         }
+        
+        // #region agent log - Final stats at reset
+        debugLog("AEC_RESET_STATS", hypothesisId: "ALL", data: [
+            "gapSamples": gapSamples,
+            "ERLE_dB": String(format: "%.1f", erle),
+            "delayMs": delayMs,
+            "totalSystemSamples": totalSys,
+            "totalMicSamples": totalMic,
+            "finalOffset": offset,
+            "sampleDiff": totalSys - totalMic
+        ])
+        // #endregion
         
         Task { await DiagnosticLogger.shared.log(.aec,
             "WEBRTC_RESET: gaps=\(gapSamples), ERLE=\(String(format: "%.1f", erle))dB, delay=\(delayMs)ms") }
@@ -347,18 +514,39 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     /// Extract render frame from system buffer at given offset (returns nil if not enough data)
     private func extractRenderFrame(offset: Int64) -> [Float]? {
         return state.withLock { state in
-            // Calculate where to read from in system buffer (offset from head)
-            // Positive offset: system arrives later → read older system samples
-            // Negative offset: system arrives earlier → read newer system samples
+            // Calculate where to read from in system buffer (offset from head/readIndex)
+            // The ring buffer's read() method reads from readIndex + offset
+            // Positive offset: system arrives later → read older system samples (further from head)
+            // Negative offset: system arrives earlier → read older system samples (closer to head)
             let available = state.systemRingBuffer.available
             let targetOffset: Int
             if offset >= 0 {
+                // System arrives later: read samples that are 'offset' samples behind current mic position
+                // Offset from head: readIndex + (offset - frameSize) to get the right alignment
                 targetOffset = max(0, Int(offset) - frameSize)
             } else {
-                // Use tail-aligned read when system leads (negative offset)
-                targetOffset = max(0, available - frameSize + Int(offset))
+                // System arrives earlier: we need system samples from the past relative to mic
+                // If offset is -960, mic is 960 samples ahead of system temporally
+                // We need system samples that are 960 samples OLDER than current mic
+                // Those are closer to the head (readIndex), so use a small positive offset
+                // But we need at least frameSize samples, so ensure we have enough
+                // For negative offsets, read from near the head (oldest available samples)
+                targetOffset = max(0, -Int(offset))
             }
-            guard available >= targetOffset + frameSize else { return nil }
+            let requiredSamples = targetOffset + frameSize
+            
+            guard available >= requiredSamples else {
+                // #region agent log - H2/H4: Log buffer underrun (important - always log)
+                debugLog("extractRenderFrame_UNDERRUN", hypothesisId: "H4", data: [
+                    "offset": offset,
+                    "targetOffset": targetOffset,
+                    "available": available,
+                    "requiredSamples": requiredSamples,
+                    "shortfall": requiredSamples - available
+                ])
+                // #endregion
+                return nil
+            }
             var buffer = [Float](repeating: 0, count: frameSize)
             let success = buffer.withUnsafeMutableBufferPointer { ptr in
                 state.systemRingBuffer.read(at: targetOffset, count: frameSize, into: ptr)

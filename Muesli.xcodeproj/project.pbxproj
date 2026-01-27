@@ -481,25 +481,6 @@
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/scripts/generate-build-info.sh\" \"${SRCROOT}/Muesli/Utilities/BuildInfo.swift\"\n";
 		};
-		A1000031241D1A1D00000003 /* Reset TCC Permissions */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Reset TCC Permissions";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-		);
-		runOnlyForDeploymentPostprocessing = 0;
-		shellPath = /bin/sh;
-		shellScript = "# Reset TCC permissions and app state for Muesli to ensure fresh state after rebuild\n# This clears stale permissions that may be associated with old code signatures\n# IMPORTANT: This resets ALL UserDefaults including onboarding - ensures clean testing\ntccutil reset ScreenCapture com.muesli.app 2>/dev/null || true\ntccutil reset Microphone com.muesli.app 2>/dev/null || true\n# Reset ALL UserDefaults (onboarding state, model paths, etc.) - DO NOT PRESERVE\ndefaults delete com.muesli.app 2>/dev/null || true\necho \"TCC permissions and app state FULLY reset for com.muesli.app\"\n";
-	};
 	A100006C241D1A1D00000009 /* Update App Icon */ = {
 		isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -529,7 +510,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A1000017241D1A1D00000001 /* Build configuration list for PBXNativeTarget "Muesli" */;
 			buildPhases = (
-				A1000031241D1A1D00000003 /* Reset TCC Permissions */,
 				A100006C241D1A1D00000009 /* Update App Icon */,
 				BI00003241D1A1D00000103 /* Generate Build Info */,
 				A1000018241D1A1D00000001 /* Sources */,
@@ -885,6 +865,24 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Muesli/Frameworks",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers",
+					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers/webrtc-audio-processing-1",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lwebrtc-audio-all",
+					"-lc++",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
 				PRODUCT_NAME = Muesli;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -915,6 +913,24 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
+				);
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Muesli/Frameworks",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers",
+					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers/webrtc-audio-processing-1",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lwebrtc-audio-all",
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.muesli.app;
 				PRODUCT_NAME = Muesli;

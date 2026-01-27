@@ -62,6 +62,12 @@ echo ""
 echo "Creating cross-compilation files..."
 
 cat > cross_arm64.txt << 'EOF'
+[binaries]
+c = 'clang'
+cpp = 'clang++'
+ar = 'ar'
+strip = 'strip'
+
 [host_machine]
 system = 'darwin'
 cpu_family = 'aarch64'
@@ -76,6 +82,12 @@ c_link_args = ['-arch', 'arm64', '-mmacosx-version-min=13.0']
 EOF
 
 cat > cross_x86_64.txt << 'EOF'
+[binaries]
+c = 'clang'
+cpp = 'clang++'
+ar = 'ar'
+strip = 'strip'
+
 [host_machine]
 system = 'darwin'
 cpu_family = 'x86_64'
@@ -113,40 +125,48 @@ meson setup build_x86_64 \
 meson compile -C build_x86_64
 meson install -C build_x86_64
 
-# 6. Create universal binary
+# 6. Create universal binaries for BOTH libraries
 echo ""
-echo "Creating universal binary..."
+echo "Creating universal binaries..."
 mkdir -p universal/lib universal/include
 
-# Find the static library (may be named differently)
-ARM64_LIB=$(find install_arm64/lib -name "*.a" -type f | head -1)
-X86_64_LIB=$(find install_x86_64/lib -name "*.a" -type f | head -1)
+# Find ALL static libraries
+for lib_file in install_arm64/lib/*.a; do
+    LIB_NAME=$(basename "$lib_file")
+    ARM64_LIB="install_arm64/lib/$LIB_NAME"
+    X86_64_LIB="install_x86_64/lib/$LIB_NAME"
+    
+    if [ -f "$ARM64_LIB" ] && [ -f "$X86_64_LIB" ]; then
+        echo "Creating universal binary for: $LIB_NAME"
+        lipo -create \
+            "$ARM64_LIB" \
+            "$X86_64_LIB" \
+            -output "universal/lib/$LIB_NAME"
+    else
+        echo "WARNING: Missing architecture for $LIB_NAME"
+    fi
+done
 
-if [ -z "$ARM64_LIB" ] || [ -z "$X86_64_LIB" ]; then
-    echo "ERROR: Could not find static libraries"
-    echo "ARM64: $ARM64_LIB"
-    echo "x86_64: $X86_64_LIB"
-    exit 1
-fi
-
-LIB_NAME=$(basename "$ARM64_LIB")
-echo "Found library: $LIB_NAME"
-
-lipo -create \
-    "$ARM64_LIB" \
-    "$X86_64_LIB" \
-    -output "universal/lib/$LIB_NAME"
+# List all libraries created
+echo ""
+echo "Universal libraries created:"
+ls -la universal/lib/
 
 # Copy headers (same for both architectures)
 cp -R install_arm64/include/* universal/include/
 
-# 7. Create XCFramework
+# 7. Create XCFramework with merged library
+# Merge all .a files into a single archive for XCFramework
+echo ""
+echo "Merging libraries into single archive..."
+libtool -static -o universal/lib/libwebrtc-audio-all.a universal/lib/*.a
+
 echo ""
 echo "Creating XCFramework..."
 rm -rf webrtc_audio_processing.xcframework
 
 xcodebuild -create-xcframework \
-    -library "universal/lib/$LIB_NAME" \
+    -library "universal/lib/libwebrtc-audio-all.a" \
     -headers universal/include \
     -output webrtc_audio_processing.xcframework
 

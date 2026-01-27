@@ -9,7 +9,14 @@
 #import "WebRTCAECBridge.h"
 
 // Conditionally include WebRTC headers if available
-#if __has_include(<webrtc_audio_processing/modules/audio_processing/include/audio_processing.h>)
+// Check various possible header paths based on how the XCFramework is configured
+#if __has_include(<webrtc-audio-processing-1/modules/audio_processing/include/audio_processing.h>)
+#define WEBRTC_AVAILABLE 1
+#include <webrtc-audio-processing-1/modules/audio_processing/include/audio_processing.h>
+#elif __has_include("webrtc-audio-processing-1/modules/audio_processing/include/audio_processing.h")
+#define WEBRTC_AVAILABLE 1
+#include "webrtc-audio-processing-1/modules/audio_processing/include/audio_processing.h"
+#elif __has_include(<webrtc_audio_processing/modules/audio_processing/include/audio_processing.h>)
 #define WEBRTC_AVAILABLE 1
 #include <webrtc_audio_processing/modules/audio_processing/include/audio_processing.h>
 #elif __has_include("modules/audio_processing/include/audio_processing.h")
@@ -81,17 +88,9 @@ static constexpr int kFrameSize = 480;
         _cachedDelayMs.store(-1);
         
 #if WEBRTC_AVAILABLE
-        // Create AudioProcessing with AEC3 config
-        webrtc::AudioProcessing::Config config;
-        config.echo_canceller.enabled = true;
-        config.echo_canceller.mobile_mode = false;  // Desktop mode (better for laptops)
-        config.gain_controller1.enabled = false;
-        config.noise_suppression.enabled = false;
-        
+        // Create AudioProcessing instance first, then apply config
         try {
-            _apm.reset(webrtc::AudioProcessingBuilder()
-                .SetConfig(config)
-                .Create());
+            _apm.reset(webrtc::AudioProcessingBuilder().Create());
             
             if (!_apm) {
                 _lastError = WebRTCAECErrorInitFailed;
@@ -102,6 +101,15 @@ static constexpr int kFrameSize = 480;
                 }
                 return nil;
             }
+            
+            // Configure AEC3 echo cancellation
+            webrtc::AudioProcessing::Config config;
+            config.echo_canceller.enabled = true;
+            config.echo_canceller.mobile_mode = false;  // Desktop mode (better for laptops)
+            config.gain_controller1.enabled = false;
+            config.noise_suppression.enabled = false;
+            _apm->ApplyConfig(config);
+            
         } catch (const std::exception& e) {
             _lastError = WebRTCAECErrorInitFailed;
             if (error) {
@@ -216,13 +224,14 @@ static constexpr int kFrameSize = 480;
     os_unfair_lock_lock(&_lock);
     
 #if WEBRTC_AVAILABLE
-    webrtc::AudioProcessing::Config config;
-    config.echo_canceller.enabled = true;
-    config.echo_canceller.mobile_mode = false;
-    
-    _apm.reset(webrtc::AudioProcessingBuilder()
-        .SetConfig(config)
-        .Create());
+    // Recreate AudioProcessing instance and apply config
+    _apm.reset(webrtc::AudioProcessingBuilder().Create());
+    if (_apm) {
+        webrtc::AudioProcessing::Config config;
+        config.echo_canceller.enabled = true;
+        config.echo_canceller.mobile_mode = false;
+        _apm->ApplyConfig(config);
+    }
 #endif
     
     _cachedERLE.store(0.0f);

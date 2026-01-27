@@ -20,7 +20,7 @@
 # - Uses deterministic DerivedData path (no wildcards)
 # - Prevents parallel builds with a lock file
 # - Clears ALL caches by default (DerivedData, Launch Services, Swift PM, module caches)
-# - Resets TCC permissions (Screen Recording, Microphone) before each build
+# - TCC permissions persist across builds (use --reset-tcc for onboarding testing)
 # - Verifies the app was just built (modification time check)
 # - Uses full path with open -a to bypass Launch Services
 # - Confirms the correct process is running after launch
@@ -50,6 +50,7 @@ DEEP_CLEAN=true
 BUILD_ONLY=false
 DRY_RUN=false
 ENABLE_LOGGING=true
+RESET_TCC=false
 
 # Lock file for preventing parallel builds
 LOCK_FILE="/tmp/muesli-build.lock"
@@ -107,6 +108,11 @@ for arg in "$@"; do
             ENABLE_LOGGING=false
             shift
             ;;
+        --reset-tcc)
+            # Opt-in to reset TCC permissions (for onboarding testing)
+            RESET_TCC=true
+            shift
+            ;;
         --help|-h)
             echo "Usage: $0 [options]"
             echo ""
@@ -114,6 +120,7 @@ for arg in "$@"; do
             echo "  --build-only       Build without launching the app"
             echo "  --dry-run          Show what would happen without doing it"
             echo "  --no-log           Disable logging to file (terminal output only)"
+            echo "  --reset-tcc        Reset TCC permissions (for onboarding testing)"
             echo "  --help, -h         Show this help message"
             echo ""
             echo "Advanced options (rarely needed):"
@@ -125,7 +132,7 @@ for arg in "$@"; do
             echo "  - Logs all output to /tmp/muesli-build-TIMESTAMP.log"
             echo "  - Removes ALL caches (DerivedData, Launch Services, Swift PM, module caches)"
             echo "  - Does a clean build to ensure all code changes are compiled"
-            echo "  - Resets TCC permissions (Screen Recording, Microphone)"
+            echo "  - TCC permissions persist across builds (use --reset-tcc for onboarding testing)"
             echo "  - Verifies correct app version is launched"
             echo ""
             echo "Examples:"
@@ -501,47 +508,57 @@ fi
 log ""
 
 # ============================================================================
-# Reset TCC Permissions (after build, so app exists in Launch Services)
+# Reset TCC Permissions (OPTIONAL - only when --reset-tcc flag provided)
 # ============================================================================
+# With stable code signing (DEVELOPMENT_TEAM), TCC permissions persist across builds.
+# Resetting is only needed when testing the onboarding flow.
 
-print_step "Resetting system permissions for ${BUNDLE_ID}..."
-
-if [ "$DRY_RUN" = true ]; then
-    print_info "[DRY RUN] Would reset: tccutil reset ScreenCapture $BUNDLE_ID"
-    print_info "[DRY RUN] Would reset: tccutil reset Microphone $BUNDLE_ID"
+if [ "$RESET_TCC" = true ]; then
+    print_step "Resetting system permissions for ${BUNDLE_ID}..."
+    
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would reset: tccutil reset ScreenCapture $BUNDLE_ID"
+        print_info "[DRY RUN] Would reset: tccutil reset Microphone $BUNDLE_ID"
+    else
+        # Register the app with Launch Services first (so tccutil can find it)
+        LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+        if [ -x "$LSREGISTER" ] && [ -d "$APP_PATH" ]; then
+            "$LSREGISTER" -f "$APP_PATH" 2>/dev/null || true
+        fi
+        
+        # Temporarily disable exit-on-error for tccutil commands
+        # tccutil may return non-zero if no entries exist (which is fine)
+        set +e
+        
+        # Reset Screen Recording permission
+        tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null
+        SCREEN_EXIT=$?
+        if [ $SCREEN_EXIT -eq 0 ]; then
+            print_success "Reset Screen Recording permission"
+        else
+            print_info "Screen Recording: no entries to reset"
+        fi
+        
+        # Reset Microphone permission
+        tccutil reset Microphone "$BUNDLE_ID" 2>/dev/null
+        MIC_EXIT=$?
+        if [ $MIC_EXIT -eq 0 ]; then
+            print_success "Reset Microphone permission"
+        else
+            print_info "Microphone: no entries to reset"
+        fi
+        
+        # Re-enable exit-on-error
+        set -e
+        
+        print_info "You will need to re-grant permissions on first launch"
+    fi
 else
-    # Register the app with Launch Services first (so tccutil can find it)
-    LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
-    if [ -x "$LSREGISTER" ] && [ -d "$APP_PATH" ]; then
-        "$LSREGISTER" -f "$APP_PATH" 2>/dev/null || true
-    fi
-    
-    # Temporarily disable exit-on-error for tccutil commands
-    # tccutil may return non-zero if no entries exist (which is fine)
-    set +e
-    
-    # Reset Screen Recording permission
-    tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null
-    SCREEN_EXIT=$?
-    if [ $SCREEN_EXIT -eq 0 ]; then
-        print_success "Reset Screen Recording permission"
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would skip TCC reset (permissions persist with stable signing)"
     else
-        print_info "Screen Recording: no entries to reset"
+        print_info "TCC reset skipped (permissions persist with stable signing)"
     fi
-    
-    # Reset Microphone permission
-    tccutil reset Microphone "$BUNDLE_ID" 2>/dev/null
-    MIC_EXIT=$?
-    if [ $MIC_EXIT -eq 0 ]; then
-        print_success "Reset Microphone permission"
-    else
-        print_info "Microphone: no entries to reset"
-    fi
-    
-    # Re-enable exit-on-error
-    set -e
-    
-    print_info "You will need to re-grant permissions on first launch"
 fi
 
 log ""

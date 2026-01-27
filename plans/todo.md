@@ -135,6 +135,85 @@ Main Window (post-onboarding)
 
 ### Enhancements
 
+**[Enhancement]** [High] Increase live transcription chunk size to 10-15 seconds
+- Description: Increase the default chunk size for live transcription from 5 seconds to 10-15 seconds to provide more context for Whisper
+- Notes: Whisper was trained on 30-second chunks; 5 seconds provides limited context and can cause issues at word boundaries
+- Changes needed:
+  - Update `AudioConfiguration.transcriptionChunkDuration` from 5.0 to 10.0-15.0
+  - Proportionally adjust `transcriptionOverlapDuration` (e.g., 3.0s for 10s chunks)
+  - May need to adjust buffer sizes in TranscriptionService
+- Tradeoffs: Increased latency before first output (10-15s vs 5s) but better accuracy
+- Related: AudioConfiguration.swift, TranscriptionService.swift
+- Effort: ~1 hour
+- Rationale: Beta tester feedback on transcription quality, especially specialized terms
+
+**[Enhancement]** [High] Add context chaining for live transcription (condition on previous text)
+- Description: Pass previous chunk's transcript as prompt context to the next transcription to maintain consistency
+- Notes: Whisper supports `promptTokens` in DecodingOptions to condition on previous text. This helps with:
+  - Consistent capitalization and style across chunks
+  - Better handling of words split across chunk boundaries
+  - Proper noun consistency throughout recording
+- Implementation approach:
+  - Store last chunk's output (last ~200 characters)
+  - Tokenize and pass via `promptTokens` to next transcription
+  - Handle speaker transitions (Me/Them) appropriately
+- Reference: OpenAI Whisper prompting guide recommends this for segment stitching
+- Related: TranscriptionService.swift (transcribeChunk method), WhisperKit DecodingOptions
+- Effort: ~2-3 hours
+- Rationale: Improve consistency in specialized vocabulary across transcript
+
+**[Enhancement]** [High] Add vocabulary prompting for specialized terms
+- Description: Allow users to specify common terms/proper nouns for better transcription accuracy
+- Notes: OpenAI's prompting guide shows vocabulary conditioning is highly effective for proper nouns
+- Implementation considerations (needs design):
+  - Tokenization lifecycle: when to tokenize (app launch vs recording start), where to cache
+  - Error handling for tokenization failures (WhisperKit tokenizer may be nil)
+  - User preference UI in Preferences > Transcription section
+  - Default vocabulary pre-populated with NVIDIA terms (NeMo RL, CUDA, TensorRT, H100, Blackwell, etc.)
+  - Token limit: WhisperKit allows ~224 tokens (~50-100 words)
+- API: `DecodingOptions.promptTokens` with glossary format ("Glossary: term1, term2, ...")
+- Related: TranscriptionService.swift, PreferencesManager.swift, WhisperKit DecodingOptions
+- Effort: ~3-4 hours (includes proper tokenization lifecycle design)
+- Rationale: Highest-impact transcription quality improvement per OpenAI documentation
+
+**[Enhancement]** [Medium] Implement VAD-based chunking for live transcription
+- Description: Use voice activity detection to find natural speech boundaries instead of fixed-interval chunking
+- Notes: WhisperKit research paper shows VAD-based chunking improves accuracy over naive time-based chunking
+- Benefits:
+  - Avoids cutting words mid-speech
+  - Reduces silence at chunk beginnings (known to cause hallucinations)
+  - More natural segment boundaries
+- Implementation approach:
+  - Use existing `hasVoiceActivity()` method as foundation
+  - Detect speech onset/offset to determine chunk boundaries
+  - Fall back to time-based if no speech boundary found within max window
+  - Consider WhisperKit's built-in `chunkingStrategy: .vad` option
+- Related: TranscriptionService.swift, AudioConfiguration.swift, WhisperKit ChunkingStrategy
+- Effort: ~4-6 hours
+- Reference: https://arxiv.org/html/2507.10860v1 (WhisperKit paper)
+
+**[Enhancement]** [Medium] Sliding window transcription with LLM stitching
+- Description: Use 30-second Whisper windows with 25-second overlap, outputting new text every 5 seconds via LLM deduplication
+- Notes: This approach provides full 30-second context (Whisper's optimal window) while still providing real-time updates
+- How it works:
+  ```
+  t=30s: Chunk 1 (0-30s) → output all
+  t=35s: Chunk 2 (5-35s) → LLM stitches with Chunk 1 → emit 30-35s
+  t=40s: Chunk 3 (10-40s) → LLM stitches → emit 35-40s
+  ```
+- Benefits:
+  - Full 30-second context for better accuracy
+  - Each 5-second segment transcribed 6 times (redundancy)
+  - LLM picks best transcription from overlapping versions
+- Tradeoffs:
+  - 30-second initial delay before first output
+  - 6x Whisper compute (30s audio every 5s)
+  - LLM latency for real-time stitching (~1-3s if local)
+- Prerequisites: Increase chunk size (above), Context chaining (above)
+- Related: TranscriptionService.swift, LLMStitchingService.swift (already exists)
+- Effort: ~2-3 days
+- Rationale: Beta tester feedback that transcription quality lags behind Teams/Zoom/Granola
+
 **[Enhancement]** [High] Improve New Recording and Copy button UI
 - Description: Make primary actions more visually prominent and intuitive
 - Changes needed:
