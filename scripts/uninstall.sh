@@ -83,14 +83,12 @@ declare -a LOGIN_ITEMS=()
 declare -a BUNDLE_CACHE_DIRS=()
 declare -a BUNDLE_HTTP_DIRS=()
 declare -a BUNDLE_PREF_FILES=()
-declare -a WORKTREE_BUILD_DIRS=()
 declare -a PROJECT_BUILD_DIRS=()
 
 # Flags for user choices on new items
 DELETE_TRASH_APPS=false
 EJECT_DMGS=false
 CLEAN_PER_BUNDLE_ARTIFACTS=false
-CLEAN_WORKTREE_BUILDS=false
 
 # Variables for recordings
 RECORDINGS_DIR="$HOME/Library/Application Support/Muesli/Recordings"
@@ -281,7 +279,7 @@ find_login_items() {
 find_per_bundle_artifacts() {
     print_info "Searching for per-bundle caches and preferences..."
     
-    # Use tight pattern: exact match OR 3-letter suffix (worktree convention) OR named suffix
+    # Use tight pattern: exact match OR named suffix
     # This prevents matching unintended bundle IDs
     
     # Caches - ~/Library/Caches/
@@ -306,17 +304,6 @@ find_per_bundle_artifacts() {
     fi
     
     print_info "Found ${#BUNDLE_CACHE_DIRS[@]} cache dir(s), ${#BUNDLE_HTTP_DIRS[@]} HTTP storage(s), ${#BUNDLE_PREF_FILES[@]} pref file(s)"
-}
-
-find_worktree_builds() {
-    print_info "Searching for builds in Cursor worktrees..."
-    local worktree_base="$HOME/.cursor/worktrees/muesli"
-    if [ -d "$worktree_base" ]; then
-        while IFS= read -r -d '' build_dir; do
-            WORKTREE_BUILD_DIRS+=("$build_dir")
-        done < <(find "$worktree_base" -maxdepth 3 -type d \( -name "DerivedData" -o -name "build" \) -print0 2>/dev/null)
-    fi
-    print_info "Found ${#WORKTREE_BUILD_DIRS[@]} build dir(s) in worktrees"
 }
 
 find_project_build_dirs() {
@@ -723,7 +710,7 @@ prompt_per_bundle_artifacts() {
         echo ""
     fi
     
-    echo "These are caches and preferences from different Muesli builds (worktrees, etc.)."
+    echo "These are caches and preferences from different Muesli builds."
     echo "Removing them is safe and can free up disk space."
     echo ""
     
@@ -738,48 +725,6 @@ prompt_per_bundle_artifacts() {
             no|NO|n|N)
                 CLEAN_PER_BUNDLE_ARTIFACTS=false
                 print_info "Per-bundle artifacts will be kept"
-                break
-                ;;
-            *)
-                print_error "Please answer 'yes' or 'no'"
-                ;;
-        esac
-    done
-}
-
-prompt_worktree_builds() {
-    if [ ${#WORKTREE_BUILD_DIRS[@]} -eq 0 ]; then
-        return
-    fi
-    
-    print_header "CURSOR WORKTREE BUILDS"
-    
-    echo "Found build directories in Cursor worktrees:"
-    echo ""
-    
-    for dir in "${WORKTREE_BUILD_DIRS[@]}"; do
-        local dir_size=$(du -sh "$dir" 2>/dev/null | cut -f1)
-        # Show relative path from worktree base
-        local rel_path=${dir#$HOME/.cursor/worktrees/muesli/}
-        echo "  - $rel_path ($dir_size)"
-    done
-    
-    echo ""
-    echo "These are build artifacts from worktree branches."
-    echo "The worktrees themselves (git data) will NOT be deleted."
-    echo ""
-    
-    while true; do
-        read -p "Delete these build directories? (yes/no): " response
-        case "$response" in
-            yes|YES|y|Y)
-                CLEAN_WORKTREE_BUILDS=true
-                print_success "Worktree build directories will be deleted"
-                break
-                ;;
-            no|NO|n|N)
-                CLEAN_WORKTREE_BUILDS=false
-                print_info "Worktree build directories will be kept"
                 break
                 ;;
             *)
@@ -871,17 +816,6 @@ show_summary() {
             fi
             echo ""
         fi
-    fi
-    
-    # Worktree builds
-    if [ "$CLEAN_WORKTREE_BUILDS" = true ] && [ ${#WORKTREE_BUILD_DIRS[@]} -gt 0 ]; then
-        has_items=1
-        echo "  Worktree Build Directories (${#WORKTREE_BUILD_DIRS[@]}):"
-        for dir in "${WORKTREE_BUILD_DIRS[@]}"; do
-            local rel_path=${dir#$HOME/.cursor/worktrees/muesli/}
-            echo "    - $rel_path"
-        done
-        echo ""
     fi
     
     # Login Items
@@ -1102,17 +1036,6 @@ kill_muesli_processes() {
         fi
     done
     
-    # Also try to kill any Muesli-* variants (worktree builds)
-    for variant in Muesli-???; do
-        if [ "$DRY_RUN" = true ]; then
-            continue
-        elif killall "$variant" 2>/dev/null; then
-            log_action "killed" "$variant"
-            print_success "Killed: $variant"
-            killed=$((killed + 1))
-        fi
-    done 2>/dev/null
-    
     if [ $killed -eq 0 ]; then
         print_info "No running processes found"
     fi
@@ -1328,29 +1251,6 @@ delete_per_bundle_artifacts() {
         else
             log_action "delete_pref_failed" "$file"
             print_error "Failed to delete preference: $file_name"
-        fi
-    done
-}
-
-delete_worktree_builds() {
-    if [ "$CLEAN_WORKTREE_BUILDS" != true ] || [ ${#WORKTREE_BUILD_DIRS[@]} -eq 0 ]; then
-        return 0
-    fi
-    
-    print_info "Deleting worktree build directories..."
-    
-    for dir in "${WORKTREE_BUILD_DIRS[@]}"; do
-        local rel_path=${dir#$HOME/.cursor/worktrees/muesli/}
-        
-        if [ "$DRY_RUN" = true ]; then
-            log_action "would_delete_worktree_build" "$dir"
-            echo -e "${YELLOW}[DRY RUN]${NC} Would delete worktree build: $rel_path"
-        elif rm -rf "$dir" 2>/dev/null; then
-            log_action "deleted_worktree_build" "$dir"
-            print_success "Deleted worktree build: $rel_path"
-        else
-            log_action "delete_worktree_build_failed" "$dir"
-            print_error "Failed to delete worktree build: $rel_path"
         fi
     done
 }
@@ -1610,10 +1510,7 @@ execute_uninstall() {
     # 11. Delete Login Items
     delete_login_items
     
-    # 12. Delete worktree builds (if user confirmed)
-    delete_worktree_builds
-    
-    # 13. Delete Application Support (unless keeping recordings)
+    # 12. Delete Application Support (unless keeping recordings)
     delete_application_support || print_warning "Application Support deletion failed, continuing..."
     
     # Log completion
@@ -1696,7 +1593,6 @@ main() {
     find_trash_apps
     find_login_items
     find_per_bundle_artifacts
-    find_worktree_builds
     find_project_build_dirs
     
     # Check if anything was found
@@ -1705,7 +1601,7 @@ main() {
         has_app_support=true
     fi
     
-    local total_found=$((${#APP_BUNDLES[@]} + ${#DERIVED_DATA_FOLDERS[@]} + ${#MOUNTED_DMG_APPS[@]} + ${#TRASH_APPS[@]} + ${#BUNDLE_CACHE_DIRS[@]} + ${#BUNDLE_HTTP_DIRS[@]} + ${#BUNDLE_PREF_FILES[@]} + ${#WORKTREE_BUILD_DIRS[@]} + ${#PROJECT_BUILD_DIRS[@]} + ${#LOGIN_ITEMS[@]}))
+    local total_found=$((${#APP_BUNDLES[@]} + ${#DERIVED_DATA_FOLDERS[@]} + ${#MOUNTED_DMG_APPS[@]} + ${#TRASH_APPS[@]} + ${#BUNDLE_CACHE_DIRS[@]} + ${#BUNDLE_HTTP_DIRS[@]} + ${#BUNDLE_PREF_FILES[@]} + ${#PROJECT_BUILD_DIRS[@]} + ${#LOGIN_ITEMS[@]}))
     
     if [ $total_found -eq 0 ] && [ "$RECORDINGS_COUNT" -eq 0 ] && [ "$has_app_support" = false ]; then
         print_warning "No Muesli installations found"
@@ -1722,7 +1618,6 @@ main() {
         echo "  - ~/Library/HTTPStorages/com.muesli.app*/"
         echo "  - ~/Library/Preferences/com.muesli.app*.plist"
         echo "  - ~/Library/LaunchAgents/"
-        echo "  - ~/.cursor/worktrees/muesli/"
         echo ""
         exit $EXIT_SUCCESS
     fi
@@ -1754,9 +1649,6 @@ main() {
     
     # Per-bundle artifacts handling
     prompt_per_bundle_artifacts
-    
-    # Worktree builds handling
-    prompt_worktree_builds
     
     # =========================================================================
     # SUMMARY AND CONFIRMATION
