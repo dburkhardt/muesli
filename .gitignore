@@ -30,9 +30,6 @@ dev-notes/
 # Build logs
 build-*.txt
 
-# Worktree configuration (personal development setup)
-.cursorworktrees.json
-
 # Coverage reports (generated files in workspace root)
 coverage.json
 coverage-report.txt

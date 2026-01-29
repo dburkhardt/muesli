@@ -36,9 +36,6 @@ struct MainWindowView: View {
                 CGSize(width: 900, height: 650) :
                 CGSize(width: 420, height: 600)
         }
-        // .overlay(alignment: .topTrailing) {
-        //     WorkTreeBadge()
-        // }
         .sheet(isPresented: Binding(
             get: { viewModel.showStartRecordingSheet },
             set: { viewModel.showStartRecordingSheet = $0 }

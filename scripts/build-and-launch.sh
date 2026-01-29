@@ -237,35 +237,12 @@ fi
 log ""
 
 # ============================================================================
-# Detect Configuration
+# Configuration
 # ============================================================================
 
-# Detect product name from worktree config
-print_step "Detecting configuration..."
-
-if [ -f ".worktree-config.json" ] && command -v jq &> /dev/null; then
-    NEEDS_WORKTREE=$(jq -r ".needsWorktree // false" .worktree-config.json)
-    if [ "$NEEDS_WORKTREE" = "true" ]; then
-        PRODUCT_NAME=$(jq -r ".productName // \"Muesli\"" .worktree-config.json)
-        BUNDLE_ID=$(jq -r ".bundleId // \"com.muesli.app\"" .worktree-config.json)
-        print_info "Worktree config detected"
-        print_info "Product: $PRODUCT_NAME"
-        print_info "Bundle ID: $BUNDLE_ID"
-    else
-        PRODUCT_NAME="Muesli"
-        BUNDLE_ID="com.muesli.app"
-        print_info "Standard configuration (main branch)"
-    fi
-elif [ -f ".worktree-config.json" ]; then
-    print_warning "jq not installed - using default product name"
-    print_info "Install jq with: brew install jq"
-    PRODUCT_NAME="Muesli"
-    BUNDLE_ID="com.muesli.app"
-else
-    PRODUCT_NAME="Muesli"
-    BUNDLE_ID="com.muesli.app"
-    print_info "Standard configuration (main branch)"
-fi
+PRODUCT_NAME="Muesli"
+BUNDLE_ID="com.muesli.app"
+print_step "Configuration: $PRODUCT_NAME ($BUNDLE_ID)"
 
 # Define paths
 DERIVED_DATA="$PROJECT_DIR/DerivedData"
