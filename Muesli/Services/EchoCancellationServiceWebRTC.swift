@@ -53,8 +53,8 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     
     private let sampleRate: Int = 48000
     private let frameSize: Int = 480  // 10ms at 48kHz (WebRTC requirement)
-    private let maxBufferMs: Int = 500  // 500ms = 24000 samples
-    private let maxBufferSamples: Int = 24000
+    private let maxBufferMs: Int = 1500  // 1500ms = 72000 samples (increased for SCK latency)
+    private let maxBufferSamples: Int = 72000
     
     // NOTE: Acoustic echo delay is now handled internally by WebRTC AEC3.
     // WebRTC uses frame arrival timing (from separate processRenderFrame/processCaptureFrame calls)
@@ -132,7 +132,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     private var lastStreamDelayMs: Int?
     private var smoothedLeadMs: Double?
     private let useAlignedRenderFeed = false
-    private let usePacedProcessing = true
+    private let usePacedProcessing = false  // Disabled - use arrival-timed mode for natural delay estimation
 
     // Pre-allocated aligned render frame for deterministic render feed
     private var alignedRenderFrame = [Float](repeating: 0, count: 480)
@@ -164,7 +164,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     // MARK: - Initialization
     
     init() {
-        self.state = OSAllocatedUnfairLock(initialState: SyncState(bufferCapacity: 24000, frameSize: frameSize))
+        self.state = OSAllocatedUnfairLock(initialState: SyncState(bufferCapacity: maxBufferSamples, frameSize: frameSize))
         
         // Initialize WebRTC bridge
         // In Swift, ObjC methods with NSError** are translated to throwing initializers
