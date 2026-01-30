@@ -225,9 +225,10 @@ final class RegressionTests: XCTestCase {
         let maxSamples = AudioConfiguration.maxBufferSamples
         let timeout = AudioConfiguration.bufferTimeoutSeconds
         
-        // 30 seconds at 16kHz = 480,000 samples
+        // 30 seconds at 16kHz = 480,000 samples (rolling buffer size)
         XCTAssertEqual(maxSamples, 480_000, "Max buffer is 30 seconds at 16kHz")
-        XCTAssertEqual(timeout, 30.0, "Buffer timeout is 30 seconds")
+        // 5 minutes (300 seconds) timeout to support large model compilation (v3 large can take 2+ minutes)
+        XCTAssertEqual(timeout, 300.0, "Buffer timeout is 300 seconds (5 minutes) for large model compilation")
     }
     
     // MARK: - RecordingController Delegation Regression Tests (Refactor: Jan 15, 2026)

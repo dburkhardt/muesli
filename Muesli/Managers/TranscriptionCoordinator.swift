@@ -89,7 +89,8 @@ final class TranscriptionCoordinator {
     /// Maximum buffer size (30 seconds at 16kHz = 480,000 samples)
     private let maxBufferSamples: Int = AudioConfiguration.maxBufferSamples
     
-    /// Maximum buffering duration (30 seconds) before timeout
+    /// Maximum buffering duration (5 minutes) before timeout
+    /// Large models like v3 large can take up to 2+ minutes to compile on first use
     private let maxBufferDuration: TimeInterval = AudioConfiguration.bufferTimeoutSeconds
     
     /// Maximum retries for model loading to prevent infinite recursion

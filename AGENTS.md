@@ -23,7 +23,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 
 1. **Follow SPEC.md phases** — one at a time, verify checkpoint before proceeding
 2. **Small diffs, compile often** — keep the app buildable at all times
-3. **Check in frequently** — confirm approach before significant work; report progress at milestones
+3. **Work autonomously** — fix bugs, implement improvements, and complete tasks without asking permission. Only pause for: destructive actions (deleting files/data), multiple valid architectural approaches, or genuine uncertainty about user intent. Report what you did, not what you're about to do.
 4. **Native patterns** — Swift 6 concurrency, `@Observable`, one type per file
 5. **UI principle** — "Granola-inspired": minimal, clean, fast
 6. **Track future work** — add todos to [`plans/todo.md`](plans/todo.md) or create a GitHub Issue for larger features

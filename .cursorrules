@@ -8,11 +8,11 @@ PHASE DISCIPLINE
 - Do not implement features from later phases
 - Verify checkpoint before proceeding
 
-USER CHECK-INS (prefer asking too often over proceeding blindly)
-- Before significant work: confirm approach
-- After milestones: report progress, ask if should continue
-- Multiple valid approaches: present options, let user choose
-- Stuck or uncertain: ask for guidance instead of guessing
+AUTONOMOUS OPERATION (bias toward action, not asking)
+- Fix bugs immediately when found — don't ask "want me to fix this?"
+- Implement obvious improvements without asking
+- Only ask when: destructive actions (deleting files/data), multiple valid architectural approaches, or genuinely uncertain about user intent
+- Report what you did, not what you're about to do
 
 ENGINEERING PRINCIPLES
 - Small diffs, compile often, keep project building
