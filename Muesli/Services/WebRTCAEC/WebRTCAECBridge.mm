@@ -48,35 +48,23 @@
 #include <array>
 #include <atomic>
 #include <Accelerate/Accelerate.h>
-#include <type_traits>
 
 // Fixed frame size for 10ms @ 48kHz
 static constexpr int kFrameSize = 480;
 
 namespace {
-template <typename T, typename = int>
-struct HasIdentifier : std::false_type {};
-template <typename T>
-struct HasIdentifier<T, decltype((void) T::identifier, 0)> : std::true_type {};
-
-template <typename T>
-inline std::unique_ptr<webrtc::AudioProcessing> CreateApmWithExternalDelay() {
-    if constexpr (HasIdentifier<T>::value) {
-        webrtc::Config apmConfig;
-        webrtc::EchoCanceller3Config aec3Config;
-        aec3Config.delay.use_external_delay_estimator = true;
-        webrtc::EchoCanceller3Config::Validate(&aec3Config);
-        apmConfig.Set(new webrtc::EchoCanceller3Config(aec3Config));
-        return std::unique_ptr<webrtc::AudioProcessing>(webrtc::AudioProcessingBuilder().Create(apmConfig));
-    } else {
-        return std::unique_ptr<webrtc::AudioProcessing>(webrtc::AudioProcessingBuilder().Create());
-    }
+// Create AudioProcessing instance using v2.x API
+// Note: In webrtc-audio-processing v2.x:
+// - Create() returns rtc::scoped_refptr<AudioProcessing>, not raw pointer
+// - EchoCanceller3 configuration is done via AudioProcessing::Config
+inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
+    return webrtc::AudioProcessingBuilder().Create();
 }
 }  // namespace
 
 @implementation WebRTCAECBridge {
 #if WEBRTC_AVAILABLE
-    std::unique_ptr<webrtc::AudioProcessing> _apm;
+    rtc::scoped_refptr<webrtc::AudioProcessing> _apm;
 #endif
     os_unfair_lock _lock;  // Real-time safe lock (no priority inversion)
     int _sampleRate;
@@ -130,12 +118,10 @@ inline std::unique_ptr<webrtc::AudioProcessing> CreateApmWithExternalDelay() {
 #if WEBRTC_AVAILABLE
         // Create AudioProcessing instance first, then apply config
         try {
-            _apm = CreateApmWithExternalDelay<webrtc::EchoCanceller3Config>();
-#ifdef WEBRTC_AEC3_EXTERNAL_DELAY_FORCED
+            _apm = CreateApm();
+            // In v2.x, external delay is managed via set_stream_delay_ms()
+            // The old EchoCanceller3Config::delay.use_external_delay_estimator is not available
             _externalDelayEnabled.store(true);
-#else
-            _externalDelayEnabled.store(HasIdentifier<webrtc::EchoCanceller3Config>::value);
-#endif
             
             if (!_apm) {
                 _lastError = WebRTCAECErrorInitFailed;
@@ -147,7 +133,7 @@ inline std::unique_ptr<webrtc::AudioProcessing> CreateApmWithExternalDelay() {
                 return nil;
             }
             
-            // Configure AEC3 echo cancellation
+            // Configure AEC3 echo cancellation using v2.x API
             webrtc::AudioProcessing::Config config;
             config.echo_canceller.enabled = true;
             config.echo_canceller.mobile_mode = false;  // Desktop mode (better for laptops)
@@ -169,8 +155,8 @@ inline std::unique_ptr<webrtc::AudioProcessing> CreateApmWithExternalDelay() {
         _lastError = WebRTCAECErrorNone;
         _isReady = YES;
         
-            NSLog(@"[WebRTCAEC] Initialized with WebRTC AEC3, sampleRate=%d, frameSize=%d, external_delay=%s",
-                  sampleRate, kFrameSize, _externalDelayEnabled.load() ? "true" : "unsupported");
+        NSLog(@"[WebRTCAEC] Initialized with WebRTC AEC3 v2.x, sampleRate=%d, frameSize=%d",
+              sampleRate, kFrameSize);
 #else
         // Stub implementation - pass through audio without echo cancellation
         _lastError = WebRTCAECErrorNone;
@@ -289,17 +275,15 @@ inline std::unique_ptr<webrtc::AudioProcessing> CreateApmWithExternalDelay() {
     os_unfair_lock_lock(&_lock);
     
 #if WEBRTC_AVAILABLE
-    // Recreate AudioProcessing instance and apply config
-    _apm = CreateApmWithExternalDelay<webrtc::EchoCanceller3Config>();
-#ifdef WEBRTC_AEC3_EXTERNAL_DELAY_FORCED
+    // Recreate AudioProcessing instance and apply config using v2.x API
+    _apm = CreateApm();
     _externalDelayEnabled.store(true);
-#else
-    _externalDelayEnabled.store(HasIdentifier<webrtc::EchoCanceller3Config>::value);
-#endif
     if (_apm) {
         webrtc::AudioProcessing::Config config;
         config.echo_canceller.enabled = true;
         config.echo_canceller.mobile_mode = false;
+        config.gain_controller1.enabled = false;
+        config.noise_suppression.enabled = false;
         _apm->ApplyConfig(config);
     }
 #endif
