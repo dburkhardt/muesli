@@ -565,6 +565,7 @@ final class MuesliViewModel {
         // refresh microphone devices. This is safe because permission is already granted.
         if self.permissionManager.hasMicrophonePermission {
             self.microphoneManager.refreshDevices()
+            self.microphoneManager.startListeningForDeviceChanges()
         }
         
         // Set initial transcription mode
@@ -642,10 +643,11 @@ final class MuesliViewModel {
     func requestMicrophonePermission() async {
         hasMicrophonePermission = await permissionManager.requestMicrophonePermission()
         
-        // If permission was granted, refresh microphone devices
+        // If permission was granted, refresh microphone devices and start listening for changes
         // This was deferred during init to avoid triggering the permission prompt
         if hasMicrophonePermission {
             microphoneManager.refreshDevices()
+            microphoneManager.startListeningForDeviceChanges()
         }
     }
     

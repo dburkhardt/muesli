@@ -20,16 +20,192 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
     /// nonisolated(unsafe) is acceptable here - worst case is slightly inaccurate count for diagnostics
     private nonisolated(unsafe) static var micBufferDiagCount = 0
     
+    /// Currently configured device ID (nil = system default)
+    private var currentDeviceID: String?
+    
+    /// Listener for audio hardware changes (device add/remove/default change)
+    private var deviceChangeListenerID: AudioObjectPropertyListenerBlock?
+    
+    /// Flag to prevent recursive restarts
+    private var isRestarting = false
+    
     init(bufferHandler: ((CMSampleBuffer) -> Void)?, levelHandler: ((Float) -> Void)?) {
         self.bufferHandler = bufferHandler
         self.levelHandler = levelHandler
+        
+        // Set up notification for audio engine configuration changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleEngineConfigurationChange),
+            name: .AVAudioEngineConfigurationChange,
+            object: audioEngine
+        )
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        removeDeviceChangeListener()
     }
     
     private let logger = LoggerFactory.logger(category: "MicrophoneCaptureEngine")
     
+    /// Handle AVAudioEngine configuration change notification
+    /// This is posted when the audio hardware configuration changes (e.g., headphones unplugged)
+    @objc private func handleEngineConfigurationChange(_ notification: Notification) {
+        logger.info("Audio engine configuration changed - restarting microphone capture")
+        restartCapture()
+    }
+    
+    /// Set up listener for audio hardware device changes
+    private func setupDeviceChangeListener() {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        let listenerBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self = self else { return }
+            self.logger.info("Default input device changed - restarting microphone capture")
+            // Dispatch to avoid blocking the audio system callback
+            DispatchQueue.main.async {
+                self.restartCapture()
+            }
+        }
+        
+        deviceChangeListenerID = listenerBlock
+        
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            DispatchQueue.main,
+            listenerBlock
+        )
+        
+        if status != noErr {
+            logger.warning("Failed to add device change listener: \(status)")
+        }
+    }
+    
+    /// Remove the device change listener
+    private func removeDeviceChangeListener() {
+        guard deviceChangeListenerID != nil else { return }
+        
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            DispatchQueue.main,
+            deviceChangeListenerID!
+        )
+        
+        deviceChangeListenerID = nil
+    }
+    
+    /// Restart capture after device change
+    private func restartCapture() {
+        guard isRunning, !isRestarting else { return }
+        isRestarting = true
+        
+        let savedDeviceID = currentDeviceID
+        logger.info("Restarting microphone capture due to device change (savedDevice: \(savedDeviceID ?? "default"))")
+        
+        // Stop current capture but keep isRunning = true so we know to restart
+        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.stop()
+        
+        // Give the system a moment to settle after device change
+        // This delay is important because the audio system needs time to reconfigure
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self = self, self.isRunning else {
+                self?.isRestarting = false
+                return
+            }
+            
+            do {
+                // Check if the previously selected device is still available
+                // If not, fall back to system default (nil)
+                var deviceToUse = savedDeviceID
+                if let deviceID = savedDeviceID, !self.isDeviceAvailable(deviceID: deviceID) {
+                    self.logger.warning("Previously selected device \(deviceID) no longer available, using system default")
+                    deviceToUse = nil
+                    self.currentDeviceID = nil
+                }
+                
+                // Re-setup and start
+                try self.setupAndStart(deviceID: deviceToUse)
+                self.logger.info("Microphone capture restarted successfully")
+                
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "MIC_RESTART: success, device=\(deviceToUse ?? "default")") }
+            } catch {
+                self.logger.error("Failed to restart microphone capture: \(error.localizedDescription)")
+                self.isRunning = false
+                
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "MIC_RESTART_FAILED: \(error.localizedDescription)") }
+            }
+            self.isRestarting = false
+        }
+    }
+    
+    /// Check if a device with the given ID is still available
+    private func isDeviceAvailable(deviceID: String) -> Bool {
+        var propertySize: UInt32 = 0
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize)
+        let deviceCount = Int(propertySize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &deviceIDs
+        )
+        
+        for audioDeviceID in deviceIDs {
+            var deviceUID: CFString = "" as CFString
+            var uidSize = UInt32(MemoryLayout<CFString>.size)
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            
+            let status = AudioObjectGetPropertyData(audioDeviceID, &uidAddress, 0, nil, &uidSize, &deviceUID)
+            if status == noErr && (deviceUID as String) == deviceID {
+                return true
+            }
+        }
+        
+        return false
+    }
+    
     func start(deviceID: String?) throws {
         guard !isRunning else { return }
         
+        currentDeviceID = deviceID
+        
+        try setupAndStart(deviceID: deviceID)
+        
+        // Set up device change listener after successful start
+        setupDeviceChangeListener()
+    }
+    
+    /// Internal setup and start method, used for both initial start and restart after device change
+    private func setupAndStart(deviceID: String?) throws {
         let inputNode = audioEngine.inputNode
         
         // Try to set the preferred device if specified
@@ -91,9 +267,13 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
     func stop() {
         guard isRunning else { return }
         
+        // Remove device change listener
+        removeDeviceChangeListener()
+        
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
         isRunning = false
+        currentDeviceID = nil
     }
     
     /// Select the first real (non-aggregate) microphone device
