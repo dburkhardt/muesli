@@ -445,6 +445,27 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
 
         // Process one capture frame per tick if available.
         guard let (micFrameData, micFrameStartIndex) = extractMicFrameWithIndex() else { return }
+        // CRITICAL FIX (2026-01-30): set_stream_delay_ms() expects ACOUSTIC delay (speaker→mic),
+        // NOT buffering lead. The lead (300-450ms) is about buffer timing between SCK and AVAudioEngine.
+        // The acoustic delay is typically 15-50ms for laptop speakers.
+        // Setting the wrong value (lead instead of acoustic delay) confuses AEC3's delay estimator.
+        //
+        // Option 1: Use fixed acoustic delay estimate (50ms for typical laptop)
+        // Option 2: Don't set delay, let AEC3 auto-detect
+        //
+        // We'll use a fixed acoustic delay of 50ms, which is appropriate for built-in speakers.
+        // The paced render feed already handles the buffering timing by feeding frames at 10ms cadence.
+        let acousticDelayMs: Int32 = 50  // Fixed acoustic delay for typical laptop setup
+        
+        // Only set once at startup (or when it changes significantly)
+        if lastStreamDelayMs == nil {
+            let success = aecBridge?.setStreamDelayMs(acousticDelayMs) ?? false
+            lastStreamDelayMs = Int(acousticDelayMs)
+            Task { await DiagnosticLogger.shared.log(.aec,
+                "WEBRTC_STREAM_DELAY_SET: acousticDelayMs=\(acousticDelayMs), success=\(success) (fixed, not buffering lead)") }
+        }
+        
+        // Still track sample delta for diagnostics
         let sampleDelta = state.withLock { state in
             state.totalSystemSamples - state.totalMicSamples
         }
@@ -453,21 +474,6 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             smoothedLeadMs = (currentSmoothed * 0.8) + (leadMs * 0.2)
         } else {
             smoothedLeadMs = leadMs
-        }
-        let smoothedLead = smoothedLeadMs ?? leadMs
-        let delayMs = max(0, min(500, Int(round(smoothedLead))))
-        if lastStreamDelayMs == nil || abs(delayMs - (lastStreamDelayMs ?? 0)) >= 5 {
-            let success = aecBridge?.setStreamDelayMs(Int32(delayMs)) ?? false
-            lastStreamDelayMs = delayMs
-            let sysAvailForLog = state.withLock { $0.systemRingBuffer.available }
-            let shouldLogDelay = pacedStatsLock.withLock { stats -> Bool in
-                stats.delayUpdates += 1
-                return stats.delayUpdates % 10 == 0
-            }
-            if shouldLogDelay {
-                Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_STREAM_DELAY_SET: delayMs=\(delayMs), sampleDelta=\(sampleDelta), sysAvail=\(sysAvailForLog), leadMs=\(String(format: "%.1f", leadMs)), smoothedLeadMs=\(String(format: "%.1f", smoothedLead)), success=\(success)") }
-            }
         }
         
         // Log WEBRTC_PACED_EXPECTED_RMS (non-destructive read at expected lag, throttled to ~1 Hz)
@@ -780,7 +786,17 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             framesExtracted += 1
             batchFrames += 1
 
-            // Apply explicit stream delay for AEC3 based on measured lead
+            // CRITICAL FIX (2026-01-30): set_stream_delay_ms() expects ACOUSTIC delay (speaker→mic),
+            // NOT buffering lead. Use fixed acoustic delay of 50ms for typical laptop setup.
+            let acousticDelayMs: Int32 = 50
+            if lastStreamDelayMs == nil {
+                let success = aecBridge?.setStreamDelayMs(acousticDelayMs) ?? false
+                lastStreamDelayMs = Int(acousticDelayMs)
+                Task { await DiagnosticLogger.shared.log(.aec,
+                    "WEBRTC_STREAM_DELAY_SET: acousticDelayMs=\(acousticDelayMs), success=\(success) (fixed, not buffering lead)") }
+            }
+            
+            // Track sample delta for diagnostics only
             let sampleDelta = state.withLock { state in
                 state.totalSystemSamples - state.totalMicSamples
             }
@@ -791,13 +807,6 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
                 smoothedLeadMs = leadMs
             }
             let smoothedLead = smoothedLeadMs ?? leadMs
-            let delayMs = max(0, min(500, Int(round(smoothedLead))))
-            if lastStreamDelayMs == nil || abs(delayMs - (lastStreamDelayMs ?? 0)) >= 5 {
-                let success = aecBridge?.setStreamDelayMs(Int32(delayMs)) ?? false
-                lastStreamDelayMs = delayMs
-                Task { await DiagnosticLogger.shared.log(.aec,
-                    "WEBRTC_STREAM_DELAY_SET: delayMs=\(delayMs), leadMs=\(String(format: "%.1f", leadMs)), smoothedLeadMs=\(String(format: "%.1f", smoothedLead)), success=\(success)") }
-            }
 
             // Deterministic render feed aligned to expected lag
             if useAlignedRenderFeed {
