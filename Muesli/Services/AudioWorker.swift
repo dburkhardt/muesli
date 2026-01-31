@@ -147,13 +147,15 @@ final class AudioWorker {
         }
         workerThread = nil
         processedCallback = nil
-        
+
         logger.info("AudioWorker stopped")
-        
+
+        let logFrames = self.stats.framesProcessed
+        let logMissed = self.stats.framesMissed
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "AUDIO_WORKER_STOP: frames=\(self.stats.framesProcessed), " +
-                "missed=\(self.stats.framesMissed)")
+                "AUDIO_WORKER_STOP: frames=\(logFrames), " +
+                "missed=\(logMissed)")
         }
     }
     

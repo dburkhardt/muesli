@@ -587,7 +587,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Set up route change listener
     private func setupRouteChangeListener() {
         routeChangeToken = CoreAudioHelpers.addRouteChangeListener { [weak self] in
-            Task {
+            guard let self = self else { return }
+            Task { [weak self] in
                 await self?.handleRouteChange()
             }
         }

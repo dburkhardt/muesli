@@ -209,12 +209,13 @@ final class DriftTracker {
             // Initial estimate from history mean
             currentDriftPPM = driftHistory.reduce(0, +) / Double(driftHistory.count)
             hasValidEstimate = true
-            
+
             logger.info("Drift estimate established: \(String(format: "%.1f", self.currentDriftPPM)) ppm")
-            
+
+            let logDrift = self.currentDriftPPM
             Task {
                 await DiagnosticLogger.shared.log(.aec,
-                    "DRIFT_ESTIMATE: ppm=\(String(format: "%.1f", self.currentDriftPPM))")
+                    "DRIFT_ESTIMATE: ppm=\(String(format: "%.1f", logDrift))")
             }
         }
     }
