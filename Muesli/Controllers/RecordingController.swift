@@ -3,7 +3,6 @@ import Foundation
 import os.lock
 import os.log
 import QuartzCore
-import ScreenCaptureKit
 import SwiftUI
 
 /// Controller responsible for recording lifecycle management
@@ -17,7 +16,7 @@ final class RecordingController {
     
     // MARK: - Dependencies
     
-    private let audioCaptureService: AudioCaptureService
+    private let audioCaptureService: any AudioCaptureServiceProtocol
     private let fileOutputService: FileOutputService
     private let transcriptionService: TranscriptionService
     private let transcriptionCoordinator: TranscriptionCoordinator
@@ -104,7 +103,7 @@ final class RecordingController {
     // MARK: - Initialization
     
     init(
-        audioCaptureService: AudioCaptureService,
+        audioCaptureService: any AudioCaptureServiceProtocol,
         fileOutputService: FileOutputService,
         transcriptionService: TranscriptionService,
         transcriptionCoordinator: TranscriptionCoordinator,
@@ -696,7 +695,7 @@ final class RecordingController {
     }
     
     /// Update audio level for the active session (throttled to ~30fps)
-    private func updateAudioLevel(_ level: Float, type: AudioCaptureService.AudioType) {
+    private func updateAudioLevel(_ level: Float, type: AudioStreamType) {
         guard let session = activeSession else { return }
         let now = Date()
         
@@ -815,7 +814,7 @@ final class RecordingController {
             Task {
                 await prepareTranscriptionAsync(for: session)
             }
-        } catch let error as AudioCaptureService.CaptureError {
+        } catch let error as AudioCaptureError {
             handleCaptureError(error, for: session)
         } catch {
             handleGenericError(error, for: session)
@@ -866,7 +865,7 @@ final class RecordingController {
         }
     }
     
-    private func handleCaptureError(_ error: AudioCaptureService.CaptureError, for session: RecordingSession) {
+    private func handleCaptureError(_ error: AudioCaptureError, for session: RecordingSession) {
         let muesliError: MuesliError
         switch error {
         case .noContentToCapture:
@@ -1326,7 +1325,7 @@ final class RecordingController {
             session.startDisplayTimer()
             
             transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
-        } catch let error as AudioCaptureService.CaptureError {
+        } catch let error as AudioCaptureError {
             if let session = activeSession {
                 handleCaptureError(error, for: session)
             }

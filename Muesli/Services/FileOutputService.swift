@@ -205,7 +205,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     ///   - buffer: The audio sample buffer to write
     ///   - type: Whether this is system audio or microphone audio
     /// This method is thread-safe and can be called from any thread
-    func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioCaptureService.AudioType) {
+    func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioStreamType) {
         lock.lock()
         defer { lock.unlock() }
         

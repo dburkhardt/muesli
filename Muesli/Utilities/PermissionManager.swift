@@ -247,14 +247,27 @@ final class PermissionManager: PermissionManagerProtocol {
         }
     }
     
-    // MARK: - Screen Recording Permission
+    // MARK: - Screen Recording Permission (for Audio Capture)
     
     /// Check if screen recording permission is granted
-    /// NOTE: Returns cached value from last async check. Use checkScreenRecordingPermissionAsync() 
+    /// NOTE: Despite the name, Muesli uses this permission for AUDIO ONLY capture.
+    /// No screen pixels or video content are ever captured. The macOS permission system
+    /// requires this permission for any system audio capture, including Core Audio taps.
+    ///
+    /// Returns cached value from last async check. Use checkScreenRecordingPermissionAsync() 
     /// for fresh check. CGPreflightScreenCaptureAccess() is unreliable with ad-hoc signing.
     var hasScreenRecordingPermission: Bool {
         return screenRecordingGranted
     }
+    
+    /// User-facing explanation for why screen recording permission is needed
+    /// Use this in UI to help users understand the audio-only nature of the capture
+    static let screenRecordingExplanation = """
+        Muesli needs Screen Recording access to capture audio from meeting apps.
+        
+        IMPORTANT: Only audio is captured - no screen pixels, video, or visual content.
+        This permission is required by macOS for any app that captures system audio.
+        """
     
     /// Check screen recording permission using SCShareableContent (async, reliable)
     /// This actually queries the TCC database correctly, unlike CGPreflightScreenCaptureAccess
@@ -395,11 +408,47 @@ final class PermissionManager: PermissionManagerProtocol {
         NSWorkspace.shared.open(url)
     }
     
+    // MARK: - Audio Capture Permissions (Core Audio Taps)
+    
+    /// Check if system audio capture is available via Core Audio taps
+    /// Note: Core Audio taps may require Screen Recording permission on some macOS versions
+    /// This is audio-only capture - no screen pixels are captured
+    var hasSystemAudioPermission: Bool {
+        // For Core Audio taps, we still need Screen Recording permission
+        // but we can clarify to users that only audio is captured
+        return hasScreenRecordingPermission
+    }
+    
+    /// Check if running in mic-only fallback mode
+    /// (system audio unavailable, microphone still works)
+    var isMicOnlyMode: Bool {
+        return !hasSystemAudioPermission && hasMicrophonePermission
+    }
+    
+    /// Get user-friendly description of current audio capture capabilities
+    var audioCaptureDescription: String {
+        if hasSystemAudioPermission && hasMicrophonePermission {
+            return "System audio and microphone"
+        } else if hasMicrophonePermission {
+            return "Microphone only (system audio unavailable)"
+        } else if hasSystemAudioPermission {
+            return "System audio only (microphone unavailable)"
+        } else {
+            return "No audio capture available"
+        }
+    }
+    
     // MARK: - Combined Checks
     
     /// Check if all required permissions are granted
     var hasAllPermissions: Bool {
         hasScreenRecordingPermission && hasMicrophonePermission
+    }
+    
+    /// Check if minimum permissions for recording are available
+    /// (at least one audio source must be available)
+    var hasMinimumPermissions: Bool {
+        return hasScreenRecordingPermission || hasMicrophonePermission
     }
     
     /// Refresh permission states (call after user returns from settings)

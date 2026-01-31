@@ -606,32 +606,19 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
     }
 }
 
-/// Callback type for receiving audio buffers
-/// Note: Buffers are processed synchronously in the callback - do not block
-typealias AudioBufferHandler = @Sendable (CMSampleBuffer, AudioCaptureService.AudioType) -> Void
-
-/// Callback type for when the stream is interrupted (e.g., captured app quits)
-typealias StreamInterruptedHandler = @Sendable (Error?) -> Void
-
-/// Callback type for audio level updates (0.0 to 1.0)
-typealias AudioLevelHandler = @Sendable (Float, AudioCaptureService.AudioType) -> Void
-
-/// Callback type for service warnings (message, details, canRetry)
-/// Used to propagate non-fatal errors to the UI
-typealias AudioWarningHandler = @Sendable (String, String, Bool) -> Void
+// Note: Callback types (AudioBufferHandler, StreamInterruptedHandler, AudioLevelHandler, AudioWarningHandler)
+// are defined in AudioCaptureServiceProtocol.swift
 
 /// Service responsible for capturing audio from meeting apps and microphone
 /// Uses ScreenCaptureKit to capture system audio from selected applications
 actor AudioCaptureService: AudioCaptureServiceProtocol {
     // MARK: - Types
-    
+
     private nonisolated let logger = LoggerFactory.logger(category: "AudioCaptureService")
-    
-    enum AudioType: Sendable {
-        case system  // Audio from the captured application
-        case microphone  // User's microphone audio
-    }
-    
+
+    /// Audio type - uses shared AudioStreamType for compatibility with TapAudioCaptureService
+    typealias AudioType = AudioStreamType
+
     enum CaptureError: Error, LocalizedError {
         case noContentToCapture
         case streamConfigurationFailed

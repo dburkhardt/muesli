@@ -1,20 +1,8 @@
 import CoreMedia
 import Foundation
 
-// MARK: - AudioCaptureServiceProtocol
-
-/// Protocol for AudioCaptureService to enable mocking in tests
-protocol AudioCaptureServiceProtocol: Sendable {
-    var isRecording: Bool { get async }
-    
-    func setBufferHandler(_ handler: @escaping AudioBufferHandler) async
-    func setInterruptedHandler(_ handler: @escaping StreamInterruptedHandler) async
-    func setLevelHandler(_ handler: @escaping AudioLevelHandler) async
-    func setMicrophoneDevice(_ deviceID: String?) async
-    func startCapture() async throws
-    func startCapture(forBundleIdentifier bundleIdentifier: String) async throws
-    func stopCapture() async throws
-}
+// Note: AudioCaptureServiceProtocol is defined in AudioCaptureServiceProtocol.swift
+// The callback type aliases (AudioBufferHandler, etc.) are also defined there.
 
 // MARK: - TranscriptionServiceProtocol
 
@@ -41,7 +29,7 @@ protocol FileOutputServiceProtocol: Sendable {
     func setOutputDirectory(_ url: URL)
     func getOutputDirectory() -> URL
     func startWriting(segmentNumber: Int) throws -> URL
-    func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioCaptureService.AudioType)
+    func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioStreamType)
     func stopWriting() async throws -> URL
     func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL
     func saveTranscript(_ transcript: String, title: String, date: Date, to directory: URL) throws
@@ -180,6 +168,9 @@ extension EchoCancellationServiceProtocol {
     /// Default no-op implementation for drift monitoring
     func startDriftMonitoring() { /* default no-op */ }
 }
+
+// Note: TapAudioCaptureService now conforms to AudioCaptureServiceProtocol
+// defined in AudioCaptureServiceProtocol.swift - no separate protocol needed.
 
 // MARK: - ExportServiceProtocol
 

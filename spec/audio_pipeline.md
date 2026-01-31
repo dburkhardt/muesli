@@ -5,12 +5,67 @@ This document specifies how Muesli captures, processes, and transcribes audio fr
 ## Overview
 
 The audio pipeline handles two parallel streams:
-1. **System Audio**: Captured from meeting apps (Zoom, Teams, Meet) via ScreenCaptureKit
+1. **System Audio**: Captured from meeting apps (Zoom, Teams, Meet)
+   - **macOS 26+**: Core Audio taps (preferred - better sync, lower latency)
+   - **Legacy**: ScreenCaptureKit (fallback for older macOS)
 2. **Microphone Audio**: Captured from the user's selected microphone via AVAudioEngine
 
 Both streams are simultaneously:
 - Written to disk as CAF files (for playback/reprocessing)
 - Resampled and fed to WhisperKit (for real-time transcription)
+
+## Architecture Selection
+
+Muesli automatically selects the best audio capture architecture:
+
+| macOS Version | System Audio Capture | Why |
+|---------------|---------------------|-----|
+| 26+ (Tahoe)   | Core Audio Taps     | Better clock sync, lower latency, true process exclusion |
+| 15.x-25.x     | ScreenCaptureKit    | Fallback for compatibility |
+
+### Core Audio Taps Architecture (macOS 26+)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 Output Tap (Core Audio)                      │
+│     (default output mix; excludes Muesli process)            │
+│   Tap-only aggregate device (NO mic subdevice)               │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+                    TapCaptureRing (render)
+
+┌─────────────────────────────────────────────────────────────┐
+│                 Mic Capture (AVAudioEngine)                  │
+│        (supports user device selection)                      │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+                    MicCaptureRing (capture)
+
+                 ┌─────────────────────────────────┐
+                 │          AudioSynchronizer       │
+                 │  - sample-index timeline         │
+                 │  - bounded jitter buffers        │
+                 │  - discontinuity detection       │
+                 │  - coarse delay controller       │
+                 │  - drift tracker + resampler     │
+                 └─────────────────┬───────────────┘
+                                   │
+                                   ▼
+                         AECProcessor (render→capture)
+                                   │
+                ┌──────────────────┴──────────────────┐
+                │                                      │
+                ▼                                      ▼
+       FileOutputService                   TranscriptionService
+```
+
+Key advantages of Core Audio taps:
+- **Single clock domain**: Tap and mic use same sample rate clock
+- **Sample-index alignment**: Precise pairing without timestamp drift
+- **Process exclusion**: True exclusion of Muesli's own audio output
+- **Lower latency**: Direct device access vs ScreenCaptureKit buffering
 
 ## Architecture
 

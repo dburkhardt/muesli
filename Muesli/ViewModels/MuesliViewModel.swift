@@ -2,7 +2,6 @@ import CoreMedia
 import Foundation
 import os.lock
 import os.log
-import ScreenCaptureKit
 import SwiftUI
 
 /// Main ViewModel for the Muesli app
@@ -118,7 +117,7 @@ final class MuesliViewModel {
     
     // MARK: - Services (injectable for testing)
     
-    private let audioCaptureService: AudioCaptureService
+    private let audioCaptureService: any AudioCaptureServiceProtocol
     private let fileOutputService: FileOutputService
     private let transcriptionService: TranscriptionService
     private let meetingAppDetector: MeetingAppDetector
@@ -435,7 +434,7 @@ final class MuesliViewModel {
         preferencesManager: PreferencesManager = PreferencesManager(),
         historyManager: MeetingHistoryManager? = nil,
         refinementCoordinator: RefinementCoordinator? = nil,
-        audioCaptureService: AudioCaptureService? = nil,
+        audioCaptureService: (any AudioCaptureServiceProtocol)? = nil,
         fileOutputService: FileOutputService? = nil,
         transcriptionService: TranscriptionService? = nil,
         meetingAppDetector: MeetingAppDetector? = nil,
@@ -448,7 +447,8 @@ final class MuesliViewModel {
         skipInitialLoad: Bool = false
     ) {
         // Initialize services (use provided or create defaults)
-        self.audioCaptureService = audioCaptureService ?? AudioCaptureService()
+        // Use TapAudioCaptureService (Core Audio taps) for macOS 26+ Tahoe
+        self.audioCaptureService = audioCaptureService ?? TapAudioCaptureService()
         self.fileOutputService = fileOutputService ?? FileOutputService()
         
         // Initialize transcription service with chunk duration from preferences
