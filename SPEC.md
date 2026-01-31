@@ -129,7 +129,6 @@ MuesliViewModel (Coordinator)
 │   ├─ outputDirectory: URL
 │   ├─ launchAtLogin: Bool
 │   ├─ transcriptionMode: TranscriptionMode
-│   └─ isEchoCancellationEnabled: Bool
 │
 ├── MeetingHistoryManager (owns meeting history state)
 │   ├─ meetingHistory: [MeetingHistoryItem]
@@ -226,6 +225,14 @@ The audio pipeline uses parallel capture with separate files for system and micr
 - Users can reprocess with different speaker assignments
 
 **Note**: Microphone capture uses AVAudioEngine instead of ScreenCaptureKit's `captureMicrophone` because SCK always uses the system default mic and ignores user device selection. See `spec/audio_pipeline.md` for details.
+
+**Note**: Microphone capture enables Voice Processing I/O (VPIO) for system echo cancellation when devices are compatible. If VPIO fails, recording continues without echo cancellation and a warning is shown.
+
+### Voice Processing I/O (VPIO) Troubleshooting
+
+- Error `-10876`: Input/output device mismatch (for example, AirPods mic + MacBook speakers)
+- Verify VPIO status in diagnostic logs (category: `APP`)
+- VPIO may change the input format; validate the actual input sample rate and channels
 
 ### Meeting App Detection
 
@@ -544,7 +551,6 @@ User preferences are stored in standard UserDefaults:
 - Active transcription model
 - Launch at login setting
 - Transcription mode (live vs post-processing)
-- Echo cancellation setting
 
 ### Diagnostic Logs
 

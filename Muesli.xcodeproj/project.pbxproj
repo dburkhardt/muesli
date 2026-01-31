@@ -23,7 +23,6 @@
 		A1000087241D1A1D00000023 /* LLMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000086241D1A1D00000023 /* LLMManager.swift */; };
 		A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000088241D1A1D00000024 /* TranscriptBlockView.swift */; };
 		A1000090241D1A1D00000025 /* TranscriptRefinementService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */; };
-		A1000096241D1A1D00000028 /* EchoCancellationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000097241D1A1D00000028 /* EchoCancellationService.swift */; };
 		A1000092241D1A1D00000026 /* RefineTranscriptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */; };
 		A1000094241D1A1D00000027 /* ResumeControlPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000095241D1A1D00000027 /* ResumeControlPane.swift */; };
 		A1000023241D1A1D00000001 /* MuesliViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000024241D1A1D00000001 /* MuesliViewModel.swift */; };
@@ -69,6 +68,7 @@
 		D1000001241D1A1D00000060 /* ServiceProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1000002241D1A1D00000060 /* ServiceProtocols.swift */; };
 		E1000001241D1A1D00000070 /* RecordingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000002241D1A1D00000070 /* RecordingController.swift */; };
 		E1000003241D1A1D00000071 /* AppStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000004241D1A1D00000071 /* AppStorageKeys.swift */; };
+		AB00001241D1A1D00000110 /* AudioBufferHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00002241D1A1D00000110 /* AudioBufferHelpers.swift */; };
 		E1000005241D1A1D00000072 /* MuesliError.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000006241D1A1D00000072 /* MuesliError.swift */; };
 		F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000002241D1A1D00000080 /* AudioConfiguration.swift */; };
 		114BBE69396045369DA85097 /* ClipboardHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 114BBE69396045369DA85098 /* ClipboardHelper.swift */; };
@@ -84,7 +84,6 @@
 		B1000011241D1A1D00000040 /* MockMicrophoneManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000012241D1A1D00000040 /* MockMicrophoneManager.swift */; };
 		B1000013241D1A1D00000040 /* MockModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000014241D1A1D00000040 /* MockModelManager.swift */; };
 		B1000015241D1A1D00000040 /* MockLLMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000016241D1A1D00000040 /* MockLLMManager.swift */; };
-		B1000017241D1A1D00000040 /* MockEchoCancellationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */; };
 		B1000020241D1A1D00000041 /* RecordingControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000021241D1A1D00000041 /* RecordingControllerTests.swift */; };
 		B1000023241D1A1D00000042 /* TranscriptionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */; };
 		B0613F64BBAA48E09FA64C49 /* TimeFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0613F64BBAA48E09FA64C49A /* TimeFormattingTests.swift */; };
@@ -153,7 +152,6 @@
 		A1000086241D1A1D00000023 /* LLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMManager.swift; sourceTree = "<group>"; };
 		A1000088241D1A1D00000024 /* TranscriptBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlockView.swift; sourceTree = "<group>"; };
 		A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRefinementService.swift; sourceTree = "<group>"; };
-		A1000097241D1A1D00000028 /* EchoCancellationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoCancellationService.swift; sourceTree = "<group>"; };
 		A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefineTranscriptSheet.swift; sourceTree = "<group>"; };
 		A1000095241D1A1D00000027 /* ResumeControlPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResumeControlPane.swift; sourceTree = "<group>"; };
 		B100001A241D1A1D00000040 /* MuesliTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MuesliTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -168,7 +166,6 @@
 		B1000012241D1A1D00000040 /* MockMicrophoneManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockMicrophoneManager.swift; sourceTree = "<group>"; };
 		B1000014241D1A1D00000040 /* MockModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockModelManager.swift; sourceTree = "<group>"; };
 		B1000016241D1A1D00000040 /* MockLLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockLLMManager.swift; sourceTree = "<group>"; };
-		B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockEchoCancellationService.swift; sourceTree = "<group>"; };
 		B1000021241D1A1D00000041 /* RecordingControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingControllerTests.swift; sourceTree = "<group>"; };
 		B1000024241D1A1D00000042 /* TranscriptionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionCoordinatorTests.swift; sourceTree = "<group>"; };
 		B0613F64BBAA48E09FA64C49A /* TimeFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeFormattingTests.swift; sourceTree = "<group>"; };
@@ -186,6 +183,7 @@
 		D1000002241D1A1D00000060 /* ServiceProtocols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceProtocols.swift; sourceTree = "<group>"; };
 		E1000002241D1A1D00000070 /* RecordingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingController.swift; sourceTree = "<group>"; };
 		E1000004241D1A1D00000071 /* AppStorageKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStorageKeys.swift; sourceTree = "<group>"; };
+		AB00002241D1A1D00000110 /* AudioBufferHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBufferHelpers.swift; sourceTree = "<group>"; };
 		E1000006241D1A1D00000072 /* MuesliError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliError.swift; sourceTree = "<group>"; };
 		F1000002241D1A1D00000080 /* AudioConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioConfiguration.swift; sourceTree = "<group>"; };
 		114BBE69396045369DA85098 /* ClipboardHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHelper.swift; sourceTree = "<group>"; };
@@ -352,7 +350,6 @@
 				A1000082241D1A1D00000021 /* TranscriptProcessor.swift */,
 				A1000084241D1A1D00000022 /* LLMStitchingService.swift */,
 				A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */,
-				A1000097241D1A1D00000028 /* EchoCancellationService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -365,6 +362,7 @@
 				A100003B241D1A1D00000007 /* MicrophoneManager.swift */,
 				A1000086241D1A1D00000023 /* LLMManager.swift */,
 				E1000004241D1A1D00000071 /* AppStorageKeys.swift */,
+				AB00002241D1A1D00000110 /* AudioBufferHelpers.swift */,
 				LF00002241D1A1D00000096A /* LoggerFactory.swift */,
 				DL00002241D1A1D00000100 /* DiagnosticLogger.swift */,
 				BI00002241D1A1D00000103 /* BuildInfo.swift */,
@@ -420,7 +418,6 @@
 				B1000012241D1A1D00000040 /* MockMicrophoneManager.swift */,
 				B1000014241D1A1D00000040 /* MockModelManager.swift */,
 				B1000016241D1A1D00000040 /* MockLLMManager.swift */,
-				B1000018241D1A1D00000040 /* MockEchoCancellationService.swift */,
 			);
 			path = Mocks;
 			sourceTree = "<group>";
@@ -645,7 +642,6 @@
 				A1000087241D1A1D00000023 /* LLMManager.swift in Sources */,
 				A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */,
 				A1000090241D1A1D00000025 /* TranscriptRefinementService.swift in Sources */,
-				A1000096241D1A1D00000028 /* EchoCancellationService.swift in Sources */,
 				A1000092241D1A1D00000026 /* RefineTranscriptSheet.swift in Sources */,
 				A1000094241D1A1D00000027 /* ResumeControlPane.swift in Sources */,
 				C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */,
@@ -658,6 +654,7 @@
 				D1000001241D1A1D00000060 /* ServiceProtocols.swift in Sources */,
 				E1000001241D1A1D00000070 /* RecordingController.swift in Sources */,
 				E1000003241D1A1D00000071 /* AppStorageKeys.swift in Sources */,
+				AB00001241D1A1D00000110 /* AudioBufferHelpers.swift in Sources */,
 				E1000005241D1A1D00000072 /* MuesliError.swift in Sources */,
 				F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */,
 				114BBE69396045369DA85097 /* ClipboardHelper.swift in Sources */,
@@ -680,7 +677,6 @@
 				B1000011241D1A1D00000040 /* MockMicrophoneManager.swift in Sources */,
 				B1000013241D1A1D00000040 /* MockModelManager.swift in Sources */,
 				B1000015241D1A1D00000040 /* MockLLMManager.swift in Sources */,
-				B1000017241D1A1D00000040 /* MockEchoCancellationService.swift in Sources */,
 				B1000020241D1A1D00000041 /* RecordingControllerTests.swift in Sources */,
 				B1000023241D1A1D00000042 /* TranscriptionCoordinatorTests.swift in Sources */,
 				B0613F64BBAA48E09FA64C49 /* TimeFormattingTests.swift in Sources */,

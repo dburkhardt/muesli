@@ -23,7 +23,6 @@ enum AppStorageKeys {
     static let transcriptionMode = "transcriptionMode"
     
     /// Whether echo cancellation is enabled
-    static let echoCancellationEnabled = "echoCancellationEnabled"
     
     /// Audio chunk duration for transcription (2-10 seconds)
     static let audioChunkDuration = "audioChunkDuration"

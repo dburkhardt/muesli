@@ -41,5 +41,8 @@ docs/download-stats.json
 # DMG files (should only exist in GitHub Releases)
 *.dmg
 
+# Local frameworks (do not commit)
+Muesli/Frameworks/
+
 # Hidden scripts with credentials (never commit!)
 hidden_scripts/

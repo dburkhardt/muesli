@@ -38,8 +38,7 @@ MuesliTests/
 │   ├── MockPermissionManager.swift
 │   ├── MockMicrophoneManager.swift
 │   ├── MockModelManager.swift
-│   ├── MockLLMManager.swift
-│   └── MockEchoCancellationService.swift
+│   └── MockLLMManager.swift
 └── Protocols/
     └── ServiceProtocols.swift    # Protocol interfaces for mocking
 ```

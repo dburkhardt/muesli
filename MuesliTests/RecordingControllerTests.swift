@@ -18,12 +18,6 @@ final class RecordingControllerTests: XCTestCase {
             transcriptionService: transcriptionService,
             modelManager: modelManager
         )
-        let echoCancellationService = EchoCancellationService(
-            filterLength: 256,
-            learningRate: 0.3,
-            sampleRate: 48000,
-            maxDelayMs: 100
-        )
         let preferencesManager = PreferencesManager()
         let microphoneManager = MicrophoneManager()
         
@@ -32,7 +26,6 @@ final class RecordingControllerTests: XCTestCase {
             fileOutputService: fileOutputService,
             transcriptionService: transcriptionService,
             transcriptionCoordinator: transcriptionCoordinator,
-            echoCancellationService: echoCancellationService,
             preferencesManager: preferencesManager,
             microphoneManager: microphoneManager,
             exportService: ExportService()
@@ -136,8 +129,8 @@ final class RecordingControllerTests: XCTestCase {
     
     // MARK: - Audio Buffer Format Tests
     
-    func testMicrophoneBufferConversionWithAECDisabled() async throws {
-        // Test that microphone buffers are converted to stereo format even when AEC is disabled
+    func testMicrophoneBufferConversionToStereo() async throws {
+        // Test that microphone buffers are converted to stereo format for file output
         // This ensures format consistency with FileOutputService expectations
         
         // Create test mono samples (simulates what MicrophoneCaptureEngine produces)
@@ -147,7 +140,7 @@ final class RecordingControllerTests: XCTestCase {
         
         // Verify we can convert mono samples to stereo buffer
         let timestamp = CMTime(value: 0, timescale: CMTimeScale(sampleRate))
-        guard let stereoBuffer = EchoCancellationService.createSampleBuffer(
+        guard let stereoBuffer = AudioBufferHelpers.createSampleBuffer(
             from: monoSamples,
             timestamp: timestamp
         ) else {
@@ -472,31 +465,3 @@ final class RecordingControllerTests: XCTestCase {
 // NOTE: Microphone mute state thread safety is now tested via RecordingControllerTests.testIsMicrophoneMutedSafeIsThreadSafe()
 // The ViewModel delegates all recording state to RecordingController
 
-// MARK: - PreferencesManager Thread Safety Tests
-
-@MainActor
-final class PreferencesManagerThreadSafetyTests: XCTestCase {
-    func testEchoCancellationLockIsThreadSafe() async {
-        let manager = PreferencesManager()
-        
-        // Access from multiple threads should not crash
-        let expectation = XCTestExpectation(description: "Concurrent access completes")
-        expectation.expectedFulfillmentCount = 20
-        
-        // Read from multiple threads
-        for _ in 0..<10 {
-            Task.detached {
-                _ = manager.echoCancellationEnabledForAudioCallback
-                expectation.fulfill()
-            }
-        }
-        
-        // Write from main thread interleaved with reads
-        for i in 0..<10 {
-            manager.isEchoCancellationEnabled = (i % 2 == 0)
-            expectation.fulfill()
-        }
-        
-        await fulfillment(of: [expectation], timeout: 5.0)
-    }
-}

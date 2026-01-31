@@ -233,16 +233,6 @@ struct GeneralPreferencesTab: View {
             }
             
             Section("Audio") {
-                Toggle(isOn: $prefs.isEchoCancellationEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Echo Cancellation")
-                        Text("Remove echo from microphone audio caused by speakers. Improves transcription quality and saved audio files.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .toggleStyle(.switch)
-                
                 LabeledContent("Audio Chunk Duration") {
                     Text(String(format: "%.1f seconds", prefs.audioChunkDuration))
                         .font(.system(size: 12, design: .monospaced))

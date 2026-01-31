@@ -1,6 +1,5 @@
 import CoreMedia
 import Foundation
-import os.lock
 import os.log
 import ScreenCaptureKit
 import SwiftUI
@@ -82,9 +81,6 @@ final class MuesliViewModel {
     private let meetingHistoryService: MeetingHistoryService
     private let exportService: ExportService
     
-    // Echo cancellation service (optional - can be enabled/disabled)
-    private let echoCancellationService: EchoCancellationService
-    
     // Transcription coordinator (manages model lifecycle and audio buffering)
     private let transcriptionCoordinator: TranscriptionCoordinator
     
@@ -96,16 +92,6 @@ final class MuesliViewModel {
     
     /// Recording controller - owns all recording lifecycle logic
     private let recordingController: RecordingController
-    
-    /// Whether echo cancellation is enabled (delegates to PreferencesManager)
-    var isEchoCancellationEnabled: Bool {
-        get {
-            preferencesManager.isEchoCancellationEnabled
-        }
-        set {
-            preferencesManager.isEchoCancellationEnabled = newValue
-        }
-    }
     
     // MARK: - Transcription State
     
@@ -381,7 +367,6 @@ final class MuesliViewModel {
     ///   - permissionManager: Manager for permissions (injectable for testing)
     ///   - microphoneManager: Manager for microphone devices (injectable for testing)
     ///   - meetingHistoryService: Service for meeting history (injectable for testing)
-    ///   - echoCancellationService: Service for echo cancellation (injectable for testing)
     ///   - llmManager: LLM Manager for transcript refinement (injectable, shared instance)
     ///   - skipInitialLoad: If true, skips loading meeting history from disk (for testing)
     init(
@@ -395,7 +380,6 @@ final class MuesliViewModel {
         permissionManager: PermissionManager? = nil,
         microphoneManager: MicrophoneManager? = nil,
         meetingHistoryService: MeetingHistoryService? = nil,
-        echoCancellationService: EchoCancellationService? = nil,
         llmManager: LLMManager? = nil,
         exportService: ExportService? = nil,
         skipInitialLoad: Bool = false
@@ -414,13 +398,6 @@ final class MuesliViewModel {
         self.microphoneManager = microphoneManager ?? MicrophoneManager()
         self.meetingHistoryService = meetingHistoryService ?? MeetingHistoryService()
         self.exportService = exportService ?? ExportService()
-        self.echoCancellationService = echoCancellationService ?? EchoCancellationService(
-            filterLength: 256,
-            learningRate: 0.3,
-            sampleRate: 48000,
-            maxDelayMs: 100
-        )
-        
         // Initialize managers (skip scanning during tests to avoid file system/Documents prompts)
         self.modelManager = ModelManager(skipScan: skipInitialLoad)
         
@@ -449,7 +426,6 @@ final class MuesliViewModel {
             fileOutputService: self.fileOutputService,
             transcriptionService: self.transcriptionService,
             transcriptionCoordinator: self.transcriptionCoordinator,
-            echoCancellationService: self.echoCancellationService,
             preferencesManager: preferencesManager,
             microphoneManager: self.microphoneManager,
             exportService: self.exportService

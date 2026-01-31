@@ -21,7 +21,7 @@ final class MuesliViewModelTests: XCTestCase {
     /// Keys that need to be cleaned up after tests
     private static let userDefaultsKeysToClean = [
         "outputDirectory", "hasCompletedOnboarding", "transcriptionMode",
-        "echoCancellationEnabled", "launchAtLogin"
+        "launchAtLogin"
     ]
     
     // MARK: - Setup / Teardown
@@ -90,22 +90,6 @@ final class MuesliViewModelTests: XCTestCase {
         // Test post-processing mode
         UserDefaults.standard.set("postProcessing", forKey: key)
         XCTAssertEqual(UserDefaults.standard.string(forKey: key), "postProcessing")
-        
-        // Clean up
-        UserDefaults.standard.removeObject(forKey: key)
-    }
-    
-    func testEchoCancellationUserDefaultsKey() async {
-        // Verify the key name for echo cancellation preference
-        let key = "echoCancellationEnabled"
-        
-        // Test enabled
-        UserDefaults.standard.set(true, forKey: key)
-        XCTAssertTrue(UserDefaults.standard.bool(forKey: key))
-        
-        // Test disabled
-        UserDefaults.standard.set(false, forKey: key)
-        XCTAssertFalse(UserDefaults.standard.bool(forKey: key))
         
         // Clean up
         UserDefaults.standard.removeObject(forKey: key)
@@ -980,41 +964,6 @@ final class MuesliViewModelTests: XCTestCase {
         XCTAssertFalse(session.isMicrophoneMuted)
     }
     
-    // MARK: - Echo Cancellation Tests (CRITICAL)
-    
-    func testEchoCancellationToggle() async {
-        let viewModel = MuesliViewModel(skipInitialLoad: true)
-        
-        // Get initial state
-        let initial = viewModel.isEchoCancellationEnabled
-        
-        // Toggle
-        viewModel.isEchoCancellationEnabled = !initial
-        XCTAssertEqual(viewModel.isEchoCancellationEnabled, !initial)
-        
-        // Verify UserDefaults persistence
-        XCTAssertEqual(UserDefaults.standard.bool(forKey: "echoCancellationEnabled"), !initial)
-        
-        // Toggle back
-        viewModel.isEchoCancellationEnabled = initial
-        XCTAssertEqual(viewModel.isEchoCancellationEnabled, initial)
-        
-        // Clean up
-        UserDefaults.standard.removeObject(forKey: "echoCancellationEnabled")
-    }
-    
-    func testEchoCancellationPersistenceBetweenInstances() async {
-        // Set a value
-        UserDefaults.standard.set(true, forKey: "echoCancellationEnabled")
-        
-        // Create new ViewModel - should load persisted value
-        let viewModel = MuesliViewModel(skipInitialLoad: true)
-        XCTAssertTrue(viewModel.isEchoCancellationEnabled)
-        
-        // Clean up
-        UserDefaults.standard.removeObject(forKey: "echoCancellationEnabled")
-    }
-    
     // MARK: - Meeting Deletion Tests (CRITICAL - Actual Deletion)
     
     func testConfirmDeleteMeetingsClearsState() async {
@@ -1478,23 +1427,6 @@ final class MuesliViewModelTests: XCTestCase {
         
         // Restore original
         prefs.transcriptionMode = initialMode
-    }
-    
-    func testPreferencesManagerEchoCancellation() async {
-        let prefs = PreferencesManager()
-        
-        // Get initial state
-        let initial = prefs.isEchoCancellationEnabled
-        
-        // Toggle
-        prefs.isEchoCancellationEnabled = !initial
-        XCTAssertEqual(prefs.isEchoCancellationEnabled, !initial)
-        
-        // Thread-safe accessor should match
-        XCTAssertEqual(prefs.echoCancellationEnabledForAudioCallback, !initial)
-        
-        // Restore
-        prefs.isEchoCancellationEnabled = initial
     }
     
     func testPreferencesManagerLaunchAtLogin() async {

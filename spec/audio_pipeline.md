@@ -19,7 +19,7 @@ Both streams are simultaneously:
 │                          AudioCaptureService                             │
 │  ┌─────────────────────────┐     ┌─────────────────────────────────┐   │
 │  │      SCStream           │     │     MicrophoneCaptureEngine     │   │
-│  │  (ScreenCaptureKit)     │     │       (AVAudioEngine)           │   │
+│  │  (ScreenCaptureKit)     │     │   (AVAudioEngine + VPIO)        │   │
 │  │                         │     │                                  │   │
 │  │  System audio from      │     │  User's microphone via          │   │
 │  │  selected meeting app   │     │  CoreAudio device selection     │   │
@@ -107,6 +107,16 @@ The `MicrophoneCaptureEngine` class wraps AVAudioEngine to provide:
 - Explicit device selection via `AudioObjectSetPropertyData`
 - Consistent Float32 sample format
 - Conversion to CMSampleBuffer for compatibility with the rest of the pipeline
+
+## Voice Processing I/O (VPIO)
+
+Muesli enables macOS Voice Processing I/O to reduce microphone echo using system AEC:
+
+- Enabled with `AVAudioInputNode.setVoiceProcessingEnabled(true)`
+- Called after device selection and before installing the input tap
+- Requires a compatible input/output device pair (for example, built-in mic + speakers, AirPods)
+- If VPIO fails with error `-10876`, recording continues without AEC and a warning is shown
+- VPIO can change the input format; we log actual input/output formats and use the input format for the tap
 
 ## File Output
 
@@ -349,11 +359,12 @@ Long transcription segments are split into multiple `TranscriptBlock` objects:
 | `TranscriptionService.swift` | WhisperKit integration, resampling, **loadAudioFile()** |
 | `TranscriptionCoordinator.swift` | Model lifecycle, audio buffering, **reprocessTranscript()** |
 | `AudioConfiguration.swift` | Centralized constants |
-| `EchoCancellationService.swift` | Sample extraction utilities |
+| `AudioBufferHelpers.swift` | Sample extraction + buffer conversion helpers |
 
 ## Change History
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-01-30 | Replaced NLMS AEC with VPIO | Simplify echo cancellation and remove custom filter |
 | 2026-01-16 | Added reprocessing documentation | Document reprocess flow and AVAudioConverter bug fix |
 | 2026-01-16 | Initial specification | Document audio pipeline architecture |

@@ -34,7 +34,6 @@ final class PreferencesManagerTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.outputDirectory)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.launchAtLogin)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.transcriptionMode)
-        UserDefaults.standard.removeObject(forKey: AppStorageKeys.echoCancellationEnabled)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.audioChunkDuration)
         UserDefaults.standard.removeObject(forKey: PreferencesManager.migrationCheckedKey)
     }
@@ -229,83 +228,6 @@ final class PreferencesManagerTests: XCTestCase {
         let newManager = PreferencesManager()
         
         XCTAssertEqual(newManager.transcriptionMode, .live)
-    }
-    
-    // MARK: - Echo Cancellation Tests
-    
-    /// Test that echo cancellation defaults to false
-    func testEchoCancellation_DefaultsToFalse() async {
-        XCTAssertFalse(preferencesManager.isEchoCancellationEnabled)
-    }
-    
-    /// Test that echo cancellation can be enabled
-    func testEchoCancellation_CanBeEnabled() async {
-        preferencesManager.isEchoCancellationEnabled = true
-        
-        XCTAssertTrue(preferencesManager.isEchoCancellationEnabled)
-    }
-    
-    /// Test that echo cancellation persists to UserDefaults
-    func testEchoCancellation_PersistsToUserDefaults() async {
-        preferencesManager.isEchoCancellationEnabled = true
-        
-        let saved = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
-        XCTAssertTrue(saved)
-    }
-    
-    /// Test that echo cancellation persists across instances
-    func testEchoCancellation_PersistsAcrossInstances() async {
-        preferencesManager.isEchoCancellationEnabled = true
-        
-        let newManager = PreferencesManager()
-        
-        XCTAssertTrue(newManager.isEchoCancellationEnabled)
-    }
-    
-    /// Test that echo cancellation is thread-safe (nonisolated getter)
-    func testEchoCancellation_ThreadSafeAccess() async {
-        preferencesManager.isEchoCancellationEnabled = true
-        
-        // Access from nonisolated context
-        let value = preferencesManager.echoCancellationEnabledForAudioCallback
-        
-        XCTAssertTrue(value)
-    }
-    
-    /// Test that echo cancellation can be toggled multiple times
-    func testEchoCancellation_CanToggleMultipleTimes() async {
-        preferencesManager.isEchoCancellationEnabled = true
-        XCTAssertTrue(preferencesManager.isEchoCancellationEnabled)
-        
-        preferencesManager.isEchoCancellationEnabled = false
-        XCTAssertFalse(preferencesManager.isEchoCancellationEnabled)
-        
-        preferencesManager.isEchoCancellationEnabled = true
-        XCTAssertTrue(preferencesManager.isEchoCancellationEnabled)
-    }
-    
-    /// Test that echo cancellation lock synchronization works under concurrent access
-    func testEchoCancellation_ConcurrentAccessIsSafe() async {
-        preferencesManager.isEchoCancellationEnabled = true
-        
-        // Capture manager reference to use in task group
-        let manager = preferencesManager!
-        
-        // Perform multiple concurrent reads and writes
-        await withTaskGroup(of: Void.self) { group in
-            for i in 0..<100 {
-                group.addTask { @MainActor in
-                    if i % 2 == 0 {
-                        _ = manager.echoCancellationEnabledForAudioCallback
-                    } else {
-                        manager.isEchoCancellationEnabled = (i % 4 == 1)
-                    }
-                }
-            }
-        }
-        
-        // Should not crash or deadlock
-        XCTAssertTrue(true)
     }
     
     // MARK: - Audio Chunk Duration Tests

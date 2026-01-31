@@ -165,15 +165,6 @@ protocol LLMManagerProtocol: AnyObject {
     func reset()
 }
 
-// MARK: - EchoCancellationServiceProtocol
-
-/// Protocol for EchoCancellationService to enable mocking in tests
-protocol EchoCancellationServiceProtocol: Sendable {
-    func storeSystemAudio(samples: [Float], timestamp: CMTime)
-    func processMicrophoneAudio(microphoneSamples: [Float], micTimestamp: CMTime) -> [Float]
-    func reset()
-}
-
 // MARK: - ExportServiceProtocol
 
 /// Protocol for ExportService to enable mocking in tests

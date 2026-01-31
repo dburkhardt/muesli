@@ -14,17 +14,22 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
     private var isRunning = false
     private let bufferHandler: ((CMSampleBuffer) -> Void)?
     private let levelHandler: ((Float) -> Void)?
+    private let vpioWarningHandler: ((String, String) -> Void)?
     
-    init(bufferHandler: ((CMSampleBuffer) -> Void)?, levelHandler: ((Float) -> Void)?) {
+    init(
+        bufferHandler: ((CMSampleBuffer) -> Void)?,
+        levelHandler: ((Float) -> Void)?,
+        vpioWarningHandler: ((String, String) -> Void)?
+    ) {
         self.bufferHandler = bufferHandler
         self.levelHandler = levelHandler
+        self.vpioWarningHandler = vpioWarningHandler
     }
     
     private let logger = LoggerFactory.logger(category: "MicrophoneCaptureEngine")
     
     func start(deviceID: String?) throws {
         guard !isRunning else { return }
-        
         let inputNode = audioEngine.inputNode
         
         // Try to set the preferred device if specified
@@ -43,17 +48,46 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
             selectFirstRealMicrophone()
         }
         
-        // Get both input and output formats for diagnostics
+        // Enable Voice Processing I/O AFTER device selection, BEFORE tap installation
+        do {
+            try inputNode.setVoiceProcessingEnabled(true)
+            logger.info("VPIO enabled for echo cancellation")
+            Task { await DiagnosticLogger.shared.log(.app, "VPIO enabled, device: \(deviceID ?? "default")") }
+        } catch let error as NSError {
+            let errorInfo = error.code == -10876 ? "device mismatch" : error.localizedDescription
+            logger.warning("VPIO unavailable: \(errorInfo). Recording without echo cancellation.")
+            Task { await DiagnosticLogger.shared.log(.app, "VPIO failed: \(errorInfo), device: \(deviceID ?? "default")") }
+            
+            vpioWarningHandler?(
+                "Echo cancellation unavailable",
+                """
+                Your microphone and speakers are on different devices. For best results, use headphones with a built-in microphone.
+                
+                Device: \(deviceID ?? "default")
+                Error: \(errorInfo)
+                """
+            )
+        }
+        
+        // Get both input and output formats for diagnostics (after VPIO)
         let inputFormat = inputNode.inputFormat(forBus: 0)
         let outputFormat = inputNode.outputFormat(forBus: 0)
+        logger.info("Post-VPIO input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channels")
+        logger.info("Post-VPIO output format: \(outputFormat.sampleRate)Hz, \(outputFormat.channelCount) channels")
         
-        // Use the output format but check if it's valid
-        // If sampleRate is 0 or invalid, the tap won't receive callbacks
-        var recordingFormat = outputFormat
-        if recordingFormat.sampleRate == 0 {
-            // Fallback: Create a standard format
-            logger.warning("outputFormat has 0 sample rate, using fallback format")
-            recordingFormat = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+        // Handle edge case: format invalid after VPIO
+        if inputFormat.sampleRate == 0 {
+            logger.warning("VPIO enabled but format invalid, using fallback")
+        }
+        
+        if inputFormat.sampleRate != 48000 && inputFormat.sampleRate > 0 {
+            logger.warning("VPIO changed sample rate to \(inputFormat.sampleRate)Hz (expected 48kHz)")
+            Task {
+                await DiagnosticLogger.shared.log(
+                    .app,
+                    "VPIO format change: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch"
+                )
+            }
         }
         
         // CRITICAL FIX: Use the INPUT format when installing the tap
@@ -554,12 +588,16 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
         // Start AVAudioEngine for microphone capture (instead of SCK's captureMicrophone)
         let micHandler = bufferHandler
         let micLevelHandler = levelHandler
+        let micWarningHandler = warningHandler
         let micEngine = MicrophoneCaptureEngine(
             bufferHandler: { buffer in
                 micHandler?(buffer, .microphone)
             },
             levelHandler: { level in
                 micLevelHandler?(level, .microphone)
+            },
+            vpioWarningHandler: { message, details in
+                micWarningHandler?(message, details, false)
             }
         )
         

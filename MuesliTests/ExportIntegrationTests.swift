@@ -221,7 +221,6 @@ final class AppStorageKeysExportTests: XCTestCase {
             AppStorageKeys.outputDirectory,
             AppStorageKeys.launchAtLogin,
             AppStorageKeys.transcriptionMode,
-            AppStorageKeys.echoCancellationEnabled,
             AppStorageKeys.audioChunkDuration,
             AppStorageKeys.exportEnabled,
             AppStorageKeys.exportDirectory,

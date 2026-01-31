@@ -153,7 +153,7 @@ final class RegressionTests: XCTestCase {
         // - isFloat: true
         // - sampleRate: 48000
         
-        // EchoCancellationService.extractSamples should handle this format
+        // AudioBufferHelpers.extractSamples should handle this format
         // and return mono Float32 samples
         
         // Document the expected format handling:

@@ -1,5 +1,4 @@
 import Foundation
-import os.lock
 import os.log
 import ServiceManagement
 
@@ -102,30 +101,6 @@ final class PreferencesManager {
         case postProcessing
     }
     
-    // MARK: - Echo Cancellation
-    
-    /// Thread-safe storage for echo cancellation state (for synchronous access from audio callbacks)
-    /// Uses OSAllocatedUnfairLock for proper synchronization
-    /// Internal access for audio callback setup
-    let echoCancellationLock = OSAllocatedUnfairLock(initialState: false)
-    
-    /// Whether echo cancellation is enabled
-    /// Uses a cached value for thread-safe access from audio callbacks
-    var isEchoCancellationEnabled: Bool {
-        get {
-            echoCancellationLock.withLock { $0 }
-        }
-        set {
-            echoCancellationLock.withLock { $0 = newValue }
-            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.echoCancellationEnabled)
-        }
-    }
-    
-    /// Thread-safe getter for audio callbacks (nonisolated)
-    nonisolated var echoCancellationEnabledForAudioCallback: Bool {
-        echoCancellationLock.withLock { $0 }
-    }
-    
     // MARK: - Audio Chunk Duration
     
     /// Audio chunk duration for transcription (2-10 seconds)
@@ -199,10 +174,6 @@ final class PreferencesManager {
     // MARK: - Initialization
 
     init() {
-        // Load persisted echo cancellation state into the lock
-        let savedValue = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
-        echoCancellationLock.withLock { $0 = savedValue }
-
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()
     }

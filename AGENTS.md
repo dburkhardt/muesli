@@ -301,7 +301,7 @@ SwiftUI Views → MuesliViewModel (coordinator)
                     ├── PreferencesManager (output dir, settings)
                     ├── MeetingHistoryManager (history list, selection)
                     ├── RefinementCoordinator (LLM refinement state)
-                    └── Services (Audio, Transcription, FileOutput, AEC)
+                    └── Services (Audio, Transcription, FileOutput)
 ```
 
 ViewModel delegates recording operations to RecordingController. Views observe only ViewModel.
@@ -354,6 +354,7 @@ resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
 // Mic: 48kHz mono → 16kHz mono  
 resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
 ```
+**VPIO note**: Voice Processing I/O may change the microphone input format (sample rate, channels). Log and validate the actual input format after enabling VPIO; do not assume 48kHz.
 
 ### ScreenCaptureKit
 - Display-based `SCContentFilter` required for audio; window-based doesn't work

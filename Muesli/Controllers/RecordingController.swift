@@ -20,7 +20,6 @@ final class RecordingController {
     private let fileOutputService: FileOutputService
     private let transcriptionService: TranscriptionService
     private let transcriptionCoordinator: TranscriptionCoordinator
-    private let echoCancellationService: EchoCancellationService
     private let preferencesManager: PreferencesManager
     private let microphoneManager: MicrophoneManager
     private let exportService: ExportService
@@ -97,7 +96,6 @@ final class RecordingController {
         fileOutputService: FileOutputService,
         transcriptionService: TranscriptionService,
         transcriptionCoordinator: TranscriptionCoordinator,
-        echoCancellationService: EchoCancellationService,
         preferencesManager: PreferencesManager,
         microphoneManager: MicrophoneManager,
         exportService: ExportService,
@@ -107,7 +105,6 @@ final class RecordingController {
         self.fileOutputService = fileOutputService
         self.transcriptionService = transcriptionService
         self.transcriptionCoordinator = transcriptionCoordinator
-        self.echoCancellationService = echoCancellationService
         self.preferencesManager = preferencesManager
         self.microphoneManager = microphoneManager
         self.exportService = exportService
@@ -162,20 +159,15 @@ final class RecordingController {
         let fileService = self.fileOutputService
         let transcriptService = self.transcriptionService
         let transcriptionCoordinator = self.transcriptionCoordinator
-        let aecService = self.echoCancellationService
-        let prefs = self.preferencesManager
         let audioCaptureServiceRef = self.audioCaptureService
         
         // Capture locks directly to avoid @MainActor isolation in callback
         let muteLock = self.isMicrophoneMutedLock
-        let aecLock = prefs.echoCancellationLock
-        
         await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
                 // Wrap entire handler in error handling for graceful degradation
                 do {
                     // NO direct self capture in processing - only use captured locks and services (thread-safe)
                     let isMicMuted = muteLock.withLock { $0 }
-                    let isAECEnabled = aecLock.withLock { $0 }
                     
                     let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
                     
@@ -183,11 +175,8 @@ final class RecordingController {
                     case .system:
                         try RecordingController.handleSystemAudioBuffer(
                             buffer,
-                            timestamp: timestamp,
-                            isAECEnabled: isAECEnabled,
                             fileService: fileService,
-                            transcriptionCoordinator: transcriptionCoordinator,
-                            aecService: aecService
+                            transcriptionCoordinator: transcriptionCoordinator
                         )
                         
                     case .microphone:
@@ -195,10 +184,8 @@ final class RecordingController {
                             buffer,
                             timestamp: timestamp,
                             isMicMuted: isMicMuted,
-                            isAECEnabled: isAECEnabled,
                             fileService: fileService,
-                            transcriptionCoordinator: transcriptionCoordinator,
-                            aecService: aecService
+                            transcriptionCoordinator: transcriptionCoordinator
                         )
                     }
                     
@@ -255,18 +242,9 @@ final class RecordingController {
     /// Process system audio buffer (extracted for error handling)
     private static nonisolated func handleSystemAudioBuffer(
         _ buffer: CMSampleBuffer,
-        timestamp: CMTime,
-        isAECEnabled: Bool,
         fileService: FileOutputService,
-        transcriptionCoordinator: TranscriptionCoordinator,
-        aecService: EchoCancellationService
+        transcriptionCoordinator: TranscriptionCoordinator
     ) throws {
-        // Store system audio for AEC reference (if AEC enabled)
-        if isAECEnabled {
-            if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
-                aecService.storeSystemAudio(samples: systemSamples, timestamp: timestamp)
-            }
-        }
         
         // Save to file (always)
         fileService.appendAudioBuffer(buffer, type: .system)
@@ -289,10 +267,8 @@ final class RecordingController {
         _ buffer: CMSampleBuffer,
         timestamp: CMTime,
         isMicMuted: Bool,
-        isAECEnabled: Bool,
         fileService: FileOutputService,
-        transcriptionCoordinator: TranscriptionCoordinator,
-        aecService: EchoCancellationService
+        transcriptionCoordinator: TranscriptionCoordinator
     ) throws {
         // Get the actual sample rate from the incoming buffer (may be 44100Hz, 48000Hz, etc.)
         var sourceSampleRate: Int = 48000  // default
@@ -302,28 +278,19 @@ final class RecordingController {
         }
         
         // Extract microphone samples at native rate (NOT necessarily 48kHz!)
-        let micSamplesNative = EchoCancellationService.extractSamples(from: buffer)
+        let micSamplesNative = AudioBufferHelpers.extractSamples(from: buffer)
         guard let micSamplesNative = micSamplesNative else {
             // Fallback: save original buffer
             fileService.appendAudioBuffer(buffer, type: .microphone)
             return
         }
         
-        // Apply AEC if enabled (operates at native sample rate)
-        let processedSamplesNative: [Float]
-        if isAECEnabled {
-            processedSamplesNative = aecService.processMicrophoneAudio(
-                microphoneSamples: micSamplesNative,
-                micTimestamp: timestamp
-            )
-        } else {
-            processedSamplesNative = micSamplesNative
-        }
+        let processedSamplesNative = micSamplesNative
         
         // Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
         // CRITICAL: Pass the actual source sample rate so resampling works correctly
         // This fixes the pitch issue when mic is at 44100Hz but file expects 48000Hz
-        if let processedBuffer = EchoCancellationService.createSampleBuffer(
+        if let processedBuffer = AudioBufferHelpers.createSampleBuffer(
             from: processedSamplesNative,
             timestamp: timestamp,
             sourceSampleRate: sourceSampleRate,
@@ -460,7 +427,6 @@ final class RecordingController {
             session.recordingStartTime = Date()
             session.state = .recording
             session.startDisplayTimer()
-            echoCancellationService.reset()
             
             // Mark initialization as completing audio setup
             session.isInitializing = false
@@ -605,7 +571,6 @@ final class RecordingController {
         
         do {
             try await audioCaptureService.stopCapture()
-            echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
             let directory = try? await fileOutputService.stopWriting()
             
@@ -633,7 +598,6 @@ final class RecordingController {
         
         do {
             try await audioCaptureService.stopCapture()
-            echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
             
             // Stop file writing and get output directory
@@ -841,7 +805,6 @@ final class RecordingController {
         session.stopDisplayTimer()
         
         do {
-            echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
             
             // Stop file writing and get output directory
