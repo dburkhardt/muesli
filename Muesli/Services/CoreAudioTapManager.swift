@@ -326,6 +326,14 @@ final class CoreAudioTapManager: @unchecked Sendable {
     /// Counter for IOProc calls (for debugging)
     private var ioProcCallCount: Int = 0
     
+    /// Debug state tracking for IOProc
+    private var ioProcNilDataCount: Int = 0
+    private var ioProcNoBuffersCount: Int = 0
+    private var ioProcNilMDataCount: Int = 0
+    private var ioProcSuccessCount: Int = 0
+    private var lastFrameCount: UInt32 = 0
+    private var lastChannelCount: UInt32 = 0
+    
     /// Handle IOProc callback
     /// RT-SAFE CHECKLIST (per plan Phase 4):
     /// - ✅ No malloc/new (uses pre-allocated buffers)
@@ -342,52 +350,20 @@ final class CoreAudioTapManager: @unchecked Sendable {
         
         guard let inputData = inputData,
               let inputTime = inputTime else {
-            // #region agent log
-            // Log nil data (non-RT safe but needed for debugging)
-            let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:347", "message": "handleIOProc nil data", "data": ["ioProcCallCount": ioProcCallCount, "inputDataNil": inputData == nil, "inputTimeNil": inputTime == nil], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,D"]
-            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                    handle.seekToEndOfFile()
-                    handle.write((jsonStr + "\n").data(using: .utf8)!)
-                    handle.closeFile()
-                }
-            }
-            // #endregion
+            ioProcNilDataCount += 1
             return
         }
         
         let bufferList = inputData.pointee
         guard bufferList.mNumberBuffers > 0 else {
-            // #region agent log
-            if ioProcCallCount <= 5 {
-                let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:362", "message": "handleIOProc no buffers", "data": ["ioProcCallCount": ioProcCallCount, "mNumberBuffers": bufferList.mNumberBuffers], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,D"]
-                if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-                    if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                        handle.seekToEndOfFile()
-                        handle.write((jsonStr + "\n").data(using: .utf8)!)
-                        handle.closeFile()
-                    }
-                }
-            }
-            // #endregion
+            ioProcNoBuffersCount += 1
             return
         }
         
         // Get first buffer (mono or interleaved stereo)
         let buffer = bufferList.mBuffers
         guard let dataPtr = buffer.mData else {
-            // #region agent log
-            if ioProcCallCount <= 5 {
-                let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:377", "message": "handleIOProc nil mData", "data": ["ioProcCallCount": ioProcCallCount], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,D"]
-                if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-                    if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                        handle.seekToEndOfFile()
-                        handle.write((jsonStr + "\n").data(using: .utf8)!)
-                        handle.closeFile()
-                    }
-                }
-            }
-            // #endregion
+            ioProcNilMDataCount += 1
             return
         }
         
@@ -395,24 +371,9 @@ final class CoreAudioTapManager: @unchecked Sendable {
         let byteCount = Int(buffer.mDataByteSize)
         let frameCount = UInt32(byteCount / MemoryLayout<Float>.size / Int(buffer.mNumberChannels))
         
-        // #region agent log
-        // Log first few IOProc calls to verify data is flowing
-        if ioProcCallCount <= 3 {
-            // Sample first few values to check if data is silence
-            var sampleValues: [Float] = []
-            for i in 0..<min(5, Int(frameCount)) {
-                sampleValues.append(samples[i])
-            }
-            let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:397", "message": "handleIOProc success", "data": ["ioProcCallCount": ioProcCallCount, "byteCount": byteCount, "frameCount": frameCount, "mNumberChannels": buffer.mNumberChannels, "firstSamples": sampleValues], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,D"]
-            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                    handle.seekToEndOfFile()
-                    handle.write((jsonStr + "\n").data(using: .utf8)!)
-                    handle.closeFile()
-                }
-            }
-        }
-        // #endregion
+        ioProcSuccessCount += 1
+        lastFrameCount = frameCount
+        lastChannelCount = buffer.mNumberChannels
         
         // Extract timing info
         let sampleTime = inputTime.pointee.mSampleTime
@@ -545,7 +506,17 @@ final class CoreAudioTapManager: @unchecked Sendable {
         // we verify the tap RMS stays low when no external audio plays
         
         // #region agent log
-        let logPayload1: [String: Any] = ["location": "CoreAudioTapManager.swift:488", "message": "testMuesliExcluded START", "data": ["rmsFrameCountBefore": rmsFrameCount, "rollingRMSBefore": rollingRMS, "ioProcCallCount": ioProcCallCount], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "E"]
+        let logPayload1: [String: Any] = ["location": "CoreAudioTapManager.swift:488", "message": "testMuesliExcluded START - IOProc Stats", "data": [
+            "rmsFrameCountBefore": rmsFrameCount, 
+            "rollingRMSBefore": rollingRMS, 
+            "ioProcCallCount": ioProcCallCount,
+            "ioProcNilDataCount": ioProcNilDataCount,
+            "ioProcNoBuffersCount": ioProcNoBuffersCount,
+            "ioProcNilMDataCount": ioProcNilMDataCount,
+            "ioProcSuccessCount": ioProcSuccessCount,
+            "lastFrameCount": lastFrameCount,
+            "lastChannelCount": lastChannelCount
+        ], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "F,G"]
         if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload1), let jsonStr = String(data: jsonData, encoding: .utf8) {
             if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
                 handle.seekToEndOfFile()
