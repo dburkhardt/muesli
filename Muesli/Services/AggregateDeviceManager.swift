@@ -86,11 +86,16 @@ final class AggregateDeviceManager {
         print("[TAP DEBUG] Created process tap with ID: \(tapID)")
         logger.info("Created process tap: \(tapID)")
 
-        // Step 2: Get the tap's UID to reference it in the aggregate device
-        let tapUID = try getTapUID(tapID)
+        // Step 2: Use tap UUID as sub-tap UID (per AudioCap example)
+        let tapUID: String
+        if let tapUUID = tapUUID {
+            tapUID = tapUUID.uuidString
+        } else {
+            tapUID = try getTapUID(tapID)
+        }
 
-        print("[TAP DEBUG] Tap UID: \(tapUID)")
-        logger.info("Tap UID: \(tapUID)")
+        print("[TAP DEBUG] Tap UID (sub-tap): \(tapUID)")
+        logger.info("Tap UID (sub-tap): \(tapUID)")
 
         // Step 3: Create aggregate device that includes this tap
         let deviceID = try createAggregateDeviceWithTap(tapUID: tapUID)
@@ -283,27 +288,34 @@ final class AggregateDeviceManager {
         
         // Build aggregate device description
         // Reference: AudioHardware.h lines 1626-1645
-        // 
-        // APPROACH: Use kAudioAggregateDeviceClockDeviceKey to set clock source
-        // WITHOUT adding the output device as a sub-device. This way:
-        // - The tap provides the only input streams
-        // - The output device provides clock timing
-        // - No extra output streams pollute the aggregate
+        //
+        // Approach (AudioCap + CoreAudio Tap example):
+        // - Include output device as main sub-device for clocking
+        // - Add tap list as an array of sub-tap dictionaries
         let aggregateDescription: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Muesli Tap Device",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
-            // Use clock device key instead of sub-device
-            kAudioAggregateDeviceClockDeviceKey: outputDeviceUID,
-            // Include the tap - key is "taps" per AudioHardware.h line 1632
-            kAudioAggregateDeviceTapListKey: [tapUID],
+            kAudioAggregateDeviceMainSubDeviceKey: outputDeviceUID,
+            kAudioAggregateDeviceSubDeviceListKey: [
+                [
+                    kAudioSubDeviceUIDKey: outputDeviceUID
+                ]
+            ],
+            // Include the tap using sub-tap dictionary
+            kAudioAggregateDeviceTapListKey: [
+                [
+                    kAudioSubTapUIDKey: tapUID,
+                    kAudioSubTapDriftCompensationKey: true
+                ]
+            ],
             // Auto-start the tap - key is "tapautostart" per AudioHardware.h line 1645
             kAudioAggregateDeviceTapAutoStartKey: true
         ]
         
         // #region agent log
-        let logPayload: [String: Any] = ["location": "AggregateDeviceManager.swift:298", "message": "Creating aggregate with clock device (no sub-device)", "data": ["outputDeviceUID": outputDeviceUID, "tapUID": tapUID, "aggregateUID": aggregateUID], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "H"]
+        let logPayload: [String: Any] = ["location": "AggregateDeviceManager.swift:298", "message": "Creating aggregate with subdevice + sub-tap", "data": ["outputDeviceUID": outputDeviceUID, "tapUID": tapUID, "aggregateUID": aggregateUID], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "H"]
         if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
             if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
                 handle.seekToEndOfFile()
