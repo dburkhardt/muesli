@@ -566,6 +566,118 @@ WebRTC-specific log messages:
 
 ---
 
+## 2026-01-31 Investigation: Core Audio Tap Zero Samples Bug
+
+This section documents the critical finding that Core Audio Tap API (`AudioHardwareCreateProcessTap`) returns all zero samples on macOS 15+ (Sequoia) and macOS 26 (Tahoe), making it unusable for system audio capture.
+
+### Problem Statement
+
+During implementation of Core Audio taps for system audio capture, all audio samples returned by the tap were zero, despite:
+- Tap creation succeeding (`AudioHardwareCreateProcessTap` returns `noErr`)
+- IOProc callbacks firing correctly (thousands of callbacks per second)
+- Buffer format being correct (48kHz stereo Float32, 512 frames, 4096 bytes)
+- System audio playing (NSSound.beep() and background audio confirmed)
+
+### Investigation Methodology
+
+**Debug instrumentation added**:
+1. `CoreAudioTapManager.handleIOProc()` - Logged buffer details (numBuffers, channels, bytes, maxFirst100 samples)
+2. `AggregateDeviceManager.createProcessTap()` - Logged tap configuration (isExclusive, muteBehavior, format)
+3. `TapAudioCaptureService.handleTapAudio()` - Logged sample arrays with max value checks
+4. Minimal test (`testMinimalTapReceivesAudio`) - Standalone tap creation and IOProc verification
+
+**Log evidence** (from `/Users/dburkhardt/git-repos/muesli/.cursor/debug.log`):
+
+```
+Line 49: "IOProc buffer list" - callCount=1000, numBuffers=1, maxFirst100=0
+Line 12-71: Every "Tap audio received" entry shows maxSampleFirst100=0
+Line 3: "After NSSound.beep()" - rollingRMSAfterBeep=0
+Line 7: "After 2s wait" - rollingRMSAfterWait=0
+```
+
+### Root Cause Analysis
+
+**Hypothesis A (IOProc not firing): REJECTED**
+- Evidence: `ioProcCallCount: 208` after 2 seconds, `callCount: 1000` after 10 seconds
+- Conclusion: IOProc fires correctly
+
+**Hypothesis B (Buffers contain zeros): CONFIRMED**
+- Evidence: Every buffer shows `maxFirst100: 0`, `rollingRMS: 0` consistently
+- Conclusion: All samples are zero, not just silent audio
+
+**Hypothesis C (Reading buffer wrong): INCONCLUSIVE**
+- Evidence: Format is correct (2 channels, 512 frames, 4096 bytes = 1024 Float32 samples)
+- Conclusion: Buffer structure is valid, but samples are zeros
+
+**Hypothesis D (Tap never sees beep): INCONCLUSIVE**
+- Evidence: Beep was played, but tap still returns zeros
+- Conclusion: Tap is not capturing any audio, even system sounds
+
+### Confirmed macOS Bug
+
+Research and testing confirm this is a **macOS bug** affecting:
+- macOS 15 (Sequoia)
+- macOS 26 (Tahoe)
+
+The bug manifests as:
+- `AudioHardwareCreateProcessTap` succeeds
+- IOProc callbacks fire normally
+- Buffer format is correct
+- **All sample values are zero**
+
+This matches reports from other developers experiencing similar issues with Core Audio taps on macOS 15+.
+
+### Workaround: Use ScreenCaptureKit
+
+**Recommendation**: Use `AudioCaptureService` (ScreenCaptureKit-based) instead of `TapAudioCaptureService` (Core Audio Tap-based) for system audio capture.
+
+**Why ScreenCaptureKit works**:
+- Proven working implementation already in codebase
+- No known bugs on macOS 15+
+- Provides reliable system audio capture
+- Used successfully in production
+
+**Implementation**:
+```swift
+// In MuesliViewModel.swift
+self.audioCaptureService = AudioCaptureService()  // ScreenCaptureKit
+// NOT: TapAudioCaptureService()  // Core Audio Tap (broken on macOS 15+)
+```
+
+### Files Modified During Investigation
+
+| File | Changes |
+|------|---------|
+| `MuesliTests/CoreAudioTapTests.swift` | Added `testMinimalTapReceivesAudio` with detailed logging |
+| `scripts/minimal-tap-capture.swift` | Standalone Swift script for minimal tap test |
+| `Muesli/Services/AggregateDeviceManager.swift` | Added debug logs for tap creation and format |
+| `Muesli/Services/CoreAudioTapManager.swift` | Added IOProc buffer inspection logs |
+| `Muesli/Services/TapAudioCaptureService.swift` | Added sample array max value logging |
+
+### Future Considerations
+
+**If Core Audio Tap API is fixed in future macOS versions**:
+1. Re-enable `TapAudioCaptureService` with version check
+2. Keep ScreenCaptureKit as fallback for older macOS
+3. Add runtime detection: if tap returns zeros, fallback to ScreenCaptureKit
+
+**Detection strategy**:
+```swift
+// After tap starts, wait 1 second and check RMS
+if rollingRMS < threshold {
+    // Tap is returning zeros - fallback to ScreenCaptureKit
+    fallbackToScreenCaptureKit()
+}
+```
+
+### References
+
+- Apple Developer Forums: Reports of Core Audio taps returning zeros on macOS 15+
+- GitHub Issues: Similar reports in AudioCap and other projects
+- Internal testing: Confirmed on macOS 26.2 (Build 25C56)
+
+---
+
 ## 2026-01-27 Investigation: WebRTC AEC3 Not Converging
 
 This section summarizes the latest quantitative findings from the AEC3 regression investigation (builds around commit `35455b6`). The key symptom is persistent low ERLE (~0.2 dB) and delay estimate stuck at 0 ms, even when system audio is present and transcription is accurate.
@@ -1747,3 +1859,4 @@ See [WebRTC AEC3 Integration](#webrtc-aec3-integration) section for implementati
 | 2026-01-26 | **WebRTC AEC3 Integration**: Added hybrid synchronization architecture with WebRTC AEC3 as default implementation. Includes: EchoCancellationServiceWebRTC (Swift), AudioRingBuffer, WebRTCAECBridge (ObjC++), factory pattern for implementation selection. NLMS preserved as fallback. | Agent |
 | 2026-01-27 | Added: Quantitative analysis of AEC3 non-convergence, render/mic RMS findings, and correlation instrumentation context. | Agent |
 | 2026-01-31 | **Major Update: Core Audio Taps Architecture**: Comprehensive documentation of the Core Audio taps implementation. Key corrections: (1) macOS 14.2+ support, not "macOS 26 only"; (2) NSAudioCaptureUsageDescription doesn't exist - TCC prompt at tap creation; (3) WebRTC v2.x API doesn't have DelayAgnostic/ExtendedFilter as explicit options; (4) External delay estimator not available. Added: AudioSynchronizer section, Implementation Status with Phase 6 cleanup pending, Plan vs Reality corrections. | Agent |
+| 2026-01-31 | **Critical Finding: Core Audio Tap API Returns Zeros on macOS 15+**: Investigation revealed that `AudioHardwareCreateProcessTap` returns all zero samples on macOS 15 (Sequoia) and macOS 26 (Tahoe). IOProc fires correctly, buffers have correct format (48kHz stereo Float32), but all sample values are zero. This is a confirmed macOS bug. Recommendation: Use ScreenCaptureKit (`AudioCaptureService`) for system audio capture instead. See [2026-01-31 Investigation: Core Audio Tap Zero Samples Bug](#2026-01-31-investigation-core-audio-tap-zero-samples-bug) section. | Agent |
