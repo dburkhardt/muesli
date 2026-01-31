@@ -289,15 +289,35 @@ final class CoreAudioTapManager: @unchecked Sendable {
             throw CoreAudioTapError.noAggregateDevice
         }
         
-        // Create IOProc for receiving audio
+        // Get the tap object ID - we'll use it directly for IOProc
+        // The aggregate device provides timing, but the tap provides the audio data
+        guard let tapID = aggregateDeviceManager?.tapID, tapID != kAudioObjectUnknown else {
+            print("[TAP DEBUG] ERROR: No tap ID available")
+            throw CoreAudioTapError.noAggregateDevice
+        }
+        
+        print("[TAP DEBUG] Starting IOProc on tap ID: \(tapID) (aggregate ID: \(aggregateDeviceID))")
+        
+        // #region agent log
+        let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:295", "message": "Starting IOProc", "data": ["tapID": tapID, "aggregateDeviceID": aggregateDeviceID], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "H"]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            } else {
+                try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8)
+            }
+        }
+        // #endregion
+        
+        // Create IOProc for receiving audio - try tap ID first, fall back to aggregate
         var procID: AudioDeviceIOProcID?
         
-        // Use a simple wrapper to get self reference into the callback
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        
-        let status = AudioDeviceCreateIOProcIDWithBlock(
+        // Try using the tap directly
+        var status = AudioDeviceCreateIOProcIDWithBlock(
             &procID,
-            aggregateDeviceID,
+            tapID,  // Use tap ID instead of aggregate
             DispatchQueue.global(qos: .userInteractive)
         ) { [weak self] inNow, inInputData, inInputTime, outOutputData, inOutputTime in
             guard let self = self else { return }
@@ -307,20 +327,45 @@ final class CoreAudioTapManager: @unchecked Sendable {
             )
         }
         
+        // If tap ID didn't work, fall back to aggregate device
+        if status != noErr || procID == nil {
+            print("[TAP DEBUG] Tap IOProc failed (status: \(status)), trying aggregate device...")
+            status = AudioDeviceCreateIOProcIDWithBlock(
+                &procID,
+                aggregateDeviceID,
+                DispatchQueue.global(qos: .userInteractive)
+            ) { [weak self] inNow, inInputData, inInputTime, outOutputData, inOutputTime in
+                guard let self = self else { return }
+                self.handleIOProc(
+                    inputData: inInputData,
+                    inputTime: inInputTime
+                )
+            }
+        }
+        
         guard status == noErr, let procID = procID else {
             throw CoreAudioTapError.ioProcCreationFailed(status)
         }
         
         ioProcID = procID
         
-        // Start the device
-        let startStatus = AudioDeviceStart(aggregateDeviceID, procID)
+        // Start the device - use whichever device the IOProc was created on
+        // Try tap first, then aggregate
+        var startStatus = AudioDeviceStart(tapID, procID)
+        if startStatus != noErr {
+            print("[TAP DEBUG] Tap start failed (status: \(startStatus)), trying aggregate...")
+            startStatus = AudioDeviceStart(aggregateDeviceID, procID)
+        }
+        
         guard startStatus == noErr else {
             // Clean up the proc ID
+            AudioDeviceDestroyIOProcID(tapID, procID)
             AudioDeviceDestroyIOProcID(aggregateDeviceID, procID)
             ioProcID = nil
             throw CoreAudioTapError.deviceStartFailed
         }
+        
+        print("[TAP DEBUG] Device started successfully")
     }
     
     /// Counter for IOProc calls (for debugging)

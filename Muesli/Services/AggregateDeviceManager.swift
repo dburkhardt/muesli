@@ -42,6 +42,11 @@ final class AggregateDeviceManager {
     var deviceID: AudioDeviceID {
         return aggregateDeviceID
     }
+    
+    /// The tap object ID (for direct IOProc if needed)
+    var tapID: AudioObjectID {
+        return tapObjectID
+    }
 
     // MARK: - Initialization
 
