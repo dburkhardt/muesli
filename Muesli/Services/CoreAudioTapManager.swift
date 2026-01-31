@@ -6,6 +6,7 @@
 //  macOS 26+ only. Captures default output mix excluding Muesli's own audio.
 //
 
+import AppKit
 import Foundation
 import CoreAudio
 import AudioToolbox
@@ -354,11 +355,11 @@ final class CoreAudioTapManager: @unchecked Sendable {
     private func updateRMS(samples: UnsafePointer<Float>, frameCount: Int, channels: Int) {
         var sumSquares: Float = 0
         let totalSamples = frameCount * channels
-        
+
         // Sample every 4th value for efficiency
-        let stride = 4
+        let strideStep = 4
         var count = 0
-        for i in stride(from: 0, to: totalSamples, by: stride) {
+        for i in Swift.stride(from: 0, to: totalSamples, by: strideStep) {
             let sample = samples[i]
             sumSquares += sample * sample
             count += 1

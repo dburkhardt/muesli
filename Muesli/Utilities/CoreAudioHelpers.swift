@@ -9,6 +9,13 @@ import Foundation
 import CoreAudio
 import os.log
 
+// proc_pidpath is declared in libproc.h, import via Darwin
+@_silgen_name("proc_pidpath")
+private func proc_pidpath(_ pid: pid_t, _ buffer: UnsafeMutablePointer<Int8>, _ buffersize: UInt32) -> Int32
+
+// PROC_PIDPATHINFO_MAXSIZE equivalent
+private let PROC_PIDPATHINFO_SIZE: Int32 = 4096
+
 private let logger = Logger(subsystem: "com.dburkhardt.muesli", category: "CoreAudioHelpers")
 
 enum CoreAudioError: Error {
@@ -453,10 +460,10 @@ struct CoreAudioHelpers {
 
     /// Get process name for a given PID (for logging/debugging)
     static func getProcessName(for pid: pid_t) -> String? {
-        let pathBuffer = UnsafeMutablePointer<Int8>.allocate(capacity: Int(PROC_PIDPATHINFO_MAXSIZE))
+        let pathBuffer = UnsafeMutablePointer<Int8>.allocate(capacity: Int(PROC_PIDPATHINFO_SIZE))
         defer { pathBuffer.deallocate() }
 
-        let pathLength = proc_pidpath(pid, pathBuffer, UInt32(PROC_PIDPATHINFO_MAXSIZE))
+        let pathLength = proc_pidpath(pid, pathBuffer, UInt32(PROC_PIDPATHINFO_SIZE))
         guard pathLength > 0 else { return nil }
 
         let path = String(cString: pathBuffer)

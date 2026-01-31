@@ -184,11 +184,13 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         // Run self-tests if tap is running
         if tapManager.state == .running {
+            // Capture warning handler before entering Task
+            let handler = self.warningHandler
             Task {
                 let result = await tapManager.runSelfTests()
                 if !result.systemSoundPresent || !result.muesliExcluded {
                     await MainActor.run {
-                        self.warningHandler?("Tap self-test warning",
+                        handler?("Tap self-test warning",
                             "System sound present: \(result.systemSoundPresent), Muesli excluded: \(result.muesliExcluded)",
                             false)
                     }
@@ -199,9 +201,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         isRecording = true
         logger.info("Tap-based audio capture started")
 
+        let logTopology = self.topologyMode
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "TAP_CAPTURE_START: topology=\(self.topologyMode)")
+                "TAP_CAPTURE_START: topology=\(logTopology)")
         }
     }
 
