@@ -281,24 +281,21 @@ final class AggregateDeviceManager {
         print("[TAP DEBUG] Using default output device as clock source: \(outputDeviceUID)")
         logger.info("Using default output device as clock source: \(outputDeviceUID)")
         
-        // Build sub-device list with the output device
-        // Each sub-device entry needs UID and optionally input/output specification
-        let subDeviceEntry: [String: Any] = [
-            kAudioSubDeviceUIDKey: outputDeviceUID
-        ]
-        
         // Build aggregate device description
         // Reference: AudioHardware.h lines 1626-1645
-        // Key insight: The aggregate needs a real audio device to provide clock timing
+        // 
+        // APPROACH: Use kAudioAggregateDeviceClockDeviceKey to set clock source
+        // WITHOUT adding the output device as a sub-device. This way:
+        // - The tap provides the only input streams
+        // - The output device provides clock timing
+        // - No extra output streams pollute the aggregate
         let aggregateDescription: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Muesli Tap Device",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
-            // Include the output device as sub-device for clock source
-            kAudioAggregateDeviceSubDeviceListKey: [subDeviceEntry],
-            // Set the output device as the clock source
-            kAudioAggregateDeviceMainSubDeviceKey: outputDeviceUID,
+            // Use clock device key instead of sub-device
+            kAudioAggregateDeviceClockDeviceKey: outputDeviceUID,
             // Include the tap - key is "taps" per AudioHardware.h line 1632
             kAudioAggregateDeviceTapListKey: [tapUID],
             // Auto-start the tap - key is "tapautostart" per AudioHardware.h line 1645
@@ -306,7 +303,7 @@ final class AggregateDeviceManager {
         ]
         
         // #region agent log
-        let logPayload: [String: Any] = ["location": "AggregateDeviceManager.swift:298", "message": "Creating aggregate with clock source", "data": ["outputDeviceUID": outputDeviceUID, "tapUID": tapUID, "aggregateUID": aggregateUID], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "F"]
+        let logPayload: [String: Any] = ["location": "AggregateDeviceManager.swift:298", "message": "Creating aggregate with clock device (no sub-device)", "data": ["outputDeviceUID": outputDeviceUID, "tapUID": tapUID, "aggregateUID": aggregateUID], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "H"]
         if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
             if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
                 handle.seekToEndOfFile()

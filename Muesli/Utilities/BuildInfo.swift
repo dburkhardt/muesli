@@ -15,13 +15,13 @@ import Foundation
 /// - `isDirty`: Whether there were uncommitted changes
 enum BuildInfo {
     /// Short git commit SHA (e.g., "abc1234")
-    static let gitCommit = "0a8e4db"
+    static let gitCommit = "6d03bbc"
     
     /// Git branch name (e.g., "main", "feature/foo", or "detached")
     static let gitBranch = "feature/audio_system_tap"
     
     /// Build timestamp in UTC (ISO 8601 format)
-    static let buildTimestamp = "2026-01-31T17:54:33Z"
+    static let buildTimestamp = "2026-01-31T18:03:25Z"
     
     /// Build configuration: "DEV" (Debug) or "RELEASE"
     static let buildType = "DEV"
