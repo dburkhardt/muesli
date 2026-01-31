@@ -321,16 +321,20 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         sampleTime: Float64,
         hostTime: UInt64
     ) {
-        // Push directly to synchronizer's lock-free ring buffer
-        // This is RT-safe because:
-        // - synchronizer.pushRender only uses OSAllocatedUnfairLock (RT-safe)
-        // - No Swift async runtime involvement
-        // - No allocations (ring buffer is pre-allocated)
         let count = Int(frameCount)
-        synchronizer.pushRender(samples: samples, count: count, sampleTime: sampleTime, hostTime: hostTime)
-
-        // Note: Level calculation, CMSampleBuffer creation, and UI updates are deferred
-        // to the worker thread to keep the IOProc RT-safe
+        let totalSamples = count * 2  // Stereo: frameCount * 2 channels
+        
+        // Push to synchronizer for transcription pipeline
+        synchronizer.pushRender(samples: samples, count: totalSamples, sampleTime: sampleTime, hostTime: hostTime)
+        
+        // Create CMSampleBuffer for file output (raw 48kHz stereo)
+        // This is done here to preserve the original audio quality
+        let sampleArray = Array(UnsafeBufferPointer(start: samples, count: totalSamples))
+        let timestamp = CACurrentMediaTime()
+        
+        Task { [weak self] in
+            await self?.deliverRawSystemAudio(samples: sampleArray, timestamp: timestamp)
+        }
     }
 
     /// Handle processed audio from worker
@@ -344,49 +348,61 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
     }
 
-    /// Deliver processed audio to callbacks
-    private func deliverProcessedAudio(
-        renderSamples: [Float],
-        captureSamples: [Float],
-        frameIndex: Int64
-    ) {
-        // Ensure format descriptions are ready
+    /// Deliver raw system audio for file output (48kHz stereo)
+    private func deliverRawSystemAudio(samples: [Float], timestamp: Double) {
         ensureFormatDescriptionsInitialized()
-
-        let timestamp = CACurrentMediaTime()
-
-        // Create CMSampleBuffer for system audio (for file output)
-        if !renderSamples.isEmpty, let buffer = createCMSampleBuffer(
-            from: renderSamples,
-            channels: 1,  // Worker outputs mono
+        
+        guard !samples.isEmpty else { return }
+        
+        // Create CMSampleBuffer with correct format (48kHz stereo Float32)
+        if let buffer = createCMSampleBuffer(
+            from: samples,
+            channels: 2,  // Stereo
             sampleRate: 48000,
             timestamp: timestamp,
             formatDesc: systemFormatDesc
         ) {
             bufferHandler?(buffer, .system)
         }
-
-        // Create CMSampleBuffer for mic audio (for file output)
-        if !captureSamples.isEmpty, let buffer = createCMSampleBuffer(
-            from: captureSamples,
-            channels: 1,
+        
+        // Calculate and deliver audio level
+        let level = calculateRMSFromArray(samples)
+        levelHandler?(level, .system)
+    }
+    
+    /// Deliver raw microphone audio for file output (48kHz mono)
+    private func deliverRawMicAudio(samples: [Float], timestamp: Double) {
+        ensureFormatDescriptionsInitialized()
+        
+        guard !samples.isEmpty else { return }
+        
+        // Create CMSampleBuffer with correct format (48kHz mono Float32)
+        if let buffer = createCMSampleBuffer(
+            from: samples,
+            channels: 1,  // Mono
             sampleRate: 48000,
             timestamp: timestamp,
             formatDesc: micFormatDesc
         ) {
             bufferHandler?(buffer, .microphone)
         }
-
-        // Calculate and deliver audio levels
-        if !renderSamples.isEmpty {
-            let level = calculateRMSFromArray(renderSamples)
-            levelHandler?(level, .system)
-        }
-
-        if !captureSamples.isEmpty {
-            let level = calculateRMSFromArray(captureSamples)
-            levelHandler?(level, .microphone)
-        }
+        
+        // Calculate and deliver audio level
+        let level = calculateRMSFromArray(samples)
+        levelHandler?(level, .microphone)
+    }
+    
+    /// Deliver processed audio to callbacks (for transcription - NOT file output)
+    private func deliverProcessedAudio(
+        renderSamples: [Float],
+        captureSamples: [Float],
+        frameIndex: Int64
+    ) {
+        // Note: File output is now handled by deliverRawSystemAudio and deliverRawMicAudio
+        // This method is kept for transcription pipeline but doesn't write to files anymore
+        
+        // The processed 16kHz mono audio would go to transcription service
+        // For now, we just skip this as file output is handled elsewhere
     }
 
     /// Create CMSampleBuffer from Float samples (for FileOutputService compatibility)
@@ -573,7 +589,13 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             hostTime: hostTime
         )
 
-        // Note: Level calculation for UI is deferred to the worker thread
+        // Create array for async delivery to file output (raw 48kHz mono)
+        let sampleArray = Array(UnsafeBufferPointer(start: samples, count: frameLength))
+        let timestamp = CACurrentMediaTime()
+        
+        Task { [weak self] in
+            await self?.deliverRawMicAudio(samples: sampleArray, timestamp: timestamp)
+        }
     }
 
     /// Set microphone input device

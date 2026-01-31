@@ -59,35 +59,16 @@ Detailed description of the feature or improvement.
 
 **Build & Launch** (recommended):
 
-The build takes 5-8 minutes. Run the script and monitor via log file:
+The build takes 1-8 minutes depending on cache state. Run the script and **wait for user confirmation**:
 
 ```bash
-# Step 1: Start the build
+# Start the build
 ./scripts/build-and-launch.sh
-
-# Step 2: Check if build is still running
-cat /tmp/muesli-build.lock  # Shows PID if running, missing if done
-
-# Step 3: Find and monitor the log file
-ls -t /tmp/muesli-build-*.log | head -1                          # Find latest log
-tail -30 "$(ls -t /tmp/muesli-build-*.log | head -1)"            # View recent output
-grep "Build & Launch Complete" /tmp/muesli-build-*.log           # Check if finished
-grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)"       # Check for errors
 ```
 
-**Build completion indicators** in log file:
-- `"Build & Launch Complete"` — Success, app is running
-- `"Build Complete (--build-only)"` — Success, app not launched
-- `"BUILD SUCCEEDED"` — xcodebuild finished successfully
-- `"error:"` — Build failed, check log for details
+**IMPORTANT: Do NOT poll, sleep, or monitor the build.** After starting the build, wait for the user to confirm when it completes. The user will tell you when the build is done (success or failure).
 
-**Build timestamp verification** (REQUIRED):
-- After successful build, the log includes a prominent `BUILD TIMESTAMP` box
-- The timestamp is also written to `/tmp/muesli-build-timestamp.txt`
-- **Agents MUST provide this timestamp to the user** when reporting build completion
-- Format: UTC ISO 8601 (e.g., `2026-01-24T15:49:31Z`)
-- User can verify in app: Help → About → Build Details → Built
-- This ensures the user knows they're running the exact build that was just compiled
+**When user confirms build success**, extract the timestamp:
 
 ```bash
 # Extract timestamp from log file
@@ -96,6 +77,20 @@ grep "BUILD TIMESTAMP:" "$(ls -t /tmp/muesli-build-*.log | head -1)"
 # Or read from dedicated timestamp file
 cat /tmp/muesli-build-timestamp.txt
 ```
+
+**If user reports build failure**, check the log for errors:
+
+```bash
+grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)"
+```
+
+**Build timestamp verification** (REQUIRED after user confirms success):
+- After successful build, the log includes a prominent `BUILD TIMESTAMP` box
+- The timestamp is also written to `/tmp/muesli-build-timestamp.txt`
+- **Agents MUST provide this timestamp to the user** when reporting build completion
+- Format: UTC ISO 8601 (e.g., `2026-01-24T15:49:31Z`)
+- User can verify in app: Help → About → Build Details → Built
+- This ensures the user knows they're running the exact build that was just compiled
 
 **Build & Launch options**:
 ```bash
