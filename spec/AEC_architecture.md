@@ -6,23 +6,26 @@ This document is the authoritative reference for AEC in Muesli. It covers theory
 
 1. [Overview](#overview)
 2. [Theory: How AEC Works](#theory-how-aec-works)
-3. [Muesli's AEC Architecture](#mueslis-aec-architecture)
-4. [WebRTC AEC3 Integration](#webrtc-aec3-integration)
-5. [Stream Synchronization](#stream-synchronization)
-6. [Buffer Gap Handling and Continuity](#buffer-gap-handling-and-continuity)
-7. [The NLMS Algorithm](#the-nlms-algorithm)
-8. [Configuration Parameters](#configuration-parameters)
-9. [Parameter Tuning Guide](#parameter-tuning-guide)
-10. [Testing and Quality Metrics](#testing-and-quality-metrics)
-11. [Double-Talk Detection (DTD)](#double-talk-detection-dtd)
-12. [Diagnostic Logging](#diagnostic-logging)
-13. [2026-01-27 Investigation: WebRTC AEC3 Not Converging](#2026-01-27-investigation-webrtc-aec3-not-converging)
-14. [2026-01-27 Follow-up: External Delay Estimator Unsupported](#2026-01-27-follow-up-external-delay-estimator-unsupported)
-15. [Common Failure Modes](#common-failure-modes)
-16. [Debugging Checklist](#debugging-checklist)
-17. [Lessons Learned](#lessons-learned)
-18. [Future Improvements](#future-improvements)
-19. [References and Standards](#references-and-standards)
+3. [Core Audio Taps Architecture (macOS 14.2+)](#core-audio-taps-architecture-macos-142)
+4. [Muesli's AEC Architecture](#mueslis-aec-architecture)
+5. [Audio Synchronizer](#audio-synchronizer)
+6. [WebRTC AEC3 Integration](#webrtc-aec3-integration)
+7. [Stream Synchronization (Legacy ScreenCaptureKit)](#stream-synchronization-legacy-screencapturekit)
+8. [Buffer Gap Handling and Continuity](#buffer-gap-handling-and-continuity)
+9. [The NLMS Algorithm](#the-nlms-algorithm)
+10. [Configuration Parameters](#configuration-parameters)
+11. [Parameter Tuning Guide](#parameter-tuning-guide)
+12. [Testing and Quality Metrics](#testing-and-quality-metrics)
+13. [Double-Talk Detection (DTD)](#double-talk-detection-dtd)
+14. [Diagnostic Logging](#diagnostic-logging)
+15. [2026-01-27 Investigation: WebRTC AEC3 Not Converging](#2026-01-27-investigation-webrtc-aec3-not-converging)
+16. [2026-01-27 Follow-up: External Delay Estimator Unsupported](#2026-01-27-follow-up-external-delay-estimator-unsupported)
+17. [Common Failure Modes](#common-failure-modes)
+18. [Debugging Checklist](#debugging-checklist)
+19. [Lessons Learned](#lessons-learned)
+20. [Implementation Status](#implementation-status)
+21. [Future Improvements](#future-improvements)
+22. [References and Standards](#references-and-standards)
 
 ---
 
@@ -88,6 +91,273 @@ Total acoustic delay is typically 15-50ms, configured via `AudioConfiguration.ae
 
 ---
 
+## Core Audio Taps Architecture (macOS 14.2+)
+
+### Overview
+
+**IMPORTANT: This section reflects the current implementation (January 2026).**
+
+Muesli now uses Core Audio process taps for system audio capture on macOS 14.2+. This replaces ScreenCaptureKit and provides:
+
+- **Single clock domain**: Tap and mic use the same sample rate clock
+- **Sample-index alignment**: Precise pairing without timestamp drift
+- **True process exclusion**: Muesli's own audio is excluded from capture
+- **Lower latency**: Direct device access vs ScreenCaptureKit buffering
+
+### Platform Requirements
+
+| Feature | Minimum macOS Version | Notes |
+|---------|----------------------|-------|
+| `AudioHardwareCreateProcessTap` | 14.2+ | Core tap creation API |
+| `CATapDescription` | 14.2+ | Tap configuration class |
+| `stereoGlobalTapButExcludeProcesses` | 14.2+ | Process exclusion initializer |
+| System audio capture permission | 14.4+ | TCC privacy prompt |
+
+**Note**: The original plan mentioned "macOS 26 Tahoe+ only" - this was incorrect. Core Audio taps are available starting in macOS 14.2 (Sonoma).
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 Output Tap (Core Audio)                      │
+│     AudioHardwareCreateProcessTap + CATapDescription         │
+│     stereoGlobalTapButExcludeProcesses (excludes Muesli)     │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│           Tap-Only Aggregate Device                          │
+│    kAudioAggregateDeviceTapListKey + TapAutoStart           │
+│    NO mic subdevice - tap only                              │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+                 IOProc Callback (RT-safe)
+                 (copy samples + timestamps only)
+                           │
+                           ▼
+                    TapCaptureRing (render)
+                    Lock-free, 600ms capacity
+
+┌─────────────────────────────────────────────────────────────┐
+│                 Mic Capture (AVAudioEngine)                  │
+│        (supports user device selection)                      │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+                    MicCaptureRing (capture)
+                    Lock-free, 250ms capacity
+
+                 ┌─────────────────────────────────┐
+                 │          AudioSynchronizer       │
+                 │  - sample-index timeline         │
+                 │  - bounded jitter buffers        │
+                 │  - discontinuity detection       │
+                 │  - CoarseDelayController         │
+                 │  - DriftTracker + resampler      │
+                 └─────────────────┬───────────────┘
+                                   │
+                                   ▼
+                         AECProcessor (render→capture)
+                                   │
+                ┌──────────────────┴──────────────────┐
+                │                                      │
+                ▼                                      ▼
+       FileOutputService                   TranscriptionService
+```
+
+### Key Components
+
+| File | Responsibility |
+|------|----------------|
+| `CoreAudioTapManager.swift` | Tap lifecycle, self-tests, IOProc callback |
+| `AggregateDeviceManager.swift` | Creates tap-only aggregate device |
+| `CoreAudioHelpers.swift` | Core Audio utilities |
+| `TapCaptureRing.swift` | Lock-free ring for render (600ms) |
+| `MicCaptureRing.swift` | Lock-free ring for capture (250ms) |
+| `AudioSynchronizer.swift` | Sample-index pairing, state machine |
+| `CoarseDelayController.swift` | Hysteresis + slew-limited delay |
+| `DriftTracker.swift` | ppm drift estimation + adaptive resampler |
+| `Muesli-CoreAudio-Bridging-Header.h` | C headers for CATapDescription |
+
+### Tap Creation Process
+
+1. **Get Muesli's PID** for exclusion
+2. **Convert PID to AudioObjectID** via `kAudioHardwarePropertyTranslatePIDToProcessObject`
+3. **Create CATapDescription** using `stereoGlobalTapButExcludeProcesses`
+4. **Call AudioHardwareCreateProcessTap** to create the tap
+5. **Create aggregate device** with tap in `kAudioAggregateDeviceTapListKey`
+6. **Start IOProc** on the aggregate device
+
+```swift
+// Simplified tap creation flow
+let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: processObjectIDs)
+tapDescription.name = "Muesli System Audio Tap"
+tapDescription.uuid = UUID()
+tapDescription.isPrivate = true
+tapDescription.muteBehavior = .unmuted  // Don't mute tapped audio
+
+var tapID: AudioObjectID = kAudioObjectUnknown
+AudioHardwareCreateProcessTap(tapDescription, &tapID)
+
+let aggregateDescription: [String: Any] = [
+    kAudioAggregateDeviceNameKey: "Muesli Tap Device",
+    kAudioAggregateDeviceUIDKey: aggregateUID,
+    kAudioAggregateDeviceIsPrivateKey: true,
+    kAudioAggregateDeviceTapListKey: [tapUID],
+    kAudioAggregateDeviceTapAutoStartKey: true
+]
+AudioHardwareCreateAggregateDevice(aggregateDescription as CFDictionary, &deviceID)
+```
+
+### Permission Model
+
+**IMPORTANT: The original plan mentioned `NSAudioCaptureUsageDescription` - this is NOT a real Info.plist key.**
+
+The actual permission model for Core Audio taps:
+
+1. **No explicit preflight check** like `CGPreflightScreenCaptureAccess()` for ScreenCaptureKit
+2. **TCC prompt happens automatically** when `AudioHardwareCreateProcessTap` is first called
+3. **If denied**: The API may return silence with no programmatic "denied" status
+4. **Detection**: Prolonged near-zero RMS after a known system sound = "not authorized"
+
+**Current implementation** (`PermissionManager.swift`):
+- Assumes permission is granted after onboarding completes
+- Actual permission check happens when tap is created
+- `audioCaptureGranted` flag is set optimistically
+
+**Required Info.plist keys**:
+- `NSMicrophoneUsageDescription` - for microphone access (required)
+- `NSScreenCaptureUsageDescription` - KEEP until ScreenCaptureKit fallback is removed
+
+### IOProc RT-Safety Checklist
+
+The IOProc callback (`CoreAudioTapManager.handleIOProc`) must be real-time safe:
+
+- ✅ **No malloc/new** - uses pre-allocated ring buffers
+- ✅ **No locks** - only lock-free ring buffer operations
+- ✅ **No Objective-C/Swift ARC work** - pure memory copies
+- ✅ **No logging** - deferred to worker thread
+- ✅ **No syscalls** - no file I/O, no network
+
+All format conversion, framing, and AEC processing happens on a dedicated audio worker thread.
+
+### Self-Tests
+
+The tap manager runs two self-tests to verify correct operation:
+
+**Self-test A: System sound present**
+1. Play a known system sound (not from Muesli)
+2. Within 2 seconds, tap RMS must exceed threshold for N frames
+
+**Self-test B: Muesli excluded**
+1. Check that tap RMS stays near-zero when only Muesli might be outputting
+
+If either fails, the system degrades to mic-only mode with actionable UI guidance.
+
+### Device Topology Detection
+
+| Mode | Condition | AEC Behavior |
+|------|-----------|--------------|
+| **Headset** | Input UID == Output UID (e.g., AirPods) | AEC off or very conservative |
+| **Speakerphone** | USB mic + BT speakers, or different UIDs | Full AEC with robust sync |
+
+On route change: flush rings, reset synchronizer, reset AEC adaptation state.
+
+---
+
+## Audio Synchronizer
+
+### Overview
+
+The `AudioSynchronizer` replaces the legacy delivery-time-based synchronization with **sample-index timeline matching**. This is more robust because it doesn't depend on framework-specific delivery timing.
+
+### State Machine
+
+```
+                    ┌──────────────────────────────────────┐
+                    │           INITIALIZING               │
+                    │  Waiting for data in both rings      │
+                    └──────────────────┬───────────────────┘
+                                       │ Both rings have data
+                                       ▼
+                    ┌──────────────────────────────────────┐
+                    │            PRIMING                   │
+                    │  Building render lead to target      │
+                    │  Target: 200ms (150-300ms band)      │
+                    └──────────────────┬───────────────────┘
+                                       │ Render lead in band +
+                                       │ no recent discontinuity
+                                       ▼
+                    ┌──────────────────────────────────────┐
+                    │             STABLE                   │
+                    │  Normal operation, AEC enabled       │
+                    └──────────────────┬───────────────────┘
+                                       │ Discontinuity detected
+                                       ▼
+                    ┌──────────────────────────────────────┐
+                    │            UNSTABLE                  │
+                    │  AEC adaptation frozen               │
+                    │  Re-priming to restore lead          │
+                    └──────────────────────────────────────┘
+```
+
+### Jitter Buffer Policy (Speakerphone Mode)
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Target render lead | 200ms | Default target |
+| Allowed band | 150-300ms | Valid range |
+| Render buffer max | 600ms | Hard cap |
+| Capture buffer max | 250ms | Hard cap |
+
+**Overflow policy**:
+- If render > max: Drop oldest render samples until render ≈ target lead
+- If capture > max: Trigger discontinuity reset
+
+**Underflow policy**:
+- If render underflows during pairing: Mark UNSTABLE, freeze AEC, re-prime
+
+### CoarseDelayController
+
+Controls coarse delay estimation with conservative adaptation:
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Deadband (hysteresis) | 15ms (720 samples) | Ignore smaller changes |
+| Slew rate | 1ms/sec (48 samples/sec) | Max slew toward target |
+| Clamp range | 0-500ms | Hard limits |
+| Stability threshold | 10ms for 5+ seconds | Definition of "stable" |
+
+**Update gating**: Only accept delay updates during:
+- Far-end dominant (or strong correlation)
+- Alignment already mostly stable
+- No recent discontinuity (10+ seconds)
+
+### DriftTracker
+
+Tracks clock drift between render and capture streams (e.g., USB mic + BT speakers have different clock domains):
+
+- Measures sample rate deviation from expected 48kHz
+- Computes relative drift in ppm (parts per million)
+- Maximum reasonable drift: ±500 ppm
+- Minimum valid estimate: 100 measurements (~10 seconds)
+- Provides `resampleRatio` for adaptive resampling
+
+### Discontinuity Detection
+
+Thresholds (mSampleTime-based):
+- **Backward jump**: deltaSamples ≤ 0
+- **Large forward jump**: deltaSamples > expectedSamplesPerCallback × 8
+
+On discontinuity:
+1. Flush both rings
+2. Re-prime jitter buffer to target render lead
+3. Mark alignment UNSTABLE for 2+ seconds
+4. Reset WebRTC AEC adaptation state
+
+---
+
 ## Muesli's AEC Architecture
 
 ### Component Overview
@@ -140,13 +410,47 @@ Total acoustic delay is typically 15-50ms, configured via `AudioConfiguration.ae
 
 As of January 2026, Muesli supports **WebRTC AEC3** as the default echo cancellation implementation, with NLMS available as a fallback. WebRTC AEC3 provides significantly better echo suppression (25-35 dB ERLE vs 10-15 dB with NLMS).
 
-### Hybrid Synchronization Architecture
+**Library Version**: webrtc-audio-processing v2.x (FreeDesktop fork)
 
-Muesli's audio pipeline has an unusual timing characteristic: microphone audio arrives 250-350ms before system audio due to:
+### API Changes in v2.x
+
+**IMPORTANT**: The original plan mentioned "DelayAgnostic + ExtendedFilter" configuration. These are NOT explicit configuration options in webrtc-audio-processing v2.x.
+
+| Feature | v1.x API | v2.x API (Current) |
+|---------|----------|-------------------|
+| Creation | `AudioProcessing::Create()` returns raw pointer | Returns `rtc::scoped_refptr<AudioProcessing>` |
+| Config | `EchoCanceller3Config` struct | `AudioProcessing::Config` with `echo_canceller` field |
+| Delay | External delay estimator configurable | Internal delay estimation only |
+| Modes | Multiple echo control modes | `enabled` + `mobile_mode` flags |
+
+**Current configuration** (from `WebRTCAECBridge.mm`):
+```cpp
+webrtc::AudioProcessing::Config config;
+config.echo_canceller.enabled = true;
+config.echo_canceller.mobile_mode = false;  // Desktop mode
+config.gain_controller1.enabled = false;    // No AGC
+config.noise_suppression.enabled = false;   // No NR
+_apm->ApplyConfig(config);
+```
+
+### External Delay Estimator Status
+
+**The external delay estimator is NOT available in the bundled v2.x framework.**
+
+- `set_stream_delay_ms()` may be called but is not honored by AEC3
+- AEC3 uses internal delay estimation only
+- This means aligned-feed mode (where Swift pre-aligns frames) removes the timing signal AEC3 needs
+- Workaround: Let render arrive naturally before capture to preserve timing information
+
+### Hybrid Synchronization Architecture (Legacy ScreenCaptureKit)
+
+**Note**: This section describes the legacy ScreenCaptureKit synchronization. With Core Audio taps, the `AudioSynchronizer` handles alignment instead.
+
+When using ScreenCaptureKit, the audio pipeline had an unusual timing characteristic: microphone audio arrived 250-350ms before system audio due to:
 - ScreenCaptureKit delivery latency for system audio
 - AVAudioEngine direct capture for microphone (near-instant)
 
-WebRTC AEC3 expects render (system) audio to arrive **at or before** capture (mic) with max ~128ms offset. To bridge this gap, Muesli uses a **hybrid synchronization approach**:
+WebRTC AEC3 expects render (system) audio to arrive **at or before** capture (mic) with max ~128ms offset. The hybrid synchronization approach was used to bridge this gap:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -343,7 +647,9 @@ The current WebRTC XCFramework cannot enable the external delay estimator, so th
 
 ---
 
-## Stream Synchronization
+## Stream Synchronization (Legacy ScreenCaptureKit)
+
+**Note**: This section describes the legacy ScreenCaptureKit synchronization approach. For the Core Audio taps architecture, see the [Audio Synchronizer](#audio-synchronizer) section above.
 
 ### The Synchronization Problem
 
@@ -1268,6 +1574,52 @@ With a large offset that doesn't match reality:
 
 ---
 
+## Implementation Status
+
+### Completed (as of January 2026)
+
+| Phase | Component | Status | Notes |
+|-------|-----------|--------|-------|
+| Phase 1 | Core Audio Tap Infrastructure | ✅ Complete | `CoreAudioTapManager`, `AggregateDeviceManager`, self-tests |
+| Phase 2 | Synchronizer | ✅ Complete | `AudioSynchronizer`, `TapCaptureRing`, `MicCaptureRing`, `CoarseDelayController`, `DriftTracker` |
+| Phase 3 | AEC Pipeline | ✅ Complete | `WebRTCAECBridge.mm` simplified for frame processing |
+| Phase 4 | IOProc RT-Safety | ✅ Complete | RT-safe callback in `CoreAudioTapManager` |
+| Phase 5 | Permissions | ⚠️ Partial | `PermissionManager` updated, but `NSAudioCaptureUsageDescription` doesn't exist - relies on TCC prompt at tap creation |
+| Phase 6 | Remove Old Code | ❌ Incomplete | Legacy files NOT removed (see below) |
+| Phase 7 | Testing | ✅ Complete | Unit tests, integration tests, manual testing |
+
+### Phase 6 Cleanup - NOT YET COMPLETED
+
+The following legacy files were scheduled for removal but still exist:
+
+| File | Status | Action Required |
+|------|--------|-----------------|
+| `AudioCaptureService.swift` | Still exists | Keep as ScreenCaptureKit fallback OR delete |
+| `EchoCancellationService.swift` | Still exists | Delete (NLMS legacy) |
+| `EchoCancellationServiceWebRTC.swift` | Still exists | Evaluate if needed or superseded |
+| `AudioRingBuffer.swift` | Still exists | Delete (replaced by TapCaptureRing/MicCaptureRing) |
+
+**Recommendation**: Keep `AudioCaptureService.swift` as a fallback for macOS < 14.2, but remove `EchoCancellationService.swift` and `AudioRingBuffer.swift` which are superseded.
+
+### New Files Created (Not in Original Plan)
+
+| File | Purpose |
+|------|---------|
+| `TapAudioCaptureService.swift` | Service wrapper for Core Audio tap capture |
+| `AudioTelemetry.swift` | Telemetry collection for audio pipeline |
+| `AudioWorker.swift` | Dedicated worker thread for audio processing |
+
+### Plan vs. Reality Corrections
+
+| Plan Statement | Reality | Impact |
+|----------------|---------|--------|
+| "macOS 26 Tahoe+ only" | Core Audio taps available in macOS 14.2+ | Lower minimum version, broader compatibility |
+| "`NSAudioCaptureUsageDescription`" | This key doesn't exist | Permission handled by TCC at tap creation |
+| "DelayAgnostic + ExtendedFilter" | Not explicit options in v2.x API | Config is just `echo_canceller.enabled` |
+| "External delay estimator for coarse alignment" | Not available in bundled WebRTC | Must rely on internal delay estimation |
+
+---
+
 ## Future Improvements
 
 ### Priority 1: Double-Talk Detection (DTD)
@@ -1360,8 +1712,11 @@ See [WebRTC AEC3 Integration](#webrtc-aec3-integration) section for implementati
 | Resource | URL |
 |----------|-----|
 | WebRTC AEC3 | https://webrtc.googlesource.com/src/+/refs/heads/main/modules/audio_processing/aec3/ |
+| webrtc-audio-processing (FreeDesktop) | https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing |
+| Apple Core Audio Taps | https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps |
 | Apple ScreenCaptureKit | https://developer.apple.com/documentation/screencapturekit |
 | Apple AVAudioEngine | https://developer.apple.com/documentation/avfaudio/avaudioengine |
+| AudioCap (sample code) | https://github.com/insidegui/audiocap |
 | VOCAL Technologies AEC | https://vocal.com/echo-cancellation/ (good tutorials) |
 
 ### Related Muesli Documentation
@@ -1371,6 +1726,12 @@ See [WebRTC AEC3 Integration](#webrtc-aec3-integration) section for implementati
 | `spec/audio_pipeline.md` | Overall audio architecture, sample rates, file formats |
 | `AGENTS.md` | Build commands, thread safety requirements |
 | `AudioConfiguration.swift` | All AEC parameters with documentation |
+| `CoreAudioTapManager.swift` | Tap lifecycle, IOProc callback, self-tests |
+| `AggregateDeviceManager.swift` | Tap-only aggregate device creation |
+| `AudioSynchronizer.swift` | Sample-index pairing, state machine |
+| `CoarseDelayController.swift` | Hysteresis + slew-limited delay control |
+| `DriftTracker.swift` | Clock drift estimation + adaptive resampler |
+| `WebRTCAECBridge.mm` | WebRTC AEC3 v2.x ObjC++ bridge |
 
 ---
 
@@ -1385,3 +1746,4 @@ See [WebRTC AEC3 Integration](#webrtc-aec3-integration) section for implementati
 | 2026-01-25 | Implemented: Post-warmup offset validation, bounds check fallback, periodic offset monitoring. Updated Lesson 7 status to FIXED. Added new diagnostic log messages. | Agent |
 | 2026-01-26 | **WebRTC AEC3 Integration**: Added hybrid synchronization architecture with WebRTC AEC3 as default implementation. Includes: EchoCancellationServiceWebRTC (Swift), AudioRingBuffer, WebRTCAECBridge (ObjC++), factory pattern for implementation selection. NLMS preserved as fallback. | Agent |
 | 2026-01-27 | Added: Quantitative analysis of AEC3 non-convergence, render/mic RMS findings, and correlation instrumentation context. | Agent |
+| 2026-01-31 | **Major Update: Core Audio Taps Architecture**: Comprehensive documentation of the Core Audio taps implementation. Key corrections: (1) macOS 14.2+ support, not "macOS 26 only"; (2) NSAudioCaptureUsageDescription doesn't exist - TCC prompt at tap creation; (3) WebRTC v2.x API doesn't have DelayAgnostic/ExtendedFilter as explicit options; (4) External delay estimator not available. Added: AudioSynchronizer section, Implementation Status with Phase 6 cleanup pending, Plan vs Reality corrections. | Agent |

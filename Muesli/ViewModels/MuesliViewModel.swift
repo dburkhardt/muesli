@@ -448,7 +448,15 @@ final class MuesliViewModel {
     ) {
         // Initialize services (use provided or create defaults)
         // Use TapAudioCaptureService (Core Audio taps) for macOS 26+ Tahoe
-        self.audioCaptureService = audioCaptureService ?? TapAudioCaptureService()
+        NSLog("[TAP DEBUG] MuesliViewModel.init - creating audio capture service...")
+        if audioCaptureService != nil {
+            NSLog("[TAP DEBUG] Using provided audioCaptureService: %@", String(describing: type(of: audioCaptureService!)))
+            self.audioCaptureService = audioCaptureService!
+        } else {
+            NSLog("[TAP DEBUG] Creating new TapAudioCaptureService")
+            self.audioCaptureService = TapAudioCaptureService()
+        }
+        NSLog("[TAP DEBUG] audioCaptureService type: %@", String(describing: type(of: self.audioCaptureService)))
         self.fileOutputService = fileOutputService ?? FileOutputService()
         
         // Initialize transcription service with chunk duration from preferences

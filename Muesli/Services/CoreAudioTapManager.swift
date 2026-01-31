@@ -140,51 +140,62 @@ final class CoreAudioTapManager: @unchecked Sendable {
         configuration: TapConfiguration? = nil,
         callback: @escaping TapAudioCallback
     ) throws {
+        print("[TAP DEBUG] CoreAudioTapManager.start() called")
         stateLock.lock()
         defer { stateLock.unlock() }
-        
+
         guard state == .idle || state == .micOnly(reason: "") else {
+            print("[TAP DEBUG] ERROR: Tap already running, state=\(state)")
             throw CoreAudioTapError.alreadyRunning
         }
-        
+
         state = .initializing
         self.configuration = configuration ?? .default
         self.audioCallback = callback
-        
+
         // Build exclusion list - always include Muesli's PID
         var excludedPIDs = self.configuration.excludedProcessIDs
         let muesliPID = CoreAudioHelpers.getCurrentProcessID()
         if !excludedPIDs.contains(muesliPID) {
             excludedPIDs.append(muesliPID)
         }
-        
+
+        print("[TAP DEBUG] Muesli PID: \(muesliPID)")
+        print("[TAP DEBUG] Excluded PIDs: \(excludedPIDs)")
         logger.info("Starting tap with excluded PIDs: \(excludedPIDs)")
-        
+
         do {
             // Create aggregate device manager
+            print("[TAP DEBUG] Creating AggregateDeviceManager...")
             aggregateDeviceManager = AggregateDeviceManager()
-            
+
             // Create tap-only aggregate device
+            print("[TAP DEBUG] Calling createTapOnlyDevice...")
             aggregateDeviceID = try aggregateDeviceManager!.createTapOnlyDevice(
                 excludedProcessIDs: excludedPIDs,
                 isExclusive: self.configuration.isExclusive
             )
-            
+
+            print("[TAP DEBUG] Created aggregate device: \(self.aggregateDeviceID)")
             logger.info("Created aggregate device: \(self.aggregateDeviceID)")
-            
+
             // Start the device with retries
+            print("[TAP DEBUG] Starting device with retries...")
             try startDeviceWithRetries()
-            
+
             state = .running
+            print("[TAP DEBUG] Tap started successfully, state=.running")
             logger.info("Tap started successfully")
-            
+
         } catch {
             state = .failed(error.localizedDescription)
+            print("[TAP DEBUG] ERROR: Failed to start tap: \(error)")
+            print("[TAP DEBUG] Error description: \(error.localizedDescription)")
             logger.error("Failed to start tap: \(error.localizedDescription)")
-            
+
             // Clean up
             cleanupTap()
-            
+
             throw error
         }
     }
@@ -312,6 +323,9 @@ final class CoreAudioTapManager: @unchecked Sendable {
         }
     }
     
+    /// Counter for IOProc calls (for debugging)
+    private var ioProcCallCount: Int = 0
+    
     /// Handle IOProc callback
     /// RT-SAFE CHECKLIST (per plan Phase 4):
     /// - ✅ No malloc/new (uses pre-allocated buffers)
@@ -324,21 +338,81 @@ final class CoreAudioTapManager: @unchecked Sendable {
         inputData: UnsafePointer<AudioBufferList>?,
         inputTime: UnsafePointer<AudioTimeStamp>?
     ) {
+        ioProcCallCount += 1
+        
         guard let inputData = inputData,
               let inputTime = inputTime else {
+            // #region agent log
+            // Log nil data (non-RT safe but needed for debugging)
+            let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:347", "message": "handleIOProc nil data", "data": ["ioProcCallCount": ioProcCallCount, "inputDataNil": inputData == nil, "inputTimeNil": inputTime == nil], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,D"]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                    handle.seekToEndOfFile()
+                    handle.write((jsonStr + "\n").data(using: .utf8)!)
+                    handle.closeFile()
+                }
+            }
+            // #endregion
             return
         }
         
         let bufferList = inputData.pointee
-        guard bufferList.mNumberBuffers > 0 else { return }
+        guard bufferList.mNumberBuffers > 0 else {
+            // #region agent log
+            if ioProcCallCount <= 5 {
+                let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:362", "message": "handleIOProc no buffers", "data": ["ioProcCallCount": ioProcCallCount, "mNumberBuffers": bufferList.mNumberBuffers], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,D"]
+                if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+                    if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                        handle.seekToEndOfFile()
+                        handle.write((jsonStr + "\n").data(using: .utf8)!)
+                        handle.closeFile()
+                    }
+                }
+            }
+            // #endregion
+            return
+        }
         
         // Get first buffer (mono or interleaved stereo)
         let buffer = bufferList.mBuffers
-        guard let dataPtr = buffer.mData else { return }
+        guard let dataPtr = buffer.mData else {
+            // #region agent log
+            if ioProcCallCount <= 5 {
+                let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:377", "message": "handleIOProc nil mData", "data": ["ioProcCallCount": ioProcCallCount], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,D"]
+                if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+                    if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                        handle.seekToEndOfFile()
+                        handle.write((jsonStr + "\n").data(using: .utf8)!)
+                        handle.closeFile()
+                    }
+                }
+            }
+            // #endregion
+            return
+        }
         
         let samples = dataPtr.assumingMemoryBound(to: Float.self)
         let byteCount = Int(buffer.mDataByteSize)
         let frameCount = UInt32(byteCount / MemoryLayout<Float>.size / Int(buffer.mNumberChannels))
+        
+        // #region agent log
+        // Log first few IOProc calls to verify data is flowing
+        if ioProcCallCount <= 3 {
+            // Sample first few values to check if data is silence
+            var sampleValues: [Float] = []
+            for i in 0..<min(5, Int(frameCount)) {
+                sampleValues.append(samples[i])
+            }
+            let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:397", "message": "handleIOProc success", "data": ["ioProcCallCount": ioProcCallCount, "byteCount": byteCount, "frameCount": frameCount, "mNumberChannels": buffer.mNumberChannels, "firstSamples": sampleValues], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,D"]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                    handle.seekToEndOfFile()
+                    handle.write((jsonStr + "\n").data(using: .utf8)!)
+                    handle.closeFile()
+                }
+            }
+        }
+        // #endregion
         
         // Extract timing info
         let sampleTime = inputTime.pointee.mSampleTime
@@ -369,8 +443,23 @@ final class CoreAudioTapManager: @unchecked Sendable {
             let frameRMS = sqrt(sumSquares / Float(count))
             // Exponential moving average with ~100ms time constant at 48kHz
             let alpha: Float = 0.1
+            let prevRMS = rollingRMS
             rollingRMS = rollingRMS * (1 - alpha) + frameRMS * alpha
             rmsFrameCount += 1
+            
+            // #region agent log
+            // Log every 100th frame to avoid flooding (RT callback)
+            if rmsFrameCount % 100 == 1 || rmsFrameCount <= 3 {
+                let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:388", "message": "updateRMS called", "data": ["rmsFrameCount": rmsFrameCount, "frameRMS": frameRMS, "prevRMS": prevRMS, "newRMS": rollingRMS, "frameCount": frameCount, "channels": channels, "totalSamples": totalSamples, "sampledCount": count], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,C,E"]
+                if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+                    if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                        handle.seekToEndOfFile()
+                        handle.write((jsonStr + "\n").data(using: .utf8)!)
+                        handle.closeFile()
+                    }
+                }
+            }
+            // #endregion
         }
     }
     
@@ -399,14 +488,43 @@ final class CoreAudioTapManager: @unchecked Sendable {
         let initialRMS = rollingRMS
         rmsFrameCount = 0
         
+        // #region agent log
+        let logPayload1: [String: Any] = ["location": "CoreAudioTapManager.swift:413", "message": "testSystemSoundPresent START", "data": ["initialRMS": initialRMS, "rmsFrameCount": rmsFrameCount, "tapState": String(describing: state)], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,C,E"]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload1), let jsonStr = String(data: jsonData, encoding: .utf8) {
+            try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8)
+        }
+        // #endregion
+        
         // Play system sound (this plays from another process, should be captured)
         // We use NSSound which plays through the system
         await MainActor.run {
             NSSound.beep()
         }
         
+        // #region agent log
+        let logPayload2: [String: Any] = ["location": "CoreAudioTapManager.swift:425", "message": "After NSSound.beep()", "data": ["rmsFrameCountAfterBeep": rmsFrameCount, "rollingRMSAfterBeep": rollingRMS], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "B"]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload2), let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            }
+        }
+        // #endregion
+        
         // Wait for sound to propagate (2 seconds)
         try? await Task.sleep(for: .seconds(2))
+        
+        // #region agent log
+        let logPayload3: [String: Any] = ["location": "CoreAudioTapManager.swift:438", "message": "After 2s wait", "data": ["rmsFrameCountAfterWait": rmsFrameCount, "rollingRMSAfterWait": rollingRMS], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,C,E"]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload3), let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            }
+        }
+        // #endregion
         
         // Check if RMS increased significantly
         let rmsThreshold: Float = 0.001  // Very low threshold
@@ -426,12 +544,34 @@ final class CoreAudioTapManager: @unchecked Sendable {
         // Since we excluded Muesli's PID during tap creation,
         // we verify the tap RMS stays low when no external audio plays
         
+        // #region agent log
+        let logPayload1: [String: Any] = ["location": "CoreAudioTapManager.swift:488", "message": "testMuesliExcluded START", "data": ["rmsFrameCountBefore": rmsFrameCount, "rollingRMSBefore": rollingRMS, "ioProcCallCount": ioProcCallCount], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "E"]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload1), let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            }
+        }
+        // #endregion
+        
         // Wait briefly and check RMS
         try? await Task.sleep(for: .seconds(1))
         
         // RMS should be very low (near silence) when only Muesli might be outputting
         let silenceThreshold: Float = 0.0001
         let isExcluded = rollingRMS < silenceThreshold || rmsFrameCount == 0
+        
+        // #region agent log
+        let logPayload2: [String: Any] = ["location": "CoreAudioTapManager.swift:505", "message": "testMuesliExcluded END", "data": ["rmsFrameCountAfter": rmsFrameCount, "rollingRMSAfter": rollingRMS, "silenceThreshold": silenceThreshold, "isExcluded": isExcluded, "ioProcCallCount": ioProcCallCount], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "E"]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload2), let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            }
+        }
+        // #endregion
         
         logger.debug("Self-test B: muesliExcluded=\(isExcluded), rms=\(self.rollingRMS)")
         return isExcluded

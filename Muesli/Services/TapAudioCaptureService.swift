@@ -84,6 +84,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     // MARK: - Initialization
 
     init() {
+        print("[TAP DEBUG] TapAudioCaptureService.init() called - CREATED")
         logger.info("TapAudioCaptureService initialized")
         // Format descriptions are set up lazily on first use to avoid actor isolation issues in init
     }
@@ -124,18 +125,23 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// Start audio capture (captures all system audio)
     func startCapture() async throws {
+        print("[TAP DEBUG] TapAudioCaptureService.startCapture() called")
         guard !isRecording else {
+            print("[TAP DEBUG] ERROR: Already recording")
             throw AudioCaptureError.alreadyRecording
         }
 
         guard bufferHandler != nil else {
+            print("[TAP DEBUG] ERROR: Buffer handler not set")
             throw AudioCaptureError.bufferHandlerNotSet
         }
 
+        print("[TAP DEBUG] Starting tap-based audio capture...")
         logger.info("Starting tap-based audio capture")
 
         // Detect device topology
         topologyMode = CoreAudioHelpers.detectTopologyMode()
+        print("[TAP DEBUG] Detected topology: \(topologyMode)")
         logger.info("Detected topology: \(String(describing: self.topologyMode))")
 
         // Configure synchronizer and AEC for topology
@@ -147,6 +153,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         // Start the tap for system audio
         do {
+            print("[TAP DEBUG] Calling tapManager.start()...")
             try tapManager.start(
                 configuration: TapConfiguration(
                     sampleRate: 48000,
@@ -159,7 +166,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                     self?.handleTapAudio(samples: samples, frameCount: frameCount, sampleTime: sampleTime, hostTime: hostTime)
                 }
             )
+            print("[TAP DEBUG] tapManager.start() succeeded")
         } catch {
+            print("[TAP DEBUG] ERROR: tapManager.start() failed: \(error)")
             logger.error("Failed to start tap: \(error.localizedDescription)")
 
             // Degrade to mic-only mode
