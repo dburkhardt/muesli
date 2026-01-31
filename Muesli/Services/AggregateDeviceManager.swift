@@ -111,6 +111,45 @@ final class AggregateDeviceManager {
         // Verify the tap is attached to the aggregate device
         verifyTapAttachment()
 
+        // #region agent log
+        // Log the tap's actual format
+        var tapFormat = AudioStreamBasicDescription()
+        var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        var formatAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let formatStatus = AudioObjectGetPropertyData(tapObjectID, &formatAddress, 0, nil, &formatSize, &tapFormat)
+        if formatStatus == noErr {
+            let logPayload: [String: Any] = [
+                "location": "AggregateDeviceManager.swift:createDevice",
+                "message": "Tap format from kAudioTapPropertyFormat",
+                "data": [
+                    "sampleRate": tapFormat.mSampleRate,
+                    "formatID": tapFormat.mFormatID,
+                    "formatFlags": tapFormat.mFormatFlags,
+                    "bytesPerPacket": tapFormat.mBytesPerPacket,
+                    "framesPerPacket": tapFormat.mFramesPerPacket,
+                    "bytesPerFrame": tapFormat.mBytesPerFrame,
+                    "channelsPerFrame": tapFormat.mChannelsPerFrame,
+                    "bitsPerChannel": tapFormat.mBitsPerChannel,
+                    "isFloat": (tapFormat.mFormatFlags & kAudioFormatFlagIsFloat) != 0,
+                    "isSignedInt": (tapFormat.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0,
+                    "tapObjectID": tapObjectID
+                ],
+                "timestamp": Date().timeIntervalSince1970 * 1000,
+                "sessionId": "debug-session",
+                "hypothesisId": "K"
+            ]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                    handle.seekToEndOfFile(); handle.write((jsonStr + "\n").data(using: .utf8)!); handle.closeFile()
+                } else { try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8) }
+            }
+        }
+        // #endregion
+        
         print("[TAP DEBUG] === Tap creation complete ===")
         return deviceID
     }
@@ -196,28 +235,22 @@ final class AggregateDeviceManager {
             logger.warning("Could not find process objects for some PIDs")
         }
 
-        // Create tap description
-        print("[TAP DEBUG] Creating CATapDescription...")
-        let tapDescription: CATapDescription
-        if processObjectIDs.isEmpty {
-            // Global tap - capture all system audio
-            print("[TAP DEBUG] Creating global tap (no exclusions)")
-            tapDescription = CATapDescription()
-            tapDescription.isMono = false
-            tapDescription.isMixdown = true
-        } else {
-            // Exclude specified processes
-            print("[TAP DEBUG] Creating tap excluding \(processObjectIDs.count) process(es)")
-            tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: processObjectIDs)
-        }
+        // Create tap description using global stereo tap
+        print("[TAP DEBUG] Creating stereo global tap...")
+        let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: processObjectIDs)
+        print("[TAP DEBUG] Created global tap excluding \(processObjectIDs.count) process(es)")
 
-        // Configure tap
+        // Configure tap (matching the working example from directmusic/sudara gist)
         tapDescription.name = "Muesli System Audio Tap"
         let uuid = UUID()
         tapDescription.uuid = uuid
         tapUUID = uuid
         tapDescription.isPrivate = true
-        tapDescription.muteBehavior = isExclusive ? .muted : .unmuted
+        // isExclusive=true means the process list contains processes to EXCLUDE (not include)
+        tapDescription.isExclusive = true
+        // muteBehavior controls whether captured audio is muted at the output
+        // CATapUnmuted = audio still plays through speakers while being captured
+        tapDescription.muteBehavior = .unmuted
 
         print("[TAP DEBUG] Tap config: name='\(tapDescription.name ?? "nil")', uuid=\(uuid), isPrivate=\(tapDescription.isPrivate), muteBehavior=\(tapDescription.muteBehavior.rawValue)")
         print("[TAP DEBUG] Tap config: isMono=\(tapDescription.isMono), isMixdown=\(tapDescription.isMixdown), isExclusive=\(tapDescription.isExclusive)")
@@ -278,44 +311,31 @@ final class AggregateDeviceManager {
 
     /// Create an aggregate device that includes the tap
     private func createAggregateDeviceWithTap(tapUID: String) throws -> AudioDeviceID {
-        // Get default output device to use as clock source
-        // An aggregate device with only a tap has no clock, so IOProc callbacks won't fire
-        let outputDeviceID = try CoreAudioHelpers.getDefaultOutputDevice()
-        let outputDeviceUID = try CoreAudioHelpers.getDeviceUID(outputDeviceID)
-        
-        print("[TAP DEBUG] Using default output device as clock source: \(outputDeviceUID)")
-        logger.info("Using default output device as clock source: \(outputDeviceUID)")
-        
         // Build aggregate device description
-        // Reference: AudioHardware.h lines 1626-1645
-        //
-        // Approach (AudioCap + CoreAudio Tap example):
-        // - Include output device as main sub-device for clocking
-        // - Add tap list as an array of sub-tap dictionaries
+        // Matching the working directmusic/sudara gist EXACTLY:
+        // - NO sub-device for clocking (the tap provides this)
+        // - TapAutoStart: false (we start via AudioDeviceStart)
+        // - IsPrivate: true
         let aggregateDescription: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Muesli Tap Device",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceIsPrivateKey: true,
-            kAudioAggregateDeviceIsStackedKey: false,
-            kAudioAggregateDeviceMainSubDeviceKey: outputDeviceUID,
-            kAudioAggregateDeviceSubDeviceListKey: [
-                [
-                    kAudioSubDeviceUIDKey: outputDeviceUID
-                ]
-            ],
-            // Include the tap using sub-tap dictionary
+            // Include the tap
             kAudioAggregateDeviceTapListKey: [
                 [
                     kAudioSubTapUIDKey: tapUID,
                     kAudioSubTapDriftCompensationKey: true
                 ]
             ],
-            // Auto-start the tap - key is "tapautostart" per AudioHardware.h line 1645
-            kAudioAggregateDeviceTapAutoStartKey: true
+            kAudioAggregateDeviceTapAutoStartKey: false
         ]
         
+        print("[TAP DEBUG] Creating aggregate with tap only (no sub-devices)")
+        print("[TAP DEBUG] tapUID: \(tapUID), aggregateUID: \(aggregateUID)")
+        logger.info("Creating aggregate device with tap: \(tapUID)")
+        
         // #region agent log
-        let logPayload: [String: Any] = ["location": "AggregateDeviceManager.swift:298", "message": "Creating aggregate with subdevice + sub-tap", "data": ["outputDeviceUID": outputDeviceUID, "tapUID": tapUID, "aggregateUID": aggregateUID], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "H"]
+        let logPayload: [String: Any] = ["location": "AggregateDeviceManager.swift:createAggregateDeviceWithTap", "message": "Creating aggregate with tap only", "data": ["tapUID": tapUID, "aggregateUID": aggregateUID], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "J"]
         if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
             if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
                 handle.seekToEndOfFile()

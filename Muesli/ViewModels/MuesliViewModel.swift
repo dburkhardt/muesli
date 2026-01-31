@@ -447,7 +447,7 @@ final class MuesliViewModel {
         skipInitialLoad: Bool = false
     ) {
         // Initialize services (use provided or create defaults)
-        // Use TapAudioCaptureService (Core Audio taps) for macOS 26+ Tahoe
+        // Use TapAudioCaptureService (Core Audio taps)
         NSLog("[TAP DEBUG] MuesliViewModel.init - creating audio capture service...")
         if audioCaptureService != nil {
             NSLog("[TAP DEBUG] Using provided audioCaptureService: %@", String(describing: type(of: audioCaptureService!)))

@@ -29,6 +29,7 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     private var bufferHandler: AudioBufferHandler?
     private var interruptedHandler: StreamInterruptedHandler?
     private var levelHandler: AudioLevelHandler?
+    private var warningHandler: AudioWarningHandler?
     
     // MARK: - AudioCaptureServiceProtocol
     
@@ -42,6 +43,10 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     
     func setLevelHandler(_ handler: @escaping AudioLevelHandler) {
         levelHandler = handler
+    }
+    
+    func setWarningHandler(_ handler: @escaping AudioWarningHandler) {
+        warningHandler = handler
     }
     
     func setMicrophoneDevice(_ deviceID: String?) {

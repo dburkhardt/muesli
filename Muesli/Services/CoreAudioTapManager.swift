@@ -361,6 +361,32 @@ final class CoreAudioTapManager: @unchecked Sendable {
             return
         }
         
+        // #region agent log
+        // Log buffer info to debug which buffer has actual audio
+        if ioProcCallCount <= 5 || ioProcCallCount % 1000 == 0 {
+            var bufferInfo: [[String: Any]] = []
+            let numBuffers = Int(bufferList.mNumberBuffers)
+            withUnsafePointer(to: bufferList.mBuffers) { ptr in
+                for i in 0..<numBuffers {
+                    let buf = ptr.advanced(by: i).pointee
+                    var maxVal: Float = 0
+                    if let data = buf.mData {
+                        let floats = data.assumingMemoryBound(to: Float.self)
+                        let count = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
+                        for j in 0..<min(100, count) { maxVal = max(maxVal, abs(floats[j])) }
+                    }
+                    bufferInfo.append(["index": i, "channels": buf.mNumberChannels, "bytes": buf.mDataByteSize, "hasData": buf.mData != nil, "maxFirst100": maxVal])
+                }
+            }
+            let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:handleIOProc", "message": "IOProc buffer list", "data": ["numBuffers": numBuffers, "buffers": bufferInfo, "callCount": ioProcCallCount], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "I"]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                    handle.seekToEndOfFile(); handle.write((jsonStr + "\n").data(using: .utf8)!); handle.closeFile()
+                } else { try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8) }
+            }
+        }
+        // #endregion
+        
         // Get first buffer (mono or interleaved stereo)
         let buffer = bufferList.mBuffers
         guard let dataPtr = buffer.mData else {

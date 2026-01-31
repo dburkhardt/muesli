@@ -332,6 +332,21 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let sampleArray = Array(UnsafeBufferPointer(start: samples, count: totalSamples))
         let timestamp = CACurrentMediaTime()
         
+        // #region agent log
+        // Log based on timestamp to avoid state - roughly every 5 seconds
+        let shouldLog = Int(timestamp) % 5 == 0 && Int(timestamp * 10) % 50 == 0
+        if shouldLog {
+            var maxSample: Float = 0
+            for i in 0..<min(100, sampleArray.count) { maxSample = max(maxSample, abs(sampleArray[i])) }
+            let logPayload: [String: Any] = ["location": "TapAudioCaptureService.swift:handleTapAudio", "message": "Tap audio received", "data": ["frameCount": count, "totalSamples": totalSamples, "arrayCount": sampleArray.count, "maxSampleFirst100": maxSample, "timestamp": timestamp], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,B,E"]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                    handle.seekToEndOfFile(); handle.write((jsonStr + "\n").data(using: .utf8)!); handle.closeFile()
+                } else { try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8) }
+            }
+        }
+        // #endregion
+        
         Task { [weak self] in
             await self?.deliverRawSystemAudio(samples: sampleArray, timestamp: timestamp)
         }
@@ -354,14 +369,33 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         
         guard !samples.isEmpty else { return }
         
+        // #region agent log
+        let shouldLog = Int(timestamp) % 5 == 0 && Int(timestamp * 10) % 50 == 0
+        var maxSample: Float = 0
+        if shouldLog { for i in 0..<min(100, samples.count) { maxSample = max(maxSample, abs(samples[i])) } }
+        // #endregion
+        
         // Create CMSampleBuffer with correct format (48kHz stereo Float32)
-        if let buffer = createCMSampleBuffer(
+        let buffer = createCMSampleBuffer(
             from: samples,
             channels: 2,  // Stereo
             sampleRate: 48000,
             timestamp: timestamp,
             formatDesc: systemFormatDesc
-        ) {
+        )
+        
+        // #region agent log
+        if shouldLog {
+            let logPayload: [String: Any] = ["location": "TapAudioCaptureService.swift:deliverRawSystemAudio", "message": "Delivering system audio", "data": ["sampleCount": samples.count, "maxSampleFirst100": maxSample, "bufferCreated": buffer != nil, "hasBufferHandler": bufferHandler != nil, "timestamp": timestamp], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "B,C,D"]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
+                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                    handle.seekToEndOfFile(); handle.write((jsonStr + "\n").data(using: .utf8)!); handle.closeFile()
+                }
+            }
+        }
+        // #endregion
+        
+        if let buffer = buffer {
             bufferHandler?(buffer, .system)
         }
         
