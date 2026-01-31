@@ -19,15 +19,16 @@
 # - Logs all output to /tmp/muesli-build-TIMESTAMP.log by default
 # - Uses deterministic DerivedData path (no wildcards)
 # - Prevents parallel builds with a lock file
-# - Clears project caches by default (DerivedData, Launch Services, module caches)
-# - Preserves Swift PM cache (expensive deps like MLX are not rebuilt each time)
+# - Preserves caches by default for fast rebuilds (~1-2 min vs 5-8 min)
+# - Only removes app bundles, keeps DerivedData intermediates
 # - TCC permissions persist across builds (use --reset-tcc for onboarding testing)
 # - Verifies the app was just built (modification time check)
 # - Uses full path with open -a to bypass Launch Services
 # - Confirms the correct process is running after launch
 #
 # Usage:
-#   ./scripts/build-and-launch.sh                  # Deep clean + build and launch (default)
+#   ./scripts/build-and-launch.sh                  # Fast rebuild (default)
+#   ./scripts/build-and-launch.sh --deep-clean     # Full cache clear if needed
 #   ./scripts/build-and-launch.sh --build-only     # Build without launching
 #   ./scripts/build-and-launch.sh --dry-run        # Show what would happen
 
@@ -44,11 +45,11 @@ SCRIPT_LOG="/tmp/muesli-build-${TIMESTAMP}.log"
 BUILD_LOG="/tmp/muesli-build-${TIMESTAMP}-xcodebuild.txt"
 
 # Default options
-# NOTE: DEEP_CLEAN=true by default - we always want a fully clean slate
-# Use --preserve-caches if you want to keep DerivedData/Launch Services/module caches
-ALWAYS_CLEAN=true
-DEEP_CLEAN=true
-PRESERVE_CACHES=false
+# NOTE: PRESERVE_CACHES=true by default for faster rebuilds (~1-2 min vs 5-8 min)
+# Use --deep-clean if you encounter stale cache issues
+ALWAYS_CLEAN=false
+DEEP_CLEAN=false
+PRESERVE_CACHES=true
 BUILD_ONLY=false
 DRY_RUN=false
 ENABLE_LOGGING=true
@@ -90,13 +91,16 @@ for arg in "$@"; do
             DEEP_CLEAN=false
             shift
             ;;
+        --deep-clean)
+            # Force a full cache clear - use when encountering stale cache issues
+            DEEP_CLEAN=true
+            PRESERVE_CACHES=false
+            ALWAYS_CLEAN=true
+            shift
+            ;;
         --preserve-caches)
-            # Skip cache clearing - NOT recommended for normal use
-            # Only use if you're certain caches are valid and need faster rebuilds
-            # Stale caches are a common source of confusing build issues
-            DEEP_CLEAN=false
-            PRESERVE_CACHES=true
-            ALWAYS_CLEAN=false
+            # Legacy flag - now the default behavior
+            # Kept for backward compatibility
             shift
             ;;
         --build-only)
@@ -122,33 +126,34 @@ for arg in "$@"; do
             echo ""
             echo "Options:"
             echo "  --build-only       Build without launching the app"
+            echo "  --deep-clean       Force full cache clear (use if builds behave unexpectedly)"
             echo "  --dry-run          Show what would happen without doing it"
             echo "  --no-log           Disable logging to file (terminal output only)"
             echo "  --reset-tcc        Reset TCC permissions (for onboarding testing)"
             echo "  --help, -h         Show this help message"
             echo ""
             echo "Advanced options (rarely needed):"
-            echo "  --preserve-caches  Skip cache clearing (NOT recommended - use only if you're"
-            echo "                     certain caches are valid and need a faster rebuild)"
-            echo "  --incremental      Use cached/incremental build (NOT recommended - may miss changes)"
+            echo "  --incremental      Skip xcodebuild clean (fastest, but may miss some changes)"
             echo ""
-            echo "Default behavior (DEEP CLEAN):"
+            echo "Default behavior (PRESERVE CACHES - fast rebuilds):"
             echo "  - Logs all output to /tmp/muesli-build-TIMESTAMP.log"
-            echo "  - Removes project caches (DerivedData, Launch Services, module caches)"
-            echo "  - Preserves Swift PM cache (expensive deps like MLX are not rebuilt)"
-            echo "  - Does a clean build to ensure all code changes are compiled"
+            echo "  - Preserves DerivedData intermediates for incremental compilation"
+            echo "  - Removes only app bundles to ensure fresh binary"
+            echo "  - Runs 'xcodebuild clean build' to recompile changed sources"
             echo "  - TCC permissions persist across builds (use --reset-tcc for onboarding testing)"
-            echo "  - Verifies correct app version is launched"
+            echo "  - Build time: ~1-2 minutes (vs 5-8 min with --deep-clean)"
             echo ""
             echo "Examples:"
-            echo "  $0                 # Deep clean + build and launch (ALWAYS use this)"
+            echo "  $0                 # Fast rebuild (default)"
+            echo "  $0 --deep-clean    # Full cache clear (use if something seems wrong)"
             echo "  $0 --build-only    # Build without launching"
-            echo "  $0 --dry-run       # Preview what would happen"
             exit 0
             ;;
-        --clean|--deep-clean)
-            # Legacy flags - now the default, kept for compatibility
-            print_info "Note: deep clean is now the default behavior"
+        --clean)
+            # Legacy flag - same as --deep-clean
+            DEEP_CLEAN=true
+            PRESERVE_CACHES=false
+            ALWAYS_CLEAN=true
             shift
             ;;
         *)

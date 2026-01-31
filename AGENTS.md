@@ -99,21 +99,24 @@ cat /tmp/muesli-build-timestamp.txt
 
 **Build & Launch options**:
 ```bash
-./scripts/build-and-launch.sh              # Deep clean + build (DEFAULT - always use this)
+./scripts/build-and-launch.sh              # Fast rebuild with cached intermediates (DEFAULT)
+./scripts/build-and-launch.sh --deep-clean # Full cache clear (use if builds behave unexpectedly)
 ./scripts/build-and-launch.sh --build-only # Build without launching
 ./scripts/build-and-launch.sh --no-log     # Disable logging to file
 ./scripts/build-and-launch.sh --dry-run    # Show what would happen
 ```
 
-**What the script does** (deep clean + logging by default):
+**What the script does** (preserves caches for fast rebuilds by default):
 - Logs all output to `/tmp/muesli-build-TIMESTAMP.log` (strips ANSI colors)
 - Uses lock file `/tmp/muesli-build.lock` to prevent parallel builds
-- Removes DerivedData, Launch Services cache, Swift PM cache, and module caches
-- Runs `xcodebuild clean build` to ensure all code changes are compiled
+- Preserves DerivedData intermediates for incremental compilation
+- Removes only app bundles to ensure fresh binary
+- Runs `xcodebuild clean build` to recompile changed sources
+- Build time: ~1-2 minutes (vs 5-8 min with `--deep-clean`)
 
 **Advanced options** (rarely needed):
-- `--preserve-caches` — Skip cache clearing (NOT recommended; stale caches cause confusing issues)
-- `--incremental` — Use cached build (NOT recommended; may miss code changes)
+- `--deep-clean` — Full cache clear (DerivedData, Launch Services, module caches); use if builds behave unexpectedly
+- `--incremental` — Skip xcodebuild clean (fastest, but may miss some changes)
 
 **Other commands**:
 - Test: `xcodebuild ... test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"`
