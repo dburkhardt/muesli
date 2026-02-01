@@ -199,10 +199,8 @@ final class RecordingController {
                     
                     switch type {
                     case .system:
-                        let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
                         try RecordingController.handleSystemAudioBuffer(
                             buffer,
-                            timestamp: timestamp,
                             isAECEnabled: isAECEnabled,
                             fileService: fileService,
                             transcriptionCoordinator: transcriptionCoordinator,
@@ -335,9 +333,9 @@ final class RecordingController {
     }
     
     /// Process system audio buffer (extracted for error handling)
+    /// Note: Timestamp is extracted inside when needed for diagnostics. AEC uses sample-count sync.
     private static nonisolated func handleSystemAudioBuffer(
         _ buffer: CMSampleBuffer,
-        timestamp: CMTime,
         isAECEnabled: Bool,
         fileService: FileOutputService,
         transcriptionCoordinator: TranscriptionCoordinator,
