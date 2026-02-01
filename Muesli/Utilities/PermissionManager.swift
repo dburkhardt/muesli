@@ -74,8 +74,13 @@ final class PermissionManager: PermissionManagerProtocol {
 
         // Check initial permissions
         microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        // Audio capture permission will be checked when needed
-        audioCaptureGranted = false
+        
+        // For Core Audio taps (macOS 26+), audio capture permission is granted when the tap is created.
+        // If onboarding has been completed, assume permission is granted since onboarding can't
+        // complete without granting it. If the user revokes permission later, the tap will fail
+        // at runtime and trigger recovery then.
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding)
+        audioCaptureGranted = hasCompletedOnboarding
 
         // Observe app becoming active (user returns from System Settings)
         notificationCenterObservers.append(

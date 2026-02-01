@@ -317,9 +317,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Check permissions for recovery mode - uses fresh checks, not cached state
     /// CRITICAL: Only uses synchronous, non-prompting APIs
     private func checkPermissionsForRecovery() -> (hasScreen: Bool, hasMic: Bool) {
-        // CGPreflightScreenCaptureAccess() is synchronous and doesn't trigger prompts
-        // Note: Returns false until app restart after permission grant (expected behavior)
-        let hasScreen = CGPreflightScreenCaptureAccess()
+        // For Core Audio taps (macOS 26+), audio capture permission is granted when the tap is created.
+        // If onboarding has been completed, we assume audio capture permission is granted since
+        // onboarding cannot complete without granting it. If the permission was revoked later,
+        // the tap will fail at runtime and we'll detect it then.
+        //
+        // Note: We can't use CGPreflightScreenCaptureAccess() here because Core Audio taps
+        // don't use screen recording permission - they use NSAudioCaptureUsageDescription.
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding)
+        let hasScreen = hasCompletedOnboarding
         
         // AVCaptureDevice.authorizationStatus() is synchronous and doesn't trigger prompts
         let hasMic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
