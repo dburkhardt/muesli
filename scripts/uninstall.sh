@@ -1452,10 +1452,6 @@ reset_tcc_permissions() {
 }
 
 delete_user_defaults() {
-    if [ ${#SELECTED_BUNDLES[@]} -eq 0 ]; then
-        return 0
-    fi
-    
     print_info "Deleting UserDefaults..."
     
     # Get unique bundle IDs
@@ -1466,6 +1462,22 @@ delete_user_defaults() {
             unique_ids+=("$bundle_id")
         fi
     done
+
+    # If no bundles were selected, fall back to known bundle IDs
+    if [ ${#unique_ids[@]} -eq 0 ]; then
+        # Prefer any discovered preference files
+        for file in "${BUNDLE_PREF_FILES[@]}"; do
+            local bundle_id=$(basename "$file" .plist)
+            if [[ ! " ${unique_ids[@]} " =~ " ${bundle_id} " ]]; then
+                unique_ids+=("$bundle_id")
+            fi
+        done
+    fi
+
+    # Final fallback to the default bundle ID
+    if [ ${#unique_ids[@]} -eq 0 ]; then
+        unique_ids=("com.muesli.app")
+    fi
     
     for bundle_id in "${unique_ids[@]}"; do
         if [ "$DRY_RUN" = true ]; then

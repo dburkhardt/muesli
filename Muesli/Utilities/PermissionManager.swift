@@ -94,6 +94,17 @@ final class PermissionManager: PermissionManagerProtocol {
         audioCaptureGranted = UserDefaults.standard.bool(forKey: systemAudioPermissionDefaultsKey)
         let preflightScreenCapture = CGPreflightScreenCaptureAccess()
 
+        if !preflightScreenCapture, audioCaptureGranted {
+            audioCaptureGranted = false
+            UserDefaults.standard.removeObject(forKey: systemAudioPermissionDefaultsKey)
+            Task {
+                await DiagnosticLogger.shared.log(
+                    .permission,
+                    "Cleared cached system audio permission (preflight=false)"
+                )
+            }
+        }
+
         // #region agent log
         let audioCaptureUsageDescription = Bundle.main.object(
             forInfoDictionaryKey: "NSAudioCaptureUsageDescription"

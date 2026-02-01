@@ -125,6 +125,17 @@ struct OnboardingView: View {
             Task {
                 // Always use synchronous check to avoid triggering permission prompts
                 viewModel.refreshPermissions()
+
+                if !mode.isRecoveryMode,
+                   !viewModel.hasScreenRecordingPermission,
+                   !viewModel.hasMicrophonePermission,
+                   currentStep != .welcome {
+                    await DiagnosticLogger.shared.log(
+                        .onboarding,
+                        "Resetting onboarding step to welcome (no permissions granted)"
+                    )
+                    setStep(.welcome)
+                }
                 
                 // Start monitoring on permission screens
                 if currentStep == .screenRecording || currentStep == .microphone {
@@ -266,7 +277,7 @@ struct OnboardingView: View {
             if isSystemAudioPermissionConfirmed {
                 // Permission granted
                 permissionStatusView(granted: true, label: "System Audio Recording")
-            } else if screenRecordingRequested {
+            } else if screenRecordingRequested || viewModel.permissionManager.awaitingScreenRecordingFromSettings {
                 // Permission was requested but not granted - show recovery options
                 VStack(spacing: 12) {
                     Text("Waiting for permission...")
@@ -335,6 +346,13 @@ struct OnboardingView: View {
                         if granted {
                             didConfirmSystemAudioThisSession = true
                             withAnimation { setStep(.microphone) }
+                        } else {
+                            viewModel.markAwaitingScreenRecordingFromSettings()
+                            viewModel.openScreenRecordingSettings()
+                            await DiagnosticLogger.shared.log(
+                                .onboarding,
+                                "System audio permission not granted - opening System Settings"
+                            )
                         }
                         AppDelegate.shared?.bringOnboardingWindowToFront()
                     }
@@ -1112,6 +1130,22 @@ struct OnboardingView: View {
                 didConfirmThisSession=\(didConfirmSystemAudioThisSession)
                 """
             )
+        }
+
+        if !mode.isRecoveryMode {
+            if !isSystemAudioPermissionConfirmed {
+                if currentStep.rawValue > OnboardingStep.screenRecording.rawValue {
+                    setStep(.screenRecording)
+                }
+                return
+            }
+
+            if !viewModel.hasMicrophonePermission {
+                if currentStep.rawValue > OnboardingStep.microphone.rawValue {
+                    setStep(.microphone)
+                }
+                return
+            }
         }
 
         // Handle recovery mode differently
