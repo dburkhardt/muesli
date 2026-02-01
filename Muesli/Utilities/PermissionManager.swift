@@ -62,6 +62,14 @@ final class PermissionManager: PermissionManagerProtocol {
     /// UserDefaults key for persisting system audio permission probe results
     private let systemAudioPermissionDefaultsKey = "systemAudioPermissionGranted"
 
+    /// Tracks whether a system-audio permission probe is currently running
+    private var systemAudioProbeTask: Task<Bool, Never>?
+
+    /// Exposes probe-in-flight state for UI gating
+    var isSystemAudioProbeInFlight: Bool {
+        systemAudioProbeTask != nil
+    }
+
     // MARK: - Initialization
 
     init() {
@@ -305,17 +313,30 @@ final class PermissionManager: PermissionManagerProtocol {
             return false
         }
 
+        if let existingTask = systemAudioProbeTask {
+            await DiagnosticLogger.shared.log(.permission, "System audio probe already in flight; awaiting result")
+            return await existingTask.value
+        }
+
         // Trigger System Audio Recording permission by attempting to create a Core Audio tap.
         // This is the ONLY way to trigger this permission prompt - there is no public API.
         // The tap will be immediately destroyed after triggering the prompt.
-        let result = await triggerSystemAudioPermissionPrompt()
-        await MainActor.run {
-            audioCaptureGranted = result || audioCaptureGranted
-            if result {
-                UserDefaults.standard.set(true, forKey: systemAudioPermissionDefaultsKey)
+        let probeTask = Task { [weak self] () -> Bool in
+            guard let self = self else { return false }
+            let result = await self.triggerSystemAudioPermissionPrompt()
+            await MainActor.run {
+                self.audioCaptureGranted = result || self.audioCaptureGranted
+                if result {
+                    UserDefaults.standard.set(true, forKey: self.systemAudioPermissionDefaultsKey)
+                }
             }
+            await DiagnosticLogger.shared.log(.permission, "System audio permission probe result: \(result)")
+            return result
         }
-        await DiagnosticLogger.shared.log(.permission, "System audio permission probe result: \(result)")
+
+        systemAudioProbeTask = probeTask
+        let result = await probeTask.value
+        systemAudioProbeTask = nil
         return result
     }
     

@@ -1,3 +1,4 @@
+import CoreGraphics
 import SwiftUI
 
 /// Multi-step onboarding flow for first-run setup and permission recovery
@@ -142,6 +143,11 @@ struct OnboardingView: View {
             if oldValue == .screenRecording || oldValue == .microphone {
                 stopPermissionMonitoring()
             }
+
+            if oldValue == .screenRecording && newValue != .screenRecording {
+                screenRecordingRequested = false
+                didConfirmSystemAudioThisSession = false
+            }
             
             // Check permissions when switching to permission steps
             if newValue == .screenRecording || newValue == .microphone {
@@ -231,6 +237,7 @@ struct OnboardingView: View {
     // MARK: - System Audio Recording Screen
     
     @State private var screenRecordingRequested = false
+    @State private var didConfirmSystemAudioThisSession = false
     
     private var screenRecordingScreen: some View {
         VStack(spacing: 20) {
@@ -256,7 +263,7 @@ struct OnboardingView: View {
             
             Spacer()
             
-            if viewModel.hasScreenRecordingPermission {
+            if isSystemAudioPermissionConfirmed {
                 // Permission granted
                 permissionStatusView(granted: true, label: "System Audio Recording")
             } else if screenRecordingRequested {
@@ -326,6 +333,7 @@ struct OnboardingView: View {
                         let granted = await viewModel.requestScreenRecordingPermission()
                         await DiagnosticLogger.shared.log(.onboarding, "requestScreenRecordingPermission() returned: \(granted)")
                         if granted {
+                            didConfirmSystemAudioThisSession = true
                             withAnimation { setStep(.microphone) }
                         }
                         AppDelegate.shared?.bringOnboardingWindowToFront()
@@ -346,7 +354,7 @@ struct OnboardingView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!viewModel.hasScreenRecordingPermission)
+            .disabled(!isSystemAudioPermissionConfirmed)
         }
         .padding(.horizontal, 60)
         .padding(.top, 40)
@@ -1006,6 +1014,19 @@ struct OnboardingView: View {
         viewModel.permissionManager.stopMonitoringPermissions()
         viewModel.permissionManager.permissionDidChange = nil
     }
+
+    private var isSystemAudioPermissionConfirmed: Bool {
+        if didConfirmSystemAudioThisSession {
+            return true
+        }
+
+        let preflightAllowsAutoAdvance = CGPreflightScreenCaptureAccess()
+        if !preflightAllowsAutoAdvance {
+            return false
+        }
+
+        return viewModel.hasScreenRecordingPermission
+    }
     
     // MARK: - File Selection
     
@@ -1033,6 +1054,20 @@ struct OnboardingView: View {
     /// Advance to appropriate step based on current permissions
     /// Skips past already-completed permission steps when user returns to the app
     private func advanceBasedOnPermissions() {
+        if currentStep == .welcome {
+            return
+        }
+
+        if viewModel.permissionManager.isSystemAudioProbeInFlight {
+            Task {
+                await DiagnosticLogger.shared.log(
+                    .onboarding,
+                    "Auto-advance deferred: system audio probe in flight"
+                )
+            }
+            return
+        }
+
         // #region agent log
         let advancePayload: [String: Any] = [
             "location": "OnboardingView.swift:advanceBasedOnPermissions",
@@ -1041,7 +1076,10 @@ struct OnboardingView: View {
                 "mode": String(describing: mode),
                 "currentStep": currentStep.rawValue,
                 "hasScreenRecordingPermission": viewModel.hasScreenRecordingPermission,
-                "hasMicrophonePermission": viewModel.hasMicrophonePermission
+                "hasMicrophonePermission": viewModel.hasMicrophonePermission,
+                "preflightScreenCapture": CGPreflightScreenCaptureAccess(),
+                "didConfirmSystemAudioThisSession": didConfirmSystemAudioThisSession,
+                "isSystemAudioProbeInFlight": viewModel.permissionManager.isSystemAudioProbeInFlight
             ],
             "timestamp": Date().timeIntervalSince1970 * 1000,
             "sessionId": "debug-session",
@@ -1064,14 +1102,26 @@ struct OnboardingView: View {
         }
         // #endregion
 
+        Task {
+            await DiagnosticLogger.shared.log(
+                .onboarding,
+                """
+                Auto-advance check: systemAudioConfirmed=\(isSystemAudioPermissionConfirmed), \
+                mic=\(viewModel.hasMicrophonePermission), \
+                preflight=\(CGPreflightScreenCaptureAccess()), \
+                didConfirmThisSession=\(didConfirmSystemAudioThisSession)
+                """
+            )
+        }
+
         // Handle recovery mode differently
         if mode.isRecoveryMode {
             // In recovery mode, check if both permissions are now granted
-            if viewModel.hasScreenRecordingPermission && viewModel.hasMicrophonePermission {
+            if isSystemAudioPermissionConfirmed && viewModel.hasMicrophonePermission {
                 // Both permissions granted - complete recovery
                 completeOnboardingForRecovery()
                 return
-            } else if viewModel.hasScreenRecordingPermission && currentStep == .screenRecording {
+            } else if isSystemAudioPermissionConfirmed && currentStep == .screenRecording {
                 // Screen recording granted, but mic still missing - advance to mic
                 setStep(.microphone)
             }
@@ -1083,7 +1133,7 @@ struct OnboardingView: View {
         // Determine the appropriate step based on current permissions
         let targetStep: OnboardingStep
         
-        if viewModel.hasScreenRecordingPermission && viewModel.hasMicrophonePermission {
+        if isSystemAudioPermissionConfirmed && viewModel.hasMicrophonePermission {
             // All permissions granted - go to model setup or complete
             if !modelManager.hasModel {
                 targetStep = .modelSetup
@@ -1094,7 +1144,7 @@ struct OnboardingView: View {
                 completeOnboarding()
                 return
             }
-        } else if viewModel.hasScreenRecordingPermission {
+        } else if isSystemAudioPermissionConfirmed {
             // Screen recording granted - skip to microphone
             targetStep = .microphone
         } else {
