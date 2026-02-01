@@ -74,13 +74,10 @@ final class PermissionManager: PermissionManagerProtocol {
 
         // Check initial permissions
         microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        
-        // For Core Audio taps (macOS 26+), audio capture permission is granted when the tap is created.
-        // If onboarding has been completed, assume permission is granted since onboarding can't
-        // complete without granting it. If the user revokes permission later, the tap will fail
-        // at runtime and trigger recovery then.
-        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding)
-        audioCaptureGranted = hasCompletedOnboarding
+
+        // Use CGPreflightScreenCaptureAccess as a safe, synchronous proxy for audio capture permission.
+        // This aligns with onboarding flow rules: sync checks only, no prompts.
+        audioCaptureGranted = CGPreflightScreenCaptureAccess()
 
         // Observe app becoming active (user returns from System Settings)
         notificationCenterObservers.append(
@@ -145,10 +142,9 @@ final class PermissionManager: PermissionManagerProtocol {
 
     /// Verify screen recording permission after user clicks "Grant Permission"
     func verifyScreenRecordingAfterRequest() async -> Bool {
-        // For Core Audio taps, the permission is granted through a TCC prompt
-        // when the tap is first created. We assume granted if we get here.
-        audioCaptureGranted = true
-        return true
+        // Re-check using the safe preflight API after the system dialog
+        audioCaptureGranted = CGPreflightScreenCaptureAccess() || audioCaptureGranted
+        return audioCaptureGranted
     }
 
     // MARK: - Real-time Permission Monitoring
@@ -195,10 +191,7 @@ final class PermissionManager: PermissionManagerProtocol {
     // MARK: - Audio Capture Permission (Core Audio Taps)
 
     /// Check if audio capture permission is granted (for system audio via Core Audio taps)
-    /// On macOS 26+, this uses the NSAudioCaptureUsageDescription permission
     var hasScreenRecordingPermission: Bool {
-        // For Core Audio taps, we assume permission is granted once the user completes onboarding
-        // The actual TCC prompt happens when the tap is created
         return audioCaptureGranted
     }
 
@@ -218,13 +211,13 @@ final class PermissionManager: PermissionManagerProtocol {
             return false
         }
 
-        // For Core Audio taps, the permission is checked when creating the tap
-        // We return the cached state here
+        // Safe, synchronous preflight check (no prompts). Keep optimistic cache.
+        audioCaptureGranted = CGPreflightScreenCaptureAccess() || audioCaptureGranted
         return audioCaptureGranted
     }
 
     /// Request audio capture permission
-    /// Note: For Core Audio taps, the system will prompt when the tap is first created
+    /// Uses the ScreenCapture permission prompt as a proxy for audio capture.
     func requestScreenRecordingPermission() {
         Task {
             await DiagnosticLogger.shared.log(.permission, "requestScreenRecordingPermission called")
@@ -237,11 +230,11 @@ final class PermissionManager: PermissionManagerProtocol {
             return
         }
 
-        // For Core Audio taps on macOS 26+, the permission prompt happens automatically
-        // when the tap is first created. Mark as granted to proceed with onboarding.
-        audioCaptureGranted = true
+        // Trigger the system prompt only on explicit user action.
+        let granted = CGRequestScreenCaptureAccess()
+        audioCaptureGranted = granted || audioCaptureGranted
         Task {
-            await DiagnosticLogger.shared.log(.permission, "Audio capture permission assumed granted for Core Audio taps")
+            await DiagnosticLogger.shared.log(.permission, "Screen capture request result: \(granted)")
         }
     }
 
@@ -328,8 +321,8 @@ final class PermissionManager: PermissionManagerProtocol {
         // Microphone check is always reliable
         microphoneGranted = hasMicrophonePermission
 
-        // Audio capture: once granted during onboarding, assume it stays granted
-        // The actual permission is checked when creating the Core Audio tap
+        // Audio capture: use safe preflight as a proxy and keep optimistic cache
+        audioCaptureGranted = CGPreflightScreenCaptureAccess() || audioCaptureGranted
 
         return (audioCaptureGranted, microphoneGranted)
     }
