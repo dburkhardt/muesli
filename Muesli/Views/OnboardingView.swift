@@ -178,7 +178,7 @@ struct OnboardingView: View {
                 NSApplication.shared.terminate(nil)
             }
         } message: {
-            Text("\(appName) requires Screen Recording and Microphone permissions to function. Please grant the permissions or quit the app.")
+            Text("\(appName) requires System Audio Recording and Microphone permissions to function. Please grant the permissions or quit the app.")
         }
     }
     
@@ -228,7 +228,7 @@ struct OnboardingView: View {
         .padding(.bottom, 24)
     }
     
-    // MARK: - Screen Recording Screen
+    // MARK: - System Audio Recording Screen
     
     @State private var screenRecordingRequested = false
     
@@ -236,16 +236,16 @@ struct OnboardingView: View {
         VStack(spacing: 20) {
             Spacer()
             
-            Image(systemName: "rectangle.inset.filled.and.person.filled")
+            Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 60))
                 .foregroundStyle(Color.accentColor)
             
-            Text("Screen Recording Access")
+            Text("System Audio Recording")
                 .font(.system(size: 24, weight: .bold))
             
             Text(
                 """
-                Muesli needs Screen Recording permission to capture audio from meeting apps \
+                Muesli needs System Audio Recording permission to capture audio from meeting apps \
                 like Zoom, Teams, and Google Meet.
                 """
             )
@@ -258,7 +258,7 @@ struct OnboardingView: View {
             
             if viewModel.hasScreenRecordingPermission {
                 // Permission granted
-                permissionStatusView(granted: true, label: "Screen Recording")
+                permissionStatusView(granted: true, label: "System Audio Recording")
             } else if screenRecordingRequested {
                 // Permission was requested but not granted - show recovery options
                 VStack(spacing: 12) {
@@ -279,7 +279,7 @@ struct OnboardingView: View {
                     
                     HoverableLink(title: "Check Again") {
                         Task {
-                            await DiagnosticLogger.shared.log(.onboarding, "Check Again tapped (screen recording)")
+                            await DiagnosticLogger.shared.log(.onboarding, "Check Again tapped (system audio)")
                         }
                         // Use synchronous check to avoid triggering prompts
                         viewModel.refreshPermissions()
@@ -287,10 +287,39 @@ struct OnboardingView: View {
                 }
             } else {
                 // Initial state - request permission
-                Button("Grant Screen Recording Access") {
+                Button("Grant System Audio Access") {
                     Task {
-                        await DiagnosticLogger.shared.log(.onboarding, "Grant Screen Recording Access button tapped")
+                        await DiagnosticLogger.shared.log(.onboarding, "Grant System Audio Access button tapped")
                     }
+                    // #region agent log
+                    let buttonPayload: [String: Any] = [
+                        "location": "OnboardingView.swift:GrantSystemAudioAccess",
+                        "message": "Grant System Audio Access tapped",
+                        "data": [
+                            "currentStep": currentStep.rawValue,
+                            "hasScreenRecordingPermission": viewModel.hasScreenRecordingPermission,
+                            "screenRecordingRequested": screenRecordingRequested
+                        ],
+                        "timestamp": Date().timeIntervalSince1970 * 1000,
+                        "sessionId": "debug-session",
+                        "runId": "pre",
+                        "hypothesisId": "H2"
+                    ]
+                    if let jsonData = try? JSONSerialization.data(withJSONObject: buttonPayload),
+                       let jsonStr = String(data: jsonData, encoding: .utf8) {
+                        if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                            handle.seekToEndOfFile()
+                            handle.write((jsonStr + "\n").data(using: .utf8)!)
+                            handle.closeFile()
+                        } else {
+                            try? (jsonStr + "\n").write(
+                                toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
+                                atomically: false,
+                                encoding: .utf8
+                            )
+                        }
+                    }
+                    // #endregion
                     viewModel.requestScreenRecordingPermission()
                     screenRecordingRequested = true
                     // Verify permission after request and auto-advance if granted
@@ -307,7 +336,7 @@ struct OnboardingView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
                 
-                permissionStatusView(granted: false, label: "Screen Recording")
+                permissionStatusView(granted: false, label: "System Audio Recording")
             }
             
             Spacer()
@@ -1006,6 +1035,37 @@ struct OnboardingView: View {
     /// Advance to appropriate step based on current permissions
     /// Skips past already-completed permission steps when user returns to the app
     private func advanceBasedOnPermissions() {
+        // #region agent log
+        let advancePayload: [String: Any] = [
+            "location": "OnboardingView.swift:advanceBasedOnPermissions",
+            "message": "Evaluating onboarding step advance",
+            "data": [
+                "mode": String(describing: mode),
+                "currentStep": currentStep.rawValue,
+                "hasScreenRecordingPermission": viewModel.hasScreenRecordingPermission,
+                "hasMicrophonePermission": viewModel.hasMicrophonePermission
+            ],
+            "timestamp": Date().timeIntervalSince1970 * 1000,
+            "sessionId": "debug-session",
+            "runId": "pre",
+            "hypothesisId": "H1"
+        ]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: advancePayload),
+           let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            } else {
+                try? (jsonStr + "\n").write(
+                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
+                    atomically: false,
+                    encoding: .utf8
+                )
+            }
+        }
+        // #endregion
+
         // Handle recovery mode differently
         if mode.isRecoveryMode {
             // In recovery mode, check if both permissions are now granted

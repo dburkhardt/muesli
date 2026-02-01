@@ -1,12 +1,14 @@
 import AppKit
 @preconcurrency import AVFoundation
+import CoreAudio
 import Foundation
 
 /// Manages app permissions for audio capture and microphone access
 /// Can be injected into views via @Environment for permission state observation
 ///
-/// macOS 26+ uses Core Audio taps for system audio capture, which requires
-/// the Audio Capture permission (NSAudioCaptureUsageDescription) - NOT screen recording.
+/// macOS 14.4+ uses Core Audio taps for system audio capture, which requires
+/// the Audio Capture permission (NSAudioCaptureUsageDescription) in the
+/// Screen & System Audio Recording privacy bucket.
 @Observable
 @MainActor
 final class PermissionManager: PermissionManagerProtocol {
@@ -75,9 +77,44 @@ final class PermissionManager: PermissionManagerProtocol {
         // Check initial permissions
         microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
 
-        // Use CGPreflightScreenCaptureAccess as a safe, synchronous proxy for audio capture permission.
-        // This aligns with onboarding flow rules: sync checks only, no prompts.
+        // Use CGPreflightScreenCaptureAccess as a safe, synchronous proxy for the
+        // Screen & System Audio Recording privacy bucket. This aligns with
+        // onboarding flow rules: sync checks only, no prompts.
         audioCaptureGranted = CGPreflightScreenCaptureAccess()
+
+        // #region agent log
+        let audioCaptureUsageDescription = Bundle.main.object(
+            forInfoDictionaryKey: "NSAudioCaptureUsageDescription"
+        ) as? String
+        let logPayload: [String: Any] = [
+            "location": "PermissionManager.swift:init",
+            "message": "Initial audio capture permission snapshot",
+            "data": [
+                "bundleId": Bundle.main.bundleIdentifier ?? "unknown",
+                "hasAudioCaptureUsageDescription": audioCaptureUsageDescription != nil,
+                "audioCaptureUsageDescription": audioCaptureUsageDescription ?? "MISSING",
+                "preflightScreenCapture": audioCaptureGranted
+            ],
+            "timestamp": Date().timeIntervalSince1970 * 1000,
+            "sessionId": "debug-session",
+            "runId": "pre",
+            "hypothesisId": "H1"
+        ]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload),
+           let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            } else {
+                try? (jsonStr + "\n").write(
+                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
+                    atomically: false,
+                    encoding: .utf8
+                )
+            }
+        }
+        // #endregion
 
         // Observe app becoming active (user returns from System Settings)
         notificationCenterObservers.append(
@@ -195,11 +232,11 @@ final class PermissionManager: PermissionManagerProtocol {
         return audioCaptureGranted
     }
 
-    /// User-facing explanation for audio capture permission
+    /// User-facing explanation for system audio capture permission
     static let screenRecordingExplanation = """
-        Muesli needs Audio Capture access to record system audio from meeting apps.
+        Muesli needs System Audio Recording access to capture audio from meeting apps.
 
-        This permission allows capturing audio only - no screen content is recorded.
+        This permission allows capturing system audio only - no screen content is recorded.
         """
 
     /// Check audio capture permission asynchronously
@@ -216,12 +253,47 @@ final class PermissionManager: PermissionManagerProtocol {
         return audioCaptureGranted
     }
 
-    /// Request audio capture permission
-    /// Uses the ScreenCapture permission prompt as a proxy for audio capture.
+    /// Request system audio capture permission
+    /// Triggers the System Audio Recording permission prompt by attempting to create a Core Audio tap.
+    /// Note: There is NO public API to request this permission directly - it's triggered by attempting
+    /// to use the audio capture API (AudioHardwareCreateProcessTap).
     func requestScreenRecordingPermission() {
         Task {
-            await DiagnosticLogger.shared.log(.permission, "requestScreenRecordingPermission called")
+            await DiagnosticLogger.shared.log(.permission, "requestSystemAudioPermission called - triggering via Core Audio tap probe")
         }
+
+        // #region agent log
+        let requestPayload: [String: Any] = [
+            "location": "PermissionManager.swift:requestScreenRecordingPermission",
+            "message": "Request system audio permission invoked",
+            "data": [
+                "isRunningTests": Self.isRunningTests,
+                "preflightScreenCapture": CGPreflightScreenCaptureAccess(),
+                "audioCaptureGranted": audioCaptureGranted,
+                "hasAudioCaptureUsageDescription": Bundle.main.object(
+                    forInfoDictionaryKey: "NSAudioCaptureUsageDescription"
+                ) != nil
+            ],
+            "timestamp": Date().timeIntervalSince1970 * 1000,
+            "sessionId": "debug-session",
+            "runId": "pre",
+            "hypothesisId": "H2"
+        ]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: requestPayload),
+           let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            } else {
+                try? (jsonStr + "\n").write(
+                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
+                    atomically: false,
+                    encoding: .utf8
+                )
+            }
+        }
+        // #endregion
 
         guard !Self.isRunningTests else {
             Task {
@@ -230,18 +302,86 @@ final class PermissionManager: PermissionManagerProtocol {
             return
         }
 
-        // Trigger the system prompt only on explicit user action.
-        let granted = CGRequestScreenCaptureAccess()
-        audioCaptureGranted = granted || audioCaptureGranted
+        // Trigger System Audio Recording permission by attempting to create a Core Audio tap.
+        // This is the ONLY way to trigger this permission prompt - there is no public API.
+        // The tap will be immediately destroyed after triggering the prompt.
         Task {
-            await DiagnosticLogger.shared.log(.permission, "Screen capture request result: \(granted)")
+            let result = await triggerSystemAudioPermissionPrompt()
+            await MainActor.run {
+                audioCaptureGranted = result || audioCaptureGranted
+            }
+            await DiagnosticLogger.shared.log(.permission, "System audio permission probe result: \(result)")
         }
     }
+    
+    /// Attempts to create a minimal Core Audio tap to trigger the System Audio Recording permission prompt.
+    /// This is the only way to programmatically request this permission on macOS 14.4+.
+    /// Returns true if permission was granted, false otherwise.
+    private func triggerSystemAudioPermissionPrompt() async -> Bool {
+        // Import Core Audio types
+        typealias AudioObjectID = UInt32
+        let kAudioObjectUnknown: AudioObjectID = 0
+        
+        // Try to create a tap - this will trigger the permission prompt if not yet granted
+        let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
+        tapDescription.name = "MuesliPermissionProbe"
+        tapDescription.isPrivate = true
+        
+        var tapObjectID: AudioObjectID = kAudioObjectUnknown
+        let status = AudioHardwareCreateProcessTap(tapDescription, &tapObjectID)
+        
+        // Clean up immediately - we just wanted to trigger the prompt
+        if tapObjectID != kAudioObjectUnknown {
+            AudioHardwareDestroyProcessTap(tapObjectID)
+        }
+        
+        // noErr (0) means success - permission was granted
+        // -54 (errSecNotAuthorized) or other errors mean permission denied/pending
+        let granted = (status == noErr)
 
-    /// Open System Settings to the Screen Recording pane
-    /// Note: For macOS 26+ with Core Audio taps, this may need to point to a different pane
+        // #region agent log
+        let probePayload: [String: Any] = [
+            "location": "PermissionManager.swift:triggerSystemAudioPermissionPrompt",
+            "message": "Core Audio tap probe result",
+            "data": [
+                "status": status,
+                "tapObjectID": tapObjectID,
+                "granted": granted
+            ],
+            "timestamp": Date().timeIntervalSince1970 * 1000,
+            "sessionId": "debug-session",
+            "runId": "pre",
+            "hypothesisId": "H3"
+        ]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: probePayload),
+           let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            } else {
+                try? (jsonStr + "\n").write(
+                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
+                    atomically: false,
+                    encoding: .utf8
+                )
+            }
+        }
+        // #endregion
+        
+        Task {
+            await DiagnosticLogger.shared.log(.permission, 
+                "Core Audio tap probe: status=\(status), granted=\(granted)")
+        }
+        
+        return granted
+    }
+
+    /// Open System Settings to the Screen & System Audio Recording pane
+    /// On macOS 14.4+ with Core Audio taps, this is the correct privacy pane for system audio capture.
     func openScreenRecordingSettings() {
-        // Try the audio capture settings first, fall back to screen recording
+        // On macOS 14.4+, system audio recording permission is in the same pane as screen recording
+        // The pane is called "Screen & System Audio Recording" in System Settings
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
         NSWorkspace.shared.open(url)
     }
@@ -319,10 +459,45 @@ final class PermissionManager: PermissionManagerProtocol {
 
     func refreshPermissions() -> (screenRecording: Bool, microphone: Bool) {
         // Microphone check is always reliable
+        let oldAudioCapture = audioCaptureGranted
+        let oldMicrophone = microphoneGranted
         microphoneGranted = hasMicrophonePermission
 
         // Audio capture: use safe preflight as a proxy and keep optimistic cache
-        audioCaptureGranted = CGPreflightScreenCaptureAccess() || audioCaptureGranted
+        let preflight = CGPreflightScreenCaptureAccess()
+        audioCaptureGranted = preflight || audioCaptureGranted
+
+        // #region agent log
+        let refreshPayload: [String: Any] = [
+            "location": "PermissionManager.swift:refreshPermissions",
+            "message": "Permission refresh result",
+            "data": [
+                "preflightScreenCapture": preflight,
+                "oldAudioCapture": oldAudioCapture,
+                "newAudioCapture": audioCaptureGranted,
+                "oldMicrophone": oldMicrophone,
+                "newMicrophone": microphoneGranted
+            ],
+            "timestamp": Date().timeIntervalSince1970 * 1000,
+            "sessionId": "debug-session",
+            "runId": "pre",
+            "hypothesisId": "H1"
+        ]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: refreshPayload),
+           let jsonStr = String(data: jsonData, encoding: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
+                handle.seekToEndOfFile()
+                handle.write((jsonStr + "\n").data(using: .utf8)!)
+                handle.closeFile()
+            } else {
+                try? (jsonStr + "\n").write(
+                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
+                    atomically: false,
+                    encoding: .utf8
+                )
+            }
+        }
+        // #endregion
 
         return (audioCaptureGranted, microphoneGranted)
     }

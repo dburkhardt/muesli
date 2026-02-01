@@ -921,10 +921,9 @@
 					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers",
 					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers/webrtc-audio-processing-1",
 				);
+				INFOPLIST_FILE = Muesli/Info.plist;
 				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Muesli needs Audio Capture access to record system audio from meeting apps.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -969,10 +968,9 @@
 					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers",
 					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers/webrtc-audio-processing-1",
 				);
+				INFOPLIST_FILE = Muesli/Info.plist;
 				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSAudioCaptureUsageDescription = "Muesli needs Audio Capture access to record system audio from meeting apps.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Muesli needs Microphone access to capture your voice during meetings.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
