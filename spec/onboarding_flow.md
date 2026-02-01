@@ -385,11 +385,10 @@ When the app becomes active and an awaiting flag is set, we use the appropriate 
 When the user clicks "Grant Permission", we verify the permission immediately:
 
 ```swift
-Button("Grant Screen Recording Access") {
-    viewModel.requestScreenRecordingPermission()
+Button("Grant System Audio Access") {
     screenRecordingRequested = true
     Task {
-        let granted = await viewModel.verifyScreenRecordingAfterRequest()
+        let granted = await viewModel.requestScreenRecordingPermission()
         if granted {
             withAnimation { setStep(.microphone) }
         }
@@ -398,25 +397,13 @@ Button("Grant Screen Recording Access") {
 }
 ```
 
-### Optimistic OR Pattern for Sync Checks
+### System Audio Permission Caching
 
-The sync `refreshPermissions()` uses optimistic OR for screen recording:
-
-```swift
-func refreshPermissions() -> (screenRecording: Bool, microphone: Bool) {
-    // CGPreflight can detect newly granted permission, but is unreliable
-    // with ad-hoc signing. Once cache is true, keep it true.
-    let preflightResult = CGPreflightScreenCaptureAccess()
-    screenRecordingGranted = preflightResult || screenRecordingGranted
-    
-    // Microphone check is always reliable
-    microphoneGranted = hasMicrophonePermission
-    
-    return (screenRecordingGranted, microphoneGranted)
-}
-```
-
-This allows detection of newly-granted permissions while preserving the cached true value.
+`refreshPermissions()` should not use `CGPreflightScreenCaptureAccess()` to set
+System Audio Recording because that API reflects the Screen Recording bucket and
+can return true even when System Audio Recording is not granted. We only update
+the system-audio permission flag from explicit Core Audio tap probes and cache
+the result.
 
 ## TCC Debugging
 

@@ -2522,7 +2522,7 @@ final class MuesliViewModelTests: XCTestCase {
         let viewModel = MuesliViewModel(skipInitialLoad: true)
         
         // Step 1-2: Request permission
-        viewModel.requestScreenRecordingPermission()
+        _ = await viewModel.requestScreenRecordingPermission()
         
         // Step 3: Verify immediately
         let granted = await viewModel.verifyScreenRecordingAfterRequest()
@@ -2573,7 +2573,7 @@ final class MuesliViewModelTests: XCTestCase {
         let viewModel = MuesliViewModel(skipInitialLoad: true)
         
         // Request and verify
-        viewModel.requestScreenRecordingPermission()
+        _ = await viewModel.requestScreenRecordingPermission()
         let granted = await viewModel.verifyScreenRecordingAfterRequest()
         
         // Even after denial, calling verify again should NOT show dialog

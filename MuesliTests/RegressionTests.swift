@@ -953,7 +953,7 @@ final class RegressionTests: XCTestCase {
         let mockPermissionManager = MockPermissionManager()
         
         // Simulate: permission request followed by verify
-        mockPermissionManager.requestScreenRecordingPermission()
+        _ = await mockPermissionManager.requestScreenRecordingPermission()
         mockPermissionManager.verifyScreenRecordingResult = true
         
         let granted = await mockPermissionManager.verifyScreenRecordingAfterRequest()

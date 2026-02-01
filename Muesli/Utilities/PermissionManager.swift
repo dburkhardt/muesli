@@ -59,6 +59,9 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Polling timer for permission checks (fallback)
     private var pollingTimer: Timer?
 
+    /// UserDefaults key for persisting system audio permission probe results
+    private let systemAudioPermissionDefaultsKey = "systemAudioPermissionGranted"
+
     // MARK: - Initialization
 
     init() {
@@ -77,10 +80,11 @@ final class PermissionManager: PermissionManagerProtocol {
         // Check initial permissions
         microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
 
-        // Use CGPreflightScreenCaptureAccess as a safe, synchronous proxy for the
-        // Screen & System Audio Recording privacy bucket. This aligns with
-        // onboarding flow rules: sync checks only, no prompts.
-        audioCaptureGranted = CGPreflightScreenCaptureAccess()
+        // Use persisted system audio permission result from our Core Audio tap probe.
+        // CGPreflightScreenCaptureAccess reflects the Screen Recording bucket and can be true
+        // even when System Audio Recording is not granted.
+        audioCaptureGranted = UserDefaults.standard.bool(forKey: systemAudioPermissionDefaultsKey)
+        let preflightScreenCapture = CGPreflightScreenCaptureAccess()
 
         // #region agent log
         let audioCaptureUsageDescription = Bundle.main.object(
@@ -93,7 +97,8 @@ final class PermissionManager: PermissionManagerProtocol {
                 "bundleId": Bundle.main.bundleIdentifier ?? "unknown",
                 "hasAudioCaptureUsageDescription": audioCaptureUsageDescription != nil,
                 "audioCaptureUsageDescription": audioCaptureUsageDescription ?? "MISSING",
-                "preflightScreenCapture": audioCaptureGranted
+                "preflightScreenCapture": preflightScreenCapture,
+                "cachedSystemAudioGranted": audioCaptureGranted
             ],
             "timestamp": Date().timeIntervalSince1970 * 1000,
             "sessionId": "debug-session",
@@ -179,8 +184,7 @@ final class PermissionManager: PermissionManagerProtocol {
 
     /// Verify screen recording permission after user clicks "Grant Permission"
     func verifyScreenRecordingAfterRequest() async -> Bool {
-        // Re-check using the safe preflight API after the system dialog
-        audioCaptureGranted = CGPreflightScreenCaptureAccess() || audioCaptureGranted
+        // Re-check using cached tap-probe result (preflight can be true for screen recording only)
         return audioCaptureGranted
     }
 
@@ -248,8 +252,7 @@ final class PermissionManager: PermissionManagerProtocol {
             return false
         }
 
-        // Safe, synchronous preflight check (no prompts). Keep optimistic cache.
-        audioCaptureGranted = CGPreflightScreenCaptureAccess() || audioCaptureGranted
+        // Use cached system audio permission (set by tap probe) to avoid false positives.
         return audioCaptureGranted
     }
 
@@ -257,7 +260,7 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Triggers the System Audio Recording permission prompt by attempting to create a Core Audio tap.
     /// Note: There is NO public API to request this permission directly - it's triggered by attempting
     /// to use the audio capture API (AudioHardwareCreateProcessTap).
-    func requestScreenRecordingPermission() {
+    func requestScreenRecordingPermission() async -> Bool {
         Task {
             await DiagnosticLogger.shared.log(.permission, "requestSystemAudioPermission called - triggering via Core Audio tap probe")
         }
@@ -299,19 +302,21 @@ final class PermissionManager: PermissionManagerProtocol {
             Task {
                 await DiagnosticLogger.shared.log(.permission, "EARLY RETURN: isRunningTests=true")
             }
-            return
+            return false
         }
 
         // Trigger System Audio Recording permission by attempting to create a Core Audio tap.
         // This is the ONLY way to trigger this permission prompt - there is no public API.
         // The tap will be immediately destroyed after triggering the prompt.
-        Task {
-            let result = await triggerSystemAudioPermissionPrompt()
-            await MainActor.run {
-                audioCaptureGranted = result || audioCaptureGranted
+        let result = await triggerSystemAudioPermissionPrompt()
+        await MainActor.run {
+            audioCaptureGranted = result || audioCaptureGranted
+            if result {
+                UserDefaults.standard.set(true, forKey: systemAudioPermissionDefaultsKey)
             }
-            await DiagnosticLogger.shared.log(.permission, "System audio permission probe result: \(result)")
         }
+        await DiagnosticLogger.shared.log(.permission, "System audio permission probe result: \(result)")
+        return result
     }
     
     /// Attempts to create a minimal Core Audio tap to trigger the System Audio Recording permission prompt.
@@ -463,9 +468,8 @@ final class PermissionManager: PermissionManagerProtocol {
         let oldMicrophone = microphoneGranted
         microphoneGranted = hasMicrophonePermission
 
-        // Audio capture: use safe preflight as a proxy and keep optimistic cache
+        // Audio capture: keep cached result from tap probe to avoid screen-recording false positives
         let preflight = CGPreflightScreenCaptureAccess()
-        audioCaptureGranted = preflight || audioCaptureGranted
 
         // #region agent log
         let refreshPayload: [String: Any] = [

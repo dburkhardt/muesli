@@ -412,6 +412,12 @@ final class MuesliViewModel {
     func toggleMicrophoneMute() {
         recordingController.toggleMicrophoneMute()
     }
+
+    /// Select microphone device and apply to active recording if needed
+    func selectMicrophoneDevice(_ deviceID: String?) {
+        microphoneManager.setSelectedDeviceID(deviceID)
+        recordingController.handleMicrophoneDeviceChange(deviceID)
+    }
     
     // MARK: - Initialization
     
@@ -640,8 +646,8 @@ final class MuesliViewModel {
         hasMicrophonePermission = permissionManager.hasMicrophonePermission
     }
     
-    func requestScreenRecordingPermission() {
-        permissionManager.requestScreenRecordingPermission()
+    func requestScreenRecordingPermission() async -> Bool {
+        await permissionManager.requestScreenRecordingPermission()
     }
     
     func openScreenRecordingSettings() {

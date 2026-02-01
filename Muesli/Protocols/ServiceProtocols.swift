@@ -74,7 +74,7 @@ protocol PermissionManagerProtocol {
     var hasAllPermissions: Bool { get }
     
     func checkScreenRecordingPermissionAsync() async -> Bool
-    func requestScreenRecordingPermission()
+    func requestScreenRecordingPermission() async -> Bool
     func openScreenRecordingSettings()
     func requestMicrophonePermission() async -> Bool
     func openMicrophoneSettings()

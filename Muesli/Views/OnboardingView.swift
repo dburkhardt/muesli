@@ -320,13 +320,11 @@ struct OnboardingView: View {
                         }
                     }
                     // #endregion
-                    viewModel.requestScreenRecordingPermission()
                     screenRecordingRequested = true
-                    // Verify permission after request and auto-advance if granted
                     Task {
-                        await DiagnosticLogger.shared.log(.onboarding, "Calling verifyScreenRecordingAfterRequest()")
-                        let granted = await viewModel.verifyScreenRecordingAfterRequest()
-                        await DiagnosticLogger.shared.log(.onboarding, "verifyScreenRecordingAfterRequest() returned: \(granted)")
+                        await DiagnosticLogger.shared.log(.onboarding, "Calling requestScreenRecordingPermission()")
+                        let granted = await viewModel.requestScreenRecordingPermission()
+                        await DiagnosticLogger.shared.log(.onboarding, "requestScreenRecordingPermission() returned: \(granted)")
                         if granted {
                             withAnimation { setStep(.microphone) }
                         }
