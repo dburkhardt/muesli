@@ -332,8 +332,9 @@ final class PermissionManager: PermissionManagerProtocol {
         // Trigger System Audio Recording permission by attempting to create a Core Audio tap.
         // This is the ONLY way to trigger this permission prompt - there is no public API.
         // The tap will be immediately destroyed after triggering the prompt.
-        let probeTask = Task { [weak self] () -> Bool in
+        let probeTask = Task { @MainActor [weak self] () -> Bool in
             guard let self = self else { return false }
+            NSApp.activate(ignoringOtherApps: true)
             let result = await self.triggerSystemAudioPermissionPrompt()
             await MainActor.run {
                 self.audioCaptureGranted = result || self.audioCaptureGranted

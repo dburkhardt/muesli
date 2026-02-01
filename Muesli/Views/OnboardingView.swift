@@ -309,8 +309,6 @@ struct OnboardingView: View {
                     Task {
                         await DiagnosticLogger.shared.log(.onboarding, "Grant System Audio Access button tapped")
                     }
-                    viewModel.markAwaitingScreenRecordingFromSettings()
-                    viewModel.openScreenRecordingSettings()
                     // #region agent log
                     let buttonPayload: [String: Any] = [
                         "location": "OnboardingView.swift:GrantSystemAudioAccess",
