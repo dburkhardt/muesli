@@ -334,6 +334,9 @@ final class PermissionManager: PermissionManagerProtocol {
         // The tap will be immediately destroyed after triggering the prompt.
         let probeTask = Task { @MainActor [weak self] () -> Bool in
             guard let self = self else { return false }
+            let previousPolicy = NSApp.activationPolicy()
+            _ = NSApp.setActivationPolicy(.regular)
+            defer { _ = NSApp.setActivationPolicy(previousPolicy) }
             NSApp.activate(ignoringOtherApps: true)
             let result = await self.triggerSystemAudioPermissionPrompt()
             await MainActor.run {
@@ -409,8 +412,11 @@ final class PermissionManager: PermissionManagerProtocol {
             "data": [
                 "deviceID": deviceID,
                 "createStatus": createStatus,
+                "createStatusDesc": describeOSStatus(createStatus),
                 "ioProcStatus": ioProcStatus,
+                "ioProcStatusDesc": describeOSStatus(ioProcStatus),
                 "startStatus": startStatus,
+                "startStatusDesc": describeOSStatus(startStatus),
                 "granted": granted
             ],
             "timestamp": Date().timeIntervalSince1970 * 1000,
@@ -435,11 +441,32 @@ final class PermissionManager: PermissionManagerProtocol {
         // #endregion
         
         Task {
-            await DiagnosticLogger.shared.log(.permission,
-                "Core Audio tap probe: createStatus=\(createStatus), ioProcStatus=\(ioProcStatus), startStatus=\(startStatus), granted=\(granted)")
+            await DiagnosticLogger.shared.log(
+                .permission,
+                "Core Audio tap probe: createStatus=\(describeOSStatus(createStatus)), ioProcStatus=\(describeOSStatus(ioProcStatus)), startStatus=\(describeOSStatus(startStatus)), granted=\(granted)"
+            )
         }
         
         return granted
+    }
+
+    private func describeOSStatus(_ status: OSStatus) -> String {
+        if status == noErr {
+            return "noErr(0)"
+        }
+        let n = UInt32(bitPattern: status)
+        func fourCCChar(_ value: UInt32) -> Character {
+            Character(UnicodeScalar(value) ?? UnicodeScalar(32))
+        }
+        let chars = [
+            fourCCChar((n >> 24) & 0xFF),
+            fourCCChar((n >> 16) & 0xFF),
+            fourCCChar((n >> 8) & 0xFF),
+            fourCCChar(n & 0xFF)
+        ]
+        let fourCC = String(chars)
+        let err = NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: nil)
+        return "\(status) '\(fourCC)' \(err.localizedDescription)"
     }
 
     /// Open System Settings to the Screen & System Audio Recording pane

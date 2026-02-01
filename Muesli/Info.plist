@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>LSUIElement</key>
-	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Muesli needs System Audio Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.</string>
 	<key>NSMicrophoneUsageDescription</key>

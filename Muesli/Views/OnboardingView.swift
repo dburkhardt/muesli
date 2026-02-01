@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import SwiftUI
 
@@ -306,8 +307,19 @@ struct OnboardingView: View {
             } else {
                 // Initial state - request permission
                 Button("Grant System Audio Access") {
-                    Task {
+                    Task { @MainActor in
                         await DiagnosticLogger.shared.log(.onboarding, "Grant System Audio Access button tapped")
+                        AppDelegate.shared?.bringOnboardingWindowToFront()
+                        NSApp.activate(ignoringOtherApps: true)
+                        if let keyWindow = NSApp.keyWindow {
+                            keyWindow.makeKeyAndOrderFront(nil)
+                            keyWindow.orderFrontRegardless()
+                        }
+                        let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+                        await DiagnosticLogger.shared.log(
+                            .onboarding,
+                            "Pre-probe focus: isActive=\(NSApp.isActive), policy=\(NSApp.activationPolicy()), hasKeyWindow=\(NSApp.keyWindow != nil), frontmost=\(frontmostBundleID)"
+                        )
                     }
                     // #region agent log
                     let buttonPayload: [String: Any] = [

@@ -87,12 +87,10 @@ final class AggregateDeviceManager {
         logger.info("Created process tap: \(tapID)")
 
         // Step 2: Use tap UUID as sub-tap UID (per AudioCap example)
-        let tapUID: String
-        if let tapUUID = tapUUID {
-            tapUID = tapUUID.uuidString
-        } else {
-            tapUID = try getTapUID(tapID)
+        guard let tapUUID = tapUUID else {
+            throw AggregateDeviceError.invalidDeviceID
         }
+        let tapUID = tapUUID.uuidString
 
         print("[TAP DEBUG] Tap UID (sub-tap): \(tapUID)")
         logger.info("Tap UID (sub-tap): \(tapUID)")
