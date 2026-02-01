@@ -309,6 +309,8 @@ struct OnboardingView: View {
                     Task {
                         await DiagnosticLogger.shared.log(.onboarding, "Grant System Audio Access button tapped")
                     }
+                    viewModel.markAwaitingScreenRecordingFromSettings()
+                    viewModel.openScreenRecordingSettings()
                     // #region agent log
                     let buttonPayload: [String: Any] = [
                         "location": "OnboardingView.swift:GrantSystemAudioAccess",
@@ -347,11 +349,9 @@ struct OnboardingView: View {
                             didConfirmSystemAudioThisSession = true
                             withAnimation { setStep(.microphone) }
                         } else {
-                            viewModel.markAwaitingScreenRecordingFromSettings()
-                            viewModel.openScreenRecordingSettings()
                             await DiagnosticLogger.shared.log(
                                 .onboarding,
-                                "System audio permission not granted - opening System Settings"
+                                "System audio permission not granted - keep waiting"
                             )
                         }
                         AppDelegate.shared?.bringOnboardingWindowToFront()
