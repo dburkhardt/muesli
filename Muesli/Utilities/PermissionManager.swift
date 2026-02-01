@@ -323,34 +323,61 @@ final class PermissionManager: PermissionManagerProtocol {
     /// This is the only way to programmatically request this permission on macOS 14.4+.
     /// Returns true if permission was granted, false otherwise.
     private func triggerSystemAudioPermissionPrompt() async -> Bool {
-        // Import Core Audio types
-        typealias AudioObjectID = UInt32
-        let kAudioObjectUnknown: AudioObjectID = 0
+        let manager = AggregateDeviceManager()
+        let excludedPIDs = [CoreAudioHelpers.getCurrentProcessID()]
+        var deviceID: AudioDeviceID = kAudioObjectUnknown
+        var ioProcID: AudioDeviceIOProcID?
+        var createStatus: OSStatus = noErr
+        var ioProcStatus: OSStatus = noErr
+        var startStatus: OSStatus = noErr
+        var granted = false
         
-        // Try to create a tap - this will trigger the permission prompt if not yet granted
-        let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
-        tapDescription.name = "MuesliPermissionProbe"
-        tapDescription.isPrivate = true
-        
-        var tapObjectID: AudioObjectID = kAudioObjectUnknown
-        let status = AudioHardwareCreateProcessTap(tapDescription, &tapObjectID)
-        
-        // Clean up immediately - we just wanted to trigger the prompt
-        if tapObjectID != kAudioObjectUnknown {
-            AudioHardwareDestroyProcessTap(tapObjectID)
+        do {
+            deviceID = try manager.createTapOnlyDevice(excludedProcessIDs: excludedPIDs)
+        } catch let error as AggregateDeviceError {
+            switch error {
+            case .creationFailed(let status), .formatQueryFailed(let status):
+                createStatus = status
+            default:
+                createStatus = -1
+            }
+        } catch {
+            createStatus = -1
         }
         
-        // noErr (0) means success - permission was granted
-        // -54 (errSecNotAuthorized) or other errors mean permission denied/pending
-        let granted = (status == noErr)
-
+        if deviceID != kAudioObjectUnknown {
+            ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
+                &ioProcID,
+                deviceID,
+                DispatchQueue.global(qos: .userInitiated)
+            ) { _, _, _, _, _ in
+                // no-op: we only need to start the device to trigger permission prompt
+            }
+            
+            if ioProcStatus == noErr, let procID = ioProcID {
+                startStatus = AudioDeviceStart(deviceID, procID)
+                granted = (startStatus == noErr)
+                
+                if startStatus == noErr {
+                    AudioDeviceStop(deviceID, procID)
+                }
+                
+                AudioDeviceDestroyIOProcID(deviceID, procID)
+                ioProcID = nil
+            }
+            
+            manager.destroyDevice()
+        }
+        
         // #region agent log
         let probePayload: [String: Any] = [
             "location": "PermissionManager.swift:triggerSystemAudioPermissionPrompt",
             "message": "Core Audio tap probe result",
             "data": [
-                "status": status,
-                "tapObjectID": tapObjectID,
+                "deviceID": deviceID,
+                "createStatus": createStatus,
+                "ioProcStatus": ioProcStatus,
+                "startStatus": startStatus,
                 "granted": granted
             ],
             "timestamp": Date().timeIntervalSince1970 * 1000,
@@ -375,8 +402,8 @@ final class PermissionManager: PermissionManagerProtocol {
         // #endregion
         
         Task {
-            await DiagnosticLogger.shared.log(.permission, 
-                "Core Audio tap probe: status=\(status), granted=\(granted)")
+            await DiagnosticLogger.shared.log(.permission,
+                "Core Audio tap probe: createStatus=\(createStatus), ioProcStatus=\(ioProcStatus), startStatus=\(startStatus), granted=\(granted)")
         }
         
         return granted
