@@ -89,7 +89,6 @@
 		C5EC4FA3BB35A1EEB4E7C343 /* AudioWorker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C604C85A259F08FD026A962 /* AudioWorker.swift */; };
 		'CT00001241D1A1D00000013' = {isa = PBXBuildFile; fileRef = CT00002241D1A1D00000013; };
 		D1000001241D1A1D00000060 /* ServiceProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1000002241D1A1D00000060 /* ServiceProtocols.swift */; };
-		DC0A41E0BDF541732A760CC4 /* AudioTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DB4B0E9D698C8BDF20079C /* AudioTelemetry.swift */; };
 		'DI00001241D1A1D00000101' = {isa = PBXBuildFile; fileRef = DI00002241D1A1D00000101; };
 		'DIV0001241D1A1D00000104' = {isa = PBXBuildFile; fileRef = DIV0002241D1A1D00000104; };
 		'DL00001241D1A1D00000100' = {isa = PBXBuildFile; fileRef = DL00002241D1A1D00000100; };
@@ -134,7 +133,6 @@
 		3BB14EFAA1A14BA98612D5ACA /* TimeFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeFormatting.swift; sourceTree = "<group>"; };
 		4C604C85A259F08FD026A962 /* AudioWorker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AudioWorker.swift; path = Muesli/Services/AudioWorker.swift; sourceTree = SOURCE_ROOT; };
 		5F3647429E8ADAF6EDE26D55 /* AudioCaptureServiceProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AudioCaptureServiceProtocol.swift; path = Muesli/Services/AudioCaptureServiceProtocol.swift; sourceTree = SOURCE_ROOT; };
-		66DB4B0E9D698C8BDF20079C /* AudioTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AudioTelemetry.swift; path = Muesli/Services/AudioTelemetry.swift; sourceTree = SOURCE_ROOT; };
 		75384C31AF31CEE654005C14 /* AECProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AECProcessor.swift; path = Muesli/Services/AECProcessor.swift; sourceTree = SOURCE_ROOT; };
 		7C684C099A3E3DD7DDAE1D20 /* MicCaptureRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MicCaptureRing.swift; path = Muesli/Services/MicCaptureRing.swift; sourceTree = SOURCE_ROOT; };
 		9262459C9FA5BB84F4D27851 /* AggregateDeviceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AggregateDeviceManager.swift; path = Muesli/Services/AggregateDeviceManager.swift; sourceTree = SOURCE_ROOT; };
@@ -269,7 +267,6 @@
 				9262459C9FA5BB84F4D27851 /* AggregateDeviceManager.swift */,
 				5F3647429E8ADAF6EDE26D55 /* AudioCaptureServiceProtocol.swift */,
 				DC8648E89347076AAD9EAF71 /* AudioSynchronizer.swift */,
-				66DB4B0E9D698C8BDF20079C /* AudioTelemetry.swift */,
 				4C604C85A259F08FD026A962 /* AudioWorker.swift */,
 				28DA4304880F1A3484A2CDCE /* CoarseDelayController.swift */,
 				359642E29E90069DBD07BABD /* CoreAudioTapManager.swift */,
@@ -727,7 +724,6 @@
 				105446ADA29406DD35C4CF80 /* AggregateDeviceManager.swift in Sources */,
 				8E8C4EC0A6D6D47D40C4EA1C /* AudioCaptureServiceProtocol.swift in Sources */,
 				9272452F9B67DC43D2CC8719 /* AudioSynchronizer.swift in Sources */,
-				DC0A41E0BDF541732A760CC4 /* AudioTelemetry.swift in Sources */,
 				C5EC4FA3BB35A1EEB4E7C343 /* AudioWorker.swift in Sources */,
 				316F436F929B6FDA7801735D /* CoarseDelayController.swift in Sources */,
 				16DE4609821FCFFEA6A6C9F7 /* CoreAudioTapManager.swift in Sources */,

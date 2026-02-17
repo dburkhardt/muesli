@@ -226,51 +226,6 @@ final class CoreAudioTapTests: XCTestCase {
         XCTAssertEqual(output.count, 3)
     }
     
-    // MARK: - FormatConversion Tests
-    
-    func testFormatConversionStereoToMono() {
-        // Stereo: L R L R L R
-        var input: [Float] = [1.0, 0.0, 1.0, 0.0, 1.0, 0.0]
-        var output = [Float](repeating: 0, count: 3)
-        
-        let count = input.withUnsafeBufferPointer { inPtr in
-            output.withUnsafeMutableBufferPointer { outPtr in
-                FormatConversion.stereoToMono(
-                    input: inPtr.baseAddress!,
-                    inputCount: 6,
-                    output: outPtr.baseAddress!,
-                    outputCount: 3
-                )
-            }
-        }
-        
-        XCTAssertEqual(count, 3)
-        // Average of (1.0, 0.0) = 0.5
-        XCTAssertEqual(output[0], 0.5)
-        XCTAssertEqual(output[1], 0.5)
-        XCTAssertEqual(output[2], 0.5)
-    }
-    
-    func testFormatConversionInt16ToFloat32() {
-        var input: [Int16] = [0, 16384, -16384, 32767]
-        var output = [Float](repeating: 0, count: 4)
-        
-        input.withUnsafeBufferPointer { inPtr in
-            output.withUnsafeMutableBufferPointer { outPtr in
-                _ = FormatConversion.int16ToFloat32(
-                    input: inPtr.baseAddress!,
-                    inputCount: 4,
-                    output: outPtr.baseAddress!
-                )
-            }
-        }
-        
-        XCTAssertEqual(output[0], 0, accuracy: 0.001)
-        XCTAssertEqual(output[1], 0.5, accuracy: 0.001)
-        XCTAssertEqual(output[2], -0.5, accuracy: 0.001)
-        XCTAssertEqual(output[3], 1.0, accuracy: 0.001)
-    }
-    
     // MARK: - AudioSynchronizer Tests
     
     func testAudioSynchronizerInitialState() {
