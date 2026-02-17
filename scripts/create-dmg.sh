@@ -83,16 +83,30 @@ rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 mkdir -p "${TEMP_DMG_DIR}"
 
+# CI detection - use explicit flag to avoid false positives
+IS_CI_BUILD=false
+if [ "${MUESLI_CI_BUILD:-}" = "1" ]; then
+    IS_CI_BUILD=true
+fi
+
 # Build the app in Release configuration
 log_info "Building ${APP_NAME} in Release configuration..."
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 BUILD_LOG="${PROJECT_ROOT}/build-release-${TIMESTAMP}.txt"
+
+# In CI mode, disable xcodebuild signing (we sign manually with Developer ID later)
+SIGNING_FLAGS=""
+if [ "$IS_CI_BUILD" = true ]; then
+    SIGNING_FLAGS="CODE_SIGN_IDENTITY= CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
+    log_info "xcodebuild signing disabled for CI build"
+fi
 
 if ! xcodebuild \
     -project "${PROJECT}" \
     -scheme "${SCHEME}" \
     -configuration "${CONFIGURATION}" \
     -derivedDataPath "${BUILD_DIR}/DerivedData" \
+    $SIGNING_FLAGS \
     clean build 2>&1 | tee "${BUILD_LOG}"; then
     log_error "Build failed! Check ${BUILD_LOG} for details."
     exit 1
