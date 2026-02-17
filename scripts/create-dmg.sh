@@ -102,7 +102,6 @@ if [ "$IS_CI_BUILD" = true ]; then
 fi
 
 # Check if WebRTC framework is available (not checked into git, optional dependency)
-WEBRTC_FLAGS=()
 WEBRTC_FRAMEWORK_PATH="${PROJECT_ROOT}/Muesli/Frameworks/webrtc_audio_processing.xcframework"
 if [ ! -d "${WEBRTC_FRAMEWORK_PATH}" ]; then
     log_warning "WebRTC framework not found at ${WEBRTC_FRAMEWORK_PATH}"
@@ -121,7 +120,6 @@ if [ ! -d "${WEBRTC_FRAMEWORK_PATH}" ]; then
     mkdir -p "${FRAMEWORK_STUB_DIR}"
     cp "${STUB_DIR}/libwebrtc-audio-all.a" "${FRAMEWORK_STUB_DIR}/"
     log_info "Created universal stub libwebrtc-audio-all.a"
-    WEBRTC_FLAGS=()
 fi
 
 if ! xcodebuild \
@@ -130,7 +128,6 @@ if ! xcodebuild \
     -configuration "${CONFIGURATION}" \
     -derivedDataPath "${BUILD_DIR}/DerivedData" \
     $SIGNING_FLAGS \
-    "${WEBRTC_FLAGS[@]}" \
     clean build 2>&1 | tee "${BUILD_LOG}"; then
     log_error "Build failed! Check ${BUILD_LOG} for details."
     exit 1
