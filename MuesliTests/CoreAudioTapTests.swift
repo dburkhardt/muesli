@@ -491,3 +491,50 @@ final class CoreAudioTapTests: XCTestCase {
         }
     }
 }
+
+// MARK: - TapAudioCaptureService Permission Tests
+
+final class TapAudioCaptureServicePermissionTests: XCTestCase {
+
+    func testStartCaptureThrowsPermissionDeniedWhenNotGranted() async throws {
+        // Given: A service with permission check that returns false
+        let service = TapAudioCaptureService(checkPermission: { false })
+        await service.setBufferHandler { _, _ in }
+
+        // When/Then: startCapture should throw permissionDenied
+        do {
+            try await service.startCapture()
+            XCTFail("Expected permissionDenied error")
+        } catch let error as AudioCaptureError {
+            XCTAssertEqual(
+                error.localizedDescription,
+                AudioCaptureError.permissionDenied.localizedDescription
+            )
+        }
+    }
+
+    func testStartCaptureDoesNotThrowPermissionDeniedWhenGranted() async throws {
+        // Given: A service with permission check that returns true
+        let service = TapAudioCaptureService(checkPermission: { true })
+        await service.setBufferHandler { _, _ in }
+
+        // When: startCapture is called, it should pass the permission check
+        // (it may throw a different error like tapCreationFailed since we're in test env,
+        // but it should NOT throw permissionDenied)
+        do {
+            try await service.startCapture()
+        } catch let error as AudioCaptureError {
+            // Any error other than permissionDenied is acceptable
+            XCTAssertNotEqual(
+                error.localizedDescription,
+                AudioCaptureError.permissionDenied.localizedDescription,
+                "Should not throw permissionDenied when permission is granted"
+            )
+        } catch {
+            // Other errors are fine — tap creation may fail in test environment
+        }
+
+        // Cleanup
+        try? await service.stopCapture()
+    }
+}

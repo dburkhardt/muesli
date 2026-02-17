@@ -30,6 +30,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     private let logger = Logger(subsystem: "com.muesli.app", category: "TapAudioCaptureService")
 
+    /// Permission check for screen recording (injected for testability)
+    private let checkPermission: @Sendable () async -> Bool
+
     /// Tap manager for system audio
     private let tapManager = CoreAudioTapManager()
 
@@ -81,7 +84,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     // MARK: - Initialization
 
-    init() {
+    init(checkPermission: @escaping @Sendable () async -> Bool = {
+        CGPreflightScreenCaptureAccess()
+    }) {
+        self.checkPermission = checkPermission
         print("[TAP DEBUG] TapAudioCaptureService.init() called - CREATED")
         logger.info("TapAudioCaptureService initialized")
         // Format descriptions are set up lazily on first use to avoid actor isolation issues in init
@@ -151,6 +157,13 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         guard bufferHandler != nil else {
             print("[TAP DEBUG] ERROR: Buffer handler not set")
             throw AudioCaptureError.bufferHandlerNotSet
+        }
+
+        // Check permission before attempting tap creation
+        let hasPermission = await checkPermission()
+        if !hasPermission {
+            logger.error("Screen recording permission not granted")
+            throw AudioCaptureError.permissionDenied
         }
 
         print("[TAP DEBUG] Starting tap-based audio capture...")
