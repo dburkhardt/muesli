@@ -26,7 +26,6 @@
 		A1000023241D1A1D00000001 /* MuesliViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000024241D1A1D00000001 /* MuesliViewModel.swift */; };
 		A1000025241D1A1D00000001 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000026241D1A1D00000001 /* MenuBarView.swift */; };
 		A1000027241D1A1D00000001 /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000028241D1A1D00000001 /* MainWindow.swift */; };
-		A1000029241D1A1D00000002 /* AudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002A241D1A1D00000002 /* AudioCaptureService.swift */; };
 		A100002B241D1A1D00000002 /* FileOutputService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002C241D1A1D00000002 /* FileOutputService.swift */; };
 		A100002D241D1A1D00000002 /* MeetingAppDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002E241D1A1D00000002 /* MeetingAppDetector.swift */; };
 		A100002E241D1A1D00000003 /* ExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002F241D1A1D00000003 /* ExportService.swift */; };
@@ -144,7 +143,6 @@
 		A1000024241D1A1D00000001 /* MuesliViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliViewModel.swift; sourceTree = "<group>"; };
 		A1000026241D1A1D00000001 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		A1000028241D1A1D00000001 /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindow.swift; sourceTree = "<group>"; };
-		A100002A241D1A1D00000002 /* AudioCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCaptureService.swift; sourceTree = "<group>"; };
 		A100002C241D1A1D00000002 /* FileOutputService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileOutputService.swift; sourceTree = "<group>"; };
 		A100002E241D1A1D00000002 /* MeetingAppDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAppDetector.swift; sourceTree = "<group>"; };
 		A100002F241D1A1D00000003 /* ExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportService.swift; sourceTree = "<group>"; };
@@ -354,7 +352,6 @@
 		A1000012241D1A1D00000001 /* Services */ = {
 			isa = PBXGroup;
 			children = (
-				A100002A241D1A1D00000002 /* AudioCaptureService.swift */,
 				A100002C241D1A1D00000002 /* FileOutputService.swift */,
 				A100002F241D1A1D00000003 /* ExportService.swift */,
 				A100002E241D1A1D00000002 /* MeetingAppDetector.swift */,
@@ -662,7 +659,6 @@
 				A1000027241D1A1D00000001 /* MainWindow.swift in Sources */,
 				A1000034241D1A1D00000004 /* OnboardingView.swift in Sources */,
 				A100003C241D1A1D00000006 /* ModelManagementView.swift in Sources */,
-				A1000029241D1A1D00000002 /* AudioCaptureService.swift in Sources */,
 				A100002B241D1A1D00000002 /* FileOutputService.swift in Sources */,
 				A100002E241D1A1D00000003 /* ExportService.swift in Sources */,
 				A100002D241D1A1D00000002 /* MeetingAppDetector.swift in Sources */,

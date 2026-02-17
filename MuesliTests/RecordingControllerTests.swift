@@ -10,7 +10,7 @@ final class RecordingControllerTests: XCTestCase {
     
     private func createTestController() async -> RecordingController {
         // Create mock services for testing
-        let audioCaptureService = AudioCaptureService()
+        let audioCaptureService = MockAudioCaptureService()
         let fileOutputService = FileOutputService()
         let transcriptionService = TranscriptionService()
         let modelManager = ModelManager(skipScan: true)
@@ -436,7 +436,7 @@ final class RecordingControllerTests: XCTestCase {
         controller.startRecording(for: session)
         
         // Then: Audio levels should be updated
-        // Note: Level updates happen via AudioCaptureService callbacks
+        // Note: Level updates happen via audio capture service callbacks
         XCTAssertNotNil(session)
     }
     

@@ -3,8 +3,6 @@
 //  Muesli
 //
 //  Shared audio types used across audio capture services.
-//  This allows both AudioCaptureService and TapAudioCaptureService
-//  to use the same type definitions for seamless integration.
 //
 
 import Foundation

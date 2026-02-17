@@ -3,7 +3,6 @@
 //  Muesli
 //
 //  Core Audio Tap-based audio capture service.
-//  Replaces ScreenCaptureKit-based AudioCaptureService for macOS 26+.
 //  Orchestrates: TapManager -> Synchronizer -> AEC -> Worker -> Output
 //
 
@@ -20,7 +19,6 @@ import QuartzCore
 /// Captures system audio via taps and microphone via AVAudioEngine
 /// Provides synchronized, echo-cancelled audio for transcription
 ///
-/// This service is API-compatible with AudioCaptureService for easy migration.
 actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     // MARK: - Types
@@ -96,7 +94,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         formatDescriptionsInitialized = true
     }
 
-    // MARK: - Public API (API-compatible with AudioCaptureService)
+    // MARK: - Public API
 
     /// Set the microphone device to use
     func setMicrophoneDevice(_ deviceID: String?) {
@@ -217,8 +215,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         if tapManager.state == .running {
             let handler = self.warningHandler
             Task { [weak self] in
-                // Wait 3 seconds before checking
-                try? await Task.sleep(for: .seconds(3))
+                // Wait 20 seconds before checking — system audio may take time to
+                // arrive depending on when the user starts playback or joins a call.
+                try? await Task.sleep(for: .seconds(20))
                 guard let self = self, await self.isRecording else { return }
                 let rms = self.tapManager.currentRMSLevel
                 if rms < 0.0001 {

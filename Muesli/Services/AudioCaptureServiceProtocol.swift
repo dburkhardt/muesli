@@ -3,8 +3,7 @@
 //  Muesli
 //
 //  Protocol for audio capture services.
-//  Allows RecordingController to work with either AudioCaptureService (ScreenCaptureKit)
-//  or TapAudioCaptureService (Core Audio taps).
+//  Allows RecordingController to work with any AudioCaptureServiceProtocol implementation.
 //
 
 import Foundation
@@ -73,7 +72,6 @@ typealias AudioLevelHandler = @Sendable (Float, AudioStreamType) -> Void
 typealias AudioWarningHandler = @Sendable (ServiceWarning.WarningCategory, String, String, Bool) -> Void
 
 /// Protocol for audio capture services
-/// Both AudioCaptureService and TapAudioCaptureService conform to this
 protocol AudioCaptureServiceProtocol: Actor {
     /// Whether currently recording
     var isRecording: Bool { get }

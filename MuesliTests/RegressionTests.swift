@@ -389,7 +389,7 @@ final class RegressionTests: XCTestCase {
     func testMicrophoneDeviceSelectionRespected() async {
         // The fix passes the selected device ID to the capture engine:
         //
-        // In AudioCaptureService:
+        // In TapAudioCaptureService:
         // func setMicrophoneDevice(_ deviceID: String?) {
         //     selectedMicrophoneDeviceID = deviceID
         // }

@@ -2,7 +2,7 @@ import CoreMedia
 import Foundation
 @testable import Muesli
 
-/// Mock implementation of AudioCaptureService for testing
+/// Mock implementation of AudioCaptureServiceProtocol for testing
 actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     // MARK: - State
     
@@ -11,9 +11,9 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     // MARK: - Test Control Properties
     
     var shouldFailStartCapture: Bool = false
-    var startCaptureError: Error = AudioCaptureService.CaptureError.permissionDenied
+    var startCaptureError: Error = AudioCaptureError.permissionDenied
     var shouldFailStopCapture: Bool = false
-    var stopCaptureError: Error = AudioCaptureService.CaptureError.notRecording
+    var stopCaptureError: Error = AudioCaptureError.notRecording
     
     // MARK: - Call Tracking
     
@@ -88,7 +88,7 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     // MARK: - Test Helpers
     
     /// Simulate receiving an audio buffer
-    func simulateBuffer(_ buffer: CMSampleBuffer, type: AudioCaptureService.AudioType) {
+    func simulateBuffer(_ buffer: CMSampleBuffer, type: AudioStreamType) {
         bufferHandler?(buffer, type)
     }
     
@@ -98,7 +98,7 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     }
     
     /// Simulate audio level update
-    func simulateLevel(_ level: Float, type: AudioCaptureService.AudioType) {
+    func simulateLevel(_ level: Float, type: AudioStreamType) {
         levelHandler?(level, type)
     }
     

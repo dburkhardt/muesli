@@ -7,14 +7,14 @@ import QuartzCore
 /// Architecture (after startup order fix 2026-01-27):
 /// ```
 /// System Audio (SCK):     ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━┃
-///                         ↑ Starts FIRST (AudioCaptureService ensures this)
+///                         ↑ Starts FIRST (TapAudioCaptureService ensures this)
 ///
 /// Mic (AVAudioEngine):        ┃━━━━━━━━━━━━━━━━━━━━━━━━┃
 ///                             ↑ Starts ~50ms later
 /// ```
 ///
 /// WebRTC AEC3 expects render (system) before capture (mic), which is now guaranteed
-/// by starting ScreenCaptureKit before AVAudioEngine in AudioCaptureService.
+/// by starting system audio capture before AVAudioEngine in TapAudioCaptureService.
 /// This allows WebRTC's internal delay estimation to work correctly.
 final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellationServiceProtocol {
     
@@ -94,7 +94,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     private let renderAccumulatorLock = OSAllocatedUnfairLock(initialState: [Float]())
     
     // Flag to track whether system audio has started (for diagnostic logging)
-    // With the AudioCaptureService startup order fix, system audio should arrive first now.
+    // With the startup order fix, system audio should arrive first now.
     private let systemHasStartedLock = OSAllocatedUnfairLock(initialState: false)
 
     private struct CadenceState {
@@ -178,7 +178,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         }
         
         // Send render frames to WebRTC as they arrive.
-        // With the AudioCaptureService startup order fix (2026-01-27), system audio
+        // With the startup order fix (2026-01-27), system audio
         // now starts BEFORE mic audio, giving WebRTC the correct frame ordering.
         
         // Track when system audio starts (for diagnostic logging)
@@ -310,7 +310,7 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         guard !microphoneSamples.isEmpty else { return microphoneSamples }
         guard aecBridge?.isReady == true else { return microphoneSamples }
         
-        // With the AudioCaptureService startup order fix (2026-01-27), system audio
+        // With the startup order fix (2026-01-27), system audio
         // now starts BEFORE mic audio, so render frames should already be arriving.
         // Just process capture frames as they come - WebRTC handles the timing.
         
