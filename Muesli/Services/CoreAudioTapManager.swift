@@ -133,7 +133,14 @@ final class CoreAudioTapManager: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
 
-        guard state == .idle || state == .micOnly(reason: "") else {
+        let canStart: Bool
+        switch state {
+        case .idle, .micOnly:
+            canStart = true
+        default:
+            canStart = false
+        }
+        guard canStart else {
             print("[TAP DEBUG] ERROR: Tap already running, state=\(state)")
             throw CoreAudioTapError.alreadyRunning
         }
