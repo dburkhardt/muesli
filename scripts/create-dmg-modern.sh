@@ -135,12 +135,29 @@ if [ "$IS_CI_BUILD" = true ]; then
     log_info "xcodebuild signing disabled for CI build"
 fi
 
+# Check if WebRTC framework is available (not checked into git, optional dependency)
+WEBRTC_FLAGS=()
+WEBRTC_FRAMEWORK_PATH="${PROJECT_ROOT}/Muesli/Frameworks/webrtc_audio_processing.xcframework"
+if [ ! -d "${WEBRTC_FRAMEWORK_PATH}" ]; then
+    log_warning "WebRTC framework not found at ${WEBRTC_FRAMEWORK_PATH}"
+    log_info "Building without WebRTC AEC support (stub implementation)"
+    # Override linker flags to remove -lwebrtc-audio-all and strip framework search paths
+    # that point to the missing xcframework. Use $(inherited) to keep SPM/system paths.
+    WEBRTC_FLAGS=(
+        'OTHER_LDFLAGS=$(inherited) -lc++'
+        'LIBRARY_SEARCH_PATHS=$(inherited)'
+        'HEADER_SEARCH_PATHS=$(inherited)'
+        'FRAMEWORK_SEARCH_PATHS=$(inherited)'
+    )
+fi
+
 if ! xcodebuild \
     -project "${PROJECT}" \
     -scheme "${SCHEME}" \
     -configuration "${CONFIGURATION}" \
     -derivedDataPath "${BUILD_DIR}/DerivedData" \
     $SIGNING_FLAGS \
+    "${WEBRTC_FLAGS[@]}" \
     clean build 2>&1 | tee "${BUILD_LOG}"; then
     log_error "Build failed! Check ${BUILD_LOG} for details."
     exit 1
