@@ -131,7 +131,7 @@ BUILD_LOG="${PROJECT_ROOT}/build-release-${TIMESTAMP}.txt"
 # In CI mode, disable xcodebuild signing (we sign manually with Developer ID later)
 SIGNING_FLAGS=""
 if [ "$IS_CI_BUILD" = true ]; then
-    SIGNING_FLAGS="CODE_SIGN_IDENTITY= CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
+    SIGNING_FLAGS="CODE_SIGN_IDENTITY= CODE_SIGN_STYLE=Manual CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
     log_info "xcodebuild signing disabled for CI build"
 fi
 
