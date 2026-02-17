@@ -24,7 +24,8 @@ When the user asks you to work on features or fixes, follow this pattern:
 
 ### Create releases
 - User says: *"Create release v0.1.0"* or *"Tag this as v0.2.0"*
-- You: Update `Version.xcconfig`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`
+- You: **MUST** update `Version.xcconfig` first, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`
+- **WARNING**: Never create a tag without first verifying `Version.xcconfig` matches. See [AGENTS.md Versioning](../AGENTS.md#versioning-critical-for-agents).
 - GitHub Actions will build DMG and create release automatically
 
 ### Emergency fixes
@@ -65,11 +66,15 @@ git branch --show-current
 
 ## Release Process
 
+**CRITICAL**: Version.xcconfig MUST be updated and committed BEFORE creating any tag.
+See [AGENTS.md Versioning](../AGENTS.md#versioning-critical-for-agents) for full details.
+
 1. Ensure `main` is stable and tested
-2. Update version in `Version.xcconfig`
-3. Commit version bump: `git commit -m "Bump version to vX.Y.Z"`
-4. Create and push tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
-5. GitHub Actions automatically:
+2. **Update version in `Version.xcconfig`** (MUST happen before step 4)
+3. Commit version bump: `git commit -m "chore: Bump version to X.Y.Z"`
+4. Push the commit: `git push origin main`
+5. Create and push tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
+6. GitHub Actions automatically:
    - Builds the app (Release configuration)
    - Creates DMG installer
    - Publishes GitHub Release with DMG attached
@@ -88,12 +93,13 @@ When a critical bug is found in production:
 
 1. Create hotfix branch from `main`: `git checkout -b hotfix/critical-fix`
 2. Fix the bug, test thoroughly
-3. Update version in `Version.xcconfig` (bump patch: 0.1.0 → 0.1.1)
-4. Commit and push
+3. **Update version in `Version.xcconfig`** (bump patch: 0.1.0 → 0.1.1) — MUST happen before tagging
+4. Commit version bump + fix together and push
 5. Create PR, get quick review
 6. Merge to `main`
-7. Tag the release: `git tag v0.1.1 && git push origin v0.1.1`
-8. GitHub Actions builds and releases automatically
+7. Verify Version.xcconfig on main: `grep MARKETING_VERSION Version.xcconfig`
+8. Tag the release: `git tag v0.1.1 && git push origin v0.1.1`
+9. GitHub Actions builds and releases automatically
 
 ## Tools
 

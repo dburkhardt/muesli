@@ -68,6 +68,8 @@ The download page on the website. Automatically updated by the release workflow 
 
 ### Trigger: Git Tags
 
+> **WARNING**: The release workflow runs `sed` to update Version.xcconfig during CI builds, but this change is **transient** — it is NOT committed back to the repository. You **MUST** update Version.xcconfig and commit it BEFORE creating a tag. Otherwise the committed version will be wrong even though the built binary looks correct. See [AGENTS.md Versioning](../AGENTS.md#versioning-critical-for-agents).
+
 The primary way to create a release:
 
 ```bash

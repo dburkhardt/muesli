@@ -195,57 +195,111 @@ CI builds use the **same Developer ID certificate** as release builds. This ensu
 
 **CI TCC Behavior**: CI builds do not require TCC resets—GitHub Actions runners have no TCC database access, and unit tests don't require screen recording or microphone permissions. If automated UI/onboarding tests are added in the future, use the `--reset-tcc` flag in the test setup.
 
+## Versioning (CRITICAL FOR AGENTS)
+
+**Golden Rule**: `Version.xcconfig` MUST be updated and committed BEFORE creating any git tag. The CI workflow's `sed` of Version.xcconfig during builds is transient (not committed back), so if Version.xcconfig doesn't match the tag, the committed version will be wrong.
+
+### Version Bump Procedure
+
+Always follow this exact sequence:
+
+```bash
+# 1. Edit Version.xcconfig
+#    Change MARKETING_VERSION = X.Y.Z
+
+# 2. Verify the change
+grep MARKETING_VERSION Version.xcconfig
+
+# 3. Commit
+git add Version.xcconfig
+git commit -m "chore: Bump version to X.Y.Z"
+
+# 4. Create tag (must start with 'v')
+git tag vX.Y.Z
+
+# 5. Push both commit and tag
+git push origin <branch>
+git push origin vX.Y.Z
+```
+
+### RC Workflow (from feature branches)
+
+Use release candidates to test builds before merging to main:
+
+```bash
+# 1. Ensure Version.xcconfig is already set to the target version (e.g., 0.6.0)
+grep MARKETING_VERSION Version.xcconfig  # Should show 0.6.0
+
+# 2. Tag the RC
+git tag v0.6.0-rc.1
+
+# 3. Push the tag (triggers release workflow, creates pre-release)
+git push origin v0.6.0-rc.1
+
+# 4. If issues found, fix on branch, then:
+git tag v0.6.0-rc.2
+git push origin v0.6.0-rc.2
+```
+
+### Stable Release Workflow (from main)
+
+After the PR is merged to main:
+
+```bash
+# 1. Verify Version.xcconfig on main has the correct version
+git checkout main && git pull
+grep MARKETING_VERSION Version.xcconfig
+
+# 2. Tag the stable release
+git tag v0.6.0
+git push origin v0.6.0
+
+# 3. Watch the release build
+./scripts/watch-release.sh
+```
+
+### Common Agent Scenarios
+
+**"Bump a patch version"**:
+```bash
+# Check current version
+grep MARKETING_VERSION Version.xcconfig  # e.g., 0.5.2
+# Edit to 0.5.3, commit, tag, push (follow procedure above)
+```
+
+**"Create an RC from this branch"**:
+```bash
+# Verify Version.xcconfig matches intended version
+grep MARKETING_VERSION Version.xcconfig
+# If not, bump it first (commit before tagging!)
+git tag vX.Y.Z-rc.N
+git push origin vX.Y.Z-rc.N
+```
+
+**"Release this"** (from main):
+```bash
+grep MARKETING_VERSION Version.xcconfig  # Verify version
+git tag vX.Y.Z && git push origin vX.Y.Z
+./scripts/watch-release.sh
+```
+
+### Troubleshooting: Version Mismatch
+
+If a tag was created without updating Version.xcconfig:
+1. Delete the tag: `git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z`
+2. Delete the release: `gh release delete vX.Y.Z --yes`
+3. Update Version.xcconfig, commit, re-tag, push
+
 ## Release Process
 
 ### Creating a Release
 
-Muesli uses automated GitHub Actions to build and publish releases. The process is triggered by git tags.
+Follow the [Versioning](#versioning-critical-for-agents) section above for the exact procedure. In summary:
 
-**Prerequisites**:
-- All changes committed to `main` branch
-- Tests passing
-- Pre-release testing completed (see checklist below)
-- Version number decided (follows [Semantic Versioning](https://semver.org/))
-
-**Steps**:
-
-1. **Update Version.xcconfig** (if not already updated):
-   ```bash
-   # Edit Version.xcconfig and set MARKETING_VERSION
-   vim Version.xcconfig  # Change to desired version (e.g., 0.2.0)
-   git add Version.xcconfig
-   git commit -m "chore: Bump version to 0.2.0"
-   git push origin main
-   ```
-
-2. **Create and push version tag**:
-   ```bash
-   # Create tag (must start with 'v')
-   git tag v0.2.0
-   
-   # Push tag to trigger release workflow
-   git push origin v0.2.0
-   
-   # Watch the build progress
-   ./scripts/watch-release.sh
-   ```
-
-3. **Monitor GitHub Actions**:
-   - Watch the "Release" workflow complete
-   - Workflow will:
-     - Cache dependencies for faster builds
-     - Build app in Release configuration
-     - Create DMG installer (tries modern script, falls back to legacy)
-     - Generate release notes with git-cliff from conventional commits
-     - Generate artifact attestation for supply chain security
-     - Create GitHub Release with DMG asset
-     - Update website with new version
-     - Deploy to GitHub Pages
-
-4. **Verify release**:
-   - Check GitHub Releases page
-   - Download DMG and test installation
-   - Verify website shows correct version
+1. Update `Version.xcconfig` and commit
+2. Create and push tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
+3. Monitor with `./scripts/watch-release.sh`
+4. Verify: check GitHub Releases, download DMG, test installation
 
 ### Version Numbering
 
@@ -538,7 +592,7 @@ Simple, agent-friendly branching. All work happens in feature branches merged to
 **Quick commands for agents**:
 - Create PR: `gh pr create --fill`
 - Merge PR: `gh pr merge --squash --delete-branch`
-- Create release: `git tag vX.Y.Z && git push origin vX.Y.Z`
+- Create release: Update `Version.xcconfig` first, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z` (see [Versioning](#versioning-critical-for-agents))
 - Check status: `gh pr status`
 
 **Branch naming**: `feature/name`, `bugfix/name`, `hotfix/name`, `refactor/name`
