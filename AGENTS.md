@@ -2,7 +2,7 @@
 
 Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-time transcription via WhisperKit, saves `audio.caf` + `microphone.caf` + `transcript.md`.
 
-**Authoritative docs**: `SPEC.md` (product spec + phases) · This file (architecture + commands + pitfalls)
+**Authoritative docs**: `SPEC.md` (product spec + phases) · This file (architecture + commands + pitfalls) · `.cursorrules` (working rules + phase discipline)
 **Note for agents**: Additional flow-specific documentation lives in the `spec/` folder. If you are doing a comprehensive architecture review, read those documents as well.
 
 **Code signing & notarization**: App is signed with Developer ID and notarized by Apple when released via GitHub Actions. Credentials stored in repository secrets (never committed to git).
@@ -174,26 +174,23 @@ Muesli tracks code coverage to ensure comprehensive testing and guide developmen
 4. Coordinators - TranscriptionCoordinator, RefinementCoordinator
 5. Views - Complex UI logic (lower priority than business logic)
 
-## CI Code Signing
+## CI Builds (Unsigned)
 
-CI builds use the **same Developer ID certificate** as release builds. This ensures consistent code signing identity across all environments, which is critical for TCC (macOS permission system) stability.
+CI builds (`ci.yml`) are intentionally **unsigned** for speed and fork compatibility. Code signing and notarization only happen in the **release workflow** (`release.yml`).
 
-**Why Developer ID signing in CI?**
-- TCC validates apps based on code signing identity
-- Changing signing identity between builds causes "TCC thrash" - permissions reset
-- Using the same certificate for local, CI, and release builds ensures permissions persist
+**Why unsigned CI?**
+- CI runners have no TCC database, so signing provides no benefit for tests
+- Removing signing saves ~2 minutes per CI run
+- Fork PRs can run CI without access to signing secrets
 
-**Required Secrets** (same as release workflow):
-- `DEVELOPER_ID_CERT_P12` - Base64-encoded .p12 certificate
-- `DEVELOPER_ID_CERT_PASSWORD` - Certificate password
+**CI workflow details**:
+- `test` job: Builds + runs tests with coverage (single `xcodebuild test` invocation)
+- `lint` job: Runs SwiftLint (no build required)
+- `build-release` job: Verifies Release configuration compiles (unsigned)
+- All jobs have timeout guards (30 min for build jobs, 10 min for lint)
+- Concurrency controls auto-cancel stale runs on the same branch
 
-**Important Notes**:
-- CI signing is **required** - builds fail if secrets are missing
-- External contributor PRs from forks will fail CI (no access to signing secrets)
-  - This is expected behavior; maintainers must check out and test fork PRs locally
-- The `lint` job does not require signing (only runs SwiftLint)
-
-**CI TCC Behavior**: CI builds do not require TCC resets—GitHub Actions runners have no TCC database access, and unit tests don't require screen recording or microphone permissions. If automated UI/onboarding tests are added in the future, use the `--reset-tcc` flag in the test setup.
+**Release workflow** (`release.yml`): Signs with Developer ID and notarizes via Apple. This is the only workflow that uses signing secrets.
 
 ## Versioning (CRITICAL FOR AGENTS)
 

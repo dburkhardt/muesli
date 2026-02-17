@@ -21,19 +21,19 @@ on:
 env:
   XCODE_VERSION: '26.2'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Build and Test
     runs-on: macos-26
-
-    # Job-level env vars from secrets (for use in step conditions)
-    env:
-      SIGNING_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
-      SIGNING_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Select Xcode version
         run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer
@@ -41,53 +41,10 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Preflight - Verify signing secrets
-        run: |
-          MISSING=""
-          if [ -z "$SIGNING_CERT_P12" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_P12"; fi
-          if [ -z "$SIGNING_CERT_PASSWORD" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_PASSWORD"; fi
-          if [ -n "$MISSING" ]; then
-            echo "::error::Missing required secrets:$MISSING"
-            echo "CI builds require Developer ID signing for consistent app identity."
-            echo "External contributor PRs from forks will fail (no access to signing secrets)."
-            exit 1
-          fi
-          echo "✅ All signing secrets present"
-
-      - name: Setup code signing certificates
-        run: |
-          echo "Setting up code signing certificates..."
-
-          # Create temporary keychain
-          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Decode and import certificate
-          echo "$SIGNING_CERT_P12" | base64 --decode > $RUNNER_TEMP/certificate.p12
-          security import $RUNNER_TEMP/certificate.p12 \
-            -k "$KEYCHAIN_PATH" \
-            -P "$SIGNING_CERT_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/productsign
-
-          # Set keychain for codesign
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Verify certificate is available
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
-
-          echo "✅ Code signing certificates configured"
-
       - name: Cache Swift Package Manager dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
-            .build
             ~/Library/Developer/Xcode/DerivedData/Muesli-*/SourcePackages
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
@@ -95,7 +52,7 @@ jobs:
 
       - name: Cache WebRTC XCFramework
         id: cache-webrtc
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: Muesli/Frameworks/webrtc_audio_processing.xcframework
           key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.XCODE_VERSION }}-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
@@ -118,19 +75,6 @@ jobs:
           else
             echo "⚠️ WebRTC XCFramework not found - WebRTC AEC will run in stub mode"
           fi
-
-      - name: Build Muesli (Debug)
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project Muesli.xcodeproj \
-            -scheme Muesli \
-            -configuration Debug \
-            -destination 'platform=macOS' \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            build | xcpretty
 
       - name: Run tests with coverage
         run: |
@@ -186,37 +130,23 @@ jobs:
           echo "✅ Coverage report generated"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           files: ./coverage.lcov,./coverage.json
           flags: unittests
           name: muesli-coverage
           fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-      - name: Check for build warnings
-        run: |
-          if xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug -destination 'platform=macOS' CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -i "warning:"; then
-            echo "⚠️ Build contains warnings"
-            exit 0  # Don't fail on warnings, just report them
-          else
-            echo "✅ No build warnings"
-          fi
-
-      - name: Verify signing identity
-        run: |
-          echo "Signing identities in keychain:"
-          security find-identity -v -p codesigning | grep "Developer ID" || echo "No Developer ID found"
 
   lint:
     name: Swift Lint
     runs-on: macos-26
+    timeout-minutes: 10
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install SwiftLint
         run: brew install swiftlint
@@ -234,66 +164,19 @@ jobs:
   build-release:
     name: Build Release Configuration
     runs-on: macos-26
-
-    # Job-level env vars from secrets (for use in step conditions)
-    env:
-      SIGNING_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
-      SIGNING_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Select Xcode version
         run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer
 
-      - name: Preflight - Verify signing secrets
-        run: |
-          MISSING=""
-          if [ -z "$SIGNING_CERT_P12" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_P12"; fi
-          if [ -z "$SIGNING_CERT_PASSWORD" ]; then MISSING="$MISSING DEVELOPER_ID_CERT_PASSWORD"; fi
-          if [ -n "$MISSING" ]; then
-            echo "::error::Missing required secrets:$MISSING"
-            echo "CI builds require Developer ID signing for consistent app identity."
-            echo "External contributor PRs from forks will fail (no access to signing secrets)."
-            exit 1
-          fi
-          echo "✅ All signing secrets present"
-
-      - name: Setup code signing certificates
-        run: |
-          echo "Setting up code signing certificates..."
-
-          # Create temporary keychain
-          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Decode and import certificate
-          echo "$SIGNING_CERT_P12" | base64 --decode > $RUNNER_TEMP/certificate.p12
-          security import $RUNNER_TEMP/certificate.p12 \
-            -k "$KEYCHAIN_PATH" \
-            -P "$SIGNING_CERT_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/productsign
-
-          # Set keychain for codesign
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Verify certificate is available
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
-
-          echo "✅ Code signing certificates configured"
-
       - name: Cache Swift Package Manager dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
-            .build
             ~/Library/Developer/Xcode/DerivedData/Muesli-*/SourcePackages
           key: ${{ runner.os }}-spm-release-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
@@ -301,7 +184,7 @@ jobs:
 
       - name: Cache WebRTC XCFramework
         id: cache-webrtc-release
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: Muesli/Frameworks/webrtc_audio_processing.xcframework
           key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.XCODE_VERSION }}-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
@@ -349,11 +232,6 @@ jobs:
             echo "❌ App bundle not found"
             exit 1
           fi
-
-      - name: Verify signing identity
-        run: |
-          echo "Signing identities in keychain:"
-          security find-identity -v -p codesigning | grep "Developer ID" || echo "No Developer ID found"
 
   summary:
     name: CI Summary
