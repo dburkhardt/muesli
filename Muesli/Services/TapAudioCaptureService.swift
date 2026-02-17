@@ -114,6 +114,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         } catch {
             logger.error("Failed to restart microphone after device switch: \(error.localizedDescription)")
             warningHandler?(
+                .microphone,
                 "Microphone switch failed",
                 "Could not switch to the selected microphone. Error: \(error.localizedDescription)",
                 true
@@ -191,7 +192,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
             // Degrade to mic-only mode
             tapManager.degradeToMicOnly(reason: error.localizedDescription)
-            warningHandler?("System audio unavailable", "Recording microphone only: \(error.localizedDescription)", false)
+            warningHandler?(.systemAudio, "System audio unavailable", "Recording microphone only: \(error.localizedDescription)", false)
         }
 
         // Start microphone capture
@@ -222,8 +223,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 let rms = self.tapManager.currentRMSLevel
                 if rms < 0.0001 {
                     await MainActor.run {
-                        handler?("System audio may not be working",
-                            "No system audio detected after 3 seconds. Check that System Audio Recording permission is still granted.",
+                        handler?(.systemAudio, "No system audio detected",
+                            "No system audio picked up yet — is anything playing? If you're on a call or playing media and still see this, check that System Audio Recording permission is granted.",
                             false)
                     }
                 }

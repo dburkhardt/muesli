@@ -261,10 +261,10 @@ final class RecordingController {
             }
         }
         
-        // Set up audio warning handler (for mic failures, etc.)
-        await audioCaptureServiceRef.setWarningHandler { [weak self] message, details, canRetry in
+        // Set up audio warning handler (for mic failures, system audio issues, etc.)
+        await audioCaptureServiceRef.setWarningHandler { [weak self] category, message, details, canRetry in
             Task { @MainActor in
-                self?.warningManager.addWarning(.microphone, message: message, details: details, canRetry: canRetry)
+                self?.warningManager.addWarning(category, message: message, details: details, canRetry: canRetry)
             }
         }
     }

@@ -960,7 +960,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
                 System audio is still being recorded.
                 You can select a different microphone in preferences and try again.
                 """
-            warningHandler?("Microphone unavailable", details, true)
+            warningHandler?(.microphone, "Microphone unavailable", details, true)
         }
     }
 }

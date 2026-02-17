@@ -69,8 +69,8 @@ typealias StreamInterruptedHandler = @Sendable (Error?) -> Void
 /// Callback type for audio level updates (0.0 to 1.0)
 typealias AudioLevelHandler = @Sendable (Float, AudioStreamType) -> Void
 
-/// Callback type for service warnings (message, details, canRetry)
-typealias AudioWarningHandler = @Sendable (String, String, Bool) -> Void
+/// Callback type for service warnings (category, message, details, canRetry)
+typealias AudioWarningHandler = @Sendable (ServiceWarning.WarningCategory, String, String, Bool) -> Void
 
 /// Protocol for audio capture services
 /// Both AudioCaptureService and TapAudioCaptureService conform to this
