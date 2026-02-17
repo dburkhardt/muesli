@@ -697,6 +697,7 @@ final class MuesliViewModel {
         hasCompletedOnboarding = false
         modelManager.reset()
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
     }
     
     // MARK: - Meeting App Detection

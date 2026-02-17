@@ -71,7 +71,7 @@ struct OnboardingView: View {
         self.mode = mode
         
         // In recovery mode: start at the first missing permission step
-        // In first-time mode: restore from UserDefaults or start at welcome
+        // In first-time mode: always start at welcome
         if mode.isRecoveryMode {
             // Calculate starting step based on which permissions are missing
             switch mode {
@@ -89,9 +89,8 @@ struct OnboardingView: View {
                 _currentStep = State(initialValue: .welcome)
             }
         } else {
-            // First-time mode: restore saved step, defaulting to welcome
-            let savedStep = UserDefaults.standard.integer(forKey: AppStorageKeys.onboardingCurrentStep)
-            _currentStep = State(initialValue: OnboardingStep(rawValue: savedStep) ?? .welcome)
+            // First-time mode: always start at welcome (stale step cleared in onAppear)
+            _currentStep = State(initialValue: .welcome)
         }
     }
     
@@ -127,22 +126,17 @@ struct OnboardingView: View {
                 // Always use synchronous check to avoid triggering permission prompts
                 viewModel.refreshPermissions()
 
-                if !mode.isRecoveryMode,
-                   !viewModel.hasScreenRecordingPermission,
-                   !viewModel.hasMicrophonePermission,
-                   currentStep != .welcome {
-                    await DiagnosticLogger.shared.log(
-                        .onboarding,
-                        "Resetting onboarding step to welcome (no permissions granted)"
-                    )
-                    setStep(.welcome)
+                // Clear any stale persisted step from a previous onboarding session
+                if !mode.isRecoveryMode {
+                    UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
                 }
-                
+
                 // Start monitoring on permission screens
                 if currentStep == .screenRecording || currentStep == .microphone {
                     startPermissionMonitoring()
                 }
-                
+
+                // Auto-advance only in recovery mode (first-time is gated inside the function)
                 advanceBasedOnPermissions()
             }
         }
@@ -1054,7 +1048,8 @@ struct OnboardingView: View {
     }
     
     /// Advance to appropriate step based on current permissions
-    /// Skips past already-completed permission steps when user returns to the app
+    /// In first-time mode: no-op (user must click Continue on each screen)
+    /// In recovery mode: auto-advance when permissions are re-granted
     private func advanceBasedOnPermissions() {
         if currentStep == .welcome {
             return
@@ -1082,64 +1077,24 @@ struct OnboardingView: View {
             )
         }
 
+        // First-time onboarding: never auto-navigate (forward or backward).
+        // User must click Continue on each screen. UI updates (permission badges,
+        // Continue button enablement) are driven by refreshPermissions(), not this function.
         if !mode.isRecoveryMode {
-            if !isSystemAudioPermissionConfirmed {
-                if currentStep.rawValue > OnboardingStep.screenRecording.rawValue {
-                    setStep(.screenRecording)
-                }
-                return
-            }
-
-            if !viewModel.hasMicrophonePermission {
-                if currentStep.rawValue > OnboardingStep.microphone.rawValue {
-                    setStep(.microphone)
-                }
-                return
-            }
-        }
-
-        // Handle recovery mode differently
-        if mode.isRecoveryMode {
-            // In recovery mode, check if both permissions are now granted
-            if isSystemAudioPermissionConfirmed && viewModel.hasMicrophonePermission {
-                // Both permissions granted - complete recovery
-                completeOnboardingForRecovery()
-                return
-            } else if isSystemAudioPermissionConfirmed && currentStep == .screenRecording {
-                // Screen recording granted, but mic still missing - advance to mic
-                setStep(.microphone)
-            }
-            // If still on mic step and mic not granted, stay there
             return
         }
-        
-        // First-time onboarding mode
-        // Determine the appropriate step based on current permissions
-        let targetStep: OnboardingStep
-        
+
+        // --- Recovery mode only below this point ---
+
+        // Recovery mode: check if both permissions are now granted
         if isSystemAudioPermissionConfirmed && viewModel.hasMicrophonePermission {
-            // All permissions granted - go to model setup or complete
-            if !modelManager.hasModel {
-                targetStep = .modelSetup
-            } else if !llmManager.hasModel {
-                targetStep = .llmSetup
-            } else {
-                // All done - complete onboarding
-                completeOnboarding()
-                return
-            }
-        } else if isSystemAudioPermissionConfirmed {
-            // Screen recording granted - skip to microphone
-            targetStep = .microphone
-        } else {
-            // No permissions yet - stay on current step (don't auto-advance from welcome)
+            completeOnboardingForRecovery()
             return
+        } else if isSystemAudioPermissionConfirmed && currentStep == .screenRecording {
+            // Screen recording granted, but mic still missing - advance to mic
+            setStep(.microphone)
         }
-        
-        // Only advance forward, never backward
-        if targetStep.rawValue > currentStep.rawValue {
-            setStep(targetStep)
-        }
+        // If still on mic step and mic not granted, stay there
     }
     
     /// Complete onboarding after permission recovery

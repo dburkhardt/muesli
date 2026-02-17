@@ -7,8 +7,8 @@ This document specifies the expected behavior of Muesli's onboarding flow, inclu
 The onboarding flow guides first-time users through granting necessary permissions and downloading required models. The flow must be:
 
 1. **Non-intrusive**: System permission prompts should only appear when the user explicitly requests them
-2. **Resumable**: Users can quit and return to continue where they left off
-3. **Smart**: Already-granted permissions should be automatically detected and skipped
+2. **Resumable (recovery mode)**: Recovery mode can resume from saved step; first-time mode always starts at welcome
+3. **Explicit**: First-time onboarding always requires user clicks to advance; already-granted permissions show as "granted" with an enabled Continue button
 
 ## Onboarding Steps
 
@@ -47,26 +47,28 @@ The onboarding flow guides first-time users through granting necessary permissio
 - Distributed notifications are reliable and event-driven
 - `AVCaptureDevice.authorizationStatus()` provides synchronous checks without side effects
 
-### Rule 3: Auto-Advance on Return
+### Rule 3: No Auto-Advance in First-Time Mode
 
-**Requirement**: When users quit and reopen the app, onboarding should automatically advance past already-completed steps.
-
-**Implementation**:
-- Save current step to `UserDefaults` (`onboardingCurrentStep` key)
-- On appear, check permissions using synchronous methods to avoid triggering prompts
-- Call `advanceBasedOnPermissions()` to skip completed steps
-- Auto-advance logic:
-  - If screen recording AND microphone granted → go to model setup
-  - If only screen recording granted → go to microphone step
-  - If no permissions → stay on current step
-
-### Rule 4: Step Persistence
-
-**Requirement**: The current onboarding step should persist across app launches.
+**Requirement**: During first-time onboarding, the user must explicitly click
+Continue/Get Started to advance through each step. If a permission is already
+granted when the user reaches that screen, show "Permission Already Granted"
+with an enabled Continue button.
 
 **Implementation**:
-- Save step on every navigation: `UserDefaults.set(step.rawValue, forKey: "onboardingCurrentStep")`
-- Restore on init: `OnboardingStep(rawValue: savedStep) ?? .welcome`
+- `advanceBasedOnPermissions()` returns immediately in first-time mode
+- Permission state is updated via `refreshPermissions()` which drives UI badges
+  and Continue button enablement
+- Auto-advance is only used in **recovery mode** (when a previously-completed
+  onboarding needs re-granted permissions)
+
+### Rule 4: Step Persistence (Recovery Mode Only)
+
+**Requirement**: Step persistence is only meaningful in recovery mode.
+First-time onboarding always starts at welcome.
+
+**Implementation**:
+- First-time mode: always init at `.welcome`, clear stale persisted step on appear
+- Recovery mode: save/restore current step via `onboardingCurrentStep` UserDefaults key
 - Clear saved step when onboarding completes
 
 ## State Flow Diagram
@@ -86,25 +88,28 @@ The onboarding flow guides first-time users through granting necessary permissio
                          │           │
                          ▼           ▼
                     ┌────────┐  ┌─────────────────┐
-                    │  Main  │  │ Load saved step │
-                    │ Window │  │  from defaults  │
+                    │  Main  │  │ Always start at │
+                    │ Window │  │ welcome (clear  │
+                    │        │  │ stale step key) │
                     └────────┘  └─────────────────┘
                                         │
                                         ▼
                               ┌──────────────────┐
-                              │ savedStep == 0?  │
-                              │   (welcome)      │
+                              │   Show Welcome   │
+                              │   (no prompts,   │
+                              │  no auto-advance)│
                               └──────────────────┘
-                                   │        │
-                                  Yes       No
-                                   │        │
-                                   ▼        ▼
-                            ┌─────────┐  ┌────────────────────┐
-                            │ Show    │  │ Async permission   │
-                            │ Welcome │  │ check, then        │
-                            │ (no     │  │ advanceBasedOn     │
-                            │ prompt) │  │ Permissions()      │
-                            └─────────┘  └────────────────────┘
+                                        │
+                                  User clicks
+                                 "Get Started"
+                                        │
+                                        ▼
+                              ┌──────────────────┐
+                              │ Each screen shows │
+                              │ current permission│
+                              │ state; user must  │
+                              │ click Continue    │
+                              └──────────────────┘
 ```
 
 ## Permission Check APIs
@@ -219,19 +224,20 @@ private func checkAndNotifyPermissionChangesSynchronously() {
 ### Test: Auto-Advance After Permission Grant
 - Grant screen recording permission
 - Quit and reopen app
-- Verify app auto-advances to microphone step (not stuck on screen recording)
+- Verify app starts at welcome screen (first-time mode always starts at welcome)
+- Click "Get Started" → screen recording screen shows "granted" with enabled Continue
 
 ### Test: Step Persistence
 - Navigate to model setup step
 - Quit app
 - Reopen app
-- Verify app resumes at model setup step
+- Verify app starts at welcome screen (first-time mode does not restore saved step)
 
 ### Test: Complete Flow Skip
 - Grant all permissions and download model
 - Reset `hasCompletedOnboarding` but keep permissions
 - Reopen app
-- Verify onboarding auto-completes or advances to final step
+- Verify onboarding starts at welcome, each screen shows "granted", user clicks through
 
 ## Critical: No Polling Timers
 
@@ -488,14 +494,17 @@ defaults delete com.muesli.app onboardingCurrentStep
 - [ ] Complete steps 1-2 (grant screen recording only)
 - [ ] Quit the app (Cmd+Q)
 - [ ] Relaunch the app
-- [ ] Verify app resumes on microphone screen (step 2)
+- [ ] Verify app starts at welcome screen (first-time always starts at welcome)
+- [ ] Click through: welcome → screen recording (shows granted) → microphone
 - [ ] Verify NO permission dialogs on launch
 
 **7. Already Granted Permissions**
 - [ ] Grant both permissions via System Settings before launching
-- [ ] Launch app
+- [ ] Clear `hasCompletedOnboarding`, launch app
 - [ ] Click "Get Started" on welcome screen
-- [ ] Verify app skips directly to model setup (step 3)
+- [ ] Verify system audio screen shows "System Audio Recording granted" with enabled Continue
+- [ ] Click Continue → microphone screen shows "Microphone granted" with enabled Continue
+- [ ] Click Continue → model setup screen shows
 
 ### Expected Console Output
 
@@ -523,3 +532,6 @@ If you see a different bundle ID, TCC permissions may not work correctly.
 | 2026-01-18 | Add optimistic OR for sync checks | Allows sync check to detect newly-granted permissions |
 | 2026-01-18 | Add bundle ID logging | Aids TCC debugging with different bundle IDs |
 | 2026-01-20 | Add diagnostic logging integration | File-based logs for debugging release build issues |
+| 2026-02-16 | **No auto-advance in first-time mode** | **Permissions already granted caused onboarding to skip all screens** |
+| 2026-02-16 | First-time mode always inits at welcome | Stale saved step caused skipping when combined with auto-advance |
+| 2026-02-16 | Clear stale step in resetOnboarding() | Prevents stale step persistence across onboarding resets |
