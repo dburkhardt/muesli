@@ -110,8 +110,9 @@ protocol ModelManagerProtocol: AnyObject {
     var activeModel: ModelManager.ModelSize? { get }
     var modelPath: URL? { get }
     var hasModel: Bool { get }
+    var isActiveModelReady: Bool { get }
     var modelDirectory: URL { get }
-    
+
     func pathForModel(_ model: ModelManager.ModelSize) -> URL?
     func isModelDownloaded(_ model: ModelManager.ModelSize) -> Bool
     func validateModel(_ model: ModelManager.ModelSize) -> Bool
@@ -124,6 +125,7 @@ protocol ModelManagerProtocol: AnyObject {
     func deleteModel(_ model: ModelManager.ModelSize) -> Bool
     func showModelsInFinder()
     func reset()
+    func retryCompilation(_ model: ModelManager.ModelSize)
 }
 
 // MARK: - LLMManagerProtocol

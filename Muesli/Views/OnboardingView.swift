@@ -22,30 +22,9 @@ struct OnboardingView: View {
     }
     @State private var currentStep: OnboardingStep
     @State private var showFilePicker = false
-    
+
     /// Alert shown when user tries to close recovery window
     @State private var showQuitAlert = false
-    
-    // MARK: - Model Compilation State
-    
-    /// Whether model is currently being compiled/optimized
-    @State private var isCompiling = false
-    
-    /// Error that occurred during compilation
-    @State private var compilationError: Error?
-    
-    /// Task for tracking compilation (for cancellation)
-    @State private var compilationTask: Task<Void, Never>?
-    
-    /// When compilation started (to detect if model was already compiled)
-    @State private var compilationStartTime: Date?
-    
-    /// The model currently being compiled
-    @State private var compilingModel: ModelManager.ModelSize?
-    
-    /// Whether compilation was cancelled while user navigated away (per plan Issue 5)
-    /// Used to refresh stale UI state in onAppear
-    @State private var wasCompilationCancelled = false
     
     // MARK: - Background Download State
     
@@ -503,31 +482,31 @@ struct OnboardingView: View {
     
     // MARK: - Model Setup Screen
     
-    /// Check if any model is downloading or ready
-    private var isAnyModelDownloadingOrReady: Bool {
-        modelManager.isAnyModelDownloading || modelManager.hasModel
+    /// Check if any model is downloading or compiling or ready
+    private var isAnyModelBusyOrReady: Bool {
+        modelManager.isAnyModelBusy || modelManager.hasModel
     }
-    
+
     private var modelSetupScreen: some View {
         VStack(spacing: 12) {
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 44))
                 .foregroundStyle(Color.accentColor)
-            
+
             Text("Transcription Models")
                 .font(.system(size: 22, weight: .bold))
-            
+
             Text("Download one or more models for transcription....")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            
+
             // Model list
             modelListView
                 .padding(.top, 4)
-            
-            // Compilation status message (shown during first-time setup)
-            if isCompiling {
+
+            // Compilation status message (shown when any model is compiling)
+            if modelManager.isAnyModelBusy && !modelManager.isAnyModelDownloading {
                 VStack(spacing: 8) {
                     Text("Optimizing for your device...")
                         .font(.subheadline)
@@ -538,25 +517,7 @@ struct OnboardingView: View {
                 }
                 .padding(.top, 8)
             }
-            
-            // Compilation error (shown if optimization failed)
-            if let error = compilationError {
-                VStack(spacing: 8) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Text("Optimization failed")
-                            .font(.subheadline)
-                            .foregroundStyle(.orange)
-                    }
-                    Text(error.localizedDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.top, 8)
-            }
-            
+
             // Background download message (shown when downloading and user can proceed)
             if modelManager.isAnyModelDownloading && !modelManager.hasModel {
                 VStack(spacing: 4) {
@@ -570,15 +531,15 @@ struct OnboardingView: View {
                 }
                 .padding(.top, 8)
             }
-            
-            // Active model picker (only if models are downloaded and not compiling)
-            if !modelManager.downloadedModels.isEmpty && !isCompiling && compilationError == nil {
+
+            // Active model picker (only if models are downloaded and no compilation error)
+            if !modelManager.downloadedModels.isEmpty {
                 activeModelPicker
                     .padding(.top, 4)
             }
-            
+
             Spacer()
-            
+
             Button("Continue") {
                 withAnimation {
                     setStep(.llmSetup)
@@ -587,34 +548,14 @@ struct OnboardingView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             // Enable Continue once user has initiated a download OR a model is ready
-            // No longer blocks on compilation completion
             .disabled(!userHasInitiatedDownload && !modelManager.hasModel)
         }
         .padding(.horizontal, 40)
         .padding(.top, 24)
         .padding(.bottom, 8) // Reduced since progress indicator now has more bottom padding
-        .onDisappear {
-            // Cancel compilation task if user navigates away (per plan Issue 5)
-            compilationTask?.cancel()
-            wasCompilationCancelled = true
-        }
         .onAppear {
-            // Refresh stale compilation state (per plan Issue 5)
-            // Case 1: User navigated away and cancelled
-            if isCompiling && wasCompilationCancelled {
-                isCompiling = false
-                compilingModel = nil
-                wasCompilationCancelled = false
-            }
-            
-            // Case 2: Task completed but UI didn't update (defensive)
-            if isCompiling && compilationTask == nil {
-                isCompiling = false
-                compilingModel = nil
-            }
-            
             // If user already has models, mark as initiated
-            if modelManager.hasModel || modelManager.isAnyModelDownloading {
+            if modelManager.hasModel || modelManager.isAnyModelBusy {
                 userHasInitiatedDownload = true
             }
         }
@@ -824,9 +765,40 @@ struct OnboardingView: View {
     @ViewBuilder
     private func modelStatusView(for model: ModelManager.ModelSize) -> some View {
         let state = modelManager.downloadState(for: model)
-        
-        // Check if this model is currently compiling
-        if isCompiling && compilingModel == model {
+
+        switch state {
+        case .idle, .checking:
+            Button("Download") {
+                userHasInitiatedDownload = true
+                Task { @MainActor in
+                    await modelManager.downloadModel(model)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+        case .downloading(let progress):
+            HStack(spacing: 6) {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 50)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, alignment: .trailing)
+                // Cancel button
+                Button {
+                    modelManager.cancelDownload(model)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancel download")
+            }
+
+        case .compiling:
             HStack(spacing: 6) {
                 ProgressView()
                     .scaleEffect(0.7)
@@ -834,116 +806,31 @@ struct OnboardingView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        } else if let error = compilationError, compilingModel == model {
-            // Compilation failed for this model
+
+        case .completed:
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Ready")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+        case .failed(let error):
             Button("Retry") {
-                compilationError = nil
-                startCompilation(for: model)
+                userHasInitiatedDownload = true
+                // If model is downloaded but compilation failed, retry compilation only
+                if modelManager.downloadedModels.contains(model) {
+                    modelManager.retryCompilation(model)
+                } else {
+                    Task { @MainActor in
+                        await modelManager.downloadModel(model)
+                    }
+                }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help(error.localizedDescription)
-        } else {
-            switch state {
-            case .idle, .checking:
-                Button("Download") {
-                    userHasInitiatedDownload = true
-                    Task { @MainActor in
-                        await modelManager.downloadModel(model)
-                        // After download completes, start compilation
-                        if modelManager.downloadState(for: model) == .completed {
-                            startCompilation(for: model)
-                        }
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                
-            case .downloading(let progress):
-                HStack(spacing: 6) {
-                    ProgressView(value: progress)
-                        .progressViewStyle(.linear)
-                        .frame(width: 50)
-                    Text("\(Int(progress * 100))%")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 30, alignment: .trailing)
-                    // Cancel button
-                    Button {
-                        modelManager.cancelDownload(model)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Cancel download")
-                }
-                
-            case .completed:
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Text("Ready")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                
-            case .failed(let error):
-                Button("Retry") {
-                    userHasInitiatedDownload = true
-                    Task { @MainActor in
-                        await modelManager.downloadModel(model)
-                        // After download completes, start compilation
-                        if modelManager.downloadState(for: model) == .completed {
-                            startCompilation(for: model)
-                        }
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help(error)
-            }
-        }
-    }
-    
-    // MARK: - Model Compilation
-    
-    /// Start compiling a model for the device
-    private func startCompilation(for model: ModelManager.ModelSize) {
-        // Prevent overlapping compilations (per plan Issue 3)
-        guard !isCompiling else {
-            // Log skipped compilation for debugging (per bdb9 review)
-            print("Skipping compilation for \(model) - already compiling \(String(describing: compilingModel))")
-            return
-        }
-        
-        isCompiling = true
-        compilingModel = model
-        compilationStartTime = Date()
-        compilationError = nil
-        
-        compilationTask = Task {
-            do {
-                try await modelManager.compileModel(model)
-                
-                // Check if we were cancelled while compiling (per plan Issue 5)
-                guard !Task.isCancelled else { return }
-                
-                await MainActor.run {
-                    isCompiling = false
-                    compilingModel = nil
-                    // Model is now ready for use
-                }
-            } catch {
-                // Check if we were cancelled while compiling (per plan Issue 5)
-                guard !Task.isCancelled else { return }
-                
-                await MainActor.run {
-                    compilationError = error
-                    isCompiling = false
-                }
-            }
+            .help(error)
         }
     }
     

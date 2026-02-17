@@ -6,12 +6,42 @@ struct DownloadIndicatorView: View {
     @Bindable var viewModel: MuesliViewModel
     
     var body: some View {
-        if viewModel.isAnyModelDownloading {
+        if viewModel.isAnyModelBusy {
             VStack(alignment: .trailing, spacing: 8) {
                 ForEach(viewModel.activeDownloads, id: \.name) { download in
-                    downloadPill(name: download.name, progress: download.progress)
+                    if download.progress < 0 {
+                        compilingPill(name: download.name)
+                    } else {
+                        downloadPill(name: download.name, progress: download.progress)
+                    }
                 }
             }
+        }
+    }
+
+    private func compilingPill(name: String) -> some View {
+        HStack(spacing: 8) {
+            // Compiling spinner
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.7)
+
+            // Model name
+            Text(name)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.primary)
+
+            // Optimizing label
+            Text("Optimizing...")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background {
+            Capsule()
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
         }
     }
     
@@ -65,20 +95,32 @@ struct CompactDownloadIndicator: View {
     @Bindable var viewModel: MuesliViewModel
     
     var body: some View {
-        if viewModel.isAnyModelDownloading && !viewModel.modelManager.hasModel {
+        if viewModel.isAnyModelBusy && !viewModel.modelManager.hasModel {
             HStack(spacing: 6) {
-                Image(systemName: "arrow.down.circle")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-                
-                Text("Downloading model...")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                
                 if let firstDownload = viewModel.activeDownloads.first {
-                    Text("\(Int(firstDownload.progress * 100))%")
-                        .font(.system(size: 10).monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                    if firstDownload.progress < 0 {
+                        // Compiling
+                        ProgressView()
+                            .controlSize(.mini)
+                            .scaleEffect(0.6)
+
+                        Text("Optimizing model...")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // Downloading
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.orange)
+
+                        Text("Downloading model...")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+
+                        Text("\(Int(firstDownload.progress * 100))%")
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
             .padding(.horizontal, 8)

@@ -17,6 +17,11 @@ final class MockModelManager: ModelManagerProtocol, @unchecked Sendable {
     var hasModel: Bool {
         activeModel != nil && downloadedModels.contains(activeModel!)
     }
+
+    var isActiveModelReady: Bool {
+        guard let active = activeModel else { return false }
+        return downloadStates[active] == .completed
+    }
     
     var modelDirectory: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("MockMuesliModels")
@@ -42,6 +47,7 @@ final class MockModelManager: ModelManagerProtocol, @unchecked Sendable {
     var deleteModelCallCount: Int = 0
     var showModelsInFinderCallCount: Int = 0
     var resetCallCount: Int = 0
+    var retryCompilationCallCount: Int = 0
     
     var lastDownloadedModel: ModelManager.ModelSize?
     var lastSetActiveModel: ModelManager.ModelSize?
@@ -158,6 +164,12 @@ final class MockModelManager: ModelManagerProtocol, @unchecked Sendable {
             downloadStates[model] = .idle
         }
     }
+
+    func retryCompilation(_ model: ModelManager.ModelSize) {
+        retryCompilationCallCount += 1
+        // In mock, just transition to completed
+        downloadStates[model] = .completed
+    }
     
     // MARK: - Test Helpers
     
@@ -189,6 +201,7 @@ final class MockModelManager: ModelManagerProtocol, @unchecked Sendable {
         deleteModelCallCount = 0
         showModelsInFinderCallCount = 0
         resetCallCount = 0
+        retryCompilationCallCount = 0
         lastDownloadedModel = nil
         lastSetActiveModel = nil
         lastDeletedModel = nil

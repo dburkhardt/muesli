@@ -72,7 +72,8 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         case idle
         case checking
         case downloading(progress: Double)
-        case completed
+        case compiling   // CoreML optimization in progress
+        case completed   // Downloaded AND compiled — ready for use
         case failed(String)
     }
     
@@ -86,6 +87,9 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     
     /// Active download tasks (for cancellation support)
     private var downloadTasks: [ModelSize: Task<Void, Never>] = [:]
+
+    /// Active compilation tasks (for lifecycle management)
+    private var compilationTasks: [ModelSize: Task<Void, Never>] = [:]
     
     /// Stored paths for downloaded models (persisted to UserDefaults)
     /// Key: model rawValue, Value: actual path returned by WhisperKit.download()
@@ -108,6 +112,12 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     /// Check if at least one model is downloaded and active
     var hasModel: Bool {
         activeModel != nil && downloadedModels.contains(activeModel!)
+    }
+
+    /// Whether the active model is fully ready (downloaded AND compiled)
+    var isActiveModelReady: Bool {
+        guard let active = activeModel else { return false }
+        return downloadStates[active] == .completed
     }
     
     // MARK: - Storage Keys (use centralized AppStorageKeys)
@@ -153,6 +163,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
                 UserDefaults.standard.set(firstValid.rawValue, forKey: AppStorageKeys.activeWhisperModel)
             }
             // If no valid models found, activeModel remains nil
+
+            // Trigger background compilation probe for the active model
+            // Fast (~1-2s) if CoreML cache is warm; full compilation if cache was evicted
+            probeActiveModelCompilation()
         }
     }
     
@@ -379,12 +393,22 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             let hasPath = pathForModel(model) != nil
             if isValid {
                 downloadedModels.insert(model)
+                // Non-active models get .completed; active model gets compiled below
                 downloadStates[model] = .completed
             } else if hasPath {
                 // Model directory exists but is incomplete/corrupted
                 downloadStates[model] = .failed("Model is incomplete or corrupted")
             }
         }
+    }
+
+    /// Trigger compilation probe for the active model on app launch.
+    /// Call this after init has set activeModel.
+    /// Fast (~1-2s) if CoreML cache is warm; full compilation if cache was evicted.
+    func probeActiveModelCompilation() {
+        guard let active = activeModel, downloadedModels.contains(active) else { return }
+        downloadStates[active] = .compiling
+        startCompilation(for: active)
     }
     
     // MARK: - Download
@@ -430,23 +454,26 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
                 }
                 
                 Self.logger.info("Download completed successfully for \(model.displayName). Folder: \(folder)")
-                
+
                 // Store the actual path returned by WhisperKit (it's already a URL)
                 self.modelPaths[model] = folder
                 Self.logger.info("Stored model path: \(folder.path)")
-                
+
                 // Mark as downloaded
                 self.downloadedModels.insert(model)
-                self.downloadStates[model] = .completed
-                
+
                 // If no active model, set this as active
                 if self.activeModel == nil {
                     self.setActiveModel(model)
                 }
-                
+
                 // Persist both downloaded models and paths
                 self.saveDownloadedModels()
                 self.saveModelPaths()
+
+                // Transition to compiling and start compilation
+                self.downloadStates[model] = .compiling
+                self.startCompilation(for: model)
             } catch {
                 // Check if this was a cancellation
                 if Task.isCancelled {
@@ -543,6 +570,16 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             return false
         }
     }
+
+    /// Check if any model is currently downloading or compiling
+    var isAnyModelBusy: Bool {
+        downloadStates.values.contains { state in
+            switch state {
+            case .downloading, .compiling: return true
+            default: return false
+            }
+        }
+    }
     
     /// Set the active model for transcription
     func setActiveModel(_ model: ModelSize) {
@@ -552,7 +589,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     }
     
     // MARK: - Model Compilation
-    
+
     /// Compile model for device (triggers CoreML optimization on first use)
     /// - Parameters:
     ///   - model: The model size to compile
@@ -563,13 +600,13 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         guard let modelPath = pathForModel(model) else {
             throw MuesliError.modelNotFound
         }
-        
+
         // Use the same config as TranscriptionService.initialize() to ensure path parity
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let muesliDir = appSupport.appendingPathComponent("Muesli", isDirectory: true)
-        
+
         Self.logger.info("Compiling model \(model.displayName) at path: \(modelPath.path)")
-        
+
         let config = WhisperKitConfig(
             downloadBase: muesliDir,
             modelFolder: modelPath.path,
@@ -577,12 +614,78 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             verbose: false,
             download: false
         )
-        
+
         // Initialize WhisperKit - this triggers CoreML compilation on first use
         // The instance is discarded after; we only care about the compilation side effect
         _ = try await WhisperKit(config)
-        
+
         Self.logger.info("Model compilation completed for \(model.displayName)")
+    }
+
+    /// Start background compilation for a model.
+    /// Transitions .compiling → .completed or .failed.
+    private func startCompilation(for model: ModelSize) {
+        // Guard against duplicate compilations
+        guard compilationTasks[model] == nil else {
+            Self.logger.info("Skipping compilation for \(model.displayName) - already in progress")
+            return
+        }
+
+        Task {
+            await DiagnosticLogger.shared.log(.transcription, "Compilation started for \(model.displayName)")
+        }
+
+        let task = Task { [weak self] in
+            guard let self = self else { return }
+            let startTime = Date()
+
+            do {
+                try await self.compileModel(model)
+
+                // Check cancellation before updating state
+                guard !Task.isCancelled else { return }
+
+                let duration = Date().timeIntervalSince(startTime)
+                self.downloadStates[model] = .completed
+
+                Task {
+                    await DiagnosticLogger.shared.log(
+                        .transcription,
+                        "Compilation completed for \(model.displayName) in \(String(format: "%.1f", duration))s"
+                    )
+                }
+            } catch {
+                // Check cancellation before updating state
+                guard !Task.isCancelled else { return }
+
+                self.downloadStates[model] = .failed("Optimization failed: \(error.localizedDescription)")
+
+                Task {
+                    await DiagnosticLogger.shared.log(
+                        .transcription,
+                        "Compilation failed for \(model.displayName): \(error.localizedDescription)"
+                    )
+                }
+            }
+
+            // Remove task reference after completion
+            self.compilationTasks.removeValue(forKey: model)
+        }
+
+        compilationTasks[model] = task
+    }
+
+    /// Retry compilation after a failure (no re-download needed).
+    func retryCompilation(_ model: ModelSize) {
+        // Only retry from failed state
+        guard case .failed = downloadStates[model] else { return }
+        // Must be a downloaded model
+        guard downloadedModels.contains(model) else { return }
+        // Guard against duplicate compilations
+        guard compilationTasks[model] == nil else { return }
+
+        downloadStates[model] = .compiling
+        startCompilation(for: model)
     }
     
     // MARK: - Persistence
@@ -627,6 +730,12 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     @MainActor
     func deleteModel(_ model: ModelSize) -> Bool {
         guard downloadedModels.contains(model) else { return false }
+
+        // Cancel any active compilation task
+        if let task = compilationTasks[model] {
+            task.cancel()
+            compilationTasks.removeValue(forKey: model)
+        }
         
         // Get the model directory path
         guard let modelPath = pathForModel(model) else {
@@ -682,6 +791,12 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     // MARK: - Reset
     
     func reset() {
+        // Cancel all compilation tasks
+        for (_, task) in compilationTasks {
+            task.cancel()
+        }
+        compilationTasks.removeAll()
+
         for model in ModelSize.allCases {
             downloadStates[model] = .idle
         }

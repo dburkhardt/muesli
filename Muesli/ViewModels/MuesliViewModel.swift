@@ -70,31 +70,47 @@ final class MuesliViewModel {
     }
     
     // MARK: - Model Download State (for background download indicator)
-    
+
+    /// Whether the active model is fully ready (downloaded AND compiled)
+    var isActiveModelReady: Bool {
+        modelManager.isActiveModelReady
+    }
+
     /// Whether any model (WhisperKit or LLM) is currently downloading
     var isAnyModelDownloading: Bool {
         modelManager.isAnyModelDownloading || llmManager.isAnyModelDownloading
     }
-    
-    /// Active downloads with progress information (for UI indicator)
-    /// Returns array of tuples: (model name, progress 0.0-1.0)
+
+    /// Whether any model (WhisperKit or LLM) is currently downloading or compiling
+    var isAnyModelBusy: Bool {
+        modelManager.isAnyModelBusy || llmManager.isAnyModelDownloading
+    }
+
+    /// Active downloads/compilations with progress information (for UI indicator)
+    /// Returns array of tuples: (model name, progress 0.0-1.0 for downloads, -1 for compiling)
     var activeDownloads: [(name: String, progress: Double)] {
         var downloads: [(name: String, progress: Double)] = []
-        
+
         // Check WhisperKit models
         for model in ModelManager.ModelSize.allCases {
-            if case .downloading(let progress) = modelManager.downloadState(for: model) {
+            let state = modelManager.downloadState(for: model)
+            switch state {
+            case .downloading(let progress):
                 downloads.append((name: model.displayName, progress: progress))
+            case .compiling:
+                downloads.append((name: model.displayName, progress: -1))
+            default:
+                break
             }
         }
-        
+
         // Check LLM models
         for model in LLMManager.LLMModel.allCases {
             if case .downloading(let progress) = llmManager.downloadState(for: model) {
                 downloads.append((name: model.displayName, progress: progress))
             }
         }
-        
+
         return downloads
     }
     

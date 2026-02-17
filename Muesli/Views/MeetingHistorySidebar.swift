@@ -75,10 +75,18 @@ struct MeetingHistorySidebar: View {
                 },
                 label: {
                     HStack(spacing: 4) {
-                        Text("New")
-                            .font(.system(size: 13, weight: .medium))
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .semibold))
+                        if !viewModel.isActiveModelReady && viewModel.activeSession == nil {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.7)
+                            Text("Preparing...")
+                                .font(.system(size: 13, weight: .medium))
+                        } else {
+                            Text("New")
+                                .font(.system(size: 13, weight: .medium))
+                            Image(systemName: "plus")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12)
@@ -88,7 +96,7 @@ struct MeetingHistorySidebar: View {
                 }
             )
             .buttonStyle(.plain)
-            .disabled(viewModel.activeSession != nil)
+            .disabled(viewModel.activeSession != nil || !viewModel.isActiveModelReady)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

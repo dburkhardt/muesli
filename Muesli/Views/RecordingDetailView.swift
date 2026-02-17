@@ -103,8 +103,8 @@ struct RecordingDetailView: View {
                     )
                 }
                 
-                // Audio-only mode banner (shown when model is downloading)
-                if session.isRecordingOnly && viewModel.isAnyModelDownloading {
+                // Audio-only mode banner (shown when model is downloading or compiling)
+                if session.isRecordingOnly && viewModel.isAnyModelBusy {
                     audioOnlyBanner
                 }
                 
