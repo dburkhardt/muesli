@@ -53,6 +53,7 @@
 static constexpr int kFrameSize = 480;
 
 namespace {
+#if WEBRTC_AVAILABLE
 // Create AudioProcessing instance using v2.x API
 // Note: In webrtc-audio-processing v2.x:
 // - Create() returns rtc::scoped_refptr<AudioProcessing>, not raw pointer
@@ -60,6 +61,7 @@ namespace {
 inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
     return webrtc::AudioProcessingBuilder().Create();
 }
+#endif
 }  // namespace
 
 @implementation WebRTCAECBridge {
