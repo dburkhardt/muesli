@@ -108,10 +108,9 @@ if [ ! -d "${WEBRTC_FRAMEWORK_PATH}" ]; then
     log_warning "WebRTC framework not found at ${WEBRTC_FRAMEWORK_PATH}"
     log_info "Building without WebRTC AEC support (stub implementation)"
     WEBRTC_FLAGS=(
-        'OTHER_LDFLAGS=$(inherited) -lc++'
-        'LIBRARY_SEARCH_PATHS=$(inherited)'
-        'HEADER_SEARCH_PATHS=$(inherited)'
-        'FRAMEWORK_SEARCH_PATHS=$(inherited)'
+        'OTHER_LDFLAGS=-lc++'
+        'LIBRARY_SEARCH_PATHS='
+        'HEADER_SEARCH_PATHS='
     )
 fi
 

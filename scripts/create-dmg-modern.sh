@@ -141,13 +141,12 @@ WEBRTC_FRAMEWORK_PATH="${PROJECT_ROOT}/Muesli/Frameworks/webrtc_audio_processing
 if [ ! -d "${WEBRTC_FRAMEWORK_PATH}" ]; then
     log_warning "WebRTC framework not found at ${WEBRTC_FRAMEWORK_PATH}"
     log_info "Building without WebRTC AEC support (stub implementation)"
-    # Override linker flags to remove -lwebrtc-audio-all and strip framework search paths
-    # that point to the missing xcframework. Use $(inherited) to keep SPM/system paths.
+    # Override linker/search flags to exclude WebRTC references entirely.
+    # Cannot use $(inherited) as it pulls in the project-level -lwebrtc-audio-all.
     WEBRTC_FLAGS=(
-        'OTHER_LDFLAGS=$(inherited) -lc++'
-        'LIBRARY_SEARCH_PATHS=$(inherited)'
-        'HEADER_SEARCH_PATHS=$(inherited)'
-        'FRAMEWORK_SEARCH_PATHS=$(inherited)'
+        'OTHER_LDFLAGS=-lc++'
+        'LIBRARY_SEARCH_PATHS='
+        'HEADER_SEARCH_PATHS='
     )
 fi
 
