@@ -158,7 +158,10 @@ struct OnboardingView: View {
 
             if oldValue == .screenRecording && newValue != .screenRecording {
                 screenRecordingRequested = false
-                didConfirmSystemAudioThisSession = false
+                // Only reset the confirmation flag if going backwards, not when advancing to microphone
+                if newValue.rawValue < oldValue.rawValue || newValue == .welcome {
+                    didConfirmSystemAudioThisSession = false
+                }
             }
             
             // Check permissions when switching to permission steps
@@ -321,35 +324,6 @@ struct OnboardingView: View {
                             "Pre-probe focus: isActive=\(NSApp.isActive), policy=\(NSApp.activationPolicy()), hasKeyWindow=\(NSApp.keyWindow != nil), frontmost=\(frontmostBundleID)"
                         )
                     }
-                    // #region agent log
-                    let buttonPayload: [String: Any] = [
-                        "location": "OnboardingView.swift:GrantSystemAudioAccess",
-                        "message": "Grant System Audio Access tapped",
-                        "data": [
-                            "currentStep": currentStep.rawValue,
-                            "hasScreenRecordingPermission": viewModel.hasScreenRecordingPermission,
-                            "screenRecordingRequested": screenRecordingRequested
-                        ],
-                        "timestamp": Date().timeIntervalSince1970 * 1000,
-                        "sessionId": "debug-session",
-                        "runId": "pre",
-                        "hypothesisId": "H2"
-                    ]
-                    if let jsonData = try? JSONSerialization.data(withJSONObject: buttonPayload),
-                       let jsonStr = String(data: jsonData, encoding: .utf8) {
-                        if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                            handle.seekToEndOfFile()
-                            handle.write((jsonStr + "\n").data(using: .utf8)!)
-                            handle.closeFile()
-                        } else {
-                            try? (jsonStr + "\n").write(
-                                toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
-                                atomically: false,
-                                encoding: .utf8
-                            )
-                        }
-                    }
-                    // #endregion
                     screenRecordingRequested = true
                     Task {
                         await DiagnosticLogger.shared.log(.onboarding, "Calling requestScreenRecordingPermission()")
@@ -1095,40 +1069,6 @@ struct OnboardingView: View {
             }
             return
         }
-
-        // #region agent log
-        let advancePayload: [String: Any] = [
-            "location": "OnboardingView.swift:advanceBasedOnPermissions",
-            "message": "Evaluating onboarding step advance",
-            "data": [
-                "mode": String(describing: mode),
-                "currentStep": currentStep.rawValue,
-                "hasScreenRecordingPermission": viewModel.hasScreenRecordingPermission,
-                "hasMicrophonePermission": viewModel.hasMicrophonePermission,
-                "preflightScreenCapture": CGPreflightScreenCaptureAccess(),
-                "didConfirmSystemAudioThisSession": didConfirmSystemAudioThisSession,
-                "isSystemAudioProbeInFlight": viewModel.permissionManager.isSystemAudioProbeInFlight
-            ],
-            "timestamp": Date().timeIntervalSince1970 * 1000,
-            "sessionId": "debug-session",
-            "runId": "pre",
-            "hypothesisId": "H1"
-        ]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: advancePayload),
-           let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            } else {
-                try? (jsonStr + "\n").write(
-                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
-                    atomically: false,
-                    encoding: .utf8
-                )
-            }
-        }
-        // #endregion
 
         Task {
             await DiagnosticLogger.shared.log(

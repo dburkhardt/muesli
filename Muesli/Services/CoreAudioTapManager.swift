@@ -6,7 +6,6 @@
 //  macOS 26+ only. Captures default output mix excluding Muesli's own audio.
 //
 
-import AppKit
 import Foundation
 import CoreAudio
 import AudioToolbox
@@ -51,16 +50,6 @@ enum TapState: Equatable {
     case micOnly(reason: String)
 }
 
-// MARK: - Self-Test Results
-
-/// Results from tap self-tests
-struct TapSelfTestResult {
-    let systemSoundPresent: Bool
-    let muesliExcluded: Bool
-    let tapRMSLevel: Float
-    let timestamp: Date
-}
-
 // MARK: - Tap Callback
 
 /// Callback for receiving tap audio data
@@ -103,14 +92,14 @@ final class CoreAudioTapManager: @unchecked Sendable {
     
     /// Audio callback for receiving tap data
     private var audioCallback: TapAudioCallback?
+
+    /// Cached tap stream format (for decoding diagnostics)
+    private var tapStreamFormat: AudioStreamBasicDescription?
     
     /// Lock for thread-safe state access
     private let stateLock = NSLock()
     
-    /// Self-test state
-    private var lastSelfTestResult: TapSelfTestResult?
-    
-    /// RMS monitoring for self-test
+    /// RMS monitoring for runtime validation
     private var rollingRMS: Float = 0
     private var rmsFrameCount: Int = 0
     
@@ -179,6 +168,9 @@ final class CoreAudioTapManager: @unchecked Sendable {
             print("[TAP DEBUG] Created aggregate device: \(self.aggregateDeviceID)")
             logger.info("Created aggregate device: \(self.aggregateDeviceID)")
 
+            // Capture tap stream format for decoding diagnostics
+            tapStreamFormat = try? aggregateDeviceManager?.getTapFormat()
+
             // Start the device with retries
             print("[TAP DEBUG] Starting device with retries...")
             try startDeviceWithRetries()
@@ -222,36 +214,6 @@ final class CoreAudioTapManager: @unchecked Sendable {
         cleanupTap()
         state = .micOnly(reason: reason)
         logger.warning("Degraded to mic-only mode: \(reason)")
-    }
-    
-    /// Run self-tests to verify tap is working correctly
-    /// - Returns: Self-test results
-    func runSelfTests() async -> TapSelfTestResult {
-        // Self-test A: System sound present
-        // Play a known system sound and verify non-zero RMS
-        let systemSoundPresent = await testSystemSoundPresent()
-        
-        // Self-test B: Muesli excluded
-        // Play audio from Muesli and verify near-zero RMS
-        let muesliExcluded = await testMuesliExcluded()
-        
-        let result = TapSelfTestResult(
-            systemSoundPresent: systemSoundPresent,
-            muesliExcluded: muesliExcluded,
-            tapRMSLevel: rollingRMS,
-            timestamp: Date()
-        )
-        
-        lastSelfTestResult = result
-        
-        Task {
-            await DiagnosticLogger.shared.log(.aec,
-                "TAP_SELF_TEST: systemSoundPresent=\(systemSoundPresent), " +
-                "muesliExcluded=\(muesliExcluded), " +
-                "rms=\(String(format: "%.4f", rollingRMS))")
-        }
-        
-        return result
     }
     
     /// Get current RMS level (for monitoring)
@@ -360,33 +322,7 @@ final class CoreAudioTapManager: @unchecked Sendable {
             ioProcNoBuffersCount += 1
             return
         }
-        
-        // #region agent log
-        // Log buffer info to debug which buffer has actual audio
-        if ioProcCallCount <= 5 || ioProcCallCount % 1000 == 0 {
-            var bufferInfo: [[String: Any]] = []
-            let numBuffers = Int(bufferList.mNumberBuffers)
-            withUnsafePointer(to: bufferList.mBuffers) { ptr in
-                for i in 0..<numBuffers {
-                    let buf = ptr.advanced(by: i).pointee
-                    var maxVal: Float = 0
-                    if let data = buf.mData {
-                        let floats = data.assumingMemoryBound(to: Float.self)
-                        let count = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
-                        for j in 0..<min(100, count) { maxVal = max(maxVal, abs(floats[j])) }
-                    }
-                    bufferInfo.append(["index": i, "channels": buf.mNumberChannels, "bytes": buf.mDataByteSize, "hasData": buf.mData != nil, "maxFirst100": maxVal])
-                }
-            }
-            let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:handleIOProc", "message": "IOProc buffer list", "data": ["numBuffers": numBuffers, "buffers": bufferInfo, "callCount": ioProcCallCount], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "I"]
-            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                    handle.seekToEndOfFile(); handle.write((jsonStr + "\n").data(using: .utf8)!); handle.closeFile()
-                } else { try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8) }
-            }
-        }
-        // #endregion
-        
+
         // Get first buffer (mono or interleaved stereo)
         let buffer = bufferList.mBuffers
         guard let dataPtr = buffer.mData else {
@@ -431,23 +367,8 @@ final class CoreAudioTapManager: @unchecked Sendable {
             let frameRMS = sqrt(sumSquares / Float(count))
             // Exponential moving average with ~100ms time constant at 48kHz
             let alpha: Float = 0.1
-            let prevRMS = rollingRMS
             rollingRMS = rollingRMS * (1 - alpha) + frameRMS * alpha
             rmsFrameCount += 1
-            
-            // #region agent log
-            // Log every 100th frame to avoid flooding (RT callback)
-            if rmsFrameCount % 100 == 1 || rmsFrameCount <= 3 {
-                let logPayload: [String: Any] = ["location": "CoreAudioTapManager.swift:388", "message": "updateRMS called", "data": ["rmsFrameCount": rmsFrameCount, "frameRMS": frameRMS, "prevRMS": prevRMS, "newRMS": rollingRMS, "frameCount": frameCount, "channels": channels, "totalSamples": totalSamples, "sampledCount": count], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,C,E"]
-                if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-                    if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                        handle.seekToEndOfFile()
-                        handle.write((jsonStr + "\n").data(using: .utf8)!)
-                        handle.closeFile()
-                    }
-                }
-            }
-            // #endregion
         }
     }
     
@@ -468,112 +389,6 @@ final class CoreAudioTapManager: @unchecked Sendable {
         audioCallback = nil
     }
     
-    // MARK: - Self-Test Implementation
-    
-    /// Test that system sound is captured
-    private func testSystemSoundPresent() async -> Bool {
-        // Reset RMS counter
-        let initialRMS = rollingRMS
-        rmsFrameCount = 0
-        
-        // #region agent log
-        let logPayload1: [String: Any] = ["location": "CoreAudioTapManager.swift:413", "message": "testSystemSoundPresent START", "data": ["initialRMS": initialRMS, "rmsFrameCount": rmsFrameCount, "tapState": String(describing: state)], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,C,E"]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload1), let jsonStr = String(data: jsonData, encoding: .utf8) {
-            try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8)
-        }
-        // #endregion
-        
-        // Play system sound (this plays from another process, should be captured)
-        // We use NSSound which plays through the system
-        await MainActor.run {
-            NSSound.beep()
-        }
-        
-        // #region agent log
-        let logPayload2: [String: Any] = ["location": "CoreAudioTapManager.swift:425", "message": "After NSSound.beep()", "data": ["rmsFrameCountAfterBeep": rmsFrameCount, "rollingRMSAfterBeep": rollingRMS], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "B"]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload2), let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            }
-        }
-        // #endregion
-        
-        // Wait for sound to propagate (2 seconds)
-        try? await Task.sleep(for: .seconds(2))
-        
-        // #region agent log
-        let logPayload3: [String: Any] = ["location": "CoreAudioTapManager.swift:438", "message": "After 2s wait", "data": ["rmsFrameCountAfterWait": rmsFrameCount, "rollingRMSAfterWait": rollingRMS], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,C,E"]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload3), let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            }
-        }
-        // #endregion
-        
-        // Check if RMS increased significantly
-        let rmsThreshold: Float = 0.001  // Very low threshold
-        let detected = rollingRMS > rmsThreshold || rmsFrameCount > 0
-        
-        logger.debug("Self-test A: systemSoundPresent=\(detected), rms=\(self.rollingRMS)")
-        return detected
-    }
-    
-    /// Test that Muesli's own audio is excluded
-    private func testMuesliExcluded() async -> Bool {
-        // This test would require playing audio from within Muesli
-        // and verifying it doesn't appear in the tap
-        // For now, we assume exclusion works if the tap is running
-        // A more thorough test would involve playing a known tone
-        
-        // Since we excluded Muesli's PID during tap creation,
-        // we verify the tap RMS stays low when no external audio plays
-        
-        // #region agent log
-        let logPayload1: [String: Any] = ["location": "CoreAudioTapManager.swift:488", "message": "testMuesliExcluded START - IOProc Stats", "data": [
-            "rmsFrameCountBefore": rmsFrameCount, 
-            "rollingRMSBefore": rollingRMS, 
-            "ioProcCallCount": ioProcCallCount,
-            "ioProcNilDataCount": ioProcNilDataCount,
-            "ioProcNoBuffersCount": ioProcNoBuffersCount,
-            "ioProcNilMDataCount": ioProcNilMDataCount,
-            "ioProcSuccessCount": ioProcSuccessCount,
-            "lastFrameCount": lastFrameCount,
-            "lastChannelCount": lastChannelCount
-        ], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "F,G"]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload1), let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            }
-        }
-        // #endregion
-        
-        // Wait briefly and check RMS
-        try? await Task.sleep(for: .seconds(1))
-        
-        // RMS should be very low (near silence) when only Muesli might be outputting
-        let silenceThreshold: Float = 0.0001
-        let isExcluded = rollingRMS < silenceThreshold || rmsFrameCount == 0
-        
-        // #region agent log
-        let logPayload2: [String: Any] = ["location": "CoreAudioTapManager.swift:505", "message": "testMuesliExcluded END", "data": ["rmsFrameCountAfter": rmsFrameCount, "rollingRMSAfter": rollingRMS, "silenceThreshold": silenceThreshold, "isExcluded": isExcluded, "ioProcCallCount": ioProcCallCount], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "E"]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload2), let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            }
-        }
-        // #endregion
-        
-        logger.debug("Self-test B: muesliExcluded=\(isExcluded), rms=\(self.rollingRMS)")
-        return isExcluded
-    }
 }
 
 // MARK: - Errors
@@ -585,8 +400,7 @@ enum CoreAudioTapError: Error, LocalizedError {
     case ioProcCreationFailed(OSStatus)
     case tapCreationFailed(OSStatus)
     case permissionDenied
-    case selfTestFailed(String)
-    
+
     var errorDescription: String? {
         switch self {
         case .alreadyRunning:
@@ -601,8 +415,6 @@ enum CoreAudioTapError: Error, LocalizedError {
             return "Failed to create tap (status: \(status))"
         case .permissionDenied:
             return "Audio capture permission denied"
-        case .selfTestFailed(let reason):
-            return "Self-test failed: \(reason)"
         }
     }
 }

@@ -109,45 +109,6 @@ final class AggregateDeviceManager {
         // Verify the tap is attached to the aggregate device
         verifyTapAttachment()
 
-        // #region agent log
-        // Log the tap's actual format
-        var tapFormat = AudioStreamBasicDescription()
-        var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-        var formatAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioTapPropertyFormat,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        let formatStatus = AudioObjectGetPropertyData(tapObjectID, &formatAddress, 0, nil, &formatSize, &tapFormat)
-        if formatStatus == noErr {
-            let logPayload: [String: Any] = [
-                "location": "AggregateDeviceManager.swift:createDevice",
-                "message": "Tap format from kAudioTapPropertyFormat",
-                "data": [
-                    "sampleRate": tapFormat.mSampleRate,
-                    "formatID": tapFormat.mFormatID,
-                    "formatFlags": tapFormat.mFormatFlags,
-                    "bytesPerPacket": tapFormat.mBytesPerPacket,
-                    "framesPerPacket": tapFormat.mFramesPerPacket,
-                    "bytesPerFrame": tapFormat.mBytesPerFrame,
-                    "channelsPerFrame": tapFormat.mChannelsPerFrame,
-                    "bitsPerChannel": tapFormat.mBitsPerChannel,
-                    "isFloat": (tapFormat.mFormatFlags & kAudioFormatFlagIsFloat) != 0,
-                    "isSignedInt": (tapFormat.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0,
-                    "tapObjectID": tapObjectID
-                ],
-                "timestamp": Date().timeIntervalSince1970 * 1000,
-                "sessionId": "debug-session",
-                "hypothesisId": "K"
-            ]
-            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                    handle.seekToEndOfFile(); handle.write((jsonStr + "\n").data(using: .utf8)!); handle.closeFile()
-                } else { try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8) }
-            }
-        }
-        // #endregion
-        
         print("[TAP DEBUG] === Tap creation complete ===")
         return deviceID
     }
@@ -331,19 +292,6 @@ final class AggregateDeviceManager {
         print("[TAP DEBUG] Creating aggregate with tap only (no sub-devices)")
         print("[TAP DEBUG] tapUID: \(tapUID), aggregateUID: \(aggregateUID)")
         logger.info("Creating aggregate device with tap: \(tapUID)")
-        
-        // #region agent log
-        let logPayload: [String: Any] = ["location": "AggregateDeviceManager.swift:createAggregateDeviceWithTap", "message": "Creating aggregate with tap only", "data": ["tapUID": tapUID, "aggregateUID": aggregateUID], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "J"]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            } else {
-                try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8)
-            }
-        }
-        // #endregion
 
         var deviceID: AudioDeviceID = kAudioObjectUnknown
         let status = AudioHardwareCreateAggregateDevice(

@@ -3,6 +3,21 @@ import AppKit
 import CoreAudio
 import Foundation
 
+/// No-op IOProc callback as a C function pointer — has no Swift actor isolation context.
+/// CoreAudio invokes this on its IO thread; using a Swift closure (even at file scope)
+/// can inherit @MainActor isolation in Swift 6, causing a SIGTRAP crash.
+private func noOpIOProc(
+    _: AudioObjectID,
+    _: UnsafePointer<AudioTimeStamp>,
+    _: UnsafePointer<AudioBufferList>,
+    _: UnsafePointer<AudioTimeStamp>,
+    _: UnsafeMutablePointer<AudioBufferList>,
+    _: UnsafePointer<AudioTimeStamp>,
+    _: UnsafeMutableRawPointer?
+) -> OSStatus {
+    return noErr
+}
+
 /// Manages app permissions for audio capture and microphone access
 /// Can be injected into views via @Environment for permission state observation
 ///
@@ -89,56 +104,10 @@ final class PermissionManager: PermissionManagerProtocol {
         microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
 
         // Use persisted system audio permission result from our Core Audio tap probe.
-        // CGPreflightScreenCaptureAccess reflects the Screen Recording bucket and can be true
-        // even when System Audio Recording is not granted.
+        // Note: CGPreflightScreenCaptureAccess() only reflects Screen Recording, not System Audio
+        // Recording. Trust the cached tap probe result. If the user revoked permission, the tap
+        // will fail at recording time and the error handler will trigger recovery.
         audioCaptureGranted = UserDefaults.standard.bool(forKey: systemAudioPermissionDefaultsKey)
-        let preflightScreenCapture = CGPreflightScreenCaptureAccess()
-
-        if !preflightScreenCapture, audioCaptureGranted {
-            audioCaptureGranted = false
-            UserDefaults.standard.removeObject(forKey: systemAudioPermissionDefaultsKey)
-            Task {
-                await DiagnosticLogger.shared.log(
-                    .permission,
-                    "Cleared cached system audio permission (preflight=false)"
-                )
-            }
-        }
-
-        // #region agent log
-        let audioCaptureUsageDescription = Bundle.main.object(
-            forInfoDictionaryKey: "NSAudioCaptureUsageDescription"
-        ) as? String
-        let logPayload: [String: Any] = [
-            "location": "PermissionManager.swift:init",
-            "message": "Initial audio capture permission snapshot",
-            "data": [
-                "bundleId": Bundle.main.bundleIdentifier ?? "unknown",
-                "hasAudioCaptureUsageDescription": audioCaptureUsageDescription != nil,
-                "audioCaptureUsageDescription": audioCaptureUsageDescription ?? "MISSING",
-                "preflightScreenCapture": preflightScreenCapture,
-                "cachedSystemAudioGranted": audioCaptureGranted
-            ],
-            "timestamp": Date().timeIntervalSince1970 * 1000,
-            "sessionId": "debug-session",
-            "runId": "pre",
-            "hypothesisId": "H1"
-        ]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload),
-           let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            } else {
-                try? (jsonStr + "\n").write(
-                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
-                    atomically: false,
-                    encoding: .utf8
-                )
-            }
-        }
-        // #endregion
 
         // Observe app becoming active (user returns from System Settings)
         notificationCenterObservers.append(
@@ -284,39 +253,6 @@ final class PermissionManager: PermissionManagerProtocol {
             await DiagnosticLogger.shared.log(.permission, "requestSystemAudioPermission called - triggering via Core Audio tap probe")
         }
 
-        // #region agent log
-        let requestPayload: [String: Any] = [
-            "location": "PermissionManager.swift:requestScreenRecordingPermission",
-            "message": "Request system audio permission invoked",
-            "data": [
-                "isRunningTests": Self.isRunningTests,
-                "preflightScreenCapture": CGPreflightScreenCaptureAccess(),
-                "audioCaptureGranted": audioCaptureGranted,
-                "hasAudioCaptureUsageDescription": Bundle.main.object(
-                    forInfoDictionaryKey: "NSAudioCaptureUsageDescription"
-                ) != nil
-            ],
-            "timestamp": Date().timeIntervalSince1970 * 1000,
-            "sessionId": "debug-session",
-            "runId": "pre",
-            "hypothesisId": "H2"
-        ]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: requestPayload),
-           let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            } else {
-                try? (jsonStr + "\n").write(
-                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
-                    atomically: false,
-                    encoding: .utf8
-                )
-            }
-        }
-        // #endregion
-
         guard !Self.isRunningTests else {
             Task {
                 await DiagnosticLogger.shared.log(.permission, "EARLY RETURN: isRunningTests=true")
@@ -367,7 +303,7 @@ final class PermissionManager: PermissionManagerProtocol {
         var ioProcStatus: OSStatus = noErr
         var startStatus: OSStatus = noErr
         var granted = false
-        
+
         do {
             deviceID = try manager.createTapOnlyDevice(excludedProcessIDs: excludedPIDs)
         } catch let error as AggregateDeviceError {
@@ -380,15 +316,18 @@ final class PermissionManager: PermissionManagerProtocol {
         } catch {
             createStatus = -1
         }
-        
+
         if deviceID != kAudioObjectUnknown {
-            ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
-                &ioProcID,
+            // Use C function pointer API (AudioDeviceCreateIOProcID) instead of the
+            // block-based API. C function pointers have NO Swift actor isolation context,
+            // which avoids the SIGTRAP crash when CoreAudio invokes the callback on its
+            // IO thread (Swift 6 would otherwise check @MainActor isolation on the block).
+            ioProcStatus = AudioDeviceCreateIOProcID(
                 deviceID,
-                DispatchQueue.global(qos: .userInitiated)
-            ) { _, _, _, _, _ in
-                // no-op: we only need to start the device to trigger permission prompt
-            }
+                noOpIOProc,
+                nil,
+                &ioProcID
+            )
             
             if ioProcStatus == noErr, let procID = ioProcID {
                 startStatus = AudioDeviceStart(deviceID, procID)
@@ -404,42 +343,7 @@ final class PermissionManager: PermissionManagerProtocol {
             
             manager.destroyDevice()
         }
-        
-        // #region agent log
-        let probePayload: [String: Any] = [
-            "location": "PermissionManager.swift:triggerSystemAudioPermissionPrompt",
-            "message": "Core Audio tap probe result",
-            "data": [
-                "deviceID": deviceID,
-                "createStatus": createStatus,
-                "createStatusDesc": describeOSStatus(createStatus),
-                "ioProcStatus": ioProcStatus,
-                "ioProcStatusDesc": describeOSStatus(ioProcStatus),
-                "startStatus": startStatus,
-                "startStatusDesc": describeOSStatus(startStatus),
-                "granted": granted
-            ],
-            "timestamp": Date().timeIntervalSince1970 * 1000,
-            "sessionId": "debug-session",
-            "runId": "pre",
-            "hypothesisId": "H3"
-        ]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: probePayload),
-           let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            } else {
-                try? (jsonStr + "\n").write(
-                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
-                    atomically: false,
-                    encoding: .utf8
-                )
-            }
-        }
-        // #endregion
-        
+
         Task {
             await DiagnosticLogger.shared.log(
                 .permission,
@@ -551,44 +455,9 @@ final class PermissionManager: PermissionManagerProtocol {
 
     func refreshPermissions() -> (screenRecording: Bool, microphone: Bool) {
         // Microphone check is always reliable
-        let oldAudioCapture = audioCaptureGranted
-        let oldMicrophone = microphoneGranted
         microphoneGranted = hasMicrophonePermission
 
         // Audio capture: keep cached result from tap probe to avoid screen-recording false positives
-        let preflight = CGPreflightScreenCaptureAccess()
-
-        // #region agent log
-        let refreshPayload: [String: Any] = [
-            "location": "PermissionManager.swift:refreshPermissions",
-            "message": "Permission refresh result",
-            "data": [
-                "preflightScreenCapture": preflight,
-                "oldAudioCapture": oldAudioCapture,
-                "newAudioCapture": audioCaptureGranted,
-                "oldMicrophone": oldMicrophone,
-                "newMicrophone": microphoneGranted
-            ],
-            "timestamp": Date().timeIntervalSince1970 * 1000,
-            "sessionId": "debug-session",
-            "runId": "pre",
-            "hypothesisId": "H1"
-        ]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: refreshPayload),
-           let jsonStr = String(data: jsonData, encoding: .utf8) {
-            if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                handle.seekToEndOfFile()
-                handle.write((jsonStr + "\n").data(using: .utf8)!)
-                handle.closeFile()
-            } else {
-                try? (jsonStr + "\n").write(
-                    toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
-                    atomically: false,
-                    encoding: .utf8
-                )
-            }
-        }
-        // #endregion
 
         return (audioCaptureGranted, microphoneGranted)
     }

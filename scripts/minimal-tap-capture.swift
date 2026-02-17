@@ -9,43 +9,7 @@ import AudioToolbox
 import AppKit
 import CoreGraphics
 
-let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-let sessionId = "debug-session"
-let runId = "tap-cli-pre"
-
-func appendDebugLog(hypothesisId: String, location: String, message: String, data: [String: Any]) {
-    // #region agent log
-    let payload: [String: Any] = [
-        "sessionId": sessionId,
-        "runId": runId,
-        "hypothesisId": hypothesisId,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": Date().timeIntervalSince1970 * 1000
-    ]
-    guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-          let jsonString = String(data: jsonData, encoding: .utf8) else {
-        return
-    }
-    if let handle = FileHandle(forWritingAtPath: logPath) {
-        handle.seekToEndOfFile()
-        handle.write((jsonString + "\n").data(using: .utf8)!)
-        handle.closeFile()
-    } else {
-        try? (jsonString + "\n").write(toFile: logPath, atomically: false, encoding: .utf8)
-    }
-    // #endregion
-}
-
-appendDebugLog(
-    hypothesisId: "A",
-    location: "minimal-tap-capture.swift:start",
-    message: "Starting minimal tap capture",
-    data: [
-        "screenCaptureAccess": CGPreflightScreenCaptureAccess()
-    ]
-)
+print("Starting minimal tap capture, screenCaptureAccess=\(CGPreflightScreenCaptureAccess())")
 
 // Create tap description
 let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
@@ -57,18 +21,7 @@ tapDescription.muteBehavior = .unmuted
 
 var tapID: AudioObjectID = kAudioObjectUnknown
 let tapStatus = AudioHardwareCreateProcessTap(tapDescription, &tapID)
-
-appendDebugLog(
-    hypothesisId: "A",
-    location: "minimal-tap-capture.swift:createTap",
-    message: "Created process tap",
-    data: [
-        "status": tapStatus,
-        "tapID": tapID,
-        "isExclusive": tapDescription.isExclusive,
-        "muteBehavior": tapDescription.muteBehavior.rawValue
-    ]
-)
+print("Created process tap: status=\(tapStatus), tapID=\(tapID)")
 
 guard tapStatus == noErr, tapID != kAudioObjectUnknown else {
     exit(1)
@@ -83,19 +36,7 @@ var formatAddress = AudioObjectPropertyAddress(
     mElement: kAudioObjectPropertyElementMain
 )
 let formatStatus = AudioObjectGetPropertyData(tapID, &formatAddress, 0, nil, &formatSize, &format)
-
-appendDebugLog(
-    hypothesisId: "C",
-    location: "minimal-tap-capture.swift:tapFormat",
-    message: "Tap format queried",
-    data: [
-        "status": formatStatus,
-        "sampleRate": format.mSampleRate,
-        "channels": format.mChannelsPerFrame,
-        "formatFlags": format.mFormatFlags,
-        "isFloat": (format.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-    ]
-)
+print("Tap format: status=\(formatStatus), sampleRate=\(format.mSampleRate), channels=\(format.mChannelsPerFrame), isFloat=\((format.mFormatFlags & kAudioFormatFlagIsFloat) != 0)")
 
 // Fetch tap UID
 var uidAddress = AudioObjectPropertyAddress(
@@ -125,17 +66,7 @@ let aggregateDesc: [String: Any] = [
 
 var aggregateID: AudioDeviceID = kAudioObjectUnknown
 let aggregateStatus = AudioHardwareCreateAggregateDevice(aggregateDesc as CFDictionary, &aggregateID)
-
-appendDebugLog(
-    hypothesisId: "A",
-    location: "minimal-tap-capture.swift:createAggregate",
-    message: "Created aggregate device",
-    data: [
-        "status": aggregateStatus,
-        "aggregateID": aggregateID,
-        "tapUID": tapUID
-    ]
-)
+print("Created aggregate device: status=\(aggregateStatus), aggregateID=\(aggregateID)")
 
 guard aggregateStatus == noErr, aggregateID != kAudioObjectUnknown else {
     AudioHardwareDestroyProcessTap(tapID)
@@ -144,7 +75,6 @@ guard aggregateStatus == noErr, aggregateID != kAudioObjectUnknown else {
 
 var callbackCount = 0
 var maxSample: Float = 0
-var loggedFirst = false
 var ioProcID: AudioDeviceIOProcID?
 
 let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, nil) { _, inInputData, _, _, _ in
@@ -161,31 +91,8 @@ let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ni
                 maxSample = value
             }
         }
-        if !loggedFirst {
-            loggedFirst = true
-            appendDebugLog(
-                hypothesisId: "B",
-                location: "minimal-tap-capture.swift:ioProc",
-                message: "First IOProc callback",
-                data: [
-                    "callbackCount": callbackCount,
-                    "bufferBytes": buffer.mDataByteSize,
-                    "channels": buffer.mNumberChannels,
-                    "maxSample": maxSample
-                ]
-            )
-        }
     }
 }
-
-appendDebugLog(
-    hypothesisId: "A",
-    location: "minimal-tap-capture.swift:createIOProc",
-    message: "Created IOProc",
-    data: [
-        "status": ioProcStatus
-    ]
-)
 
 guard ioProcStatus == noErr, let ioProcID = ioProcID else {
     AudioHardwareDestroyAggregateDevice(aggregateID)
@@ -194,28 +101,12 @@ guard ioProcStatus == noErr, let ioProcID = ioProcID else {
 }
 
 let startStatus = AudioDeviceStart(aggregateID, ioProcID)
-appendDebugLog(
-    hypothesisId: "A",
-    location: "minimal-tap-capture.swift:startDevice",
-    message: "Started audio device",
-    data: [
-        "status": startStatus
-    ]
-)
+print("Started audio device: status=\(startStatus)")
 
 NSSound.beep()
 RunLoop.current.run(until: Date().addingTimeInterval(2.0))
 
-appendDebugLog(
-    hypothesisId: "D",
-    location: "minimal-tap-capture.swift:final",
-    message: "Final tap stats",
-    data: [
-        "callbackCount": callbackCount,
-        "maxSample": maxSample,
-        "nonZero": maxSample > 0.001
-    ]
-)
+print("Final: callbackCount=\(callbackCount), maxSample=\(maxSample), nonZero=\(maxSample > 0.001)")
 
 AudioDeviceStop(aggregateID, ioProcID)
 AudioDeviceDestroyIOProcID(aggregateID, ioProcID)

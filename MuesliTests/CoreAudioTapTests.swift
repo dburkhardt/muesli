@@ -10,39 +10,7 @@ import XCTest
 @testable import Muesli
 
 final class CoreAudioTapTests: XCTestCase {
-    private func appendDebugLog(
-        runId: String,
-        hypothesisId: String,
-        location: String,
-        message: String,
-        data: [String: Any]
-    ) {
-        let payload: [String: Any] = [
-            "sessionId": "debug-session",
-            "runId": runId,
-            "hypothesisId": hypothesisId,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": Date().timeIntervalSince1970 * 1000
-        ]
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-              let jsonString = String(data: jsonData, encoding: .utf8) else {
-            return
-        }
-        if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-            handle.seekToEndOfFile()
-            handle.write((jsonString + "\n").data(using: .utf8)!)
-            handle.closeFile()
-        } else {
-            try? (jsonString + "\n").write(
-                toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log",
-                atomically: false,
-                encoding: .utf8
-            )
-        }
-    }
-    
+
     // MARK: - TapCaptureRing Tests
     
     func testTapCaptureRingBasicPushPop() {
@@ -516,26 +484,10 @@ final class CoreAudioTapTests: XCTestCase {
     // MARK: - Minimal Tap Test (Standalone)
 
     func testMinimalTapReceivesAudio() {
-        let runId = "tap-minimal-pre"
         let manager = AggregateDeviceManager()
         var ioProcID: AudioDeviceIOProcID?
         var callbackCount = 0
         var maxSample: Float = 0
-        var loggedFirstCallback = false
-
-        // #region agent log
-        appendDebugLog(
-            runId: runId,
-            hypothesisId: "A",
-            location: "CoreAudioTapTests.swift:testMinimalTapReceivesAudio",
-            message: "Starting minimal tap test",
-            data: [
-                "isExclusive": true,
-                "muteBehavior": "unmuted",
-                "threshold": 0.001
-            ]
-        )
-        // #endregion
 
         do {
             let deviceID = try manager.createTapOnlyDevice(excludedProcessIDs: [], isExclusive: true)
@@ -543,7 +495,6 @@ final class CoreAudioTapTests: XCTestCase {
                 callbackCount += 1
                 guard let inputData = inInputData else { return }
                 let bufferList = UnsafeMutableAudioBufferListPointer(inputData)
-                let bufferCount = bufferList.count
                 for buffer in bufferList {
                     let byteCount = Int(buffer.mDataByteSize)
                     if let data = buffer.mData {
@@ -558,37 +509,7 @@ final class CoreAudioTapTests: XCTestCase {
                     }
                 }
 
-                if !loggedFirstCallback {
-                    loggedFirstCallback = true
-                    // #region agent log
-                    self.appendDebugLog(
-                        runId: runId,
-                        hypothesisId: "B",
-                        location: "CoreAudioTapTests.swift:testMinimalTapReceivesAudio:ioProc",
-                        message: "First IOProc callback",
-                        data: [
-                            "callbackCount": callbackCount,
-                            "bufferCount": bufferCount,
-                            "maxSample": maxSample
-                        ]
-                    )
-                    // #endregion
-                }
             }
-
-            // #region agent log
-            appendDebugLog(
-                runId: runId,
-                hypothesisId: "C",
-                location: "CoreAudioTapTests.swift:testMinimalTapReceivesAudio",
-                message: "Created IOProc",
-                data: [
-                    "deviceID": deviceID,
-                    "tapID": manager.tapID,
-                    "ioProcStatus": ioProcStatus
-                ]
-            )
-            // #endregion
 
             XCTAssertEqual(ioProcStatus, noErr, "IOProc creation should succeed")
 
@@ -604,20 +525,6 @@ final class CoreAudioTapTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.3)
             NSSound.beep()
             Thread.sleep(forTimeInterval: 1.0)
-
-            // #region agent log
-            appendDebugLog(
-                runId: runId,
-                hypothesisId: "D",
-                location: "CoreAudioTapTests.swift:testMinimalTapReceivesAudio",
-                message: "Final tap stats",
-                data: [
-                    "callbackCount": callbackCount,
-                    "maxSample": maxSample,
-                    "nonZero": maxSample > 0.001
-                ]
-            )
-            // #endregion
 
             XCTAssertGreaterThan(callbackCount, 0, "Should receive IOProc callbacks")
 

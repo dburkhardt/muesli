@@ -2,37 +2,6 @@ import Foundation
 import os.lock
 import QuartzCore
 
-// #region agent log - Debug file logging helper
-private func debugLog(_ message: String, hypothesisId: String, data: [String: Any] = [:]) {
-    let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log"
-    let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-    let location = "EchoCancellationServiceWebRTC.swift"
-    var payload: [String: Any] = [
-        "timestamp": timestamp,
-        "location": location,
-        "message": message,
-        "sessionId": "debug-session",
-        "hypothesisId": hypothesisId
-    ]
-    if !data.isEmpty {
-        payload["data"] = data
-    }
-    if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-       let jsonString = String(data: jsonData, encoding: .utf8) {
-        let line = jsonString + "\n"
-        if let handle = FileHandle(forWritingAtPath: logPath) {
-            handle.seekToEndOfFile()
-            if let data = line.data(using: .utf8) {
-                handle.write(data)
-            }
-            handle.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
-        }
-    }
-}
-// #endregion
-
 /// WebRTC AEC3 implementation for acoustic echo cancellation.
 ///
 /// Architecture (after startup order fix 2026-01-27):
@@ -157,10 +126,6 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     }
     private let pacedStatsLock = OSAllocatedUnfairLock(initialState: PacedStats())
     
-    // #region agent log - Debug log throttle counter
-    private var debugLogCounter: Int = 0
-    // #endregion
-    
     // MARK: - Initialization
     
     init() {
@@ -235,17 +200,6 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             // Store in ring buffer
             state.systemRingBuffer.push(monoSamples)
             state.totalSystemSamples += Int64(monoSamples.count)
-            
-            // #region agent log (async, non-blocking) - periodic sample count tracking
-            if state.systemBufferCount % 100 == 0 {
-                let totalSys = state.totalSystemSamples
-                let totalMic = state.totalMicSamples
-                let sysAvail = state.systemRingBuffer.available
-                let micAvail = state.micRingBuffer.available
-                Task { await DiagnosticLogger.shared.log(.aec,
-                    "AEC_SAMPLE_COUNTS: sysTotal=\(totalSys), micTotal=\(totalMic), diff=\(totalSys - totalMic), sysAvail=\(sysAvail), micAvail=\(micAvail)") }
-            }
-            // #endregion
         }
         
         // Send render frames to WebRTC as they arrive.
@@ -710,19 +664,11 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         // Step 2: Process in 10ms frames with ACTUAL ALIGNMENT
         // CRITICAL FIX: Push samples to buffer FIRST, then extract and process frames.
         // If we can't extract frames (buffer underrun), we must handle the samples we just pushed.
-        let (micAvailBefore, sysAvailBefore, totalMicBefore, totalSysBefore) = state.withLock { state in
-            let micAvail = state.micRingBuffer.available
-            let sysAvail = state.systemRingBuffer.available
+        state.withLock { state in
             state.micRingBuffer.push(microphoneSamples)
             state.totalMicSamples += Int64(microphoneSamples.count)
-            return (micAvail, sysAvail, state.totalMicSamples, state.totalSystemSamples)
         }
-        
-        // #region agent log (async, non-blocking)
-        Task { await DiagnosticLogger.shared.log(.aec,
-            "AEC_MIC_INPUT: samples=\(microphoneSamples.count), micBufBefore=\(micAvailBefore), sysBuf=\(sysAvailBefore), totalMic=\(totalMicBefore), totalSys=\(totalSysBefore)") }
-        // #endregion
-        
+
         if usePacedProcessing {
             startPacedProcessingIfNeeded()
         }
@@ -765,13 +711,6 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         while true {
             // Extract mic frame with absolute start index (Swift 6 compliant - returns new array or nil)
             guard let (micFrameData, micFrameStartIndex) = extractMicFrameWithIndex() else {
-                // #region agent log (async, non-blocking)
-                if framesExtracted == 0 {
-                    let micAvailNow = state.withLock { $0.micRingBuffer.available }
-                    Task { await DiagnosticLogger.shared.log(.aec,
-                        "AEC_MIC_UNDERRUN: pushed=\(microphoneSamples.count), available=\(micAvailNow), framesExtracted=0") }
-                }
-                // #endregion
                 break
             }
             framesExtracted += 1
@@ -1031,43 +970,17 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
         // processed when combined with samples from the next callback.
         // NOTE: This could cause slight timing issues but ensures no samples are lost.
         let result = outputSamples.isEmpty ? microphoneSamples : outputSamples
-        
-        // #region agent log (async, non-blocking)
-        let logInputCount = microphoneSamples.count
-        let logOutputCount = result.count
-        let logFramesExtracted = framesExtracted
-        if outputSamples.isEmpty {
-            Task { await DiagnosticLogger.shared.log(.aec,
-                "AEC_MIC_PASSTHROUGH: input=\(logInputCount), output=\(logOutputCount), framesExtracted=\(logFramesExtracted)") }
-        } else {
-            Task { await DiagnosticLogger.shared.log(.aec,
-                "AEC_MIC_PROCESSED: input=\(logInputCount), output=\(logOutputCount), framesExtracted=\(logFramesExtracted)") }
-        }
-        // #endregion
-        
+
         return result
     }
     
     /// Reset the AEC state (call when starting new recording)
     func reset() {
         // Log stats before reset
-        let (gapSamples, erle, delayMs, totalSys, totalMic, offset) = state.withLock { state in
-            (state.totalGapSamples, aecBridge?.getERLE() ?? 0, aecBridge?.getDelayMs() ?? -1,
-             state.totalSystemSamples, state.totalMicSamples, state.deliveryOffsetSamples)
+        let (gapSamples, erle, delayMs) = state.withLock { state in
+            (state.totalGapSamples, aecBridge?.getERLE() ?? 0, aecBridge?.getDelayMs() ?? -1)
         }
-        
-        // #region agent log - Final stats at reset
-        debugLog("AEC_RESET_STATS", hypothesisId: "ALL", data: [
-            "gapSamples": gapSamples,
-            "ERLE_dB": String(format: "%.1f", erle),
-            "delayMs": delayMs,
-            "totalSystemSamples": totalSys,
-            "totalMicSamples": totalMic,
-            "finalOffset": offset,
-            "sampleDiff": totalSys - totalMic
-        ])
-        // #endregion
-        
+
         Task { await DiagnosticLogger.shared.log(.aec,
             "WEBRTC_RESET: gaps=\(gapSamples), ERLE=\(String(format: "%.1f", erle))dB, delay=\(delayMs)ms") }
         

@@ -101,6 +101,24 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Set the microphone device to use
     func setMicrophoneDevice(_ deviceID: String?) {
         selectedMicrophoneDeviceID = deviceID
+        
+        guard isRecording else { return }
+        
+        logger.info("Switching microphone device during tap capture: \(deviceID ?? "system default")")
+        stopMicrophoneCapture()
+        synchronizer.reset()
+        aecProcessor.reset()
+        
+        do {
+            try startMicrophoneCapture()
+        } catch {
+            logger.error("Failed to restart microphone after device switch: \(error.localizedDescription)")
+            warningHandler?(
+                "Microphone switch failed",
+                "Could not switch to the selected microphone. Error: \(error.localizedDescription)",
+                true
+            )
+        }
     }
 
     /// Set callback for audio buffers (for file output)
@@ -191,16 +209,21 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
         audioWorker = worker
 
-        // Run self-tests if tap is running
+        // Start runtime RMS monitoring for the tap
+        // If rollingRMS stays near-zero for >3 seconds during an active recording,
+        // fire the warningHandler to alert the user (catches real permission revocation
+        // without false positives from excluded-process audio).
         if tapManager.state == .running {
-            // Capture warning handler before entering Task
             let handler = self.warningHandler
-            Task {
-                let result = await tapManager.runSelfTests()
-                if !result.systemSoundPresent || !result.muesliExcluded {
+            Task { [weak self] in
+                // Wait 3 seconds before checking
+                try? await Task.sleep(for: .seconds(3))
+                guard let self = self, await self.isRecording else { return }
+                let rms = self.tapManager.currentRMSLevel
+                if rms < 0.0001 {
                     await MainActor.run {
-                        handler?("Tap self-test warning",
-                            "System sound present: \(result.systemSoundPresent), Muesli excluded: \(result.muesliExcluded)",
+                        handler?("System audio may not be working",
+                            "No system audio detected after 3 seconds. Check that System Audio Recording permission is still granted.",
                             false)
                     }
                 }
@@ -331,22 +354,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         // This is done here to preserve the original audio quality
         let sampleArray = Array(UnsafeBufferPointer(start: samples, count: totalSamples))
         let timestamp = CACurrentMediaTime()
-        
-        // #region agent log
-        // Log based on timestamp to avoid state - roughly every 5 seconds
-        let shouldLog = Int(timestamp) % 5 == 0 && Int(timestamp * 10) % 50 == 0
-        if shouldLog {
-            var maxSample: Float = 0
-            for i in 0..<min(100, sampleArray.count) { maxSample = max(maxSample, abs(sampleArray[i])) }
-            let logPayload: [String: Any] = ["location": "TapAudioCaptureService.swift:handleTapAudio", "message": "Tap audio received", "data": ["frameCount": count, "totalSamples": totalSamples, "arrayCount": sampleArray.count, "maxSampleFirst100": maxSample, "timestamp": timestamp], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "A,B,E"]
-            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                    handle.seekToEndOfFile(); handle.write((jsonStr + "\n").data(using: .utf8)!); handle.closeFile()
-                } else { try? (jsonStr + "\n").write(toFile: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log", atomically: false, encoding: .utf8) }
-            }
-        }
-        // #endregion
-        
+
         Task { [weak self] in
             await self?.deliverRawSystemAudio(samples: sampleArray, timestamp: timestamp)
         }
@@ -368,13 +376,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         ensureFormatDescriptionsInitialized()
         
         guard !samples.isEmpty else { return }
-        
-        // #region agent log
-        let shouldLog = Int(timestamp) % 5 == 0 && Int(timestamp * 10) % 50 == 0
-        var maxSample: Float = 0
-        if shouldLog { for i in 0..<min(100, samples.count) { maxSample = max(maxSample, abs(samples[i])) } }
-        // #endregion
-        
+
         // Create CMSampleBuffer with correct format (48kHz stereo Float32)
         let buffer = createCMSampleBuffer(
             from: samples,
@@ -383,18 +385,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             timestamp: timestamp,
             formatDesc: systemFormatDesc
         )
-        
-        // #region agent log
-        if shouldLog {
-            let logPayload: [String: Any] = ["location": "TapAudioCaptureService.swift:deliverRawSystemAudio", "message": "Delivering system audio", "data": ["sampleCount": samples.count, "maxSampleFirst100": maxSample, "bufferCreated": buffer != nil, "hasBufferHandler": bufferHandler != nil, "timestamp": timestamp], "timestamp": Date().timeIntervalSince1970 * 1000, "sessionId": "debug-session", "hypothesisId": "B,C,D"]
-            if let jsonData = try? JSONSerialization.data(withJSONObject: logPayload), let jsonStr = String(data: jsonData, encoding: .utf8) {
-                if let handle = FileHandle(forWritingAtPath: "/Users/dburkhardt/git-repos/muesli/.cursor/debug.log") {
-                    handle.seekToEndOfFile(); handle.write((jsonStr + "\n").data(using: .utf8)!); handle.closeFile()
-                }
-            }
-        }
-        // #endregion
-        
+
         if let buffer = buffer {
             bufferHandler?(buffer, .system)
         }
@@ -407,14 +398,14 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Deliver raw microphone audio for file output (48kHz mono)
     private func deliverRawMicAudio(samples: [Float], timestamp: Double) {
         ensureFormatDescriptionsInitialized()
-        
+
         guard !samples.isEmpty else { return }
-        
-        // Create CMSampleBuffer with correct format (48kHz mono Float32)
+
+        // Create CMSampleBuffer with correct format (mono Float32 at actual mic sample rate)
         if let buffer = createCMSampleBuffer(
             from: samples,
             channels: 1,  // Mono
-            sampleRate: 48000,
+            sampleRate: microphoneSampleRate,
             timestamp: timestamp,
             formatDesc: micFormatDesc
         ) {
@@ -623,7 +614,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             hostTime: hostTime
         )
 
-        // Create array for async delivery to file output (raw 48kHz mono)
+        // Create array for async delivery to file output (raw mono at mic sample rate)
         let sampleArray = Array(UnsafeBufferPointer(start: samples, count: frameLength))
         let timestamp = CACurrentMediaTime()
         
