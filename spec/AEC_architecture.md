@@ -212,12 +212,12 @@ AudioHardwareCreateAggregateDevice(aggregateDescription as CFDictionary, &device
 
 ### Permission Model
 
-**IMPORTANT: The original plan mentioned `NSAudioCaptureUsageDescription` - this is NOT a real Info.plist key.**
+**IMPORTANT: `NSAudioCaptureUsageDescription` is a real Info.plist key and is required for system audio capture.**
 
-The actual permission model for Core Audio taps:
+The permission model for Core Audio taps:
 
 1. **No explicit preflight check** like `CGPreflightScreenCaptureAccess()` for ScreenCaptureKit
-2. **TCC prompt happens automatically** when `AudioHardwareCreateProcessTap` is first called
+2. **TCC prompt happens automatically** when `AudioHardwareCreateProcessTap` is first called (requires `NSAudioCaptureUsageDescription`)
 3. **If denied**: The API may return silence with no programmatic "denied" status
 4. **Detection**: Prolonged near-zero RMS after a known system sound = "not authorized"
 
@@ -227,8 +227,9 @@ The actual permission model for Core Audio taps:
 - `audioCaptureGranted` flag is set optimistically
 
 **Required Info.plist keys**:
+- `NSAudioCaptureUsageDescription` - for system audio capture (required for taps)
 - `NSMicrophoneUsageDescription` - for microphone access (required)
-- `NSScreenCaptureUsageDescription` - KEEP until ScreenCaptureKit fallback is removed
+- `NSScreenCaptureUsageDescription` - keep while ScreenCaptureKit fallback exists
 
 ### IOProc RT-Safety Checklist
 
@@ -566,9 +567,9 @@ WebRTC-specific log messages:
 
 ---
 
-## 2026-01-31 Investigation: Core Audio Tap Zero Samples Bug
+## 2026-01-31 Investigation: Core Audio Tap Zero Samples Issue
 
-This section documents the critical finding that Core Audio Tap API (`AudioHardwareCreateProcessTap`) returns all zero samples on macOS 15+ (Sequoia) and macOS 26 (Tahoe), making it unusable for system audio capture.
+This section documents an investigation into `AudioHardwareCreateProcessTap` returning all-zero samples during local testing. The original conclusion attributed this to a confirmed macOS bug, but subsequent review (2026-02-16) determined the root cause is **unresolved — likely a combination of real OS-level bugs (most fixed in macOS 15.2+) and potential implementation/configuration issues**.
 
 ### Problem Statement
 
@@ -613,36 +614,53 @@ Line 7: "After 2s wait" - rollingRMSAfterWait=0
 - Evidence: Beep was played, but tap still returns zeros
 - Conclusion: Tap is not capturing any audio, even system sounds
 
-### Confirmed macOS Bug
+**Hypothesis E (Self-test flaw): NOT INVESTIGATED (added 2026-02-16)**
+- `NSSound.beep()` is played from Muesli's own process, which is in the tap's exclusion list
+- The beep would be correctly excluded by the tap, making the self-test always show zeros
+- This does not prove the tap is broken — it may prove the exclusion list works correctly
+- **Action needed**: Retest using audio from an external process (e.g., `afplay` via shell)
 
-Research and testing confirm this is a **macOS bug** affecting:
-- macOS 15 (Sequoia)
-- macOS 26 (Tahoe)
+### Known macOS Bugs (Apple-fixed)
 
-The bug manifests as:
-- `AudioHardwareCreateProcessTap` succeeds
-- IOProc callbacks fire normally
-- Buffer format is correct
-- **All sample values are zero**
+Apple has fixed several Core Audio capture bugs across macOS 15.x point releases:
 
-This matches reports from other developers experiencing similar issues with Core Audio taps on macOS 15+.
+| Version | Fix | Relevance |
+|---------|-----|-----------|
+| macOS 15.1 | Apps in hog mode caused all capture to fail | Medium — unlikely in normal use |
+| **macOS 15.2** | **Muting issues when capturing audio played to aggregate devices** | **High — directly affects this implementation's aggregate device approach** |
+| macOS 15.4 | Audio playback cutting out during capture (especially Safari) | Medium |
+| macOS 26 | Fixed capture failures at low sample rates (regression from late Sequoia) | Low — we use 48kHz |
 
-### Workaround: Use ScreenCaptureKit
+The macOS 15.2 fix is the most likely candidate for the original zero-sample issue if testing was done on macOS 15.0-15.1. Since Muesli only targets macOS 26+, these Sequoia-era bugs should not affect production users.
 
-**Recommendation**: Use `AudioCaptureService` (ScreenCaptureKit-based) instead of `TapAudioCaptureService` (Core Audio Tap-based) for system audio capture.
+### Potential Implementation Issues (not yet ruled out)
 
-**Why ScreenCaptureKit works**:
-- Proven working implementation already in codebase
-- No known bugs on macOS 15+
-- Provides reliable system audio capture
-- Used successfully in production
+1. **Multi-channel output device volume halving**: The sudara Core Audio Tap gist documents that if the default output device has >2 channels, captured volume is halved per extra channel pair. On a 4+ channel device this could reduce levels to near-zero. Affects ScreenCaptureKit too (macOS 14.2+).
 
-**Implementation**:
-```swift
-// In MuesliViewModel.swift
-self.audioCaptureService = AudioCaptureService()  // ScreenCaptureKit
-// NOT: TapAudioCaptureService()  // Core Audio Tap (broken on macOS 15+)
-```
+2. **`isExclusive` semantics**: `CATapDescription.isExclusive` controls whether the tap has exclusive access to audio, not the process list direction. The current code comment ("isExclusive=true means the process list contains processes to EXCLUDE") may be incorrect. `stereoGlobalTapButExcludeProcesses:` already handles exclusion semantics.
+
+3. **Permissions**: System audio capture permission may not have been granted. The tap succeeds but returns zeros without proper entitlement/permission. Some contexts don't trigger the permission prompt.
+
+4. **No sub-device for clocking**: The current implementation uses a tap-only aggregate device (no sub-devices). This matches community examples but differs from Apple's official sample code.
+
+### Current Status
+
+**ScreenCaptureKit is used in production** (`AudioCaptureService`). The Core Audio Tap implementation (`TapAudioCaptureService`) is available but not active.
+
+Core Audio taps remain the preferred long-term approach because they:
+- Don't require Screen Recording permission (only Audio Recording)
+- Have lower latency
+- Support per-process audio routing
+
+### Before Re-attempting Core Audio Taps
+
+The following should be verified before concluding the API is broken on macOS 26:
+
+1. **Test with external audio source** — Play audio from a different process (not Muesli) during self-test
+2. **Check output device channel count** — Log the default output device's channel count to detect the volume halving bug
+3. **Verify permissions** — Confirm system audio capture permission is granted in System Settings > Privacy & Security
+4. **Test with a reference implementation** — Run [AudioCap](https://github.com/insidegui/AudioCap) or [audiograb](https://github.com/obsfx/audiograb) on the same machine to isolate OS vs. implementation issues
+5. **Review `isExclusive` usage** — Verify the flag means what the code assumes
 
 ### Files Modified During Investigation
 
@@ -654,27 +672,14 @@ self.audioCaptureService = AudioCaptureService()  // ScreenCaptureKit
 | `Muesli/Services/CoreAudioTapManager.swift` | Added IOProc buffer inspection logs |
 | `Muesli/Services/TapAudioCaptureService.swift` | Added sample array max value logging |
 
-### Future Considerations
-
-**If Core Audio Tap API is fixed in future macOS versions**:
-1. Re-enable `TapAudioCaptureService` with version check
-2. Keep ScreenCaptureKit as fallback for older macOS
-3. Add runtime detection: if tap returns zeros, fallback to ScreenCaptureKit
-
-**Detection strategy**:
-```swift
-// After tap starts, wait 1 second and check RMS
-if rollingRMS < threshold {
-    // Tap is returning zeros - fallback to ScreenCaptureKit
-    fallbackToScreenCaptureKit()
-}
-```
-
 ### References
 
-- Apple Developer Forums: Reports of Core Audio taps returning zeros on macOS 15+
-- GitHub Issues: Similar reports in AudioCap and other projects
-- Internal testing: Confirmed on macOS 26.2 (Build 25C56)
+- Rogue Amoeba blog: macOS 15.1/15.2/15.4 audio capture bug fixes — https://weblog.rogueamoeba.com
+- Apple Developer Forums thread 767333: "Capturing system audio no longer works with macOS Sequoia" — https://developer.apple.com/forums/thread/767333
+- sudara's Core Audio Tap gist (volume bug, reference implementation) — https://gist.github.com/sudara/34f00efad69a7e8ceafa078ea0f76f6f
+- insidegui/AudioCap (reference implementation) — https://github.com/insidegui/AudioCap
+- obsfx/audiograb (permission documentation) — https://github.com/obsfx/audiograb
+- Internal testing: Observed on macOS 26.2 (Build 25C56), root cause unresolved
 
 ---
 
@@ -1696,7 +1701,7 @@ With a large offset that doesn't match reality:
 | Phase 2 | Synchronizer | ✅ Complete | `AudioSynchronizer`, `TapCaptureRing`, `MicCaptureRing`, `CoarseDelayController`, `DriftTracker` |
 | Phase 3 | AEC Pipeline | ✅ Complete | `WebRTCAECBridge.mm` simplified for frame processing |
 | Phase 4 | IOProc RT-Safety | ✅ Complete | RT-safe callback in `CoreAudioTapManager` |
-| Phase 5 | Permissions | ⚠️ Partial | `PermissionManager` updated, but `NSAudioCaptureUsageDescription` doesn't exist - relies on TCC prompt at tap creation |
+| Phase 5 | Permissions | ⚠️ Partial | `PermissionManager` updated, but must verify `NSAudioCaptureUsageDescription` and Screen & System Audio Recording state |
 | Phase 6 | Remove Old Code | ❌ Incomplete | Legacy files NOT removed (see below) |
 | Phase 7 | Testing | ✅ Complete | Unit tests, integration tests, manual testing |
 
@@ -1726,7 +1731,7 @@ The following legacy files were scheduled for removal but still exist:
 | Plan Statement | Reality | Impact |
 |----------------|---------|--------|
 | "macOS 26 Tahoe+ only" | Core Audio taps available in macOS 14.2+ | Lower minimum version, broader compatibility |
-| "`NSAudioCaptureUsageDescription`" | This key doesn't exist | Permission handled by TCC at tap creation |
+| "`NSAudioCaptureUsageDescription`" | Required Info.plist key for system audio capture | Ensure Info.plist contains it and permission UX points to Screen & System Audio Recording |
 | "DelayAgnostic + ExtendedFilter" | Not explicit options in v2.x API | Config is just `echo_canceller.enabled` |
 | "External delay estimator for coarse alignment" | Not available in bundled WebRTC | Must rely on internal delay estimation |
 
@@ -1858,5 +1863,5 @@ See [WebRTC AEC3 Integration](#webrtc-aec3-integration) section for implementati
 | 2026-01-25 | Implemented: Post-warmup offset validation, bounds check fallback, periodic offset monitoring. Updated Lesson 7 status to FIXED. Added new diagnostic log messages. | Agent |
 | 2026-01-26 | **WebRTC AEC3 Integration**: Added hybrid synchronization architecture with WebRTC AEC3 as default implementation. Includes: EchoCancellationServiceWebRTC (Swift), AudioRingBuffer, WebRTCAECBridge (ObjC++), factory pattern for implementation selection. NLMS preserved as fallback. | Agent |
 | 2026-01-27 | Added: Quantitative analysis of AEC3 non-convergence, render/mic RMS findings, and correlation instrumentation context. | Agent |
-| 2026-01-31 | **Major Update: Core Audio Taps Architecture**: Comprehensive documentation of the Core Audio taps implementation. Key corrections: (1) macOS 14.2+ support, not "macOS 26 only"; (2) NSAudioCaptureUsageDescription doesn't exist - TCC prompt at tap creation; (3) WebRTC v2.x API doesn't have DelayAgnostic/ExtendedFilter as explicit options; (4) External delay estimator not available. Added: AudioSynchronizer section, Implementation Status with Phase 6 cleanup pending, Plan vs Reality corrections. | Agent |
+| 2026-01-31 | **Major Update: Core Audio Taps Architecture**: Comprehensive documentation of the Core Audio taps implementation. Key corrections: (1) macOS 14.2+ support, not "macOS 26 only"; (2) NSAudioCaptureUsageDescription required for system audio capture; (3) WebRTC v2.x API doesn't have DelayAgnostic/ExtendedFilter as explicit options; (4) External delay estimator not available. Added: AudioSynchronizer section, Implementation Status with Phase 6 cleanup pending, Plan vs Reality corrections. | Agent |
 | 2026-01-31 | **Critical Finding: Core Audio Tap API Returns Zeros on macOS 15+**: Investigation revealed that `AudioHardwareCreateProcessTap` returns all zero samples on macOS 15 (Sequoia) and macOS 26 (Tahoe). IOProc fires correctly, buffers have correct format (48kHz stereo Float32), but all sample values are zero. This is a confirmed macOS bug. Recommendation: Use ScreenCaptureKit (`AudioCaptureService`) for system audio capture instead. See [2026-01-31 Investigation: Core Audio Tap Zero Samples Bug](#2026-01-31-investigation-core-audio-tap-zero-samples-bug) section. | Agent |

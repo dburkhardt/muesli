@@ -1427,4 +1427,14 @@ final class RecordingController {
     private func resetMuteState() {
         isMicrophoneMutedLock.withLock { $0 = false }
     }
+
+    // MARK: - Microphone Device Selection
+    
+    func handleMicrophoneDeviceChange(_ deviceID: String?) {
+        guard let session = activeSession, session.isRecording else { return }
+        
+        Task {
+            await audioCaptureService.setMicrophoneDevice(deviceID)
+        }
+    }
 }

@@ -167,7 +167,7 @@ struct MainWindow: View {
                 HStack(spacing: 8) {
                     Picker("Microphone", selection: Binding(
                         get: { viewModel.microphoneManager.selectedDeviceID },
-                        set: { viewModel.microphoneManager.setSelectedDeviceID($0) }
+                        set: { viewModel.selectMicrophoneDevice($0) }
                     )) {
                         ForEach(viewModel.microphoneManager.availableDevices) { device in
                             HStack {

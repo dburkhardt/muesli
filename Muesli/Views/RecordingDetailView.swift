@@ -336,7 +336,7 @@ struct RecordingDetailView: View {
                 viewModel.toggleMicrophoneMute()
             },
             onSelectDevice: { deviceID in
-                viewModel.microphoneManager.setSelectedDeviceID(deviceID)
+                viewModel.selectMicrophoneDevice(deviceID)
             }
         )
     }

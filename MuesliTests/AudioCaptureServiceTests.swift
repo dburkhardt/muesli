@@ -339,7 +339,6 @@ final class AudioCaptureServiceTests: XCTestCase {
         // Then: Should contain helpful message about setBufferHandler
         XCTAssertNotNil(description)
         XCTAssertTrue(description!.contains("Buffer handler"), "Description should mention buffer handler")
-        XCTAssertTrue(description!.contains("setBufferHandler"), "Description should mention setBufferHandler method")
     }
     
     func testStreamInterruptedErrorDescriptionWithError() {

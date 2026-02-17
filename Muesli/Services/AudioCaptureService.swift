@@ -203,6 +203,13 @@ private final class MicrophoneCaptureEngine: @unchecked Sendable {
         // Set up device change listener after successful start
         setupDeviceChangeListener()
     }
+
+    /// Switch to a new microphone device while running
+    func switchDevice(to deviceID: String?) {
+        currentDeviceID = deviceID
+        guard isRunning else { return }
+        restartCapture()
+    }
     
     /// Internal setup and start method, used for both initial start and restart after device change
     private func setupAndStart(deviceID: String?) throws {
@@ -619,40 +626,7 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     /// Audio type - uses shared AudioStreamType for compatibility with TapAudioCaptureService
     typealias AudioType = AudioStreamType
 
-    enum CaptureError: Error, LocalizedError {
-        case noContentToCapture
-        case streamConfigurationFailed
-        case permissionDenied
-        case streamStartFailed(underlying: Error)
-        case alreadyRecording
-        case notRecording
-        case streamInterrupted(underlying: Error?)
-        case bufferHandlerNotSet
-        
-        var errorDescription: String? {
-            switch self {
-            case .noContentToCapture:
-                return "No content available to capture"
-            case .streamConfigurationFailed:
-                return "Failed to configure audio stream"
-            case .permissionDenied:
-                return "Screen recording permission denied"
-            case .streamStartFailed(let error):
-                return "Failed to start stream: \(error.localizedDescription)"
-            case .alreadyRecording:
-                return "Already recording"
-            case .notRecording:
-                return "Not currently recording"
-            case .streamInterrupted(let error):
-                if let error = error {
-                    return "Stream interrupted: \(error.localizedDescription)"
-                }
-                return "Stream was interrupted"
-            case .bufferHandlerNotSet:
-                return "Buffer handler must be set before starting capture. Call setBufferHandler() first."
-            }
-        }
-    }
+    typealias CaptureError = AudioCaptureError
     
     // MARK: - Properties
     
@@ -695,6 +669,15 @@ actor AudioCaptureService: AudioCaptureServiceProtocol {
     /// Set the microphone device to use for capture
     func setMicrophoneDevice(_ deviceID: String?) {
         selectedMicrophoneDeviceID = deviceID
+        
+        guard isRecording else { return }
+        
+        if let microphoneEngine = microphoneEngine {
+            logger.info("Switching microphone device during recording: \(deviceID ?? "system default")")
+            microphoneEngine.switchDevice(to: deviceID)
+        } else if pendingMicrophoneEngine != nil {
+            logger.info("Microphone device updated before mic start: \(deviceID ?? "system default")")
+        }
     }
     
     // MARK: - Public API

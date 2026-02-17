@@ -125,7 +125,7 @@ struct StartRecordingSheet: View {
         
         // Use default microphone (system default)
         if let defaultMic = viewModel.microphoneManager.currentDefaultDevice {
-            viewModel.microphoneManager.setSelectedDeviceID(defaultMic.id)
+            viewModel.selectMicrophoneDevice(defaultMic.id)
         }
         
         // Ensure live transcription mode

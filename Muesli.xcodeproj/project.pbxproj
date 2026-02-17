@@ -915,15 +915,13 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/Muesli/Frameworks",
 				);
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers",
 					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers/webrtc-audio-processing-1",
 				);
 				INFOPLIST_FILE = Muesli/Info.plist;
-				INFOPLIST_KEY_LSUIElement = NO;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -962,15 +960,13 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/Muesli/Frameworks",
 				);
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers",
 					"$(PROJECT_DIR)/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/Headers/webrtc-audio-processing-1",
 				);
 				INFOPLIST_FILE = Muesli/Info.plist;
-				INFOPLIST_KEY_LSUIElement = NO;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
