@@ -46,7 +46,7 @@ Onboarding Step: Transcription Model
 ├── "Download in background" option/button
 └── Proceed to next step →
 
-Onboarding Step: Refinement Model  
+Onboarding Step: Refinement Model
 ├── Select refinement model preferences
 ├── Downloads start in background
 └── Complete onboarding →
