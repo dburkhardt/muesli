@@ -993,4 +993,100 @@ final class RegressionTests: XCTestCase {
             "Awaiting flag set before opening settings"
         )
     }
+
+    // MARK: - Microphone Sample Rate Race Condition Regression Tests (Bug Fix: Feb 17, 2026)
+
+    /// Regression test: Non-48kHz mic audio is correctly resampled to 48kHz for file output
+    /// Bug: TapAudioCaptureService had a cached micFormatDesc that was overwritten with 48kHz
+    ///      by setupFormatDescriptions(), even when the actual mic hardware ran at 44100Hz.
+    ///      RecordingController then read 48kHz from the format description, skipped resampling,
+    ///      and wrote 44100Hz data into a 48kHz CAF file → sped-up playback.
+    /// Fix: Removed cached micFormatDesc; format descs now created per-buffer from actual rate.
+    func testNon48kHzMicResampledTo48kHzForFileOutput() {
+        // Test 44100Hz (common USB/analog mic rate) → 48kHz
+        let samples44100 = [Float](repeating: 0.5, count: 441)  // ~10ms at 44100Hz
+        let resampled44100 = EchoCancellationServiceNLMS.resampleFloat32Public(
+            samples: samples44100,
+            sourceSampleRate: 44100,
+            targetSampleRate: 48000
+        )
+
+        // Verify resampling produced output at the correct ratio
+        // 441 samples at 44100Hz → ~480 samples at 48kHz (ratio: 48000/44100 ≈ 1.0884)
+        let expectedCount44100 = Int(Double(samples44100.count) * 48000.0 / 44100.0)
+        XCTAssertEqual(resampled44100.count, expectedCount44100,
+            "44100Hz → 48kHz resampling should produce ~\(expectedCount44100) samples from \(samples44100.count)")
+        XCTAssertFalse(resampled44100.isEmpty, "Resampled output should not be empty")
+
+        // Verify createSampleBuffer produces a buffer with 48kHz format description
+        let timestamp = CMTime(seconds: 0, preferredTimescale: 48000)
+        if let outputBuffer = EchoCancellationServiceNLMS.createSampleBuffer(
+            from: samples44100,
+            timestamp: timestamp,
+            sourceSampleRate: 44100,
+            targetSampleRate: 48000
+        ) {
+            // Verify the output buffer's format description says 48kHz
+            if let formatDesc = CMSampleBufferGetFormatDescription(outputBuffer),
+               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) {
+                XCTAssertEqual(Int(asbd.pointee.mSampleRate), 48000,
+                    "Output buffer format should be 48kHz, not the source rate")
+                XCTAssertEqual(Int(asbd.pointee.mChannelsPerFrame), 2,
+                    "Output buffer should be stereo (FileOutputService expects stereo)")
+            } else {
+                XCTFail("Output buffer should have a valid format description")
+            }
+        } else {
+            XCTFail("createSampleBuffer should succeed for 44100Hz → 48kHz conversion")
+        }
+    }
+
+    /// Regression test: 16kHz (Bluetooth) mic audio resampled correctly
+    /// Bluetooth headsets commonly use 16kHz for their microphone input.
+    func testBluetooth16kHzMicResampledTo48kHz() {
+        let samples16k = [Float](repeating: 0.3, count: 160)  // ~10ms at 16kHz
+        let resampled = EchoCancellationServiceNLMS.resampleFloat32Public(
+            samples: samples16k,
+            sourceSampleRate: 16000,
+            targetSampleRate: 48000
+        )
+
+        // 160 samples at 16kHz → 480 samples at 48kHz (ratio: 3.0)
+        let expectedCount = Int(Double(samples16k.count) * 48000.0 / 16000.0)
+        XCTAssertEqual(resampled.count, expectedCount,
+            "16kHz → 48kHz resampling ratio should be 3:1")
+        XCTAssertFalse(resampled.isEmpty)
+    }
+
+    /// Regression test: 32kHz mic audio resampled correctly
+    /// Some exotic configurations may produce 32kHz mic audio.
+    func testExotic32kHzMicResampledTo48kHz() {
+        let samples32k = [Float](repeating: 0.2, count: 320)  // ~10ms at 32kHz
+        let resampled = EchoCancellationServiceNLMS.resampleFloat32Public(
+            samples: samples32k,
+            sourceSampleRate: 32000,
+            targetSampleRate: 48000
+        )
+
+        // 320 samples at 32kHz → 480 samples at 48kHz (ratio: 1.5)
+        let expectedCount = Int(Double(samples32k.count) * 48000.0 / 32000.0)
+        XCTAssertEqual(resampled.count, expectedCount,
+            "32kHz → 48kHz resampling ratio should be 1.5:1")
+        XCTAssertFalse(resampled.isEmpty)
+    }
+
+    /// Regression test: 48kHz mic audio passes through without resampling
+    /// When mic is already at 48kHz, no resampling should occur.
+    func testNative48kHzMicPassesThrough() {
+        let samples48k = [Float](repeating: 0.4, count: 480)  // ~10ms at 48kHz
+        let resampled = EchoCancellationServiceNLMS.resampleFloat32Public(
+            samples: samples48k,
+            sourceSampleRate: 48000,
+            targetSampleRate: 48000
+        )
+
+        // Same rate → same count, no resampling
+        XCTAssertEqual(resampled.count, samples48k.count,
+            "48kHz → 48kHz should pass through unchanged")
+    }
 }

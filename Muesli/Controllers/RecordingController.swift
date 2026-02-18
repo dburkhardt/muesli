@@ -82,6 +82,10 @@ final class RecordingController {
     /// Whether the resampling warning has been shown this recording session
     /// Thread-safe for access from audio callback
     private let hasShownResamplingWarningLock = OSAllocatedUnfairLock(initialState: false)
+
+    /// Whether we've logged a non-48kHz mic sample rate this recording session
+    /// Thread-safe for access from audio callback (one-shot per session to avoid log spam)
+    private let micRateLoggedLock = OSAllocatedUnfairLock(initialState: false)
     
     // MARK: - Callbacks
     
@@ -189,6 +193,7 @@ final class RecordingController {
         let aecLock = prefs.echoCancellationLock
         let aecDisabledLock = self.aecDisabledDueToFallbackLock
         let warningShownLock = self.hasShownResamplingWarningLock
+        let micRateLogged = self.micRateLoggedLock
         
         await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
                 // Wrap entire handler in error handling for graceful degradation
@@ -217,7 +222,8 @@ final class RecordingController {
                             aecService: aecService,
                             aecDisabledLock: aecDisabledLock,
                             warningShownLock: warningShownLock,
-                            warningManager: warningMgr
+                            warningManager: warningMgr,
+                            micRateLoggedLock: micRateLogged
                         )
                     }
                     
@@ -459,16 +465,29 @@ final class RecordingController {
         aecService: EchoCancellationServiceProtocol,
         aecDisabledLock: OSAllocatedUnfairLock<Bool>,
         warningShownLock: OSAllocatedUnfairLock<Bool>,
-        warningManager: WarningManager
+        warningManager: WarningManager,
+        micRateLoggedLock: OSAllocatedUnfairLock<Bool>
     ) throws {
         let callbackStart = CACurrentMediaTime()
         var timing = CallbackTiming()
-        
+
         // Get the actual sample rate from the incoming buffer (may be 44100Hz, 48000Hz, etc.)
         var sourceSampleRate: Int = 48000  // default
         if let formatDesc = CMSampleBufferGetFormatDescription(buffer),
            let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) {
             sourceSampleRate = Int(asbd.pointee.mSampleRate)
+        }
+
+        // Log once per session when a non-48kHz mic rate is detected
+        // This helps diagnose sped-up audio bugs caused by sample rate mismatches
+        if sourceSampleRate != 48000 {
+            let shouldLog = micRateLoggedLock.withLock {
+                if !$0 { $0 = true; return true }
+                return false
+            }
+            if shouldLog {
+                print("[MIC DEBUG] Non-48kHz mic detected: \(sourceSampleRate)Hz — resampling to 48kHz for file output")
+            }
         }
         
         // TIMING: Extract microphone samples at native rate (NOT necessarily 48kHz!)
@@ -766,6 +785,7 @@ final class RecordingController {
         // Reset AEC fallback state for new recording session
         aecDisabledDueToFallbackLock.withLock { $0 = false }
         hasShownResamplingWarningLock.withLock { $0 = false }
+        micRateLoggedLock.withLock { $0 = false }
         
         // Reset timing diagnostics for new recording session
         // This ensures each recording logs timing stats every ~2 seconds from the start

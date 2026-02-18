@@ -30,6 +30,10 @@ See [`template.md`](template.md) for the standard debug log format.
 
 ### 2026
 
+#### February
+
+- [2026-02-17: Microphone Sample Rate Race Condition](2026-02-17_mic-sample-rate-race.md) - Cached micFormatDesc overwritten with wrong sample rate, causing sped-up microphone playback
+
 #### January
 
 - [2026-01-24: AEC Zero Match Rate Bug](2026-01-24_aec-zero-match-rate.md) - Echo cancellation shows 0% match rate despite successful stream sync (IN PROGRESS)

@@ -76,9 +76,6 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Pre-allocated format description for system audio (stereo 48kHz Float32)
     private var systemFormatDesc: CMFormatDescription?
 
-    /// Pre-allocated format description for mic audio (mono Float32)
-    private var micFormatDesc: CMFormatDescription?
-
     /// Whether format descriptions have been set up
     private var formatDescriptionsInitialized = false
 
@@ -325,28 +322,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             formatDescriptionOut: &systemFormatDesc
         )
 
-        // Mic audio format: mono 48kHz Float32 (will be updated if different sample rate detected)
-        var micASBD = AudioStreamBasicDescription(
-            mSampleRate: 48000,
-            mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
-            mBytesPerPacket: 4,
-            mFramesPerPacket: 1,
-            mBytesPerFrame: 4,
-            mChannelsPerFrame: 1,
-            mBitsPerChannel: 32,
-            mReserved: 0
-        )
-        CMAudioFormatDescriptionCreate(
-            allocator: nil,
-            asbd: &micASBD,
-            layoutSize: 0,
-            layout: nil,
-            magicCookieSize: 0,
-            magicCookie: nil,
-            extensions: nil,
-            formatDescriptionOut: &micFormatDesc
-        )
+        // Note: Mic format description is NOT pre-allocated here.
+        // It is created per-buffer in createCMSampleBuffer() using the actual
+        // microphoneSampleRate, which avoids a race condition where this method
+        // would overwrite the correct rate with a default 48kHz value.
     }
 
     /// Handle audio from tap (RT callback - minimal work)
@@ -408,19 +387,22 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         levelHandler?(level, .system)
     }
     
-    /// Deliver raw microphone audio for file output (48kHz mono)
+    /// Deliver raw microphone audio for file output (mono Float32 at actual mic sample rate)
     private func deliverRawMicAudio(samples: [Float], timestamp: Double) {
         ensureFormatDescriptionsInitialized()
 
         guard !samples.isEmpty else { return }
 
         // Create CMSampleBuffer with correct format (mono Float32 at actual mic sample rate)
+        // Pass nil for formatDesc so createCMSampleBuffer creates a fresh description
+        // from microphoneSampleRate — this avoids the race condition where a cached
+        // micFormatDesc could be overwritten with the wrong sample rate.
         if let buffer = createCMSampleBuffer(
             from: samples,
             channels: 1,  // Mono
             sampleRate: microphoneSampleRate,
             timestamp: timestamp,
-            formatDesc: micFormatDesc
+            formatDesc: nil
         ) {
             bufferHandler?(buffer, .microphone)
         }
@@ -551,31 +533,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let inputFormat = inputNode.inputFormat(forBus: 0)
         let tapSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
         microphoneSampleRate = tapSampleRate
-
-        // Update mic format description if sample rate differs
-        if tapSampleRate != 48000 {
-            var micASBD = AudioStreamBasicDescription(
-                mSampleRate: tapSampleRate,
-                mFormatID: kAudioFormatLinearPCM,
-                mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
-                mBytesPerPacket: 4,
-                mFramesPerPacket: 1,
-                mBytesPerFrame: 4,
-                mChannelsPerFrame: 1,
-                mBitsPerChannel: 32,
-                mReserved: 0
-            )
-            CMAudioFormatDescriptionCreate(
-                allocator: nil,
-                asbd: &micASBD,
-                layoutSize: 0,
-                layout: nil,
-                magicCookieSize: 0,
-                magicCookie: nil,
-                extensions: nil,
-                formatDescriptionOut: &micFormatDesc
-            )
-        }
+        // Note: microphoneSampleRate is actor-isolated. The nonisolated handleMicrophoneBuffer
+        // callback does not read it directly — it dispatches to deliverRawMicAudio via Task,
+        // which runs on the actor and reads microphoneSampleRate safely.
 
         // Install tap
         guard let tapFormat = AVAudioFormat(
@@ -595,6 +555,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         microphoneEngine = engine
 
         logger.info("Microphone capture started at \(tapSampleRate)Hz")
+        Task {
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_SAMPLE_RATE: Detected \(tapSampleRate)Hz (hardware), format descs created per-buffer at actual rate")
+        }
     }
 
     /// Stop microphone capture

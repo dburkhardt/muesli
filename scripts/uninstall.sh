@@ -829,21 +829,22 @@ show_summary() {
         echo ""
     fi
     
-    # TCC Permissions
-    if [ ${#SELECTED_BUNDLES[@]} -gt 0 ]; then
-        echo "  TCC Permissions:"
-        local unique_ids=()
-        for idx in "${SELECTED_BUNDLES[@]}"; do
-            local bundle_id="${APP_BUNDLE_IDS[$idx]}"
-            if [[ ! " ${unique_ids[@]} " =~ " ${bundle_id} " ]]; then
-                unique_ids+=("$bundle_id")
-            fi
-        done
-        echo "    - Screen Recording for: ${unique_ids[*]}"
-        echo "    - Microphone for: ${unique_ids[*]}"
-        echo ""
+    # TCC Permissions (always reset — entries may exist even without app bundles)
+    echo "  TCC Permissions:"
+    local tcc_ids=()
+    for idx in "${SELECTED_BUNDLES[@]}"; do
+        local bundle_id="${APP_BUNDLE_IDS[$idx]}"
+        if [[ ! " ${tcc_ids[@]} " =~ " ${bundle_id} " ]]; then
+            tcc_ids+=("$bundle_id")
+        fi
+    done
+    if [[ ! " ${tcc_ids[@]} " =~ " com.muesli.app " ]]; then
+        tcc_ids+=("com.muesli.app")
     fi
-    
+    echo "    - Screen Recording for: ${tcc_ids[*]}"
+    echo "    - Microphone for: ${tcc_ids[*]}"
+    echo ""
+
     # UserDefaults
     if [ ${#SELECTED_BUNDLES[@]} -gt 0 ]; then
         echo "  UserDefaults:"
@@ -1302,12 +1303,8 @@ delete_login_items() {
 }
 
 reset_tcc_permissions() {
-    if [ ${#SELECTED_BUNDLES[@]} -eq 0 ]; then
-        return 0
-    fi
-    
     print_info "Resetting TCC permissions..."
-    
+
     # Get unique bundle IDs from selected bundles
     local unique_ids=()
     for idx in "${SELECTED_BUNDLES[@]}"; do
@@ -1316,7 +1313,7 @@ reset_tcc_permissions() {
             unique_ids+=("$bundle_id")
         fi
     done
-    
+
     # Also include bundle IDs from per-bundle artifacts being cleaned
     if [ "$CLEAN_PER_BUNDLE_ARTIFACTS" = true ]; then
         for dir in "${BUNDLE_CACHE_DIRS[@]}"; do
@@ -1326,26 +1323,40 @@ reset_tcc_permissions() {
             fi
         done
     fi
-    
+
+    # Always include the default bundle ID — TCC entries may exist even if no app
+    # bundles were found (e.g., app was already deleted but permissions remain)
+    if [[ ! " ${unique_ids[@]} " =~ " com.muesli.app " ]]; then
+        unique_ids+=("com.muesli.app")
+    fi
+
     for bundle_id in "${unique_ids[@]}"; do
         if [ "$DRY_RUN" = true ]; then
             log_action "would_reset_tcc" "$bundle_id"
             echo -e "${YELLOW}[DRY RUN]${NC} Would reset TCC permissions for: $bundle_id"
         else
             # Reset Screen Recording permission
-            if tccutil reset ScreenCapture "$bundle_id" 2>/dev/null; then
+            local screen_output
+            screen_output=$(tccutil reset ScreenCapture "$bundle_id" 2>&1)
+            local screen_exit=$?
+            if [ $screen_exit -eq 0 ]; then
                 log_action "reset_tcc_screen" "$bundle_id"
                 print_success "Reset Screen Recording for: $bundle_id"
             else
-                print_warning "Could not reset Screen Recording for: $bundle_id"
+                log_action "reset_tcc_screen_failed" "$bundle_id: $screen_output"
+                print_warning "Could not reset Screen Recording for: $bundle_id ($screen_output)"
             fi
-            
+
             # Reset Microphone permission
-            if tccutil reset Microphone "$bundle_id" 2>/dev/null; then
+            local mic_output
+            mic_output=$(tccutil reset Microphone "$bundle_id" 2>&1)
+            local mic_exit=$?
+            if [ $mic_exit -eq 0 ]; then
                 log_action "reset_tcc_mic" "$bundle_id"
                 print_success "Reset Microphone for: $bundle_id"
             else
-                print_warning "Could not reset Microphone for: $bundle_id"
+                log_action "reset_tcc_mic_failed" "$bundle_id: $mic_output"
+                print_warning "Could not reset Microphone for: $bundle_id ($mic_output)"
             fi
         fi
     done
@@ -1491,37 +1502,39 @@ execute_uninstall() {
     
     # 1. Unregister apps from Launch Services BEFORE deleting them
     unregister_all_apps
-    
+
     # 2. Kill running processes
     kill_muesli_processes
-    
-    # 3. Delete app bundles (DerivedData, /Applications, ~/Applications)
-    delete_app_bundles
-    
-    # 4. Delete Trash apps (if user confirmed)
-    delete_trash_apps
-    
-    # 5. Eject mounted DMGs (if user confirmed)
-    eject_mounted_dmgs
-    
-    # 6. Delete DerivedData folders
-    delete_derived_data
-    
-    # 7. Delete project build directories
-    delete_project_build_dirs
-    
-    # 8. Reset TCC permissions
+
+    # 3. Reset TCC permissions BEFORE deleting app bundles
+    # On macOS 15+, tccutil may need the app bundle present to verify the
+    # code signing identity. Resetting after deletion could silently fail.
     reset_tcc_permissions
-    
+
+    # 4. Delete app bundles (DerivedData, /Applications, ~/Applications)
+    delete_app_bundles
+
+    # 5. Delete Trash apps (if user confirmed)
+    delete_trash_apps
+
+    # 6. Eject mounted DMGs (if user confirmed)
+    eject_mounted_dmgs
+
+    # 7. Delete DerivedData folders
+    delete_derived_data
+
+    # 8. Delete project build directories
+    delete_project_build_dirs
+
     # 9. Delete UserDefaults
     delete_user_defaults
-    
+
     # 10. Delete per-bundle caches/HTTP storages/preferences
     delete_per_bundle_artifacts
-    
+
     # 11. Delete Login Items
     delete_login_items
-    
+
     # 12. Delete Application Support (unless keeping recordings)
     delete_application_support || print_warning "Application Support deletion failed, continuing..."
     
