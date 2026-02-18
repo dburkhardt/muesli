@@ -3,7 +3,6 @@ import CoreMedia
 import Foundation
 import os.lock
 import os.log
-import QuartzCore
 import SwiftUI
 
 /// Controller responsible for recording lifecycle management
@@ -73,20 +72,6 @@ final class RecordingController {
     nonisolated var isMicrophoneMutedSafe: Bool {
         isMicrophoneMutedLock.withLock { $0 }
     }
-    
-    // MARK: - AEC Fallback State (Thread-safe)
-    
-    /// Whether AEC was disabled due to resampling fallback (sample rate mismatch)
-    /// Thread-safe for access from audio callback
-    private let aecDisabledDueToFallbackLock = OSAllocatedUnfairLock(initialState: false)
-    
-    /// Whether the resampling warning has been shown this recording session
-    /// Thread-safe for access from audio callback
-    private let hasShownResamplingWarningLock = OSAllocatedUnfairLock(initialState: false)
-
-    /// Whether we've logged a non-48kHz mic sample rate this recording session
-    /// Thread-safe for access from audio callback (one-shot per session to avoid log spam)
-    private let micRateLoggedLock = OSAllocatedUnfairLock(initialState: false)
     
     // MARK: - Callbacks
     
@@ -186,52 +171,29 @@ final class RecordingController {
     /// Must be called (and awaited) before audioCaptureService.startCapture()
     private func ensureAudioHandlersConfigured() async {
         let fileService = self.fileOutputService
-        let transcriptService = self.transcriptionService
         let transcriptionCoordinator = self.transcriptionCoordinator
-        let aecService = self.echoCancellationService
-        let prefs = self.preferencesManager
         let audioCaptureServiceRef = self.audioCaptureService
-        let warningMgr = self.warningManager
-        
+
         // Capture locks directly to avoid @MainActor isolation in callback
         let muteLock = self.isMicrophoneMutedLock
-        let aecLock = prefs.echoCancellationLock
-        let aecDisabledLock = self.aecDisabledDueToFallbackLock
-        let warningShownLock = self.hasShownResamplingWarningLock
-        let micRateLogged = self.micRateLoggedLock
-        
+
         await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
                 // Wrap entire handler in error handling for graceful degradation
                 do {
-                    // NO direct self capture in processing - only use captured locks and services (thread-safe)
-                    let isMicMuted = muteLock.withLock { $0 }
-                    let isAECEnabled = aecLock.withLock { $0 }
-                    
                     switch type {
                     case .system:
                         try RecordingController.handleSystemAudioBuffer(
                             buffer,
-                            isAECEnabled: isAECEnabled,
-                            fileService: fileService,
-                            transcriptionCoordinator: transcriptionCoordinator,
-                            aecService: aecService
+                            fileService: fileService
                         )
-                        
+
                     case .microphone:
                         try RecordingController.handleMicrophoneAudioBuffer(
                             buffer,
-                            isMicMuted: isMicMuted,
-                            isAECEnabled: isAECEnabled,
-                            fileService: fileService,
-                            transcriptionCoordinator: transcriptionCoordinator,
-                            aecService: aecService,
-                            aecDisabledLock: aecDisabledLock,
-                            warningShownLock: warningShownLock,
-                            warningManager: warningMgr,
-                            micRateLoggedLock: micRateLogged
+                            fileService: fileService
                         )
                     }
-                    
+
                     // Reset error counter on success
                     Task { @MainActor in
                         self?.audioErrorCounter = 0
@@ -242,13 +204,13 @@ final class RecordingController {
                         guard let self = self else { return }
                         self.logger.error("Audio buffer processing error: \(error)")
                         self.audioErrorCounter += 1
-                        
+
                         // If too many consecutive errors, stop recording gracefully
                         if self.audioErrorCounter > self.maxConsecutiveAudioErrors {
                             self.logger.error(
                                 "Too many consecutive audio errors (\(self.audioErrorCounter)), stopping recording"
                             )
-                            
+
                             if let session = self.activeSession {
                                 session.interruptionReason = "Audio processing error"
                                 self.handleCaptureInterrupted(error: error)
@@ -257,458 +219,65 @@ final class RecordingController {
                     }
                 }
             }
-            
+
             // Set up stream interruption handler
             await audioCaptureServiceRef.setInterruptedHandler { [weak self] error in
                 Task { @MainActor in
                     self?.handleCaptureInterrupted(error: error)
                 }
             }
-            
+
         // Set up audio level handler
         await audioCaptureServiceRef.setLevelHandler { [weak self] level, type in
             Task { @MainActor in
                 self?.updateAudioLevel(level, type: type)
             }
         }
-        
+
         // Set up audio warning handler (for mic failures, system audio issues, etc.)
         await audioCaptureServiceRef.setWarningHandler { [weak self] category, message, details, canRetry in
             Task { @MainActor in
                 self?.warningManager.addWarning(category, message: message, details: details, canRetry: canRetry)
             }
         }
+
+        // Set up AEC-processed audio handler (16kHz mono → transcription)
+        // AudioWorker already resamples to 16kHz mono, so this is transcription-ready
+        await audioCaptureServiceRef.setProcessedAudioHandler { [weak self] renderSamples, captureSamples in
+            let isMicMuted = muteLock.withLock { $0 }
+            Task { @MainActor in
+                guard self != nil else { return }
+                transcriptionCoordinator.bufferSystemAudio(renderSamples)
+                if !isMicMuted {
+                    transcriptionCoordinator.bufferMicrophoneAudio(captureSamples)
+                }
+            }
+        }
     }
-    
+
     // MARK: - Audio Buffer Processing Helpers
-    
-    // MARK: - AEC Diagnostic Counters
-    
-    // MARK: - Callback Performance Instrumentation
-    
-    /// Component timing breakdown for callback performance analysis
-    private struct CallbackTiming: Sendable {
-        var extract: TimeInterval = 0
-        var aec: TimeInterval = 0
-        var fileOutput: TimeInterval = 0
-        var resample: TimeInterval = 0
-        var transcription: TimeInterval = 0
-        var total: TimeInterval = 0
-    }
-    
-    /// Thread-safe timing state shared across audio callbacks
-    private struct TimingState {
-        var sysBufferDiagCount: Int = 0
-        var systemTimings: [CallbackTiming] = []
-        var micTimings: [CallbackTiming] = []
-        var sysTimingFlushCount: Int = 0
-        var micTimingFlushCount: Int = 0
-        
-        init() {
-            systemTimings.reserveCapacity(200)
-            micTimings.reserveCapacity(200)
-        }
-    }
-    
-    /// Lock to protect timing buffers and counters across audio threads
-    private nonisolated(unsafe) static let timingStateLock = OSAllocatedUnfairLock(
-        initialState: TimingState()
-    )
-    
-    /// Compute timing statistics from buffer (min, p50, p95, max)
-    private static nonisolated func computeTimingStats(_ timings: [CallbackTiming]) -> (
-        total: (min: Double, p50: Double, p95: Double, max: Double),
-        extract: Double, aec: Double, fileOutput: Double, resample: Double, transcription: Double
-    ) {
-        guard !timings.isEmpty else {
-            return ((0, 0, 0, 0), 0, 0, 0, 0, 0)
-        }
-        
-        let sorted = timings.map { $0.total }.sorted()
-        let count = sorted.count
-        
-        let minVal = sorted.first! * 1000  // Convert to ms
-        let maxVal = sorted.last! * 1000
-        let p50 = sorted[count / 2] * 1000
-        let p95Idx = Swift.min(count - 1, Int(Double(count) * 0.95))
-        let p95 = sorted[p95Idx] * 1000
-        
-        // Average component times (in ms)
-        let avgExtract = timings.map { $0.extract }.reduce(0, +) / Double(count) * 1000
-        let avgAec = timings.map { $0.aec }.reduce(0, +) / Double(count) * 1000
-        let avgFileOutput = timings.map { $0.fileOutput }.reduce(0, +) / Double(count) * 1000
-        let avgResample = timings.map { $0.resample }.reduce(0, +) / Double(count) * 1000
-        let avgTranscription = timings.map { $0.transcription }.reduce(0, +) / Double(count) * 1000
-        
-        return ((minVal, p50, p95, maxVal), avgExtract, avgAec, avgFileOutput, avgResample, avgTranscription)
-    }
-    
-    /// Process system audio buffer (extracted for error handling)
-    /// Note: Timestamp is extracted inside when needed for diagnostics. AEC uses sample-count sync.
+
+    /// Process system audio buffer — file output only
+    /// Transcription is now handled by the AEC-processed audio callback from TapAudioCaptureService
     private static nonisolated func handleSystemAudioBuffer(
         _ buffer: CMSampleBuffer,
-        isAECEnabled: Bool,
-        fileService: FileOutputService,
-        transcriptionCoordinator: TranscriptionCoordinator,
-        aecService: EchoCancellationServiceProtocol
+        fileService: FileOutputService
     ) throws {
-        let callbackStart = CACurrentMediaTime()
-        var timing = CallbackTiming()
-        
-        // AEC Diagnostic: Log system audio timestamps to verify SCK clock domain
-        // Throttled to every 100th buffer to avoid performance impact
-        let shouldLogSysDiag = timingStateLock.withLock { state -> Bool in
-            state.sysBufferDiagCount += 1
-            return state.sysBufferDiagCount % 100 == 0
-        }
-        if shouldLogSysDiag {
-            let sckTimestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
-            let wallClock = CACurrentMediaTime()
-            Task {
-                await DiagnosticLogger.shared.log(.aec,
-                    "SYS: sck=\(String(format: "%.3f", sckTimestamp.seconds))s, " +
-                    "wall=\(String(format: "%.3f", wallClock))s, " +
-                    "delta=\(String(format: "%.3f", wallClock - sckTimestamp.seconds))s")
-            }
-        }
-        
-        // TIMING: Extract samples for AEC
-        let extractStart = CACurrentMediaTime()
-        var systemSamples: [Float]?
-        if isAECEnabled {
-            systemSamples = EchoCancellationServiceNLMS.extractSamples(from: buffer)
-        }
-        timing.extract = CACurrentMediaTime() - extractStart
-
-        if shouldLogSysDiag {
-            if let samples = systemSamples {
-                let rms = sqrt(samples.map { $0 * $0 }.reduce(0, +) / Float(samples.count))
-                let inputDb = rms > 0 ? 20 * log10(rms) : -100
-                let sampleCount = samples.count
-                Task {
-                    await DiagnosticLogger.shared.log(.aec,
-                        "SYS_EXTRACT_RMS: samples=\(sampleCount), inputDb=\(String(format: "%.1f", inputDb))")
-                }
-            } else {
-                Task {
-                    await DiagnosticLogger.shared.log(.aec, "SYS_EXTRACT_FAILED")
-                }
-            }
-        }
-        
-        // TIMING: Store system audio for AEC reference (if AEC enabled)
-        let aecStart = CACurrentMediaTime()
-        if isAECEnabled, let samples = systemSamples {
-            aecService.storeSystemAudio(samples: samples)
-        }
-        timing.aec = CACurrentMediaTime() - aecStart
-        
-        // TIMING: Save to file (always)
-        let fileStart = CACurrentMediaTime()
         fileService.appendAudioBuffer(buffer, type: .system)
-        timing.fileOutput = CACurrentMediaTime() - fileStart
-        
-        // TIMING: Feed to transcription coordinator (handles buffering during model load)
-        let resampleStart = CACurrentMediaTime()
-        let samples = TranscriptionService.resampleToWhisperFormat(
-            buffer,
-            sourceSampleRate: 48000,
-            sourceChannels: 2
-        )
-        timing.resample = CACurrentMediaTime() - resampleStart
-        
-        // TIMING: Transcription buffering
-        let transcriptionStart = CACurrentMediaTime()
-        if let samples = samples {
-            Task { @MainActor in
-                transcriptionCoordinator.bufferSystemAudio(samples)
-            }
-        }
-        timing.transcription = CACurrentMediaTime() - transcriptionStart
-        
-        timing.total = CACurrentMediaTime() - callbackStart
-        let timingSnapshot = timing
-        
-        // Collect timing (no allocation if within capacity)
-        // Collect timing and flush every 100 buffers (~2 seconds) - NOT per-buffer
-        let sysFlush = timingStateLock.withLock { state -> (shouldFlush: Bool, snapshot: [CallbackTiming]) in
-            if state.systemTimings.count < 200 {
-                state.systemTimings.append(timingSnapshot)
-            }
-            state.sysTimingFlushCount += 1
-            if state.sysTimingFlushCount % 100 == 0 {
-                let snapshot = state.systemTimings
-                state.systemTimings.removeAll(keepingCapacity: true)
-                return (true, snapshot)
-            }
-            return (false, [])
-        }
-        if sysFlush.shouldFlush {
-            let stats = computeTimingStats(sysFlush.snapshot)
-            Task {
-                await DiagnosticLogger.shared.log(.aec,
-                    "SYS_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
-                    "p50=\(String(format: "%.2f", stats.total.p50))ms, " +
-                    "p95=\(String(format: "%.2f", stats.total.p95))ms, " +
-                    "max=\(String(format: "%.2f", stats.total.max))ms) " +
-                    "components(extract=\(String(format: "%.2f", stats.extract))ms, " +
-                    "aec=\(String(format: "%.2f", stats.aec))ms, " +
-                    "file=\(String(format: "%.2f", stats.fileOutput))ms, " +
-                    "resample=\(String(format: "%.2f", stats.resample))ms, " +
-                    "transcription=\(String(format: "%.2f", stats.transcription))ms)")
-            }
-        }
     }
     
-    /// Process microphone audio buffer (extracted for error handling)
+
+    /// Process microphone audio buffer — file output only
+    /// Transcription is now handled by the AEC-processed audio callback from TapAudioCaptureService
     private static nonisolated func handleMicrophoneAudioBuffer(
         _ buffer: CMSampleBuffer,
-        isMicMuted: Bool,
-        isAECEnabled: Bool,
-        fileService: FileOutputService,
-        transcriptionCoordinator: TranscriptionCoordinator,
-        aecService: EchoCancellationServiceProtocol,
-        aecDisabledLock: OSAllocatedUnfairLock<Bool>,
-        warningShownLock: OSAllocatedUnfairLock<Bool>,
-        warningManager: WarningManager,
-        micRateLoggedLock: OSAllocatedUnfairLock<Bool>
+        fileService: FileOutputService
     ) throws {
-        let callbackStart = CACurrentMediaTime()
-        var timing = CallbackTiming()
-
-        // Get the actual sample rate from the incoming buffer (may be 44100Hz, 48000Hz, etc.)
-        var sourceSampleRate: Int = 48000  // default
-        if let formatDesc = CMSampleBufferGetFormatDescription(buffer),
-           let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) {
-            sourceSampleRate = Int(asbd.pointee.mSampleRate)
-        }
-
-        // Log once per session when a non-48kHz mic rate is detected
-        // This helps diagnose sped-up audio bugs caused by sample rate mismatches
-        if sourceSampleRate != 48000 {
-            let shouldLog = micRateLoggedLock.withLock {
-                if !$0 { $0 = true; return true }
-                return false
-            }
-            if shouldLog {
-                print("[MIC DEBUG] Non-48kHz mic detected: \(sourceSampleRate)Hz — resampling to 48kHz for file output")
-            }
-        }
-        
-        // TIMING: Extract microphone samples at native rate (NOT necessarily 48kHz!)
-        let extractStart = CACurrentMediaTime()
-        let micSamplesNative = EchoCancellationServiceNLMS.extractSamples(from: buffer)
-        timing.extract = CACurrentMediaTime() - extractStart
-        
-        guard let micSamplesNative = micSamplesNative else {
-            // Fallback: save original buffer
-            fileService.appendAudioBuffer(buffer, type: .microphone)
-            return
-        }
-        
-        // Track actual mic sample rate (may differ from 48kHz after fallback)
-        var actualMicRate = 48000
-        
-        // Check if AEC was disabled due to earlier fallback
-        let aecWasDisabled = aecDisabledLock.withLock { $0 }
-        
-        // CRITICAL: Resample mic to 48kHz BEFORE AEC for consistent alignment with system audio
-        // System audio is always at 48kHz, so AEC must operate at 48kHz
-        let micSamples48k: [Float]
-        if sourceSampleRate != 48000 {
-            if micSamplesNative.isEmpty {
-                // Empty input buffer: don't treat as resample failure
-                // Keep actualMicRate at 48kHz so AEC isn't disabled for the session
-                micSamples48k = micSamplesNative
-            } else {
-                let resampled = EchoCancellationServiceNLMS.resampleFloat32Public(
-                    samples: micSamplesNative,
-                    sourceSampleRate: sourceSampleRate,
-                    targetSampleRate: 48000
-                )
-                if resampled.isEmpty {
-                    // Fallback: use native samples at original rate
-                    micSamples48k = micSamplesNative
-                    actualMicRate = sourceSampleRate  // Track that we're NOT at 48kHz
-                    
-                    // CRITICAL: Disable AEC since sample rates don't match (per r7x9 review)
-                    // AEC expects both streams at 48kHz - mismatched rates cause:
-                    // - Incorrect echo prediction (time alignment breaks)
-                    // - Potential buffer overruns/underruns
-                    // - Degraded or non-functional echo cancellation
-                    //
-                    // Atomic check-and-set to prevent TOCTOU race condition:
-                    // Multiple audio callback threads could otherwise observe the same state
-                    // and trigger duplicate warnings.
-                    let shouldShowWarning = aecDisabledLock.withLock {
-                        if !$0 {
-                            $0 = true  // Atomically mark as disabled
-                            return true  // First time - need to warn
-                        }
-                        return false
-                    }
-                    
-                    if shouldShowWarning {
-                        // Rate-limited warning (per 9ebe review) - show only once per session
-                        // Atomic check-and-set to prevent duplicate warnings from concurrent threads
-                        let shouldWarn = warningShownLock.withLock {
-                            if !$0 {
-                                $0 = true  // Atomically mark as warned
-                                return true
-                            }
-                            return false
-                        }
-                        
-                        if shouldWarn {
-                            // Log to diagnostics
-                            Task {
-                                await DiagnosticLogger.shared.log(.aec,
-                                    "RESAMPLE_FALLBACK: Disabling AEC - mic at \(sourceSampleRate)Hz, cannot resample to 48kHz")
-                            }
-                            
-                            // Show user warning
-                            Task { @MainActor in
-                                warningManager.addWarning(
-                                    .microphone,
-                                    message: "Echo cancellation disabled",
-                                    details: "Microphone resampling failed (using \(sourceSampleRate)Hz). Echo may be present in recording.",
-                                    canRetry: false
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    micSamples48k = resampled
-                }
-            }
-        } else {
-            micSamples48k = micSamplesNative
-        }
-        
-        // Determine if AEC should be used for this buffer
-        // AEC is disabled if: user disabled it, OR resampling failed (sample rate mismatch)
-        let effectiveAECEnabled = isAECEnabled && !aecWasDisabled && actualMicRate == 48000
-        
-        // TIMING: Apply AEC at consistent 48kHz (system audio is always 48kHz)
-        // Note: timestamp no longer passed - AEC uses sample-count synchronization
-        let aecStart = CACurrentMediaTime()
-        let processedSamples: [Float]
-        if effectiveAECEnabled {
-            processedSamples = aecService.processMicrophoneAudio(
-                microphoneSamples: micSamples48k
-            )
-        } else {
-            processedSamples = micSamples48k
-        }
-        timing.aec = CACurrentMediaTime() - aecStart
-        
-        // TIMING: Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
-        // Use actualMicRate for correct sample rate metadata
-        let fileStart = CACurrentMediaTime()
-        let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
-        if let processedBuffer = EchoCancellationServiceNLMS.createSampleBuffer(
-            from: processedSamples,
-            timestamp: timestamp,
-            sourceSampleRate: actualMicRate,
-            targetSampleRate: 48000
-        ) {
-            fileService.appendAudioBuffer(processedBuffer, type: .microphone)
-        } else {
-            // Fallback: save original if conversion fails
-            fileService.appendAudioBuffer(buffer, type: .microphone)
-        }
-        timing.fileOutput = CACurrentMediaTime() - fileStart
-        
-        // Skip microphone audio for transcription if muted
-        if isMicMuted {
-            // Still record timing for muted case
-            timing.total = CACurrentMediaTime() - callbackStart
-            let timingSnapshot = timing
-            let micFlush = timingStateLock.withLock { state -> (shouldFlush: Bool, snapshot: [CallbackTiming]) in
-                if state.micTimings.count < 200 {
-                    state.micTimings.append(timingSnapshot)
-                }
-                state.micTimingFlushCount += 1
-                if state.micTimingFlushCount % 100 == 0 {
-                    let snapshot = state.micTimings
-                    state.micTimings.removeAll(keepingCapacity: true)
-                    return (true, snapshot)
-                }
-                return (false, [])
-            }
-            if micFlush.shouldFlush {
-                let stats = computeTimingStats(micFlush.snapshot)
-                Task {
-                    await DiagnosticLogger.shared.log(.aec,
-                        "MIC_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
-                        "p50=\(String(format: "%.2f", stats.total.p50))ms, " +
-                        "p95=\(String(format: "%.2f", stats.total.p95))ms, " +
-                        "max=\(String(format: "%.2f", stats.total.max))ms) " +
-                        "components(extract=\(String(format: "%.2f", stats.extract))ms, " +
-                        "aec=\(String(format: "%.2f", stats.aec))ms, " +
-                        "file=\(String(format: "%.2f", stats.fileOutput))ms, " +
-                        "resample=\(String(format: "%.2f", stats.resample))ms, " +
-                        "transcription=\(String(format: "%.2f", stats.transcription))ms)")
-                }
-            }
-            return
-        }
-        
-        // TIMING: Feed to transcription coordinator (handles buffering during model load)
-        // Use high-quality AVAudioConverter resampling from actualMicRate to 16kHz
-        let resampleStart = CACurrentMediaTime()
-        let resampled = TranscriptionService.resampleSamples(
-            samples: processedSamples,
-            sourceSampleRate: Double(actualMicRate),
-            sourceChannels: 1,  // Mic is mono
-            targetSampleRate: 16000,
-            targetChannels: 1,
-            isInterleaved: false
-        )
-        timing.resample = CACurrentMediaTime() - resampleStart
-        
-        // TIMING: Transcription buffering
-        let transcriptionStart = CACurrentMediaTime()
-        if let resampled = resampled {
-            Task { @MainActor in
-                transcriptionCoordinator.bufferMicrophoneAudio(resampled)
-            }
-        }
-        timing.transcription = CACurrentMediaTime() - transcriptionStart
-        
-        timing.total = CACurrentMediaTime() - callbackStart
-        let timingSnapshot = timing
-        
-        // Collect timing (no allocation if within capacity)
-        let micFlush = timingStateLock.withLock { state -> (shouldFlush: Bool, snapshot: [CallbackTiming]) in
-            if state.micTimings.count < 200 {
-                state.micTimings.append(timingSnapshot)
-            }
-            state.micTimingFlushCount += 1
-            if state.micTimingFlushCount % 100 == 0 {
-                let snapshot = state.micTimings
-                state.micTimings.removeAll(keepingCapacity: true)
-                return (true, snapshot)
-            }
-            return (false, [])
-        }
-        if micFlush.shouldFlush {
-            let stats = computeTimingStats(micFlush.snapshot)
-            Task {
-                await DiagnosticLogger.shared.log(.aec,
-                    "MIC_CALLBACK_TIMING: total(min=\(String(format: "%.2f", stats.total.min))ms, " +
-                    "p50=\(String(format: "%.2f", stats.total.p50))ms, " +
-                    "p95=\(String(format: "%.2f", stats.total.p95))ms, " +
-                    "max=\(String(format: "%.2f", stats.total.max))ms) " +
-                    "components(extract=\(String(format: "%.2f", stats.extract))ms, " +
-                    "aec=\(String(format: "%.2f", stats.aec))ms, " +
-                    "file=\(String(format: "%.2f", stats.fileOutput))ms, " +
-                    "resample=\(String(format: "%.2f", stats.resample))ms, " +
-                    "transcription=\(String(format: "%.2f", stats.transcription))ms)")
-            }
-        }
+        // Save raw mic audio to file (always, even when muted — mute only affects transcription
+        // which is handled by the processed audio callback)
+        fileService.appendAudioBuffer(buffer, type: .microphone)
     }
-    
+
     // MARK: - Session Management
     
     /// Create a new recording session
@@ -786,22 +355,7 @@ final class RecordingController {
     private func startRecordingAsync(for session: RecordingSession) async {
         // Clear any previous warnings at start of new recording
         warningManager.clearAll()
-        
-        // Reset AEC fallback state for new recording session
-        aecDisabledDueToFallbackLock.withLock { $0 = false }
-        hasShownResamplingWarningLock.withLock { $0 = false }
-        micRateLoggedLock.withLock { $0 = false }
-        
-        // Reset timing diagnostics for new recording session
-        // This ensures each recording logs timing stats every ~2 seconds from the start
-        Self.timingStateLock.withLock { state in
-            state.sysBufferDiagCount = 0
-            state.sysTimingFlushCount = 0
-            state.micTimingFlushCount = 0
-            state.systemTimings.removeAll(keepingCapacity: true)
-            state.micTimings.removeAll(keepingCapacity: true)
-        }
-        
+
         do {
             // Start file output FIRST
             session.outputDirectory = try fileOutputService.startWriting()
@@ -823,13 +377,11 @@ final class RecordingController {
                 try await audioCaptureService.startCapture()
             }
             
-            // Audio is now flowing and being saved to disk ✅
+            // Audio is now flowing and being saved to disk
             session.recordingStartTime = Date()
             session.state = .recording
             session.startDisplayTimer()
-            echoCancellationService.reset()
-            echoCancellationService.startDriftMonitoring()
-            
+
             // Mark initialization as completing audio setup
             session.isInitializing = false
             
@@ -1013,7 +565,6 @@ final class RecordingController {
         
         do {
             try await audioCaptureService.stopCapture()
-            echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
             let directory = try? await fileOutputService.stopWriting()
             
@@ -1041,9 +592,8 @@ final class RecordingController {
         
         do {
             try await audioCaptureService.stopCapture()
-            echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
-            
+
             // Stop file writing and get output directory
             let directory: URL
             do {
@@ -1249,9 +799,8 @@ final class RecordingController {
         session.stopDisplayTimer()
         
         do {
-            echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
-            
+
             // Stop file writing and get output directory
             let directory: URL
             do {

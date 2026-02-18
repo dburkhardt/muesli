@@ -71,6 +71,9 @@ typealias AudioLevelHandler = @Sendable (Float, AudioStreamType) -> Void
 /// Callback type for service warnings (category, message, details, canRetry)
 typealias AudioWarningHandler = @Sendable (ServiceWarning.WarningCategory, String, String, Bool) -> Void
 
+/// Callback for AEC-processed audio (16kHz mono, for transcription)
+typealias ProcessedTranscriptionAudioHandler = @Sendable (_ renderSamples: [Float], _ captureSamples: [Float]) -> Void
+
 /// Protocol for audio capture services
 protocol AudioCaptureServiceProtocol: Actor {
     /// Whether currently recording
@@ -90,6 +93,9 @@ protocol AudioCaptureServiceProtocol: Actor {
 
     /// Set callback for warnings
     func setWarningHandler(_ handler: @escaping AudioWarningHandler)
+
+    /// Set callback for AEC-processed audio (16kHz mono, for transcription)
+    func setProcessedAudioHandler(_ handler: @escaping ProcessedTranscriptionAudioHandler)
 
     /// Start audio capture (all system audio)
     func startCapture() async throws

@@ -30,6 +30,7 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     private var interruptedHandler: StreamInterruptedHandler?
     private var levelHandler: AudioLevelHandler?
     private var warningHandler: AudioWarningHandler?
+    private var processedAudioHandler: ProcessedTranscriptionAudioHandler?
     
     // MARK: - AudioCaptureServiceProtocol
     
@@ -47,6 +48,10 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     
     func setWarningHandler(_ handler: @escaping AudioWarningHandler) {
         warningHandler = handler
+    }
+
+    func setProcessedAudioHandler(_ handler: @escaping ProcessedTranscriptionAudioHandler) {
+        processedAudioHandler = handler
     }
     
     func setMicrophoneDevice(_ deviceID: String?) {
@@ -101,6 +106,11 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     func simulateLevel(_ level: Float, type: AudioStreamType) {
         levelHandler?(level, type)
     }
+
+    /// Simulate processed audio delivery
+    func simulateProcessedAudio(renderSamples: [Float], captureSamples: [Float]) {
+        processedAudioHandler?(renderSamples, captureSamples)
+    }
     
     /// Reset all state for next test
     func reset() {
@@ -116,5 +126,6 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
         bufferHandler = nil
         interruptedHandler = nil
         levelHandler = nil
+        processedAudioHandler = nil
     }
 }

@@ -70,6 +70,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     private var interruptedHandler: StreamInterruptedHandler?
     private var levelHandler: AudioLevelHandler?
     private var warningHandler: AudioWarningHandler?
+    private var processedAudioHandler: ProcessedTranscriptionAudioHandler?
 
     // MARK: - CMSampleBuffer Creation State
 
@@ -144,6 +145,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Set callback for warnings
     func setWarningHandler(_ handler: @escaping AudioWarningHandler) {
         warningHandler = handler
+    }
+
+    /// Set callback for AEC-processed audio (16kHz mono, for transcription)
+    func setProcessedAudioHandler(_ handler: @escaping ProcessedTranscriptionAudioHandler) {
+        processedAudioHandler = handler
     }
 
     /// Start audio capture (captures all system audio)
@@ -341,9 +347,18 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     ) {
         let count = Int(frameCount)
         let totalSamples = count * 2  // Stereo: frameCount * 2 channels
-        
-        // Push to synchronizer for transcription pipeline
-        synchronizer.pushRender(samples: samples, count: totalSamples, sampleTime: sampleTime, hostTime: hostTime)
+
+        // Downmix interleaved stereo to mono before pushing to synchronizer
+        // The synchronizer and AEC operate on mono 48kHz frames (480 samples = 10ms)
+        // Without this, interleaved stereo would be misinterpreted as mono
+        let monoBuffer = UnsafeMutablePointer<Float>.allocate(capacity: count)
+        defer { monoBuffer.deallocate() }
+        for i in 0..<count {
+            monoBuffer[i] = (samples[i * 2] + samples[i * 2 + 1]) * 0.5
+        }
+
+        // Push mono audio to synchronizer for transcription pipeline
+        synchronizer.pushRender(samples: monoBuffer, count: count, sampleTime: sampleTime, hostTime: hostTime)
         
         // Create CMSampleBuffer for file output (raw 48kHz stereo)
         // This is done here to preserve the original audio quality
@@ -421,11 +436,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         captureSamples: [Float],
         frameIndex: Int64
     ) {
-        // Note: File output is now handled by deliverRawSystemAudio and deliverRawMicAudio
-        // This method is kept for transcription pipeline but doesn't write to files anymore
-        
-        // The processed 16kHz mono audio would go to transcription service
-        // For now, we just skip this as file output is handled elsewhere
+        processedAudioHandler?(renderSamples, captureSamples)
     }
 
     /// Create CMSampleBuffer from Float samples (for FileOutputService compatibility)
