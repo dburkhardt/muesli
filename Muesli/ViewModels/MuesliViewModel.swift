@@ -630,6 +630,13 @@ final class MuesliViewModel {
         self.recordingController.onSplitViewVisibilityChanged = { [weak self] visible in
             self?.isSplitViewVisible = visible
         }
+
+        self.recordingController.onPermissionRecoveryNeeded = { missingScreen, missingMic in
+            AppDelegate.shared?.requestPermissionRecovery(
+                missingScreen: missingScreen,
+                missingMic: missingMic
+            )
+        }
         
         // Load available meeting apps
         Task {

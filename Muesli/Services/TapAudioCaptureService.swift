@@ -82,7 +82,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     // MARK: - Initialization
 
     init(checkPermission: @escaping @Sendable () async -> Bool = {
-        CGPreflightScreenCaptureAccess()
+        // Use cached tap-probe result from PermissionManager, NOT CGPreflightScreenCaptureAccess().
+        // CGPreflight only checks the Screen Recording TCC bucket, but Core Audio taps use the
+        // System Audio Recording bucket — a separate permission entry.
+        UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
     }) {
         self.checkPermission = checkPermission
         print("[TAP DEBUG] TapAudioCaptureService.init() called - CREATED")

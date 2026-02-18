@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreMedia
 import Foundation
 import os.lock
@@ -103,6 +104,10 @@ final class RecordingController {
     
     /// Called when split view visibility should change
     var onSplitViewVisibilityChanged: ((Bool) -> Void)?
+
+    /// Called when a permission error is detected during recording start.
+    /// Parameters: (missingScreen: Bool, missingMic: Bool)
+    var onPermissionRecoveryNeeded: ((Bool, Bool) -> Void)?
     
     // MARK: - Initialization
     
@@ -890,10 +895,39 @@ final class RecordingController {
             muesliError = .noAudioContent
         case .permissionDenied, .streamStartFailed:
             muesliError = .screenRecordingDenied
+        case .microphoneStartFailed:
+            muesliError = .microphoneDenied
         default:
             muesliError = .captureStartFailed(underlying: error)
         }
-        
+
+        // For permission-related errors, try permission recovery flow
+        switch error {
+        case .permissionDenied, .streamStartFailed:
+            let missingScreen = !CGPreflightScreenCaptureAccess()
+            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+            // If both checks say granted (false negative), default to missingScreen
+            // since screen capture is what actually failed
+            let effectiveMissingScreen = missingScreen || (!missingScreen && !missingMic)
+            if let callback = onPermissionRecoveryNeeded {
+                logger.warning("Permission error during capture start, triggering recovery: missingScreen=\(effectiveMissingScreen), missingMic=\(missingMic)")
+                callback(effectiveMissingScreen, missingMic)
+                cleanupFailedSession(session)
+                return
+            }
+        case .microphoneStartFailed:
+            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+            if missingMic, let callback = onPermissionRecoveryNeeded {
+                logger.warning("Microphone permission error during capture start, triggering recovery")
+                callback(false, true)
+                cleanupFailedSession(session)
+                return
+            }
+        default:
+            break
+        }
+
+        // Fallback: show error on session (legacy path)
         // Add context for specific cases
         if case .noContentToCapture = error, let app = session.selectedApp {
             session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
@@ -905,10 +939,21 @@ final class RecordingController {
     
     private func handleGenericError(_ error: Error, for session: RecordingSession) {
         let errorMsg = error.localizedDescription
-        
+
         let muesliError: MuesliError
         if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
             muesliError = .screenRecordingDenied
+
+            // Try permission recovery for TCC/permission errors
+            let missingScreen = !CGPreflightScreenCaptureAccess()
+            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+            let effectiveMissingScreen = missingScreen || (!missingScreen && !missingMic)
+            if let callback = onPermissionRecoveryNeeded {
+                logger.warning("Generic permission error during capture, triggering recovery: missingScreen=\(effectiveMissingScreen), missingMic=\(missingMic)")
+                callback(effectiveMissingScreen, missingMic)
+                cleanupFailedSession(session)
+                return
+            }
         } else {
             muesliError = .captureStartFailed(underlying: error)
         }

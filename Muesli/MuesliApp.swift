@@ -326,6 +326,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return (hasScreen, hasMic)
     }
     
+    /// Trigger permission recovery from outside AppDelegate (e.g., ViewModel callback).
+    /// Guards against double-show if recovery window is already visible.
+    func requestPermissionRecovery(missingScreen: Bool, missingMic: Bool) {
+        if let window = onboardingWindow, window.isVisible { return }
+        showOnboardingWindow(mode: .permissionRecovery(
+            missingScreen: missingScreen,
+            missingMic: missingMic
+        ))
+    }
+
     /// Called when permission recovery completes - closes onboarding and opens main window
     func exitPermissionRecovery() {
         // Log recovery completion
