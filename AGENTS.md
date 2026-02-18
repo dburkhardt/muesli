@@ -59,38 +59,41 @@ Detailed description of the feature or improvement.
 
 **Build & Launch** (recommended):
 
-The build takes 1-8 minutes depending on cache state. Run the script and **wait for user confirmation**:
+The build takes 1-8 minutes depending on cache state. Run the build in the background and poll until it finishes:
 
 ```bash
-# Start the build
+# 1. Start the build in background
 ./scripts/build-and-launch.sh
 ```
 
-**IMPORTANT: Do NOT poll, sleep, or monitor the build.** After starting the build, wait for the user to confirm when it completes. The user will tell you when the build is done (success or failure).
-
-**When user confirms build success**, extract the timestamp:
+Run the build script in the background (using the Bash tool's `run_in_background` parameter). Then poll for completion with a while loop + sleep:
 
 ```bash
-# Extract timestamp from log file
-grep "BUILD TIMESTAMP:" "$(ls -t /tmp/muesli-build-*.log | head -1)"
+# 2. Poll until build completes (check every 15 seconds)
+while [ -f /tmp/muesli-build.lock ]; do sleep 15; done
 
-# Or read from dedicated timestamp file
-cat /tmp/muesli-build-timestamp.txt
+# 3. Check result
+LOG=$(ls -t /tmp/muesli-build-*.log | head -1)
+if grep -q "BUILD SUCCEEDED" "$LOG"; then
+  echo "SUCCESS"; grep "BUILD TIMESTAMP:" "$LOG"; cat /tmp/muesli-build-timestamp.txt
+else
+  echo "FAILED"; grep "error:" "$LOG" | head -20
+fi
 ```
 
-**If user reports build failure**, check the log for errors:
-
-```bash
-grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)"
-```
-
-**Build timestamp verification** (REQUIRED after user confirms success):
+**Build timestamp verification** (REQUIRED after build success):
 - After successful build, the log includes a prominent `BUILD TIMESTAMP` box
 - The timestamp is also written to `/tmp/muesli-build-timestamp.txt`
 - **Agents MUST provide this timestamp to the user** when reporting build completion
 - Format: UTC ISO 8601 (e.g., `2026-01-24T15:49:31Z`)
 - User can verify in app: Help → About → Build Details → Built
 - This ensures the user knows they're running the exact build that was just compiled
+
+**If the build fails**, check the log for errors:
+
+```bash
+grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)" | head -20
+```
 
 **Build & Launch options**:
 ```bash
@@ -191,6 +194,25 @@ CI builds (`ci.yml`) are intentionally **unsigned** for speed and fork compatibi
 - Concurrency controls auto-cancel stale runs on the same branch
 
 **Release workflow** (`release.yml`): Signs with Developer ID and notarizes via Apple. This is the only workflow that uses signing secrets.
+
+**Monitoring CI/Release workflows**: After pushing code or tags that trigger workflows, poll for completion using `watch-release.sh` or `gh run watch`:
+
+```bash
+# Watch the most recent CI run (poll with while loop + sleep)
+RUN_ID=$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')
+while true; do
+  STATUS=$(gh run view "$RUN_ID" --json status -q '.status')
+  [ "$STATUS" != "in_progress" ] && [ "$STATUS" != "queued" ] && break
+  sleep 15
+done
+CONCLUSION=$(gh run view "$RUN_ID" --json conclusion -q '.conclusion')
+echo "Run $RUN_ID: $CONCLUSION"
+
+# Or for release builds specifically:
+./scripts/watch-release.sh
+```
+
+Run the monitoring command in the background (using the Bash tool's `run_in_background` parameter) and check results when it completes. Do NOT wait for the user to report CI results — poll and report them yourself.
 
 ## Versioning (CRITICAL FOR AGENTS)
 
