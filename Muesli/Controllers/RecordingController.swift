@@ -782,9 +782,10 @@ final class RecordingController {
             session.outputDirectory = try fileOutputService.startWriting()
             
             // Configure microphone preference before starting capture
-            // Pass selected mic device to audio capture service for AVAudioEngine capture            let selectedMicID = microphoneManager.selectedDeviceID
+            // Pass selected mic device to audio capture service for AVAudioEngine capture
+            let selectedMicID = microphoneManager.selectedDeviceID
             await audioCaptureService.setMicrophoneDevice(selectedMicID)
-            
+
             // CRITICAL: Ensure audio handlers are configured BEFORE starting capture
             // This fixes the race condition where handlers weren't set when capture started
             
@@ -1304,7 +1305,8 @@ final class RecordingController {
                 segmentNumber: session.segmentNumber
             )
             
-            // Pass selected mic device to audio capture service for AVAudioEngine capture            let selectedMicID = microphoneManager.selectedDeviceID
+            // Pass selected mic device to audio capture service for AVAudioEngine capture
+            let selectedMicID = microphoneManager.selectedDeviceID
             await audioCaptureService.setMicrophoneDevice(selectedMicID)
             
             // CRITICAL: Ensure audio handlers are configured BEFORE starting capture
