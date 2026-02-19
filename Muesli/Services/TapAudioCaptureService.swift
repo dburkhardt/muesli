@@ -338,27 +338,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         )
         audioWorker = worker
 
-        // Start runtime RMS monitoring for the tap
-        // If rollingRMS stays near-zero for >3 seconds during an active recording,
-        // fire the warningHandler to alert the user (catches real permission revocation
-        // without false positives from excluded-process audio).
-        if tapManager.state == .running {
-            let handler = self.warningHandler
-            Task { [weak self] in
-                // Wait 20 seconds before checking — system audio may take time to
-                // arrive depending on when the user starts playback or joins a call.
-                try? await Task.sleep(for: .seconds(20))
-                guard let self = self, await self.isRecording else { return }
-                let rms = self.tapManager.currentRMSLevel
-                if rms < 0.0001 {
-                    await MainActor.run {
-                        handler?(.systemAudio, "No system audio detected",
-                            "No system audio picked up yet — is anything playing? If you're on a call or playing media and still see this, check that System Audio Recording permission is granted.",
-                            false)
-                    }
-                }
-            }
-        }
+        // Note: No system audio warning removed — the app supports personal dictation
+        // (mic-only) as a valid use case. Absence of system audio is not an error.
 
         isRecording = true
         logger.info("Tap-based audio capture started")

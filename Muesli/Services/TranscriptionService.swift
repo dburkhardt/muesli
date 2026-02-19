@@ -361,9 +361,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             usePrefillPrompt: true,
             usePrefillCache: true,
             suppressBlank: true,                     // Prevent "[BLANK_AUDIO]" hallucinations
-            compressionRatioThreshold: 2.4,          // Detect repetitive hallucinations
-            logProbThreshold: -1.0,                  // Reject low-confidence outputs
-            noSpeechThreshold: 0.6                   // Better silence detection
+            compressionRatioThreshold: 1.8,          // Aggressively detect repetitive hallucinations
+            logProbThreshold: -0.7,                  // Reject low-confidence outputs more strictly
+            noSpeechThreshold: 0.5                   // More sensitive silence detection
         )
     }
     
