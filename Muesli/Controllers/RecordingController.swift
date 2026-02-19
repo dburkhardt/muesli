@@ -176,6 +176,10 @@ final class RecordingController {
 
         // Capture locks directly to avoid @MainActor isolation in callback
         let muteLock = self.isMicrophoneMutedLock
+        let ingestionQueue = DispatchQueue(label: "com.muesli.app.transcription.ingestion", qos: .userInitiated)
+        let micBatchBuffer = OSAllocatedUnfairLock(initialState: [Float]())
+        let renderBatchBuffer = OSAllocatedUnfairLock(initialState: [Float]())
+        let batchThreshold = 9600  // 200ms at 48kHz
 
         await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
                 // Wrap entire handler in error handling for graceful degradation
@@ -241,15 +245,58 @@ final class RecordingController {
             }
         }
 
-        // Set up AEC-processed audio handler (16kHz mono → transcription)
-        // AudioWorker already resamples to 16kHz mono, so this is transcription-ready
-        await audioCaptureServiceRef.setProcessedAudioHandler { [weak self] renderSamples, captureSamples in
-            let isMicMuted = muteLock.withLock { $0 }
-            Task { @MainActor in
+        // Set up processed mic handler (48kHz mono -> batched -> 16kHz -> transcription)
+        await audioCaptureServiceRef.setProcessedMicHandler { [weak self] frame in
+            ingestionQueue.async {
                 guard self != nil else { return }
-                transcriptionCoordinator.bufferSystemAudio(renderSamples)
-                if !isMicMuted {
-                    transcriptionCoordinator.bufferMicrophoneAudio(captureSamples)
+                let isMicMuted = muteLock.withLock { $0 }
+                guard !isMicMuted else { return }
+
+                let batch: [Float]? = micBatchBuffer.withLock { buffer in
+                    buffer.append(contentsOf: frame.samples)
+                    guard buffer.count >= batchThreshold else { return nil }
+                    let output = buffer
+                    buffer.removeAll(keepingCapacity: true)
+                    return output
+                }
+
+                guard let batch else { return }
+                let samples16k = TranscriptionService.resampleToWhisperFormat(
+                    batch,
+                    sourceSampleRate: Double(frame.sampleRate),
+                    sourceChannels: 1
+                )
+
+                Task { @MainActor in
+                    guard self != nil else { return }
+                    transcriptionCoordinator.bufferMicrophoneAudio(samples16k)
+                }
+            }
+        }
+
+        // Set up processed render handler (48kHz mono -> batched -> 16kHz -> transcription)
+        await audioCaptureServiceRef.setProcessedRenderHandler { [weak self] frame in
+            ingestionQueue.async {
+                guard self != nil else { return }
+
+                let batch: [Float]? = renderBatchBuffer.withLock { buffer in
+                    buffer.append(contentsOf: frame.samples)
+                    guard buffer.count >= batchThreshold else { return nil }
+                    let output = buffer
+                    buffer.removeAll(keepingCapacity: true)
+                    return output
+                }
+
+                guard let batch else { return }
+                let samples16k = TranscriptionService.resampleToWhisperFormat(
+                    batch,
+                    sourceSampleRate: Double(frame.sampleRate),
+                    sourceChannels: 1
+                )
+
+                Task { @MainActor in
+                    guard self != nil else { return }
+                    transcriptionCoordinator.bufferSystemAudio(samples16k)
                 }
             }
         }

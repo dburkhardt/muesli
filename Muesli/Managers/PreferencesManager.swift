@@ -130,7 +130,7 @@ final class PreferencesManager {
     }
     
     // MARK: - AEC Implementation Selection
-    
+
     /// AEC implementation (hidden/advanced setting)
     /// Default: .webrtc for new users (better echo suppression)
     var aecImplementation: String {
@@ -141,15 +141,39 @@ final class PreferencesManager {
             UserDefaults.standard.set(newValue, forKey: AppStorageKeys.aecImplementation)
         }
     }
-    
+
     /// Get typed AEC implementation
     var aecImplementationType: AECImplementation {
         AECImplementation(rawValue: aecImplementation) ?? .webrtc
     }
-    
+
     /// Set AEC implementation type
     func setAECImplementation(_ implementation: AECImplementation) {
         aecImplementation = implementation.rawValue
+    }
+
+    // MARK: - AEC Delay Mode
+
+    /// AEC delay mode determines how stream delay is computed for echo cancellation
+    enum AECDelayMode: String, CaseIterable {
+        case arrivalOnly
+        case arrivalPlusStreamDelay
+    }
+
+    /// AEC delay mode (advanced setting)
+    /// Default: .arrivalOnly — delay computed from render/capture arrival time difference only
+    var aecDelayMode: String {
+        get {
+            UserDefaults.standard.string(forKey: AppStorageKeys.aecDelayMode) ?? AECDelayMode.arrivalOnly.rawValue
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.aecDelayMode)
+        }
+    }
+
+    /// Get typed AEC delay mode
+    var aecDelayModeType: AECDelayMode {
+        AECDelayMode(rawValue: aecDelayMode) ?? .arrivalOnly
     }
     
     // MARK: - Audio Chunk Duration

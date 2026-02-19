@@ -55,6 +55,9 @@ enum AppStorageKeys {
     
     /// AEC implementation type: "WebRTC AEC3" (default) or "NLMS (Legacy)"
     static let aecImplementation = "aecImplementation"
+
+    /// AEC delay mode: how stream delay is computed for echo cancellation
+    static let aecDelayMode = "aecDelayMode"
     
     /// Audio chunk duration for transcription (2-10 seconds)
     static let audioChunkDuration = "audioChunkDuration"

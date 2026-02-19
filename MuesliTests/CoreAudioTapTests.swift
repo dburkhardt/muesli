@@ -7,6 +7,8 @@
 //
 
 import XCTest
+import AudioToolbox
+import os.lock
 @testable import Muesli
 
 final class CoreAudioTapTests: XCTestCase {
@@ -307,11 +309,11 @@ final class CoreAudioTapTests: XCTestCase {
         let manager = AggregateDeviceManager()
         
         // Create tap with no exclusions (global tap)
-        let deviceID = try manager.createDevice(excludedPIDs: [], isExclusive: false)
-        
+        let deviceID = try manager.createTapOnlyDevice(excludedProcessIDs: [], isExclusive: false)
+
         XCTAssertNotEqual(deviceID, kAudioObjectUnknown, "Aggregate device should be created")
         XCTAssertNotEqual(manager.tapID, kAudioObjectUnknown, "Tap should be created")
-        
+
         // Clean up
         manager.destroyDevice()
     }
@@ -319,7 +321,7 @@ final class CoreAudioTapTests: XCTestCase {
     func testAggregateDeviceFormat() throws {
         let manager = AggregateDeviceManager()
         
-        let _ = try manager.createDevice(excludedPIDs: [], isExclusive: false)
+        let _ = try manager.createTapOnlyDevice(excludedProcessIDs: [], isExclusive: false)
         
         // Query the tap format
         let format = try manager.getTapFormat()
@@ -343,24 +345,30 @@ final class CoreAudioTapTests: XCTestCase {
         var lastSamples: [Float] = []
         
         // Start the tap with a callback
-        try await manager.start(excludedPIDs: [], isExclusive: false) { samples, frameCount, sampleTime, hostTime in
-            callbackCount += 1
-            // Capture first 100 samples for inspection
-            if lastSamples.isEmpty && frameCount > 0 {
-                let count = min(Int(frameCount) * 2, 100)  // Stereo
-                lastSamples = Array(UnsafeBufferPointer(start: samples, count: count))
+        try manager.start(
+            configuration: TapConfiguration(
+                sampleRate: 48000, channelCount: 2, frameQuantum: 480,
+                excludedProcessIDs: [], isExclusive: false
+            ),
+            callback: { samples, frameCount, sampleTime, hostTime in
+                callbackCount += 1
+                // Capture first 100 samples for inspection
+                if lastSamples.isEmpty && frameCount > 0 {
+                    let count = min(Int(frameCount) * 2, 100)  // Stereo
+                    lastSamples = Array(UnsafeBufferPointer(start: samples, count: count))
+                }
             }
-        }
-        
+        )
+
         // Wait a bit for IOProc callbacks
         try await Task.sleep(nanoseconds: 500_000_000)  // 500ms
-        
+
         // Check that callbacks fired
         print("[TEST] IOProc callback count after 500ms: \(callbackCount)")
         XCTAssertGreaterThan(callbackCount, 0, "IOProc should fire callbacks")
-        
+
         // Stop
-        await manager.stop()
+        manager.stop()
     }
     
     func testTapManagerReceivesAudioWithBeep() async throws {
@@ -370,13 +378,19 @@ final class CoreAudioTapTests: XCTestCase {
         var totalCallbacks = 0
         
         // Start the tap
-        try await manager.start(excludedPIDs: [], isExclusive: false) { samples, frameCount, sampleTime, hostTime in
-            totalCallbacks += 1
-            let count = Int(frameCount) * 2  // Stereo
-            for i in 0..<count {
-                maxSampleValue = max(maxSampleValue, abs(samples[i]))
+        try manager.start(
+            configuration: TapConfiguration(
+                sampleRate: 48000, channelCount: 2, frameQuantum: 480,
+                excludedProcessIDs: [], isExclusive: false
+            ),
+            callback: { samples, frameCount, sampleTime, hostTime in
+                totalCallbacks += 1
+                let count = Int(frameCount) * 2  // Stereo
+                for i in 0..<count {
+                    maxSampleValue = max(maxSampleValue, abs(samples[i]))
+                }
             }
-        }
+        )
         
         // Wait for tap to stabilize
         try await Task.sleep(nanoseconds: 200_000_000)  // 200ms
@@ -400,8 +414,8 @@ final class CoreAudioTapTests: XCTestCase {
         
         XCTAssertGreaterThan(totalCallbacks, 0, "Should receive callbacks")
         // Note: We don't fail on zero samples since it could be a permission issue
-        
-        await manager.stop()
+
+        manager.stop()
     }
     
     func testTapFormatIsFloat32() async throws {
@@ -410,30 +424,36 @@ final class CoreAudioTapTests: XCTestCase {
         var formatChecked = false
         var isFloat32 = false
         
-        try await manager.start(excludedPIDs: [], isExclusive: false) { samples, frameCount, sampleTime, hostTime in
-            if !formatChecked {
-                formatChecked = true
-                // If samples are Float, reading them as Float should give sensible values
-                // (not NaN, not huge numbers from misinterpreted bytes)
-                let count = min(Int(frameCount) * 2, 100)
-                var hasValidFloats = true
-                for i in 0..<count {
-                    let val = samples[i]
-                    if val.isNaN || val.isInfinite || abs(val) > 10.0 {
-                        hasValidFloats = false
-                        break
+        try manager.start(
+            configuration: TapConfiguration(
+                sampleRate: 48000, channelCount: 2, frameQuantum: 480,
+                excludedProcessIDs: [], isExclusive: false
+            ),
+            callback: { samples, frameCount, sampleTime, hostTime in
+                if !formatChecked {
+                    formatChecked = true
+                    // If samples are Float, reading them as Float should give sensible values
+                    // (not NaN, not huge numbers from misinterpreted bytes)
+                    let count = min(Int(frameCount) * 2, 100)
+                    var hasValidFloats = true
+                    for i in 0..<count {
+                        let val = samples[i]
+                        if val.isNaN || val.isInfinite || abs(val) > 10.0 {
+                            hasValidFloats = false
+                            break
+                        }
                     }
+                    isFloat32 = hasValidFloats
                 }
-                isFloat32 = hasValidFloats
             }
-        }
+        )
         
         try await Task.sleep(nanoseconds: 200_000_000)
         
         XCTAssertTrue(formatChecked, "Should have received at least one callback")
         XCTAssertTrue(isFloat32, "Samples should be valid Float32 (not NaN, Inf, or huge values)")
-        
-        await manager.stop()
+
+        manager.stop()
     }
 
     // MARK: - Minimal Tap Test (Standalone)
@@ -448,8 +468,8 @@ final class CoreAudioTapTests: XCTestCase {
             let deviceID = try manager.createTapOnlyDevice(excludedProcessIDs: [], isExclusive: true)
             let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, deviceID, nil) { _, inInputData, _, _, _ in
                 callbackCount += 1
-                guard let inputData = inInputData else { return }
-                let bufferList = UnsafeMutableAudioBufferListPointer(inputData)
+                let mutablePtr = UnsafeMutablePointer(mutating: inInputData)
+                let bufferList = UnsafeMutableAudioBufferListPointer(mutablePtr)
                 for buffer in bufferList {
                     let byteCount = Int(buffer.mDataByteSize)
                     if let data = buffer.mData {
@@ -489,6 +509,171 @@ final class CoreAudioTapTests: XCTestCase {
         } catch {
             XCTFail("Minimal tap test failed: \(error)")
         }
+    }
+
+    // MARK: - AudioFrameMetadataRing Tests
+
+    func testMetadataRingPushPop() {
+        let ring = AudioFrameMetadataRing(capacityFrames: 4)
+
+        // Push 3 entries
+        ring.push(hostTime: 100, startSampleIndex: 0)
+        ring.push(hostTime: 200, startSampleIndex: 480)
+        ring.push(hostTime: 300, startSampleIndex: 960)
+
+        // Pop and verify order
+        let first = ring.pop()
+        XCTAssertNotNil(first)
+        XCTAssertEqual(first?.hostTime, 100)
+        XCTAssertEqual(first?.startSampleIndex, 0)
+
+        let second = ring.pop()
+        XCTAssertNotNil(second)
+        XCTAssertEqual(second?.hostTime, 200)
+        XCTAssertEqual(second?.startSampleIndex, 480)
+
+        let third = ring.pop()
+        XCTAssertNotNil(third)
+        XCTAssertEqual(third?.hostTime, 300)
+        XCTAssertEqual(third?.startSampleIndex, 960)
+
+        // Empty — should return nil
+        let empty = ring.pop()
+        XCTAssertNil(empty)
+    }
+
+    func testMetadataRingOverflow() {
+        let ring = AudioFrameMetadataRing(capacityFrames: 2)
+
+        // Push 3 entries into ring of capacity 2 — first should be dropped
+        ring.push(hostTime: 100, startSampleIndex: 0)
+        ring.push(hostTime: 200, startSampleIndex: 480)
+        ring.push(hostTime: 300, startSampleIndex: 960)
+
+        // First pop should be the second entry (first was dropped)
+        let first = ring.pop()
+        XCTAssertNotNil(first)
+        XCTAssertEqual(first?.hostTime, 200)
+
+        let second = ring.pop()
+        XCTAssertNotNil(second)
+        XCTAssertEqual(second?.hostTime, 300)
+
+        XCTAssertNil(ring.pop())
+    }
+
+    func testMetadataRingReset() {
+        let ring = AudioFrameMetadataRing(capacityFrames: 4)
+
+        ring.push(hostTime: 100, startSampleIndex: 0)
+        ring.push(hostTime: 200, startSampleIndex: 480)
+
+        ring.reset()
+
+        // After reset, pop should return nil
+        XCTAssertNil(ring.pop())
+
+        // Can push again after reset
+        ring.push(hostTime: 500, startSampleIndex: 0)
+        let entry = ring.pop()
+        XCTAssertNotNil(entry)
+        XCTAssertEqual(entry?.hostTime, 500)
+    }
+
+    // MARK: - TapCaptureRing Pop Tests
+
+    func testTapCaptureRingPopConsumes() {
+        let ring = TapCaptureRing(capacitySamples: 2000)
+
+        // Push 960 samples with known pattern
+        var samples = [Float](repeating: 0, count: 960)
+        for i in 0..<960 { samples[i] = Float(i) }
+
+        samples.withUnsafeBufferPointer { ptr in
+            ring.push(samples: ptr.baseAddress!, count: 960, sampleTime: 0, hostTime: 0)
+        }
+
+        XCTAssertEqual(ring.available, 960)
+
+        // Pop 480 samples (one AEC frame)
+        var dest = [Float](repeating: 0, count: 480)
+        let ok = dest.withUnsafeMutableBufferPointer { ptr in
+            ring.pop(into: ptr.baseAddress!, count: 480)
+        }
+        XCTAssertTrue(ok)
+        XCTAssertEqual(ring.available, 480)
+        XCTAssertEqual(dest[0], 0)
+        XCTAssertEqual(dest[479], 479)
+
+        // Pop remaining
+        let ok2 = dest.withUnsafeMutableBufferPointer { ptr in
+            ring.pop(into: ptr.baseAddress!, count: 480)
+        }
+        XCTAssertTrue(ok2)
+        XCTAssertEqual(dest[0], 480)
+        XCTAssertEqual(ring.available, 0)
+    }
+
+    // MARK: - AudioWorker Lead Cap Tests
+
+    func testAudioWorkerRenderLeadBounded() {
+        // Create rings and worker with only render frames (no capture).
+        let synchronizer = AudioSynchronizer()
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let renderRing = TapCaptureRing(capacityMs: 600)
+
+        // Pre-fill render ring with 50 frames (500ms) of silence
+        let silence = [Float](repeating: 0, count: 480)
+        for i in 0..<50 {
+            silence.withUnsafeBufferPointer { ptr in
+                renderRing.push(
+                    samples: ptr.baseAddress!,
+                    count: 480,
+                    sampleTime: Float64(i * 480),
+                    hostTime: 0
+                )
+            }
+        }
+
+        nonisolated(unsafe) let renderRingRef = renderRing
+        let renderFrameCounter = OSAllocatedUnfairLock(initialState: Int64(0))
+
+        let worker = AudioWorker(
+            synchronizer: synchronizer,
+            aecProcessor: aec,
+            popRenderAECFrame: { dest in
+                guard renderRingRef.pop(into: dest, count: 480) else { return nil }
+                let idx = renderFrameCounter.withLock { count -> Int64 in
+                    let current = count
+                    count += 1
+                    return current
+                }
+                return (hostTime: 0, startSampleIndex: idx * 480)
+            },
+            popCaptureAECFrame: { _ in
+                // No capture frames available
+                return nil
+            }
+        )
+
+        // Collect stats — start worker briefly
+        worker.start(
+            micCallback: { _ in },
+            renderCallback: { _ in }
+        )
+
+        // Let it run for a short period (enough to process available frames)
+        Thread.sleep(forTimeInterval: 0.1)
+        worker.stop()
+
+        let stats = worker.getStats()
+
+        // With 50 render frames available and 0 capture frames,
+        // the lead should be bounded by maxRenderLeadFrames (30).
+        XCTAssertLessThanOrEqual(stats.renderLeadFrames, Int64(AudioWorker.maxRenderLeadFrames) + 1,
+            "Render lead should be bounded by maxRenderLeadFrames")
     }
 }
 

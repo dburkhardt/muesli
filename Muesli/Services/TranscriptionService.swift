@@ -906,7 +906,24 @@ extension TranscriptionService {
             isInterleaved: true  // CMSampleBuffer provides interleaved audio
         )
     }
-    
+
+    /// Resample pre-extracted Float samples to WhisperKit format (16kHz mono).
+    /// Used by the AEC pipeline which delivers already-extracted mono 48kHz samples.
+    static func resampleToWhisperFormat(
+        _ samples: [Float],
+        sourceSampleRate: Double,
+        sourceChannels: Int
+    ) -> [Float] {
+        return resampleWithAVAudioConverter(
+            samples: samples,
+            sourceSampleRate: sourceSampleRate,
+            sourceChannels: sourceChannels,
+            targetSampleRate: 16000,
+            targetChannels: 1,
+            isInterleaved: false  // Already mono, no interleaving
+        ) ?? samples  // Pass-through on failure to preserve audio
+    }
+
     /// Resample audio samples using AVAudioConverter
     /// - Parameters:
     ///   - samples: Input samples (mono or stereo, interleaved or not)

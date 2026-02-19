@@ -71,8 +71,24 @@ typealias AudioLevelHandler = @Sendable (Float, AudioStreamType) -> Void
 /// Callback type for service warnings (category, message, details, canRetry)
 typealias AudioWarningHandler = @Sendable (ServiceWarning.WarningCategory, String, String, Bool) -> Void
 
-/// Callback for AEC-processed audio (16kHz mono, for transcription)
-typealias ProcessedTranscriptionAudioHandler = @Sendable (_ renderSamples: [Float], _ captureSamples: [Float]) -> Void
+// MARK: - Processed Audio Metadata
+
+/// Self-describing processed audio frame used by the transcription pipeline.
+/// All frames are expected to be mono 10ms chunks at 48kHz (480 samples).
+struct AudioFrame: Sendable {
+    let samples: [Float]
+    let sampleRate: Int
+    let hostTime: UInt64
+    let startSampleIndex: Int64
+
+    var frameCount: Int { samples.count }
+}
+
+/// Callback for processed microphone audio (authoritative AEC output).
+typealias ProcessedMicHandler = @Sendable (AudioFrame) -> Void
+
+/// Callback for processed system/render audio (transcription path).
+typealias ProcessedRenderHandler = @Sendable (AudioFrame) -> Void
 
 /// Protocol for audio capture services
 protocol AudioCaptureServiceProtocol: Actor {
@@ -94,8 +110,11 @@ protocol AudioCaptureServiceProtocol: Actor {
     /// Set callback for warnings
     func setWarningHandler(_ handler: @escaping AudioWarningHandler)
 
-    /// Set callback for AEC-processed audio (16kHz mono, for transcription)
-    func setProcessedAudioHandler(_ handler: @escaping ProcessedTranscriptionAudioHandler)
+    /// Set callback for processed microphone audio (48kHz mono frame stream)
+    func setProcessedMicHandler(_ handler: @escaping ProcessedMicHandler)
+
+    /// Set callback for processed render/system audio (48kHz mono frame stream)
+    func setProcessedRenderHandler(_ handler: @escaping ProcessedRenderHandler)
 
     /// Start audio capture (all system audio)
     func startCapture() async throws

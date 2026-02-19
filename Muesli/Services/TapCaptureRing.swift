@@ -232,6 +232,38 @@ final class TapCaptureRing {
         
         return true
     }
+
+    /// Pop samples from the front of the buffer.
+    /// - Parameters:
+    ///   - destination: Destination buffer for popped samples
+    ///   - count: Number of samples to pop
+    /// - Returns: True if enough samples were available
+    func pop(
+        into destination: UnsafeMutablePointer<Float>,
+        count popCount: Int
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard popCount <= count else { return false }
+
+        let firstPart = min(popCount, capacity - readIndex)
+        let secondPart = popCount - firstPart
+
+        for i in 0..<firstPart {
+            destination[i] = buffer[readIndex + i]
+        }
+
+        for i in 0..<secondPart {
+            destination[firstPart + i] = buffer[i]
+        }
+
+        readIndex = (readIndex + popCount) % capacity
+        count -= popCount
+        startSampleIndex += Int64(popCount)
+
+        return true
+    }
     
     /// Get the current available sample count
     var available: Int {

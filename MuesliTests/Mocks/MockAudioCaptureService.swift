@@ -30,7 +30,8 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     private var interruptedHandler: StreamInterruptedHandler?
     private var levelHandler: AudioLevelHandler?
     private var warningHandler: AudioWarningHandler?
-    private var processedAudioHandler: ProcessedTranscriptionAudioHandler?
+    private var processedMicHandler: ProcessedMicHandler?
+    private var processedRenderHandler: ProcessedRenderHandler?
     
     // MARK: - AudioCaptureServiceProtocol
     
@@ -50,8 +51,12 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
         warningHandler = handler
     }
 
-    func setProcessedAudioHandler(_ handler: @escaping ProcessedTranscriptionAudioHandler) {
-        processedAudioHandler = handler
+    func setProcessedMicHandler(_ handler: @escaping ProcessedMicHandler) {
+        processedMicHandler = handler
+    }
+
+    func setProcessedRenderHandler(_ handler: @escaping ProcessedRenderHandler) {
+        processedRenderHandler = handler
     }
     
     func setMicrophoneDevice(_ deviceID: String?) {
@@ -107,9 +112,34 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
         levelHandler?(level, type)
     }
 
-    /// Simulate processed audio delivery
-    func simulateProcessedAudio(renderSamples: [Float], captureSamples: [Float]) {
-        processedAudioHandler?(renderSamples, captureSamples)
+    /// Simulate processed audio delivery for microphone stream
+    func simulateProcessedMicAudio(
+        samples: [Float],
+        sampleRate: Int = 48000,
+        hostTime: UInt64 = 0,
+        startSampleIndex: Int64 = 0
+    ) {
+        processedMicHandler?(AudioFrame(
+            samples: samples,
+            sampleRate: sampleRate,
+            hostTime: hostTime,
+            startSampleIndex: startSampleIndex
+        ))
+    }
+
+    /// Simulate processed audio delivery for render stream
+    func simulateProcessedRenderAudio(
+        samples: [Float],
+        sampleRate: Int = 48000,
+        hostTime: UInt64 = 0,
+        startSampleIndex: Int64 = 0
+    ) {
+        processedRenderHandler?(AudioFrame(
+            samples: samples,
+            sampleRate: sampleRate,
+            hostTime: hostTime,
+            startSampleIndex: startSampleIndex
+        ))
     }
     
     /// Reset all state for next test
@@ -126,6 +156,7 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
         bufferHandler = nil
         interruptedHandler = nil
         levelHandler = nil
-        processedAudioHandler = nil
+        processedMicHandler = nil
+        processedRenderHandler = nil
     }
 }

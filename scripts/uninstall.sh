@@ -73,6 +73,7 @@ declare -a APP_BUNDLE_IDS=()
 declare -a APP_BUNDLE_TYPES=()
 declare -a SELECTED_BUNDLES=()
 declare -a DERIVED_DATA_FOLDERS=()
+declare -a SELECTED_DERIVED_DATA=()
 
 # New arrays for comprehensive cleanup
 declare -a MOUNTED_DMG_APPS=()
