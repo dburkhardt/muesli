@@ -53,9 +53,6 @@ enum AppStorageKeys {
     /// Whether echo cancellation is enabled
     static let echoCancellationEnabled = "echoCancellationEnabled"
     
-    /// AEC implementation type: "WebRTC AEC3" (default) or "NLMS (Legacy)"
-    static let aecImplementation = "aecImplementation"
-
     /// AEC delay mode: how stream delay is computed for echo cancellation
     static let aecDelayMode = "aecDelayMode"
     

@@ -95,8 +95,25 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
         isRecording = false
     }
     
+    // MARK: - Handler Introspection (for test assertions)
+
+    /// Whether a buffer handler has been registered
+    var hasBufferHandler: Bool { bufferHandler != nil }
+
+    /// Whether a level handler has been registered
+    var hasLevelHandler: Bool { levelHandler != nil }
+
+    /// Whether an interrupted handler has been registered
+    var hasInterruptedHandler: Bool { interruptedHandler != nil }
+
+    /// Whether a processed mic handler has been registered
+    var hasProcessedMicHandler: Bool { processedMicHandler != nil }
+
+    /// Whether a processed render handler has been registered
+    var hasProcessedRenderHandler: Bool { processedRenderHandler != nil }
+
     // MARK: - Test Helpers
-    
+
     /// Simulate receiving an audio buffer
     func simulateBuffer(_ buffer: CMSampleBuffer, type: AudioStreamType) {
         bufferHandler?(buffer, type)

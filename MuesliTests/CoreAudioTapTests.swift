@@ -435,6 +435,10 @@ final class CoreAudioTapTests: XCTestCase {
     }
     
     func testTapFormatIsFloat32() async throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["CI"] != nil,
+            "Skipping hardware-dependent test in CI"
+        )
         let manager = CoreAudioTapManager()
         
         var formatChecked = false
@@ -474,7 +478,11 @@ final class CoreAudioTapTests: XCTestCase {
 
     // MARK: - Minimal Tap Test (Standalone)
 
-    func testMinimalTapReceivesAudio() {
+    func testMinimalTapReceivesAudio() throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["CI"] != nil,
+            "Skipping hardware-dependent test in CI"
+        )
         let manager = AggregateDeviceManager()
         var ioProcID: AudioDeviceIOProcID?
         var callbackCount = 0
@@ -697,21 +705,29 @@ final class CoreAudioTapTests: XCTestCase {
 
 final class TapAudioCaptureServicePermissionTests: XCTestCase {
 
-    func testStartCaptureThrowsPermissionDeniedWhenNotGranted() async throws {
-        // Given: A service with permission check that returns false
+    func testStartCaptureAttempsTapEvenWhenCachedPermissionIsFalse() async throws {
+        // Given: A service with cached permission check returning false
         let service = TapAudioCaptureService(checkPermission: { false })
         await service.setBufferHandler { _, _ in }
 
-        // When/Then: startCapture should throw permissionDenied
+        // When: startCapture is called, it should NOT throw permissionDenied.
+        // The service now logs a warning and attempts the tap anyway
+        // (the tap itself is the authoritative check).
+        // It may throw other errors like tapCreationFailed in test env — that's fine.
         do {
             try await service.startCapture()
-            XCTFail("Expected permissionDenied error")
         } catch let error as AudioCaptureError {
-            XCTAssertEqual(
+            XCTAssertNotEqual(
                 error.localizedDescription,
-                AudioCaptureError.permissionDenied.localizedDescription
+                AudioCaptureError.permissionDenied.localizedDescription,
+                "Should not throw permissionDenied — service should attempt tap regardless of cached permission"
             )
+        } catch {
+            // Other errors are fine — tap creation may fail in test environment
         }
+
+        // Cleanup
+        try? await service.stopCapture()
     }
 
     func testStartCaptureDoesNotThrowPermissionDeniedWhenGranted() async throws {

@@ -129,29 +129,6 @@ final class PreferencesManager {
         echoCancellationLock.withLock { $0 }
     }
     
-    // MARK: - AEC Implementation Selection
-
-    /// AEC implementation (hidden/advanced setting)
-    /// Default: .webrtc for new users (better echo suppression)
-    var aecImplementation: String {
-        get {
-            UserDefaults.standard.string(forKey: AppStorageKeys.aecImplementation) ?? AECImplementation.webrtc.rawValue
-        }
-        set {
-            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.aecImplementation)
-        }
-    }
-
-    /// Get typed AEC implementation
-    var aecImplementationType: AECImplementation {
-        AECImplementation(rawValue: aecImplementation) ?? .webrtc
-    }
-
-    /// Set AEC implementation type
-    func setAECImplementation(_ implementation: AECImplementation) {
-        aecImplementation = implementation.rawValue
-    }
-
     // MARK: - AEC Delay Mode
 
     /// AEC delay mode determines how stream delay is computed for echo cancellation

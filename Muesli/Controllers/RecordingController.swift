@@ -500,14 +500,14 @@ final class RecordingController {
         // For permission-related errors, try permission recovery flow
         switch error {
         case .permissionDenied, .streamStartFailed:
-            let missingScreen = !CGPreflightScreenCaptureAccess()
+            let missingTap = !UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
             let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
-            // If both checks say granted (false negative), default to missingScreen
-            // since screen capture is what actually failed
-            let effectiveMissingScreen = missingScreen || (!missingScreen && !missingMic)
+            // If both checks say granted (false negative), default to missingTap
+            // since system audio tap is what actually failed
+            let effectiveMissingTap = missingTap || (!missingTap && !missingMic)
             if let callback = onPermissionRecoveryNeeded {
-                logger.warning("Permission error during capture start, triggering recovery: missingScreen=\(effectiveMissingScreen), missingMic=\(missingMic)")
-                callback(effectiveMissingScreen, missingMic)
+                logger.warning("Permission error during capture start, triggering recovery: missingTap=\(effectiveMissingTap), missingMic=\(missingMic)")
+                callback(effectiveMissingTap, missingMic)
                 cleanupFailedSession(session)
                 return
             }
@@ -541,12 +541,12 @@ final class RecordingController {
             muesliError = .screenRecordingDenied
 
             // Try permission recovery for TCC/permission errors
-            let missingScreen = !CGPreflightScreenCaptureAccess()
+            let missingTap = !UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
             let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
-            let effectiveMissingScreen = missingScreen || (!missingScreen && !missingMic)
+            let effectiveMissingTap = missingTap || (!missingTap && !missingMic)
             if let callback = onPermissionRecoveryNeeded {
-                logger.warning("Generic permission error during capture, triggering recovery: missingScreen=\(effectiveMissingScreen), missingMic=\(missingMic)")
-                callback(effectiveMissingScreen, missingMic)
+                logger.warning("Generic permission error during capture, triggering recovery: missingTap=\(effectiveMissingTap), missingMic=\(missingMic)")
+                callback(effectiveMissingTap, missingMic)
                 cleanupFailedSession(session)
                 return
             }
