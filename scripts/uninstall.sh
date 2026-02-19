@@ -438,6 +438,94 @@ interactive_select_bundles() {
     fi
 }
 
+interactive_select_derived_data() {
+    if [ ${#DERIVED_DATA_FOLDERS[@]} -eq 0 ]; then
+        return
+    fi
+
+    print_header "DERIVEDDATA FOLDERS"
+
+    echo "Found the following DerivedData folder(s):"
+    echo ""
+
+    local -a selected=()
+    for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+        selected[$i]=1
+    done
+
+    for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+        local folder="${DERIVED_DATA_FOLDERS[$i]}"
+        local folder_name=$(basename "$folder")
+        local folder_size=$(du -sh "$folder" 2>/dev/null | cut -f1)
+
+        if [ "${selected[$i]}" -eq 1 ]; then
+            echo "  [x] $((i+1)). $folder_name ($folder_size)"
+        else
+            echo "  [ ] $((i+1)). $folder_name ($folder_size)"
+        fi
+    done
+
+    echo ""
+    echo "DerivedData contains build caches. Deleting saves disk space but"
+    echo "requires a full rebuild (~5-8 min) next time."
+    echo ""
+    echo "Enter numbers to toggle, 'all'/'none', or Enter to continue:"
+
+    while true; do
+        read -p "> " input
+
+        if [ -z "$input" ]; then
+            break
+        elif [ "$input" = "all" ]; then
+            for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+                selected[$i]=1
+            done
+        elif [ "$input" = "none" ]; then
+            for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+                selected[$i]=0
+            done
+        else
+            for num in $input; do
+                if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1 ] && [ "$num" -le ${#DERIVED_DATA_FOLDERS[@]} ]; then
+                    local idx=$((num-1))
+                    if [ "${selected[$idx]}" -eq 1 ]; then
+                        selected[$idx]=0
+                    else
+                        selected[$idx]=1
+                    fi
+                fi
+            done
+        fi
+
+        # Redisplay
+        echo ""
+        for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+            local folder="${DERIVED_DATA_FOLDERS[$i]}"
+            local folder_name=$(basename "$folder")
+            local folder_size=$(du -sh "$folder" 2>/dev/null | cut -f1)
+            if [ "${selected[$i]}" -eq 1 ]; then
+                echo "  [x] $((i+1)). $folder_name ($folder_size)"
+            else
+                echo "  [ ] $((i+1)). $folder_name ($folder_size)"
+            fi
+        done
+        echo ""
+    done
+
+    SELECTED_DERIVED_DATA=()
+    for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+        if [ "${selected[$i]}" -eq 1 ]; then
+            SELECTED_DERIVED_DATA+=("$i")
+        fi
+    done
+
+    if [ ${#SELECTED_DERIVED_DATA[@]} -eq 0 ]; then
+        print_info "No DerivedData folders selected"
+    else
+        print_success "Selected ${#SELECTED_DERIVED_DATA[@]} DerivedData folder(s)"
+    fi
+}
+
 prompt_recording_action() {
     if [ "$RECORDINGS_COUNT" -eq 0 ]; then
         RECORDING_ACTION="none"
@@ -779,10 +867,11 @@ show_summary() {
     fi
     
     # DerivedData
-    if [ ${#DERIVED_DATA_FOLDERS[@]} -gt 0 ]; then
+    if [ ${#SELECTED_DERIVED_DATA[@]} -gt 0 ]; then
         has_items=1
-        echo "  DerivedData (${#DERIVED_DATA_FOLDERS[@]} folders):"
-        for folder in "${DERIVED_DATA_FOLDERS[@]}"; do
+        echo "  DerivedData (${#SELECTED_DERIVED_DATA[@]} folders):"
+        for idx in "${SELECTED_DERIVED_DATA[@]}"; do
+            local folder="${DERIVED_DATA_FOLDERS[$idx]}"
             local folder_name=$(basename "$folder")
             echo "    - $folder_name"
         done
@@ -830,7 +919,7 @@ show_summary() {
         echo ""
     fi
     
-    # TCC Permissions (always reset — entries may exist even without app bundles)
+    # TCC Permissions (always reset — entries may exist even without apundles)
     echo "  TCC Permissions:"
     local tcc_ids=()
     for idx in "${SELECTED_BUNDLES[@]}"; do
@@ -844,6 +933,7 @@ show_summary() {
     fi
     echo "    - Screen Recording for: ${tcc_ids[*]}"
     echo "    - Microphone for: ${tcc_ids[*]}"
+    echo "    - System Audio Capture for: ${tcc_ids[*]}"
     echo ""
 
     # UserDefaults
@@ -1119,13 +1209,14 @@ delete_app_bundles() {
 }
 
 delete_derived_data() {
-    if [ ${#DERIVED_DATA_FOLDERS[@]} -eq 0 ]; then
+    if [ ${#SELECTED_DERIVED_DATA[@]} -eq 0 ]; then
         return 0
     fi
-    
+
     print_info "Deleting DerivedData folders..."
-    
-    for folder in "${DERIVED_DATA_FOLDERS[@]}"; do
+
+    for idx in "${SELECTED_DERIVED_DATA[@]}"; do
+        local folder="${DERIVED_DATA_FOLDERS[$idx]}"
         local folder_name=$(basename "$folder")
         
         if [ "$DRY_RUN" = true ]; then
@@ -1336,29 +1427,22 @@ reset_tcc_permissions() {
             log_action "would_reset_tcc" "$bundle_id"
             echo -e "${YELLOW}[DRY RUN]${NC} Would reset TCC permissions for: $bundle_id"
         else
-            # Reset Screen Recording permission
-            local screen_output
-            screen_output=$(tccutil reset ScreenCapture "$bundle_id" 2>&1)
-            local screen_exit=$?
-            if [ $screen_exit -eq 0 ]; then
-                log_action "reset_tcc_screen" "$bundle_id"
-                print_success "Reset Screen Recording for: $bundle_id"
-            else
-                log_action "reset_tcc_screen_failed" "$bundle_id: $screen_output"
-                print_warning "Could not reset Screen Recording for: $bundle_id ($screen_output)"
-            fi
-
-            # Reset Microphone permission
-            local mic_output
-            mic_output=$(tccutil reset Microphone "$bundle_id" 2>&1)
-            local mic_exit=$?
-            if [ $mic_exit -eq 0 ]; then
-                log_action "reset_tcc_mic" "$bundle_id"
-                print_success "Reset Microphone for: $bundle_id"
-            else
-                log_action "reset_tcc_mic_failed" "$bundle_id: $mic_output"
-                print_warning "Could not reset Microphone for: $bundle_id ($mic_output)"
-            fi
+            # Reset all TCC services Muesli uses:
+            #   ScreenCapture  — screen recording (ScreenCaptureKit)
+            #   Microphone     — microphone access (AVAudioEngine)
+            #   ListenEvent    — system audio capture (Core Audio taps / NSAudioCaptureUsageDescription)
+            for svc in ScreenCapture Microphone ListenEvent; do
+                local svc_output
+                svc_output=$(tccutil reset "$svc" "$bundle_id" 2>&1)
+                local svc_exit=$?
+                if [ $svc_exit -eq 0 ]; then
+                    log_action "reset_tcc_$svc" "$bundle_id"
+                    print_success "Reset $svc for: $bundle_id"
+                else
+                    log_action "reset_tcc_${svc}_failed" "$bundle_id: $svc_output"
+                    print_warning "Could not reset $svc for: $bundle_id ($svc_output)"
+                fi
+            done
         fi
     done
 }
@@ -1656,7 +1740,12 @@ main() {
     if [ ${#APP_BUNDLES[@]} -gt 0 ]; then
         interactive_select_bundles
     fi
-    
+
+    # DerivedData selection
+    if [ ${#DERIVED_DATA_FOLDERS[@]} -gt 0 ]; then
+        interactive_select_derived_data
+    fi
+
     # Mounted DMG handling
     prompt_mounted_dmg_action
     

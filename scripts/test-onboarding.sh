@@ -85,6 +85,9 @@ tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null || echo "   (no entries to 
 echo "Resetting Microphone permission..."
 tccutil reset Microphone "$BUNDLE_ID" 2>/dev/null || echo "   (no entries to reset)"
 
+echo "Resetting System Audio Capture permission..."
+tccutil reset ListenEvent "$BUNDLE_ID" 2>/dev/null || echo "   (no entries to reset)"
+
 # ============================================================================
 # Reset UserDefaults
 # ============================================================================

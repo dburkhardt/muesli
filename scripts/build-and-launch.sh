@@ -530,6 +530,7 @@ if [ "$RESET_TCC" = true ]; then
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY RUN] Would reset: tccutil reset ScreenCapture $BUNDLE_ID"
         print_info "[DRY RUN] Would reset: tccutil reset Microphone $BUNDLE_ID"
+        print_info "[DRY RUN] Would reset: tccutil reset ListenEvent $BUNDLE_ID"
     else
         # Register the app with Launch Services first (so tccutil can find it)
         LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
@@ -558,7 +559,16 @@ if [ "$RESET_TCC" = true ]; then
         else
             print_info "Microphone: no entries to reset"
         fi
-        
+
+        # Reset System Audio Capture permission (Core Audio taps)
+        tccutil reset ListenEvent "$BUNDLE_ID" 2>/dev/null
+        LISTEN_EXIT=$?
+        if [ $LISTEN_EXIT -eq 0 ]; then
+            print_success "Reset System Audio Capture permission"
+        else
+            print_info "System Audio Capture: no entries to reset"
+        fi
+
         # Re-enable exit-on-error
         set -e
         
