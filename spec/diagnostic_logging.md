@@ -28,12 +28,16 @@ actor DiagnosticLogger {
         case onboarding = "ONBOARDING"
         case build = "BUILD"
         case app = "APP"
+        case transcription = "TRANSCRIPTION"
+        case aec = "AEC"
     }
-    
-    func log(_ category: Category, _ message: String) async
-    func logBuildInfo() async
+
+    func log(_ category: Category, _ message: String)
+    func logBuildInfo()
 }
 ```
+
+> **Note**: `log()` and `logBuildInfo()` are synchronous from the caller's perspective. Since `DiagnosticLogger` is an actor, any actor hop is internal to the implementation — callers simply `await` the result without needing to mark their own functions `async` solely for logging.
 
 **Location**: `Muesli/Utilities/DiagnosticLogger.swift`
 
@@ -45,6 +49,22 @@ actor DiagnosticLogger {
 | `PERMISSION` | Permission checks and requests | "authorizationStatus(for: .audio) = 0 (notDetermined)" |
 | `ONBOARDING` | Step transitions, button taps | "Grant Microphone Access button tapped" |
 | `APP` | General app lifecycle events | "App launched", "Recording started" |
+| `TRANSCRIPTION` | WhisperKit transcription events, model selection, segment timing | "Model loaded: openai_whisper-base", "Segment 12: 3.2s" |
+| `AEC` | Echo cancellation pipeline events, mode switches, calibration | "AEC mode: voiceProcessing", "Calibration complete" |
+
+### BuildInfo Struct
+
+The `BuildInfo` struct captures build-time metadata, logged at app launch via `logBuildInfo()`. Fields are populated by a build script that generates `BuildInfo.swift` on every build.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `gitCommit` | `String` | Short git commit hash |
+| `gitBranch` | `String` | Current branch name |
+| `isDirty` | `Bool` | Whether working tree has uncommitted changes |
+| `buildType` | `String` | Debug or Release |
+| `buildTimestamp` | `String` | UTC ISO 8601 build timestamp |
+| `isCIBuild` | `Bool` | Whether built in CI environment |
+| `ciRunInfo` | `String?` | CI run ID / info if available |
 
 ## Log File Management
 
@@ -126,6 +146,7 @@ A user-accessible panel displays diagnostic information and provides access to l
 | Onboarding State | Current step, `hasCompletedOnboarding` | |
 | NSMicrophoneUsageDescription | `Bundle.main.object(forInfoDictionaryKey:)` | Or "MISSING" |
 | NSScreenCaptureUsageDescription | `Bundle.main.object(forInfoDictionaryKey:)` | Or "MISSING" |
+| NSAudioCaptureUsageDescription | `Bundle.main.object(forInfoDictionaryKey:)` | Or "MISSING" (not yet displayed by actual view — marks intended state) |
 | Log File Location | Path to logs directory | |
 
 ### Actions
@@ -247,6 +268,13 @@ If logs show no entries after button tap, the tap handler isn't being called (Sw
 | `Muesli/Utilities/DiagnosticLogger.swift` | Core logging actor |
 | `Muesli/Views/DebugInfoView.swift` | Debug info panel UI |
 | `Muesli/Views/MenuBarView.swift` | Menu item for Debug Info |
+
+## Best Practices
+
+- **System audio permission model**: The app uses a tap-probe at session start rather than calling `CGPreflightScreenCaptureAccess()` as a preflight. The result is cached in `UserDefaults` so subsequent checks avoid re-probing.
+- **RT audio callback constraints**: Real-time audio callbacks (e.g., `IOProc`) must not perform heap allocation, Objective-C messaging, or lock acquisition. Log from RT callbacks only via lock-free ring buffers or deferred dispatch.
+- **WhisperKit sample rate**: WhisperKit requires 16 kHz mono audio. Always resample from the 48 kHz capture rate using `TranscriptionService.resampleToWhisperFormat()`.
+- **macOS version requirement**: `AudioHardwareCreateProcessTap` is available on macOS 14.2+. The app requires macOS 14.2 or later for system audio capture.
 
 ## Testing
 

@@ -15,7 +15,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 | Language | Swift 6 |
 | UI | SwiftUI with `@Observable` |
 | Architecture | `MuesliViewModel` (app state) + `RecordingSession` (per-recording) |
-| Audio | ScreenCaptureKit |
+| Audio | Core Audio Taps (macOS 14.2+) via AVAudioEngine |
 | Transcription | WhisperKit |
 | Package manager | Swift Package Manager |
 
@@ -131,7 +131,7 @@ grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)" | head -20
 **TCC Permission Persistence**: With stable code signing (`DEVELOPMENT_TEAM`), TCC permissions persist across builds. You only need to grant permissions once after a fresh clone. Use `--reset-tcc` or `test-onboarding.sh` only when testing the onboarding flow.
 
 **First Build After Clone**: 
-New developers cloning the repo will need to grant Screen Recording and Microphone permissions once when first launching the app. This is expected behavior:
+New developers cloning the repo will need to grant Screen & System Audio Recording and Microphone permissions once when first launching the app. This is expected behavior:
 1. Build and launch: `./scripts/build-and-launch.sh`
 2. Grant permissions when prompted in System Settings
 3. Subsequent builds will preserve these permissions (no re-granting needed)
@@ -172,7 +172,7 @@ Muesli tracks code coverage to ensure comprehensive testing and guide developmen
 
 **Priority Areas for Coverage**:
 1. Controllers - RecordingController (core recording logic)
-2. Services - AudioCaptureService, TranscriptionService, FileOutputService
+2. Services - TapAudioCaptureService, TranscriptionService, FileOutputService
 3. Managers - ModelManager, MeetingHistoryManager, PreferencesManager
 4. Coordinators - TranscriptionCoordinator, RefinementCoordinator
 5. Views - Complex UI logic (lower priority than business logic)
@@ -436,7 +436,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history and release notes.
 ### App Structure
 - `MuesliApp` — MenuBarExtra + single main Window
 - **Single-window model**: Shows `UnifiedHistoryView` (idle) or split view (recording/viewing)
-- **Contextual sizing**: 420px for list, 750-900px for split view
+- **Contextual sizing**: compact for list, adjusts for split view
 
 ### State Management (Delegation Pattern)
 ```
@@ -457,11 +457,11 @@ ViewModel delegates recording operations to RecordingController. Views observe o
 
 ### Audio Pipeline
 ```
-System Audio: SCStream → AVAssetWriter (audio.caf) + resample 16kHz → WhisperKit
-Microphone:   AVAudioEngine → AVAssetWriter (microphone.caf) + resample 16kHz → WhisperKit
+System Audio: Core Audio Tap → TapCaptureRing → AudioWorker → AECProcessor
+                                                               ├── FileOutputService (audio.caf)
+                                                               └── TranscriptionService (→16kHz→WhisperKit)
+Microphone:   AVAudioEngine → MicCaptureRing → AudioSynchronizer → AECProcessor → ...
 ```
-
-Note: Microphone uses AVAudioEngine (not ScreenCaptureKit) to support user device selection.
 
 ## UI Patterns
 
@@ -486,8 +486,8 @@ Recordings saved to: `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD
 - Random permission prompts during normal operation
 
 **Permission Check APIs**:
-- `CGPreflightScreenCaptureAccess()` — Now reliable with stable signing. Used as a gate in `AudioCaptureService` before `SCShareableContent` calls.
-- `PermissionManager.checkScreenRecordingPermissionAsync()` — Uses `SCShareableContent` for authoritative check. Includes 5-minute caching to reduce prompt frequency.
+- `CGPreflightScreenCaptureAccess()` — Secondary guard only with stable signing. System audio permission is determined by tap-probe at session start; the result is cached in UserDefaults.
+- `PermissionManager.checkScreenRecordingPermissionAsync()` — Uses tap-probe + UserDefaults for authoritative check. Includes 5-minute caching to reduce prompt frequency.
 - Do NOT use `SCShareableContent` for meeting app detection (triggers prompt). Use `NSWorkspace.shared.runningApplications` instead.
 
 **If TCC Permissions Reset Unexpectedly**:
@@ -497,18 +497,19 @@ Recordings saved to: `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD
 4. See [plans/code_signing.md](plans/code_signing.md) for full troubleshooting guide
 
 ### Audio Sample Rates (CRITICAL)
-**If transcription outputs gibberish, check sample rates first!** WhisperKit requires 16kHz. Both system audio (ScreenCaptureKit) and microphone (AVAudioEngine) capture at 48kHz. Use `TranscriptionService.resampleToWhisperFormat()`:
+**If transcription outputs gibberish, check sample rates first!** WhisperKit requires 16kHz. Both system audio (Core Audio tap) and microphone (AVAudioEngine) capture at 48kHz. Use `TranscriptionService.resampleToWhisperFormat()`:
 ```swift
 // System: 48kHz stereo → 16kHz mono
 resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
-// Mic: 48kHz mono → 16kHz mono  
+// Mic: 48kHz mono → 16kHz mono
 resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
 ```
 
-### ScreenCaptureKit
-- Display-based `SCContentFilter` required for audio; window-based doesn't work
-- We use AVAudioEngine for microphone instead of SCK's `captureMicrophone` (supports device selection)
-- `CMSampleBuffer` not Sendable — use `OSAllocatedUnfairLock`, not actor isolation
+### Core Audio Taps
+- `AudioHardwareCreateProcessTap` requires macOS 14.2+
+- IOProc constraints: no heap allocation, no Objective-C, no locks in the audio callback
+- Aggregate device setup required for combining system + mic audio
+- Use lock-free ring buffers for audio handoff from IOProc to Swift
 
 ### Meeting App Detection
 Do NOT use `SCShareableContent` for app detection — triggers permission prompts. Use `NSWorkspace.shared.runningApplications`.
@@ -616,11 +617,18 @@ Simple, agent-friendly branching. All work happens in feature branches merged to
 
 **Branch naming**: `feature/name`, `bugfix/name`, `hotfix/name`, `refactor/name`
 
+## Best Practices
+
+- **System audio permission model**: Use tap-probe at session start to determine permission status; do not rely on `CGPreflightScreenCaptureAccess()` as a preflight. Cache the tap-probe result in UserDefaults.
+- **RT audio callback constraints**: No heap allocation, no Objective-C, no locks in the IOProc callback. Use lock-free ring buffers for all audio handoff from the real-time thread to Swift.
+- **WhisperKit sample rate**: WhisperKit requires 16 kHz mono audio. Always resample from the 48 kHz capture rate using `TranscriptionService.resampleToWhisperFormat()`.
+- **macOS version requirement**: `AudioHardwareCreateProcessTap` is macOS 14.2+. The app requires macOS 14.2 or later.
+
 ## Reference
 
 **Dependencies**:
 - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — on-device speech-to-text
-- ScreenCaptureKit — system framework for audio capture
+- Core Audio / AVAudioEngine — system audio capture via process taps
 - GitHub CLI (`gh`) — for PR management from command line
 
 **Testing**: Use Zoom/Meet/Teams or QuickTime Player. Verify permissions, recording cycles, transcript accuracy.

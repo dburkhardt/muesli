@@ -15,7 +15,7 @@ The onboarding flow guides first-time users through granting necessary permissio
 | Step | Name | Purpose |
 |------|------|---------|
 | 0 | Welcome | Introduction screen, no permission checks |
-| 1 | Screen Recording | Request screen/audio capture permission |
+| 1 | System Audio Recording | Request system audio capture permission (uses the `kTCCServiceScreenCapture` TCC bucket — same as screen recording — but the UI labels it "System Audio Recording" to better describe what the app actually needs) |
 | 2 | Microphone | Request microphone access permission |
 | 3 | Model Setup | Download WhisperKit transcription model |
 | 4 | LLM Setup | (Optional) Download LLM for transcript refinement |
@@ -409,7 +409,19 @@ Button("Grant System Audio Access") {
 System Audio Recording because that API reflects the Screen Recording bucket and
 can return true even when System Audio Recording is not granted. We only update
 the system-audio permission flag from explicit Core Audio tap probes and cache
-the result.
+the result. See also: `spec/AEC_architecture.md §"Permission Model"` for details on tap-probe validation.
+
+### isSystemAudioPermissionConfirmed Triple-Check Logic
+
+Before prompting the user or gating recording on system audio permission, the app performs a three-tier check:
+
+1. **Tier 1: Session flag (`isSystemAudioPermissionConfirmed`)** — A fast, in-memory boolean set to `true` once a successful tap-probe confirms system audio is available during the current app session. This avoids redundant OS calls on every permission query.
+
+2. **Tier 2: `CGPreflightScreenCaptureAccess()` fast-fail** — An OS-level synchronous gate. If this returns `false`, the TCC `kTCCServiceScreenCapture` bucket has not been granted and there is no point attempting a tap-probe. This check never triggers a permission prompt.
+
+3. **Tier 3: ViewModel cache (UserDefaults)** — The last confirmed tap-probe result is persisted in UserDefaults (`systemAudioPermissionGranted`). On app launch, this cached value is consulted before performing a fresh tap-probe so the app can display the correct UI state immediately without blocking on audio hardware.
+
+The checks are evaluated in order; the first tier that provides a definitive answer short-circuits the rest. A fresh tap-probe is only performed when all three tiers are inconclusive or stale.
 
 ## TCC Debugging
 
@@ -514,6 +526,40 @@ Watch for these log messages:
 ```
 
 If you see a different bundle ID, TCC permissions may not work correctly.
+
+## Best Practices
+
+### System Audio Permission Model
+
+The system audio permission uses a **tap-probe** approach rather than a preflight API:
+
+- At session start, the app attempts to create a short-lived `AudioHardwareCreateProcessTap` to confirm system audio capture is allowed.
+- There is no dedicated `CGPreflightSystemAudioAccess()` API; the `CGPreflightScreenCaptureAccess()` call only checks the `kTCCServiceScreenCapture` TCC bucket and may not reflect actual tap availability.
+- The tap-probe result is cached in UserDefaults so subsequent launches can display the correct permission state without re-probing.
+
+### Real-Time Audio Callback Constraints
+
+IOProc and other real-time audio callbacks run on a high-priority, deadline-driven thread. Violating RT constraints causes audio glitches or dropouts:
+
+- **No heap allocation** (`malloc`, `new`, Swift `Array` growth, `String` interpolation)
+- **No Objective-C messaging** (ObjC runtime takes locks internally)
+- **No locks** (`os_unfair_lock`, `NSLock`, `pthread_mutex`) — use lock-free ring buffers instead
+- **No file I/O, logging, or network calls**
+
+### WhisperKit Audio Format Requirements
+
+WhisperKit requires **16 kHz mono Float32** audio. Both capture sources (system audio via ScreenCaptureKit/ProcessTap and microphone via AVAudioEngine) record at 48 kHz. Always resample before passing buffers to WhisperKit:
+
+```swift
+// System: 48 kHz stereo → 16 kHz mono
+resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
+// Mic: 48 kHz mono → 16 kHz mono
+resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
+```
+
+### Minimum macOS Version
+
+`AudioHardwareCreateProcessTap` is available starting in **macOS 14.2** (Sonoma). The app's deployment target must be macOS 14.2 or later to use tap-based system audio capture.
 
 ## Change History
 

@@ -25,7 +25,8 @@ This document is the authoritative reference for AEC in Muesli. It covers theory
 19. [Lessons Learned](#lessons-learned)
 20. [Implementation Status](#implementation-status)
 21. [Future Improvements](#future-improvements)
-22. [References and Standards](#references-and-standards)
+22. [Best Practices](#best-practices)
+23. [References and Standards](#references-and-standards)
 
 ---
 
@@ -506,10 +507,11 @@ WebRTC AEC3 expects render (system) audio to arrive **at or before** capture (mi
 
 ### WebRTC Library Source
 
-- **Library**: FreeDesktop webrtc-audio-processing v1.3
+- **Library**: FreeDesktop webrtc-audio-processing v2.x
 - **Repository**: https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing
 - **License**: BSD-3-Clause (compatible with Muesli's MIT license)
 - **Build**: `./scripts/build-webrtc-aec.sh` creates XCFramework for arm64/x86_64
+- **Note**: Earlier documentation referenced v1.3, which had an external delay estimator API. That API is not available in v2.x; AEC3 uses internal delay estimation only (see [External Delay Estimator Status](#external-delay-estimator-status)).
 
 ### Performance Characteristics
 
@@ -554,6 +556,8 @@ WebRTC-specific log messages:
 | `WEBRTC_RESET` | Service reset, includes ERLE and delay stats |
 | `AEC_FACTORY` | Factory created WebRTC or NLMS service |
 | `AEC_FACTORY_FALLBACK` | WebRTC failed, using NLMS fallback |
+
+> **Note on `AEC_FACTORY_FALLBACK`**: The NLMS fallback is intentional and the fallback implementation file (`EchoCancellationService.swift`) is still present in the codebase. If WebRTC AEC3 initialization fails (e.g., missing framework, unsupported platform), the factory automatically falls back to the NLMS implementation to ensure echo cancellation remains available.
 
 ### Troubleshooting WebRTC Issues
 
@@ -1595,19 +1599,19 @@ The following legacy files were scheduled for removal but still exist:
 
 | File | Status | Action Required |
 |------|--------|-----------------|
-| `AudioCaptureService.swift` | Still exists | Keep as ScreenCaptureKit fallback OR delete |
+| `AudioCaptureService.swift` | ✅ DELETED | Removed; Core Audio taps replaced ScreenCaptureKit capture |
 | `EchoCancellationService.swift` | Still exists | Delete (NLMS legacy) |
 | `EchoCancellationServiceWebRTC.swift` | Still exists | Evaluate if needed or superseded |
 | `AudioRingBuffer.swift` | Still exists | Delete (replaced by TapCaptureRing/MicCaptureRing) |
 
-**Recommendation**: Keep `AudioCaptureService.swift` as a fallback for macOS < 14.2, but remove `EchoCancellationService.swift` and `AudioRingBuffer.swift` which are superseded.
+**Recommendation**: `AudioCaptureService.swift` has been deleted (Core Audio taps replaced ScreenCaptureKit). Remove `EchoCancellationService.swift` and `AudioRingBuffer.swift` which are also superseded.
 
 ### New Files Created (Not in Original Plan)
 
 | File | Purpose |
 |------|---------|
 | `TapAudioCaptureService.swift` | Service wrapper for Core Audio tap capture |
-| `AudioTelemetry.swift` | Telemetry collection for audio pipeline |
+| `AECProcessor.swift` | AEC processing pipeline (render-to-capture frame processing) |
 | `AudioWorker.swift` | Dedicated worker thread for audio processing |
 
 ### Plan vs. Reality Corrections
@@ -1733,6 +1737,44 @@ See [WebRTC AEC3 Integration](#webrtc-aec3-integration) section for implementati
 | `CoarseDelayController.swift` | Hysteresis + slew-limited delay control |
 | `DriftTracker.swift` | Clock drift estimation + adaptive resampler |
 | `WebRTCAECBridge.mm` | WebRTC AEC3 v2.x ObjC++ bridge |
+
+---
+
+## Best Practices
+
+### System Audio Permission Model
+
+- Use a **tap-probe at session start** to determine system audio permission status. Do not call `CGPreflightScreenCaptureAccess()` as a preflight check for Core Audio taps — that API is specific to ScreenCaptureKit.
+- The result of the tap-probe is **cached in UserDefaults** so subsequent sessions can skip the probe if permission was previously granted.
+- If the tap-probe fails (silence detected), degrade gracefully to mic-only mode and show actionable UI guidance.
+
+### Real-Time Audio Callback Constraints
+
+The IOProc callback (`CoreAudioTapManager.handleIOProc`) runs on a real-time audio thread. Violating RT constraints causes audio glitches, dropouts, or priority inversion. The following are **strictly prohibited** inside the IOProc:
+
+- **No heap allocation** (`malloc`, `new`, Swift Array/Dictionary growth)
+- **No Objective-C messaging** (no ARC retain/release, no `@objc` dispatch)
+- **No locks** (`os_unfair_lock`, `pthread_mutex`, `NSLock`) — use only lock-free ring buffers
+- **No syscalls** (no file I/O, no network, no logging)
+
+All format conversion, framing, AEC processing, and logging must be deferred to a dedicated audio worker thread.
+
+### WhisperKit Audio Format Requirements
+
+WhisperKit requires **16 kHz mono** audio for transcription. Both system audio (Core Audio tap) and microphone (AVAudioEngine) capture at **48 kHz**. Always resample before feeding to WhisperKit:
+
+```swift
+// System: 48kHz stereo → 16kHz mono
+resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
+// Mic: 48kHz mono → 16kHz mono
+resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
+```
+
+Failing to resample results in gibberish transcription output.
+
+### macOS Version Requirements
+
+`AudioHardwareCreateProcessTap` and `CATapDescription` require **macOS 14.2+** (Sonoma). The app's minimum deployment target must be macOS 14.2 or later. Earlier macOS versions do not have the Core Audio tap APIs and cannot capture system audio using this architecture.
 
 ---
 

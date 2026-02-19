@@ -130,13 +130,13 @@ private func hideMainWindow() {
 
 ## Window Types
 
-| Window | Scene Type | Creation | Visibility Control |
-|--------|------------|----------|-------------------|
-| Main | `Window` | Auto by SwiftUI | Hide during onboarding |
-| Onboarding | `NSWindow` | Manual by AppDelegate | Show on first launch |
-| Model Management | `WindowGroup` | On-demand via openWindow | openWindow(id:) |
-| Completed Meeting | `WindowGroup` | On-demand via openWindow | openWindow(id:) |
-| Preferences | `Settings` | Cmd+, | System managed |
+| Window | Scene Type | Creation | Default Size | Visibility Control |
+|--------|------------|----------|--------------|--------------------|
+| Main | `Window` | Auto by SwiftUI | 420×600 | Hide during onboarding |
+| Onboarding | `NSWindow` | Manual by AppDelegate | | Show on first launch |
+| Model Management | `WindowGroup` | On-demand via openWindow | | openWindow(id:) |
+| Completed Meeting | `WindowGroup` | On-demand via openWindow | | openWindow(id:) |
+| Preferences | `Settings` | Cmd+, | | System managed |
 
 ## Key Implementation Details
 
@@ -200,8 +200,26 @@ SwiftUI may show the main window briefly before `applicationDidFinishLaunching` 
 |------|----------------|
 | `MuesliApp.swift` | Scene definitions, AppDelegate |
 | `AppDelegate` (in MuesliApp.swift) | Window lifecycle management |
+| `MainWindow.swift` | Main window container |
 | `MainWindowView.swift` | Main window content |
+| `UnifiedHistoryView.swift` | Meeting history list (idle state) |
+| `MeetingHistorySidebar.swift` | Sidebar for meeting history in split view |
+| `RecordingDetailView.swift` | Detail view for a recording |
 | `OnboardingView.swift` | Onboarding content |
+
+## Best Practices
+
+### System Audio Permission Model
+Use a tap-probe at session start rather than calling `CGPreflightScreenCaptureAccess()` as a preflight check. The result of the tap-probe is cached in `UserDefaults` so subsequent checks avoid redundant probing.
+
+### Real-Time Audio Callback Constraints
+RT audio callbacks (IOProc) must not perform heap allocation, Objective-C messaging, or lock acquisition. Violating these constraints causes priority inversion, audio glitches, or watchdog termination.
+
+### WhisperKit Audio Format
+WhisperKit requires 16 kHz mono audio. Both system audio and microphone capture at 48 kHz, so always resample before passing buffers to the transcription pipeline.
+
+### Minimum OS Version
+`AudioHardwareCreateProcessTap` is available starting in macOS 14.2. The app requires macOS 14.2 or later to support the process tap audio capture path.
 
 ## Change History
 
