@@ -274,7 +274,7 @@ If logs show no entries after button tap, the tap handler isn't being called (Sw
 - **System audio permission model**: The app uses a tap-probe at session start rather than calling `CGPreflightScreenCaptureAccess()` as a preflight. The result is cached in `UserDefaults` so subsequent checks avoid re-probing.
 - **RT audio callback constraints**: Real-time audio callbacks (e.g., `IOProc`) must not perform heap allocation, Objective-C messaging, or lock acquisition. Log from RT callbacks only via lock-free ring buffers or deferred dispatch.
 - **WhisperKit sample rate**: WhisperKit requires 16 kHz mono audio. Always resample from the 48 kHz capture rate using `TranscriptionService.resampleToWhisperFormat()`.
-- **macOS version requirement**: `AudioHardwareCreateProcessTap` is available on macOS 14.2+. The app requires macOS 14.2 or later for system audio capture.
+- **macOS version requirement**: `AudioHardwareCreateProcessTap` is available on macOS 14.2+. The app deployment target is **macOS 26.0**, which satisfies the 14.2+ API requirement.
 
 ## Testing
 

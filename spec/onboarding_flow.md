@@ -160,8 +160,10 @@ Permission changes are detected through macOS system events, **not polling**:
   - Use for: button-triggered checks, monitoring callbacks, onboarding screens
 
 - **`refreshPermissionsAsync()`** (asynchronous):
-  - System audio: re-runs the tap probe to refresh `audioCaptureGranted`
-  - **May trigger system audio permission prompt if not yet granted**
+  - System audio: reads cached `audioCaptureGranted` (same as `refreshPermissions()` — **does not re-probe**)
+  - Microphone: uses `AVCaptureDevice.authorizationStatus(for: .audio)`
+  - **Does NOT trigger any permission prompt**
+  - The actual re-probe path is `triggerSystemAudioPermissionPrompt()`, called from the background `Task` in `handleDidBecomeActive()` only when `hasCompletedOnboarding` is true
   - Only use: in `didBecomeActiveNotification` after onboarding complete
   - **NEVER use**: in onboarding screens, timers, polling loops, or distributed notification handlers
 
@@ -249,7 +251,7 @@ Using `Timer.scheduledTimer()` to poll for permission changes causes:
 3. **Poor user experience** - dialogs appear at unexpected times
 
 ### Impact
-A polling timer that calls `refreshPermissionsAsync()` will trigger the screen recording permission dialog on the microphone screen, breaking the onboarding flow.
+A polling timer that calls `refreshPermissionsAsync()` during onboarding is still wrong — it creates unnecessary async work and violates the event-driven architecture. The actual permission prompt is triggered by `triggerSystemAudioPermissionPrompt()`, which is only safe to call when the user explicitly requests permission (button tap) or post-onboarding in `handleDidBecomeActive()`.
 
 ### Solution
 Use **event-driven architecture only**:
@@ -349,31 +351,36 @@ When there's a problem:
 
 ## Strict Step-Based Guards (Critical)
 
-### Rule: Step 0 (Welcome) is SAFE-ONLY
+### Rule: Onboarding is SAFE-ONLY
 
-**Requirement**: The welcome screen (step 0) must NEVER trigger any async permission checks.
+**Requirement**: During onboarding, `handleDidBecomeActive()` must NEVER trigger async permission probes. Only synchronous `refreshPermissions()` is used, gated by the awaiting-settings flags.
 
 **Implementation in `PermissionManager.handleDidBecomeActive()`**:
 
 ```swift
 if hasCompletedOnboarding {
-    // Post-onboarding: safe to use async refresh
-    _ = await refreshPermissionsAsync()
-} else if currentStep == 0 {
-    // STRICT GUARD: Welcome screen - ONLY safe sync check, NO async
+    // Post-onboarding: sync refresh + background re-probe to converge cache
     _ = refreshPermissions()
-} else if awaitingScreenRecordingFromSettings {
-    // User returned from System Settings - safe to check async
-    awaitingScreenRecordingFromSettings = false
-    _ = await checkScreenRecordingPermissionAsync()
-    permissionDidChange?(screenRecordingGranted, microphoneGranted)
+    Task { @MainActor in
+        let probeResult = await triggerSystemAudioPermissionPrompt()
+        // Update cache if reality diverged (e.g. user revoked in System Settings)
+        if probeResult != UserDefaults.standard.bool(forKey: systemAudioPermissionDefaultsKey) {
+            UserDefaults.standard.set(probeResult, forKey: systemAudioPermissionDefaultsKey)
+            audioCaptureGranted = probeResult
+            permissionDidChange?(audioCaptureGranted, microphoneGranted)
+        }
+    }
+} else if awaitingAudioCaptureFromSettings {
+    // User returned from System Settings after being sent there for audio permission
+    awaitingAudioCaptureFromSettings = false
+    _ = refreshPermissions()
+    permissionDidChange?(audioCaptureGranted, microphoneGranted)
 } else if awaitingMicrophoneFromSettings {
-    // User returned from System Settings - mic check is always safe
+    // User returned from System Settings after being sent there for mic permission
     awaitingMicrophoneFromSettings = false
     _ = refreshPermissions()
-    permissionDidChange?(screenRecordingGranted, microphoneGranted)
+    permissionDidChange?(audioCaptureGranted, microphoneGranted)
 } else {
-    // On permission screens but not awaiting settings return
     _ = refreshPermissions()
 }
 ```
@@ -382,7 +389,7 @@ if hasCompletedOnboarding {
 
 When the user clicks "Open System Settings", we mark that we're awaiting their return:
 
-1. **Screen Recording**: `markAwaitingScreenRecordingFromSettings()`
+1. **Audio Capture**: `markAwaitingAudioCaptureFromSettings()`
 2. **Microphone**: `markAwaitingMicrophoneFromSettings()`
 
 When the app becomes active and an awaiting flag is set, we use the appropriate check and clear the flag.
@@ -549,7 +556,7 @@ IOProc and other real-time audio callbacks run on a high-priority, deadline-driv
 
 ### WhisperKit Audio Format Requirements
 
-WhisperKit requires **16 kHz mono Float32** audio. Both capture sources (system audio via ScreenCaptureKit/ProcessTap and microphone via AVAudioEngine) record at 48 kHz. Always resample before passing buffers to WhisperKit:
+WhisperKit requires **16 kHz mono Float32** audio. Both capture sources (system audio via Core Audio tap and microphone via AVAudioEngine) record at 48 kHz. Always resample before passing buffers to WhisperKit:
 
 ```swift
 // System: 48 kHz stereo → 16 kHz mono

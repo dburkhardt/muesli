@@ -587,7 +587,7 @@ for meeting in manifest.meetings {
 
 ### macOS Version Requirements
 - `AudioHardwareCreateProcessTap` is available on **macOS 14.2+**.
-- The app requires macOS 14.2 or later as a minimum deployment target.
+- The app deployment target is **macOS 26.0**, which satisfies the 14.2+ API requirement.
 
 ## Future Enhancements (Phase 2)
 
