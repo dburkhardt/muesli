@@ -95,6 +95,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Permission check for screen recording (injected for testability)
     private let checkPermission: @Sendable () async -> Bool
 
+    /// Closure to query whether AEC is enabled (RT-safe: reads OSAllocatedUnfairLock).
+    private let isAECEnabled: @Sendable () -> Bool
+
     /// Tap manager for system audio
     private let tapManager = CoreAudioTapManager()
 
@@ -179,13 +182,17 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     // MARK: - Initialization
 
-    init(checkPermission: @escaping @Sendable () async -> Bool = {
-        // Use cached tap-probe result from PermissionManager, NOT CGPreflightScreenCaptureAccess().
-        // CGPreflight only checks the Screen Recording TCC bucket, but Core Audio taps use the
-        // System Audio Recording bucket — a separate permission entry.
-        UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
-    }) {
+    init(
+        checkPermission: @escaping @Sendable () async -> Bool = {
+            // Use cached tap-probe result from PermissionManager, NOT CGPreflightScreenCaptureAccess().
+            // CGPreflight only checks the Screen Recording TCC bucket, but Core Audio taps use the
+            // System Audio Recording bucket — a separate permission entry.
+            UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
+        },
+        isAECEnabled: @escaping @Sendable () -> Bool = { true }
+    ) {
         self.checkPermission = checkPermission
+        self.isAECEnabled = isAECEnabled
         print("[TAP DEBUG] TapAudioCaptureService.init() called - CREATED")
         logger.info("TapAudioCaptureService initialized")
         // Format descriptions are set up lazily on first use to avoid actor isolation issues in init
@@ -268,11 +275,12 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             throw AudioCaptureError.bufferHandlerNotSet
         }
 
-        // Check permission before attempting tap creation
+        // Check permission before attempting tap creation.
+        // If cache says false, still attempt the tap — permission may have been granted
+        // externally (e.g., via System Settings). The tap attempt itself is the authoritative check.
         let hasPermission = await checkPermission()
         if !hasPermission {
-            logger.error("Screen recording permission not granted")
-            throw AudioCaptureError.permissionDenied
+            logger.warning("Cached tap permission is false — will attempt tap anyway (may have been granted externally)")
         }
 
         print("[TAP DEBUG] Starting tap-based audio capture...")
@@ -307,9 +315,14 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 }
             )
             print("[TAP DEBUG] tapManager.start() succeeded")
+            // Tap succeeded — ensure cache reflects granted permission
+            UserDefaults.standard.set(true, forKey: "systemAudioPermissionGranted")
         } catch {
             print("[TAP DEBUG] ERROR: tapManager.start() failed: \(error)")
             logger.error("Failed to start tap: \(error.localizedDescription)")
+
+            // Invalidate stale cache so future launches don't assume permission is granted
+            UserDefaults.standard.set(false, forKey: "systemAudioPermissionGranted")
 
             // Degrade to mic-only mode
             tapManager.degradeToMicOnly(reason: error.localizedDescription)
@@ -333,7 +346,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             },
             popCaptureAECFrame: { [weak self] destination in
                 self?.popCaptureAECFrame(into: destination)
-            }
+            },
+            isAECEnabled: isAECEnabled
         )
         worker.start(
             micCallback: { [weak self] frame in

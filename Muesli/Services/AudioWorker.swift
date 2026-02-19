@@ -75,6 +75,9 @@ final class AudioWorker {
     /// Ring pop callback for capture frames.
     private let popCaptureAECFrame: PopAECFrameCallback
 
+    /// Closure to query whether AEC is enabled (RT-safe: reads OSAllocatedUnfairLock).
+    private let isAECEnabled: @Sendable () -> Bool
+
     /// Callback for processed microphone frames.
     private var processedMicCallback: ProcessedMicFrameCallback?
 
@@ -113,12 +116,14 @@ final class AudioWorker {
         synchronizer: AudioSynchronizer,
         aecProcessor: AECProcessor,
         popRenderAECFrame: @escaping PopAECFrameCallback,
-        popCaptureAECFrame: @escaping PopAECFrameCallback
+        popCaptureAECFrame: @escaping PopAECFrameCallback,
+        isAECEnabled: @escaping @Sendable () -> Bool = { true }
     ) {
         self.synchronizer = synchronizer
         self.aecProcessor = aecProcessor
         self.popRenderAECFrame = popRenderAECFrame
         self.popCaptureAECFrame = popCaptureAECFrame
+        self.isAECEnabled = isAECEnabled
         self.processingTimesRing = [Double](repeating: 0, count: processingTimeHistorySize)
 
         assert(renderFrameBuffer.count == Self.frameSizeSamples)
@@ -250,33 +255,38 @@ final class AudioWorker {
 
     /// Process available frames in three stages:
     /// 1) render feed to AEC (bounded lead),
-    /// 2) capture processing through AEC,
+    /// 2) capture processing through AEC (or pass-through if disabled),
     /// 3) aligned render frame output from synchronizer.
     private func processAvailableFrames() {
         let maxFramesPerIteration = 10
+        let aecEnabled = isAECEnabled()
 
         // 1) Feed render stream first, but keep lead bounded.
+        //    Skip entirely if AEC is disabled — no point feeding render to a disabled processor.
         var renderFedThisIteration = 0
-        while renderFedThisIteration < maxFramesPerIteration {
-            let currentLead = renderFedCount - captureFedCount
-            if currentLead > Int64(Self.maxRenderLeadFrames) {
-                break
-            }
+        if aecEnabled {
+            while renderFedThisIteration < maxFramesPerIteration {
+                let currentLead = renderFedCount - captureFedCount
+                if currentLead > Int64(Self.maxRenderLeadFrames) {
+                    break
+                }
 
-            let metadata = renderFrameBuffer.withUnsafeMutableBufferPointer { ptr in
-                popRenderAECFrame(ptr.baseAddress!)
-            }
+                let metadata = renderFrameBuffer.withUnsafeMutableBufferPointer { ptr in
+                    popRenderAECFrame(ptr.baseAddress!)
+                }
 
-            guard metadata != nil else {
-                break
-            }
+                guard metadata != nil else {
+                    break
+                }
 
-            _ = aecProcessor.feedRenderFrame(renderFrameBuffer, isStable: synchronizer.isStable)
-            renderFedCount += 1
-            renderFedThisIteration += 1
+                _ = aecProcessor.feedRenderFrame(renderFrameBuffer, isStable: synchronizer.isStable)
+                renderFedCount += 1
+                renderFedThisIteration += 1
+            }
         }
 
         // 2) Process capture frames and emit processed microphone audio.
+        //    When AEC is disabled, pass capture frames through unmodified.
         var captureProcessedThisIteration = 0
         while captureProcessedThisIteration < maxFramesPerIteration {
             let metadata = captureFrameBuffer.withUnsafeMutableBufferPointer { ptr in
@@ -288,10 +298,16 @@ final class AudioWorker {
             }
 
             let processStart = DispatchTime.now()
-            let processedCapture = aecProcessor.processCaptureFrame(
-                captureFrameBuffer,
-                isStable: synchronizer.isStable
-            )
+            let processedCapture: [Float]
+            if aecEnabled {
+                processedCapture = aecProcessor.processCaptureFrame(
+                    captureFrameBuffer,
+                    isStable: synchronizer.isStable
+                )
+            } else {
+                // AEC disabled — pass capture through unmodified
+                processedCapture = captureFrameBuffer
+            }
             let processEnd = DispatchTime.now()
             let processingTimeMs = Double(processEnd.uptimeNanoseconds - processStart.uptimeNanoseconds) / 1_000_000
 

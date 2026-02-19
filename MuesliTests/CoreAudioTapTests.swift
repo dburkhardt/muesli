@@ -306,6 +306,10 @@ final class CoreAudioTapTests: XCTestCase {
     // MARK: - AggregateDeviceManager Integration Tests
     
     func testAggregateDeviceCreation() throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["CI"] != nil,
+            "Skipping hardware-dependent test in CI"
+        )
         let manager = AggregateDeviceManager()
         
         // Create tap with no exclusions (global tap)
@@ -319,6 +323,10 @@ final class CoreAudioTapTests: XCTestCase {
     }
     
     func testAggregateDeviceFormat() throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["CI"] != nil,
+            "Skipping hardware-dependent test in CI"
+        )
         let manager = AggregateDeviceManager()
         
         let _ = try manager.createTapOnlyDevice(excludedProcessIDs: [], isExclusive: false)
@@ -339,6 +347,10 @@ final class CoreAudioTapTests: XCTestCase {
     // MARK: - CoreAudioTapManager Integration Tests
     
     func testTapManagerStartStop() async throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["CI"] != nil,
+            "Skipping hardware-dependent test in CI"
+        )
         let manager = CoreAudioTapManager()
         
         var callbackCount = 0
@@ -372,6 +384,10 @@ final class CoreAudioTapTests: XCTestCase {
     }
     
     func testTapManagerReceivesAudioWithBeep() async throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["CI"] != nil,
+            "Skipping hardware-dependent test in CI"
+        )
         let manager = CoreAudioTapManager()
         
         var maxSampleValue: Float = 0

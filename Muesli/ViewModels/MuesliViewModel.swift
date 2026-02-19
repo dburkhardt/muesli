@@ -476,7 +476,11 @@ final class MuesliViewModel {
             self.audioCaptureService = audioCaptureService!
         } else {
             NSLog("[TAP DEBUG] Creating new TapAudioCaptureService")
-            self.audioCaptureService = TapAudioCaptureService()
+            self.audioCaptureService = TapAudioCaptureService(
+                isAECEnabled: { [weak preferencesManager] in
+                    preferencesManager?.echoCancellationEnabledForAudioCallback ?? true
+                }
+            )
         }
         NSLog("[TAP DEBUG] audioCaptureService type: %@", String(describing: type(of: self.audioCaptureService)))
         self.fileOutputService = fileOutputService ?? FileOutputService()
@@ -524,7 +528,6 @@ final class MuesliViewModel {
             fileOutputService: self.fileOutputService,
             transcriptionService: self.transcriptionService,
             transcriptionCoordinator: self.transcriptionCoordinator,
-            echoCancellationService: self.echoCancellationService,
             preferencesManager: preferencesManager,
             microphoneManager: self.microphoneManager,
             exportService: self.exportService

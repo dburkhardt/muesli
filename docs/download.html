@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Download & Installation - Muesli</title>
-    <meta name="description" content="Download Muesli and learn how to install the unsigned macOS app with detailed troubleshooting instructions.">
+    <meta name="description" content="Download Muesli — signed and notarized macOS meeting transcription app. Simple installation instructions.">
     <link rel="stylesheet" href="assets/style.css">
     <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
     <style>
@@ -74,7 +74,7 @@
         <div class="container">
             <h1 style="text-align: center;">Download Muesli</h1>
             <p style="text-align: center; color: var(--secondary-text); max-width: 600px; margin: 0 auto 48px;">
-                Follow these steps to install Muesli on your Mac. The app is currently unsigned, so you'll need to bypass Gatekeeper.
+                Follow these steps to install Muesli on your Mac. The app is signed and notarized by Apple for a smooth installation.
             </p>
 
             <div class="cta-buttons">
@@ -96,9 +96,9 @@
         <div class="container installation-content">
             <h2>Installation Instructions</h2>
 
-            <div class="warning-box">
-                <p><strong>⚠️ Unsigned App Warning</strong></p>
-                <p>Muesli is not code-signed with an Apple Developer certificate. macOS will block it by default. Follow the steps below to install it safely.</p>
+            <div class="success-box">
+                <p><strong>Signed & Notarized</strong></p>
+                <p>Muesli is signed with a Developer ID certificate and notarized by Apple. It should install and open without any Gatekeeper warnings.</p>
             </div>
 
             <div class="steps">
@@ -106,7 +106,7 @@
                     <div class="step-number">1</div>
                     <div class="step-content">
                         <h3>Download the DMG</h3>
-                        <p>Click the download button above. Your browser may warn you about downloading from an unidentified developer—this is normal for unsigned apps. Choose "Keep" or "Save" to continue.</p>
+                        <p>Click the download button above to get the latest release from GitHub.</p>
                     </div>
                 </div>
 
@@ -129,9 +129,8 @@
                 <div class="step">
                     <div class="step-number">4</div>
                     <div class="step-content">
-                        <h3>Bypass Gatekeeper</h3>
-                        <p>Go to your Applications folder, find Muesli, then <strong>right-click (or Control-click)</strong> on the app and select <strong>"Open"</strong> from the menu.</p>
-                        <p style="margin-top: 8px;">A dialog will appear saying the app is from an unidentified developer. Click <strong>"Open"</strong> to launch it. You only need to do this once.</p>
+                        <h3>Launch Muesli</h3>
+                        <p>Open the app from your Applications folder or Spotlight. It will launch without any Gatekeeper warnings.</p>
                     </div>
                 </div>
 
@@ -154,7 +153,7 @@
                 <h2>Troubleshooting</h2>
 
                 <h3>"Muesli can't be opened" Error</h3>
-                <p>If you see this error even after right-clicking and choosing "Open", you can manually approve the app:</p>
+                <p>This should not occur with the signed release. If you built from source or downloaded from an unofficial source, try:</p>
                 <ol style="margin-left: 20px; margin-top: 12px;">
                     <li>Open <strong>System Settings</strong> → <strong>Privacy & Security</strong></li>
                     <li>Scroll down to the Security section</li>
@@ -164,7 +163,7 @@
                 </ol>
 
                 <h3>Removing Quarantine Flag (Advanced)</h3>
-                <p>If the above doesn't work, you can manually remove the quarantine attribute using Terminal:</p>
+                <p>For self-built or non-notarized versions, you can manually remove the quarantine attribute using Terminal:</p>
                 <div class="command-box">xattr -d com.apple.quarantine /Applications/Muesli.app</div>
                 <p>Then try opening the app normally.</p>
 

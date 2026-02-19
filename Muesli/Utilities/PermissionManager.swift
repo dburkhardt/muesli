@@ -132,6 +132,19 @@ final class PermissionManager: PermissionManagerProtocol {
         if hasCompletedOnboarding {
             // Post-onboarding: refresh permissions
             _ = refreshPermissions()
+
+            // Background re-probe: converge the tap permission cache with reality.
+            // The cached UserDefaults key may be stale if the user granted/revoked
+            // permission externally via System Settings.
+            Task { @MainActor in
+                let probeResult = await self.triggerSystemAudioPermissionPrompt()
+                let cachedValue = UserDefaults.standard.bool(forKey: self.systemAudioPermissionDefaultsKey)
+                if probeResult != cachedValue {
+                    UserDefaults.standard.set(probeResult, forKey: self.systemAudioPermissionDefaultsKey)
+                    self.audioCaptureGranted = probeResult
+                    self.permissionDidChange?(self.audioCaptureGranted, self.microphoneGranted)
+                }
+            }
         } else if awaitingAudioCaptureFromSettings {
             awaitingAudioCaptureFromSettings = false
             _ = refreshPermissions()

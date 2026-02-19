@@ -9,7 +9,11 @@ final class RecordingControllerTests: XCTestCase {
     // MARK: - Test Setup
     
     private func createTestController() async -> RecordingController {
-        // Create mock services for testing
+        let (controller, _) = await createTestControllerWithMocks()
+        return controller
+    }
+
+    private func createTestControllerWithMocks() async -> (RecordingController, MockAudioCaptureService) {
         let audioCaptureService = MockAudioCaptureService()
         let fileOutputService = FileOutputService()
         let transcriptionService = TranscriptionService()
@@ -18,27 +22,19 @@ final class RecordingControllerTests: XCTestCase {
             transcriptionService: transcriptionService,
             modelManager: modelManager
         )
-        // Use AudioConfiguration values to test production-equivalent behavior
-        let echoCancellationService = EchoCancellationServiceNLMS(
-            filterLength: AudioConfiguration.aecFilterLength,
-            learningRate: AudioConfiguration.aecLearningRate,
-            sampleRate: AudioConfiguration.captureSampleRate,
-            maxDelayMs: 100,
-            acousticDelayMs: AudioConfiguration.aecAcousticDelayMs
-        )
         let preferencesManager = PreferencesManager()
         let microphoneManager = MicrophoneManager()
-        
-        return RecordingController(
+
+        let controller = RecordingController(
             audioCaptureService: audioCaptureService,
             fileOutputService: fileOutputService,
             transcriptionService: transcriptionService,
             transcriptionCoordinator: transcriptionCoordinator,
-            echoCancellationService: echoCancellationService,
             preferencesManager: preferencesManager,
             microphoneManager: microphoneManager,
             exportService: ExportService()
         )
+        return (controller, audioCaptureService)
     }
     
     // MARK: - Session Creation Tests
@@ -173,282 +169,320 @@ final class RecordingControllerTests: XCTestCase {
     // MARK: - Recording Lifecycle Tests
     
     func testStartRecordingWithSession() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Starting recording
         controller.startRecording(for: session)
-        
-        // Then: Session state should update (may fail without permissions)
-        // Note: Actual recording requires TCC permissions
-        XCTAssertNotNil(session)
+
+        // Give async start time to initiate
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Should attempt to start audio capture
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertGreaterThan(callCount, 0, "startCapture should be called on the audio service")
     }
-    
+
     func testStartRecordingInitializesSession() async {
-        let controller = await createTestController()
+        let (controller, _) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Starting recording
         controller.startRecording(for: session)
-        
-        // Then: Session should be configured
-        XCTAssertNotNil(session)
+
+        // Give async start time
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Active session should be tracked
+        XCTAssertNotNil(controller.activeSession, "activeSession should be set after starting recording")
     }
-    
+
     func testStartRecordingCapturesAudio() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Starting recording
         controller.startRecording(for: session)
-        
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
         // Then: Should attempt audio capture
-        XCTAssertNotNil(session)
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertGreaterThan(callCount, 0, "Should call startCapture on audio service")
     }
     
     func testStartRecordingStartsTranscription() async {
-        let controller = await createTestController()
+        let (controller, _) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Starting recording
         controller.startRecording(for: session)
-        
-        // Then: Should start transcription service
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Active session should be set (transcription starts as part of recording)
+        XCTAssertNotNil(controller.activeSession, "activeSession should be set - transcription starts with recording")
     }
-    
+
     func testStopRecordingSuccessfully() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // Given: Recording session
         controller.startRecording(for: session)
-        
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
         // When: Stopping recording
         controller.stopRecording(for: session)
-        
-        // Then: Should stop (may have errors from test environment)
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Should call stopCapture
+        let stopCount = await mockCapture.stopCaptureCallCount
+        XCTAssertGreaterThan(stopCount, 0, "stopCapture should be called on the audio service")
     }
-    
+
     func testStopRecordingSavesFiles() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // Given: Recording session
         controller.startRecording(for: session)
-        
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
         // When: Stopping recording
         controller.stopRecording(for: session)
-        
-        // Then: Files should be saved to session directory
-        // Note: Actual file creation depends on successful recording
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Stop should have been invoked (file saving follows stop)
+        let stopCount = await mockCapture.stopCaptureCallCount
+        XCTAssertGreaterThan(stopCount, 0, "stopCapture should be called to finalize files")
     }
     
     func testHandleStartWithoutModel() async {
-        let controller = await createTestController()
+        let (controller, _) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // Given: No model available (ModelManager initialized with skipScan)
-        
+
         // When: Starting recording
         controller.startRecording(for: session)
-        
-        // Then: Should handle missing model
-        // Either show error or start recording-only mode
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Should handle missing model — either show error or start recording-only mode
+        let hasAlert = controller.showModelErrorAlert
+        let hasActiveSession = controller.activeSession != nil
+        XCTAssertTrue(hasAlert || hasActiveSession,
+            "Should either show model error alert or start recording without transcription")
     }
     
     func testHandleMultipleStartAttempts() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Attempting to start twice
         controller.startRecording(for: session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
         controller.startRecording(for: session)
-        
-        // Then: Should prevent duplicate starts
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Should only call startCapture once (prevents duplicate starts)
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertEqual(callCount, 1, "startCapture should only be called once for duplicate start attempts")
     }
     
     func testHandleStopWithoutActiveSession() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Stopping without having started
         controller.stopRecording(for: session)
-        
-        // Then: Should handle gracefully
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        // Then: Should handle gracefully — no stopCapture call since there's nothing to stop
+        let stopCount = await mockCapture.stopCaptureCallCount
+        XCTAssertEqual(stopCount, 0, "stopCapture should not be called when there's no active recording")
     }
-    
+
     func testActiveSessionTracking() async {
-        let controller = await createTestController()
+        let (controller, _) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
+        // Initially no active session
+        XCTAssertNil(controller.activeSession, "No active session before start")
+
         // When: Starting recording
         controller.startRecording(for: session)
-        
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
         // Then: Active session should be set
-        // Note: May not be set if recording fails due to permissions
-        XCTAssertNotNil(session)
+        XCTAssertNotNil(controller.activeSession, "activeSession should be set after starting recording")
     }
     
     func testPendingStopSessionWorkflow() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // Given: Recording session
         controller.startRecording(for: session)
-        
-        // When: Initiating stop (which may show title prompt)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // When: Initiating stop
         controller.stopRecording(for: session)
-        
-        // Then: Session should be handled
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Stop should have been called
+        let stopCount = await mockCapture.stopCaptureCallCount
+        XCTAssertGreaterThan(stopCount, 0, "stopCapture should be called during stop workflow")
     }
-    
+
     func testSessionStateTransitions() async {
-        let controller = await createTestController()
+        let (controller, _) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // Then: Session starts in idle state
         XCTAssertEqual(session.state, .idle)
-        
+
         // When: Starting recording
         controller.startRecording(for: session)
-        
-        // Then: State may transition (depends on success)
-        // Note: State machine transitions tested separately
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Active session should be tracked after start
+        XCTAssertNotNil(controller.activeSession, "Active session should be set after starting")
     }
-    
+
     func testTitlePromptSheetState() async {
-        let controller = await createTestController()
+        let (controller, _) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // Given: Completed recording
         controller.startRecording(for: session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
         controller.stopRecording(for: session)
-        
-        // Then: Title prompt may be shown
-        // Note: Depends on preferences and recording success
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Controller should have processed the stop (title prompt state depends on preferences)
+        // At minimum, the controller should not be in an inconsistent state
+        XCTAssertNil(controller.activeSession, "activeSession should be nil after stop")
     }
-    
+
     func testModelErrorAlertState() async {
-        let controller = await createTestController()
+        let (controller, _) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
-        // Given: No model available
+
+        // Given: No model available (skipScan: true means no model loaded)
         // When: Starting recording
         controller.startRecording(for: session)
-        
-        // Then: Model error alert may be shown
-        // Note: Depends on model availability
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Model error alert should be shown (since no model is available)
+        // or session should have been started in recording-only mode
+        let hasAlert = controller.showModelErrorAlert
+        let hasActiveSession = controller.activeSession != nil
+        XCTAssertTrue(hasAlert || hasActiveSession,
+            "Should either show model error alert or have started recording")
     }
-    
+
     func testTimerUpdatesDuringRecording() async {
-        let controller = await createTestController()
+        let (controller, _) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Starting recording
         controller.startRecording(for: session)
-        
-        // Wait briefly
-        try? await Task.sleep(for: .milliseconds(100))
-        
-        // Then: Timer should be running
-        // Note: Timer updates are handled by session
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        // Then: Session should be actively tracked
+        XCTAssertNotNil(controller.activeSession, "Active session should exist during recording")
     }
     
     // MARK: - Audio Callback Integration Tests
     
     func testSystemAudioBufferCallbackInfrastructure() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Recording system audio
         controller.startRecording(for: session)
-        
-        // Note: Actual buffer callbacks require real audio capture
-        // This test verifies the callback infrastructure is set up
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Audio capture should have been started (callback infrastructure is set up during start)
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertGreaterThan(callCount, 0, "startCapture should be called to set up buffer callbacks")
     }
-    
+
     func testMicrophoneAudioBufferCallbackInfrastructure() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Recording
         controller.startRecording(for: session)
-        
-        // Then: Microphone callbacks should be configured
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Microphone callbacks should be configured via startCapture
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertGreaterThan(callCount, 0, "Audio service should be started for microphone callbacks")
     }
-    
+
     func testBuffersForwardedToFileOutputService() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Recording
         controller.startRecording(for: session)
-        
-        // Then: Buffer handlers should forward to FileOutputService
-        // Note: Actual forwarding happens in buffer callbacks
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Buffer handlers should be registered (verified by startCapture being called)
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertGreaterThan(callCount, 0, "startCapture called means buffer handlers are set up for FileOutputService")
     }
-    
+
     func testBuffersForwardedToTranscriptionService() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Recording with transcription enabled
         controller.startRecording(for: session)
-        
-        // Then: Buffer handlers should forward to TranscriptionService
-        // Note: Forwarding verified through transcription coordinator
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Audio capture should be started (transcription handlers registered during setup)
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertGreaterThan(callCount, 0, "startCapture called means transcription handlers are configured")
     }
-    
+
     func testEchoCancellationProcessing() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
-        // Given: Echo cancellation enabled
-        // Note: Preferences set in PreferencesManager
-        
+
         // When: Recording
         controller.startRecording(for: session)
-        
-        // Then: Echo cancellation should process buffers
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Audio capture should have started (AEC is wired through the audio pipeline)
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertGreaterThan(callCount, 0, "Audio capture service should be started for AEC processing")
     }
-    
+
     func testAudioLevelUpdates() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Recording
         controller.startRecording(for: session)
-        
-        // Then: Audio levels should be updated
-        // Note: Level updates happen via audio capture service callbacks
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Audio service should be running (level updates come from the service)
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertGreaterThan(callCount, 0, "Audio service should be started for level updates")
     }
-    
+
     func testHandleCallbackErrors() async {
-        let controller = await createTestController()
+        let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
-        
+
         // When: Recording (may encounter errors in test environment)
         controller.startRecording(for: session)
-        
-        // Then: Should handle callback errors gracefully
-        XCTAssertNotNil(session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Then: Should have attempted to start (error handling happens in callbacks)
+        let callCount = await mockCapture.startCaptureCallCount
+        XCTAssertGreaterThan(callCount, 0, "Should attempt to start capture even if callbacks might error")
     }
     
     func testMicrophoneMuteToggle() async {

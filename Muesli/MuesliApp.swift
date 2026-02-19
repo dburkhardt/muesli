@@ -204,25 +204,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Onboarding complete - check if permissions are still valid
             Task { @MainActor in
                 // Check permissions for recovery (fresh check, no cache)
-                let (hasScreen, hasMic) = self.checkPermissionsForRecovery()
-                
+                let (hasTapCached, hasMic) = self.checkPermissionsForRecovery()
+
                 // Log permission check
                 await DiagnosticLogger.shared.log(
                     .permission,
-                    "Permission check on launch: screen=\(hasScreen), mic=\(hasMic)"
+                    "Permission check on launch: tapCached=\(hasTapCached), mic=\(hasMic)"
                 )
-                
-                if !hasScreen || !hasMic {
+
+                // Only mic is a hard requirement for recovery mode.
+                // Missing tap permission is handled gracefully at recording time
+                // (degrades to mic-only mode), so don't block the user.
+                if !hasMic {
                     // Log recovery mode trigger
                     await DiagnosticLogger.shared.log(
                         .permission,
-                        "Entering permission recovery: missingScreen=\(!hasScreen), missingMic=\(!hasMic)"
+                        "Entering permission recovery: missingMic=true"
                     )
-                    
-                    // Show onboarding for permission recovery
+
+                    // Show onboarding for permission recovery (mic only)
                     self.showOnboardingWindow(mode: .permissionRecovery(
-                        missingScreen: !hasScreen,
-                        missingMic: !hasMic
+                        missingScreen: false,
+                        missingMic: true
                     ))
                 } else {
                     // Normal launch - open main window
@@ -298,9 +301,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appName = Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
         window.title = mode.isRecoveryMode ? mode.windowTitle : "Welcome to \(appName)"
         
-        // In recovery mode: window is NOT closable (user must grant or quit)
+        // In recovery mode: window is closable (user can dismiss and quit)
         if mode.isRecoveryMode {
-            window.styleMask = [.titled]  // Remove .closable
+            window.styleMask = [.titled, .closable]
         } else {
             window.styleMask = [.titled, .closable]
         }
@@ -316,14 +319,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     
     /// Check permissions for recovery mode - uses fresh checks, not cached state
     /// CRITICAL: Only uses synchronous, non-prompting APIs
-    private func checkPermissionsForRecovery() -> (hasScreen: Bool, hasMic: Bool) {
-        // Safe, synchronous preflight check. Used as a proxy for audio capture permission.
-        let hasScreen = CGPreflightScreenCaptureAccess()
-        
+    /// Note: Only mic is a hard requirement. Tap permission is optional — if missing,
+    /// the app launches normally and degrades to mic-only at recording time.
+    private func checkPermissionsForRecovery() -> (hasTapCached: Bool, hasMic: Bool) {
+        // Use cached tap-probe result (consistent with PermissionManager and TapAudioCaptureService).
+        // CGPreflightScreenCaptureAccess() checks the wrong TCC bucket (Screen Recording, not System Audio).
+        let hasTapCached = UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
+
         // AVCaptureDevice.authorizationStatus() is synchronous and doesn't trigger prompts
         let hasMic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        
-        return (hasScreen, hasMic)
+
+        return (hasTapCached, hasMic)
     }
     
     /// Trigger permission recovery from outside AppDelegate (e.g., ViewModel callback).
