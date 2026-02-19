@@ -1774,7 +1774,7 @@ Failing to resample results in gibberish transcription output.
 
 ### macOS Version Requirements
 
-`AudioHardwareCreateProcessTap` and `CATapDescription` require **macOS 14.2+** (Sonoma). The app's minimum deployment target must be macOS 14.2 or later. Earlier macOS versions do not have the Core Audio tap APIs and cannot capture system audio using this architecture.
+`AudioHardwareCreateProcessTap` and `CATapDescription` require **macOS 14.2+** (Sonoma). The app deployment target is **macOS 26.0** (`MACOSX_DEPLOYMENT_TARGET = 26.0`), which satisfies this requirement. Earlier macOS versions do not have the Core Audio tap APIs and cannot capture system audio using this architecture.
 
 ---
 

@@ -142,7 +142,9 @@ Permission changes are detected through macOS system events, **not polling**:
 │ 2. App Activation Notification                                  │
 │    - Event: NSApplication.didBecomeActiveNotification           │
 │    - Fires when: User returns from System Settings              │
-│    - Handler: refreshPermissionsAsync() (only after onboarding) │
+│    - Handler: handleDidBecomeActive() — sync refreshPermissions()│
+│      + background triggerSystemAudioPermissionPrompt() if        │
+│      hasCompletedOnboarding; or awaitingAudioCapture/Mic flags   │
 │                                                                  │
 │ 3. Manual Checks (Button Clicks)                                │
 │    - Trigger: User clicks "Check Again" button                  │
@@ -292,16 +294,36 @@ If `MicrophoneManager.refreshDevices()` is called during app init (before onboar
 `SCShareableContent.excludingDesktopWindows()` triggers the screen recording permission prompt. If called from notification observers or callbacks, the prompt appears at unexpected times.
 
 ### Solution
-1. In `didBecomeActiveNotification`, check `hasCompletedOnboarding` before calling `refreshPermissionsAsync()`
+1. In `didBecomeActiveNotification`, the handler is `handleDidBecomeActive()` — it uses only synchronous `refreshPermissions()` during onboarding and a background tap re-probe (`triggerSystemAudioPermissionPrompt()`) only post-onboarding
 2. In distributed notification observers, **always use synchronous checks** (`refreshPermissions()`)
-3. **Never call `refreshPermissionsAsync()` in callbacks, loops, or timers**
+3. **Never call `SCShareableContent` in callbacks, loops, or timers**
 
-Example from `PermissionManager.init()`:
+The observer wiring and branching live entirely in `handleDidBecomeActive()` (no async SCShareableContent path exists in the current implementation):
 ```swift
-guard UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding) else {
-    return  // Skip during onboarding - SCShareableContent would trigger prompt
+// PermissionManager.init() wires the observer:
+NotificationCenter.default.addObserver(
+    forName: NSApplication.didBecomeActiveNotification, ...
+) { [weak self] _ in
+    Task { @MainActor in await self?.handleDidBecomeActive() }
 }
-_ = await self?.refreshPermissionsAsync()
+
+// handleDidBecomeActive() branches on completion state + awaiting flags:
+if hasCompletedOnboarding {
+    _ = refreshPermissions()
+    Task { @MainActor in
+        // Background re-probe to converge cache (may trigger prompt)
+        let result = await triggerSystemAudioPermissionPrompt()
+        // update UserDefaults + audioCaptureGranted if changed
+    }
+} else if awaitingAudioCaptureFromSettings {
+    awaitingAudioCaptureFromSettings = false
+    _ = refreshPermissions(); permissionDidChange?(...)
+} else if awaitingMicrophoneFromSettings {
+    awaitingMicrophoneFromSettings = false
+    _ = refreshPermissions(); permissionDidChange?(...)
+} else {
+    _ = refreshPermissions()
+}
 ```
 
 ## Debugging Onboarding Issues
