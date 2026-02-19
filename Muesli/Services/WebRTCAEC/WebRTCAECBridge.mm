@@ -172,7 +172,12 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
 
 - (BOOL)processRenderFrame:(const float *)samples {
     if (!_isReady || !samples) return NO;
-    
+
+    // Note: This method reads exactly kFrameSize (480) samples from `samples`.
+    // All callers (AECProcessor.feedRenderFrame) validate frame size at the Swift
+    // layer before calling. We cannot validate here because the API takes a raw
+    // pointer without a count parameter.
+
     os_unfair_lock_lock(&_lock);
     
 #if WEBRTC_AVAILABLE
@@ -206,7 +211,11 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
 
 - (BOOL)processCaptureFrame:(const float *)samples outputSamples:(float *)outputSamples {
     if (!_isReady || !samples || !outputSamples) return NO;
-    
+
+    // Note: This method reads exactly kFrameSize (480) samples from `samples` and writes
+    // kFrameSize samples to `outputSamples`. All callers (AECProcessor.processCaptureFrame)
+    // validate frame size at the Swift layer before calling.
+
     os_unfair_lock_lock(&_lock);
     
 #if WEBRTC_AVAILABLE

@@ -153,6 +153,13 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         initialState: [Float](repeating: 0, count: 4096)
     )
 
+    /// Dedicated file-output ring for raw stereo system audio (RT-safe push from IOProc).
+    /// 600ms × 48kHz × 2ch = 57600 samples.
+    private nonisolated(unsafe) let fileOutputRenderRing = TapCaptureRing(capacitySamples: 57600)
+
+    /// File output drain timer task handle.
+    private var fileOutputDrainTask: Task<Void, Never>?
+
     // MARK: - Callbacks
 
     private var bufferHandler: AudioBufferHandler?
@@ -338,6 +345,14 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         )
         audioWorker = worker
 
+        // Start file-output drain loop (every 50ms, drains RT-safe ring to actor for CMSampleBuffer delivery)
+        fileOutputDrainTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.drainFileOutputRings()
+                try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+            }
+        }
+
         // Note: No system audio warning removed — the app supports personal dictation
         // (mic-only) as a valid use case. Absence of system audio is not an error.
 
@@ -367,6 +382,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
 
         logger.info("Stopping tap-based audio capture")
+
+        // Stop file-output drain
+        fileOutputDrainTask?.cancel()
+        fileOutputDrainTask = nil
 
         // Stop audio worker
         audioWorker?.stop()
@@ -474,15 +493,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             }
         }
         pushRenderFrameMetadata(hostTime: hostTime, startSampleIndex: startSampleIndex, sampleCount: count)
-        
-        // Create CMSampleBuffer for file output (raw 48kHz stereo)
-        // This is done here to preserve the original audio quality
-        let sampleArray = Array(UnsafeBufferPointer(start: samples, count: totalSamples))
-        let timestamp = CACurrentMediaTime()
 
-        Task { [weak self] in
-            await self?.deliverRawSystemAudio(samples: sampleArray, timestamp: timestamp)
-        }
+        // Push raw stereo samples to file-output ring (RT-safe, no allocation)
+        _ = fileOutputRenderRing.push(samples: samples, count: totalSamples, sampleTime: sampleTime, hostTime: hostTime)
     }
 
     /// Handle processed microphone frame from worker.
@@ -502,7 +515,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Deliver raw system audio for file output (48kHz stereo)
     private func deliverRawSystemAudio(samples: [Float], timestamp: Double) {
         ensureFormatDescriptionsInitialized()
-        
+
         guard !samples.isEmpty else { return }
 
         // Create CMSampleBuffer with correct format (48kHz stereo Float32)
@@ -517,10 +530,24 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         if let buffer = buffer {
             bufferHandler?(buffer, .system)
         }
-        
+
         // Calculate and deliver audio level
         let level = calculateRMSFromArray(samples)
         levelHandler?(level, .system)
+    }
+
+    /// Drain the RT-safe file-output ring and deliver to file output (runs on actor).
+    private func drainFileOutputRings() {
+        let available = fileOutputRenderRing.available
+        guard available > 0 else { return }
+
+        var samples = [Float](repeating: 0, count: available)
+        let popped = samples.withUnsafeMutableBufferPointer { ptr -> Bool in
+            fileOutputRenderRing.pop(into: ptr.baseAddress!, count: available)
+        }
+        guard popped else { return }
+
+        deliverRawSystemAudio(samples: samples, timestamp: CACurrentMediaTime())
     }
     
     /// Deliver raw microphone audio for file output (mono Float32 at actual mic sample rate)
@@ -644,6 +671,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         captureRingForAEC.reset()
         renderMetadataRingForAEC.reset()
         captureMetadataRingForAEC.reset()
+        fileOutputRenderRing.reset()
 
         _ = renderSampleIndexCounter.withLock { index in
             index = 0
@@ -842,7 +870,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             sampleCount: frameLength
         )
 
-        // Create array for async delivery to file output (raw mono at mic sample rate)
+        // Create array for async delivery to file output (raw mono at mic sample rate).
+        // Note: AVAudioEngine tap callbacks are high-priority but NOT true RT IOProc.
+        // Array allocation + Task dispatch is acceptable here. See handleTapAudio for
+        // the RT-safe ring-based approach used for the true IOProc callback.
         let sampleArray = Array(UnsafeBufferPointer(start: samples, count: frameLength))
         let timestamp = CACurrentMediaTime()
         

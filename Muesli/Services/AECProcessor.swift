@@ -140,6 +140,7 @@ final class AECProcessor {
     func feedRenderFrame(_ samples: [Float], isStable: Bool = true) -> Bool {
         guard samples.count == Self.frameSizeSamples else {
             logger.warning("Invalid render frame size: \(samples.count), expected \(Self.frameSizeSamples)")
+            assertionFailure("AEC render frame size invariant violated: \(samples.count) != \(Self.frameSizeSamples)")
             stateLock.withLock { state in
                 state.stats.framesSkipped += 1
             }
@@ -153,11 +154,6 @@ final class AECProcessor {
             }
 
             let (changed, frozen) = Self.updateGatingLocked(state: &state, isStable: isStable)
-
-            if state.isAdaptationFrozen && state.mode == .conservative {
-                state.stats.framesSkipped += 1
-                return (false, changed, frozen, false)
-            }
 
             guard let bridge = state.bridge, bridge.isReady else {
                 state.stats.framesSkipped += 1
@@ -203,6 +199,7 @@ final class AECProcessor {
     ) -> [Float] {
         guard captureSamples.count == Self.frameSizeSamples else {
             logger.warning("Invalid capture frame size: \(captureSamples.count), expected \(Self.frameSizeSamples)")
+            assertionFailure("AEC capture frame size invariant violated: \(captureSamples.count) != \(Self.frameSizeSamples)")
             stateLock.withLock { state in
                 state.stats.framesSkipped += 1
             }
@@ -216,11 +213,6 @@ final class AECProcessor {
             }
 
             let (changed, frozen) = Self.updateGatingLocked(state: &state, isStable: isStable)
-
-            if state.isAdaptationFrozen && state.mode == .conservative {
-                state.stats.framesSkipped += 1
-                return (captureSamples, false, changed, frozen, false)
-            }
 
             guard let bridge = state.bridge, bridge.isReady else {
                 state.stats.framesSkipped += 1
@@ -412,8 +404,8 @@ final class AECProcessor {
                 state.isAdaptationFrozen = true
                 state.stats.adaptationFrozen = true
             }
-        } else if state.isAdaptationFrozen && state.mode == .aggressive {
-            // Only unfreeze automatically in aggressive mode.
+        } else if state.isAdaptationFrozen {
+            // Unfreeze when stable returns (any mode).
             state.isAdaptationFrozen = false
             state.stats.adaptationFrozen = false
         }

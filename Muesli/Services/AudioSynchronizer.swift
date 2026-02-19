@@ -26,18 +26,21 @@ enum SynchronizerState: Equatable {
 struct AlignedFrame {
     /// Render (system audio) samples - Float32 mono
     let renderSamples: [Float]
-    
+
     /// Capture (microphone) samples - Float32 mono
     let captureSamples: [Float]
-    
+
     /// Sample index for this frame
     let sampleIndex: Int64
-    
+
     /// Frame size in samples (480 for 10ms at 48kHz)
     let frameSize: Int
-    
+
     /// Whether the alignment is considered stable
     let isStable: Bool
+
+    /// Host time from the render stream (for downstream timing metadata)
+    let renderHostTime: UInt64
 }
 
 // MARK: - Synchronizer Statistics
@@ -129,6 +132,9 @@ final class AudioSynchronizer {
     
     /// Current sample index for output frames
     private var outputSampleIndex: Int64 = 0
+
+    /// Last-seen render hostTime (propagated to AlignedFrame for downstream metadata)
+    private var lastRenderHostTime: UInt64 = 0
     
     /// Lock for state access
     private let stateLock = NSLock()
@@ -186,6 +192,9 @@ final class AudioSynchronizer {
         hostTime: UInt64
     ) {
         renderRing.push(samples: samples, count: count, sampleTime: sampleTime, hostTime: hostTime)
+
+        // Track render hostTime for propagation to AlignedFrame
+        lastRenderHostTime = hostTime
         
         // Update drift tracker with render timing
         driftTracker.updateRender(sampleTime: sampleTime, hostTime: hostTime, sampleCount: count)
@@ -239,6 +248,7 @@ final class AudioSynchronizer {
             if canTransitionToStable() {
                 state = .stable
                 lastStableTime = Date()
+                delayController.unfreezeAdaptation()
             } else {
                 // Continue priming - wait for render lead
                 return nil
@@ -251,6 +261,7 @@ final class AudioSynchronizer {
             if canTransitionToStable() {
                 state = .stable
                 lastStableTime = Date()
+                delayController.unfreezeAdaptation()
             }
             fallthrough
             
@@ -341,7 +352,8 @@ final class AudioSynchronizer {
             captureSamples: captureFrame,
             sampleIndex: outputSampleIndex,
             frameSize: Self.frameSizeSamples,
-            isStable: isStable
+            isStable: isStable,
+            renderHostTime: lastRenderHostTime
         )
         
         outputSampleIndex += Int64(Self.frameSizeSamples)
@@ -386,6 +398,7 @@ final class AudioSynchronizer {
         lastStableTime = nil
         lastDiscontinuityTime = Date()
         outputSampleIndex = 0
+        lastRenderHostTime = 0
         
         stats.discontinuities += 1
 

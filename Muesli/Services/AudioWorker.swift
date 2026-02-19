@@ -121,6 +121,9 @@ final class AudioWorker {
         self.popCaptureAECFrame = popCaptureAECFrame
         self.processingTimesRing = [Double](repeating: 0, count: processingTimeHistorySize)
 
+        assert(renderFrameBuffer.count == Self.frameSizeSamples)
+        assert(captureFrameBuffer.count == Self.frameSizeSamples)
+
         logger.info("AudioWorker initialized")
     }
 
@@ -326,7 +329,7 @@ final class AudioWorker {
             renderCallback?(AudioFrame(
                 samples: alignedFrame.renderSamples,
                 sampleRate: Self.sampleRate,
-                hostTime: 0,
+                hostTime: alignedFrame.renderHostTime,
                 startSampleIndex: alignedFrame.sampleIndex
             ))
 

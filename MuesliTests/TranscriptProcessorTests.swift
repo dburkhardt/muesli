@@ -355,8 +355,9 @@ final class TranscriptProcessorTests: XCTestCase {
         processor.processSegment(segment1)
         
         XCTAssertEqual(processor.blocks.count, 1)
+        guard processor.blocks.count >= 1 else { return }
         XCTAssertTrue(processor.blocks[0].wordCount >= 75)
-        
+
         // Next segment from same speaker should create new block
         let segment2 = TranscriptionService.TranscriptSegment(
             text: "This should be a new block",
@@ -364,8 +365,9 @@ final class TranscriptProcessorTests: XCTestCase {
             speaker: .me
         )
         processor.processSegment(segment2)
-        
+
         XCTAssertEqual(processor.blocks.count, 2, "Should create new block after word limit exceeded")
+        guard processor.blocks.count >= 2 else { return }
         XCTAssertEqual(processor.blocks[1].text, "This should be a new block")
     }
     
