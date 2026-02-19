@@ -142,7 +142,7 @@ A user-accessible panel displays diagnostic information and provides access to l
 | App Version | `Bundle.main.infoDictionary` | |
 | Build Config | `#if DEBUG` | Debug or Release |
 | Microphone Status | `AVCaptureDevice.authorizationStatus(for: .audio)` | Raw int (0-3) |
-| Screen Recording Status | Cached `PermissionManager.screenRecordingGranted` | "(cached, may be stale)" |
+| Screen Recording Status | `CGPreflightScreenCaptureAccess()` | "(may be unreliable with ad-hoc signing)" |
 | Onboarding State | Current step, `hasCompletedOnboarding` | |
 | NSMicrophoneUsageDescription | `Bundle.main.object(forInfoDictionaryKey:)` | Or "MISSING" |
 | NSScreenCaptureUsageDescription | `Bundle.main.object(forInfoDictionaryKey:)` | Or "MISSING" |

@@ -219,7 +219,7 @@ RT audio callbacks (IOProc) must not perform heap allocation, Objective-C messag
 WhisperKit requires 16 kHz mono audio. Both system audio and microphone capture at 48 kHz, so always resample before passing buffers to the transcription pipeline.
 
 ### Minimum OS Version
-`AudioHardwareCreateProcessTap` is available starting in macOS 14.2. The app requires macOS 14.2 or later to support the process tap audio capture path.
+`AudioHardwareCreateProcessTap` is available starting in macOS 14.2. The app deployment target is **macOS 26.0** (`MACOSX_DEPLOYMENT_TARGET = 26.0`), which satisfies this requirement.
 
 ## Change History
 

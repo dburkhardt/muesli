@@ -398,27 +398,27 @@ Logs can be viewed with Console.app filtering for:
 
 ### Test Coverage
 
-Comprehensive test suite with **44 test cases** covering:
+Test suite with **37 test cases** across 4 classes (all in `MuesliTests/`):
 
-1. **ExportServiceTests** (29 tests)
+1. **ExportServiceTests** (22 tests, in `ExportServiceTests.swift`)
    - Directory creation and management
    - Single and bulk meeting export
    - Manifest generation
    - Edge cases (empty data, special characters, etc.)
    - File operations and error handling
 
-2. **PreferencesManagerExportTests** (5 tests)
+2. **PreferencesManagerExportTests** (5 tests, in `ExportServiceTests.swift`)
    - Export preferences persistence
    - Default values
    - Configuration changes
 
-3. **ExportIntegrationTests** (8 tests)
+3. **ExportIntegrationTests** (8 tests, in `ExportIntegrationTests.swift`)
    - ViewModel delegation
    - End-to-end export flow
    - Error handling
    - MockExportService behavior
 
-4. **AppStorageKeysExportTests** (2 tests)
+4. **AppStorageKeysExportTests** (2 tests, in `ExportIntegrationTests.swift`)
    - Key definitions
    - Uniqueness validation
 

@@ -89,7 +89,7 @@ enum AudioConfiguration {
     
     // Buffering
     static let maxBufferSamples: Int = 480_000     // 30 seconds at 16kHz
-    static let bufferTimeoutSeconds: TimeInterval = 30.0
+    static let bufferTimeoutSeconds: TimeInterval = 300.0  // 5-minute safety net (memory bounded by maxBufferSamples)
     
     // Voice activity detection
     static let vadThreshold: Float = 0.01         // RMS threshold (~-40dB)
@@ -199,7 +199,7 @@ The Echo Cancellation Service requires a warmup period at the start of each reco
 2. **During warmup:** Microphone audio passes through unprocessed (no echo cancellation)
 3. **After warmup:** AEC activates with correct stream alignment
 
-**Configuration:** `kBuffersToAverage = 12` (defined in `AECProcessor`)
+**Configuration:** `kBuffersToAverage = 12` (defined in `EchoCancellationServiceWebRTC.SyncState`)
 
 **Expected warmup duration:**
 - Typical buffer: ~4096 samples at 48kHz (~85ms per buffer)
@@ -401,7 +401,7 @@ Long transcription segments are split into multiple `TranscriptBlock` objects:
 - **System audio permission model**: Use tap-probe at session start (attempt `AudioHardwareCreateProcessTap` and observe the result) rather than calling `CGPreflightScreenCaptureAccess()` as a preflight. Cache the permission result in `UserDefaults` so subsequent launches can skip the probe.
 - **RT audio callback constraints**: IOProc callbacks run on a real-time thread. No heap allocation, no Objective-C messaging, no lock acquisition. Use only lock-free ring buffers (`TapCaptureRing`, `MicCaptureRing`) to hand off samples.
 - **WhisperKit sample rate**: WhisperKit requires 16 kHz mono audio. Always resample from the 48 kHz capture rate using `TranscriptionService.resampleToWhisperFormat()`.
-- **Minimum macOS version**: `AudioHardwareCreateProcessTap` is available on macOS 14.2+. The app requires macOS 14.2 or later.
+- **Minimum macOS version**: `AudioHardwareCreateProcessTap` is available on macOS 14.2+. The app deployment target is **macOS 26.0** (`MACOSX_DEPLOYMENT_TARGET = 26.0` in `project.pbxproj`), which satisfies this requirement.
 
 ## Change History
 

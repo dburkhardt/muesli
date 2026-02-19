@@ -7,7 +7,7 @@ This document specifies the expected behavior of Muesli's onboarding flow, inclu
 The onboarding flow guides first-time users through granting necessary permissions and downloading required models. The flow must be:
 
 1. **Non-intrusive**: System permission prompts should only appear when the user explicitly requests them
-2. **Resumable (recovery mode)**: Recovery mode can resume from saved step; first-time mode always starts at welcome
+2. **Resumable (recovery mode)**: Recovery mode starts at the first missing permission step (derived from current permission state, not persisted)
 3. **Explicit**: First-time onboarding always requires user clicks to advance; already-granted permissions show as "granted" with an enabled Continue button
 
 ## Onboarding Steps
@@ -68,8 +68,8 @@ First-time onboarding always starts at welcome.
 
 **Implementation**:
 - First-time mode: always init at `.welcome`, clear stale persisted step on appear
-- Recovery mode: save/restore current step via `onboardingCurrentStep` UserDefaults key
-- Clear saved step when onboarding completes
+- Recovery mode: starting step is **derived from which permissions are missing** (passed as `OnboardingMode.permissionRecovery(missingScreen:missingMic:)` at init); no UserDefaults step is read
+- There is no "resume from saved step" — step is always computed from current permission state, not persisted
 
 ## State Flow Diagram
 
@@ -116,13 +116,13 @@ First-time onboarding always starts at welcome.
 
 | API | Triggers Prompt? | Reliable? | Use Case |
 |-----|------------------|-----------|----------|
-| `CGPreflightScreenCaptureAccess()` | No | No (ad-hoc signing) | Initial checks only |
-| `CGRequestScreenCaptureAccess()` | Yes | N/A | **ONLY** when user clicks "Grant Permission" button |
-| `SCShareableContent.excludingDesktopWindows()` | Only if not granted | Yes | **AVOID** - use only for explicit permission requests |
-| `AVCaptureDevice.authorizationStatus(for: .audio)` | No | Yes | **PREFERRED** - use for all microphone checks |
-| `AVCaptureDevice.requestAccess(for: .audio)` | Yes (if undetermined) | Yes | **ONLY** when user clicks "Grant Permission" button |
+| `AudioHardwareCreateProcessTap` (probe) | Yes (first time) | Yes | **Primary** — triggers system audio permission prompt; result cached in `audioCaptureGranted` |
+| `CGPreflightScreenCaptureAccess()` | No | Partial (unreliable with ad-hoc signing) | Secondary fast-fail gate only |
+| `PermissionManager.checkScreenRecordingPermissionAsync()` | No | Yes | Read cached `audioCaptureGranted` from tap-probe result |
+| `AVCaptureDevice.authorizationStatus(for: .audio)` | No | Yes | **Preferred** for all microphone checks |
+| `AVCaptureDevice.requestAccess(for: .audio)` | Yes (if undetermined) | Yes | **Only** when user clicks "Grant Permission" button |
 
-**Critical Rule**: Use `AVCaptureDevice.authorizationStatus()` for all permission checks during monitoring. Never use `SCShareableContent` in loops, timers, or callbacks - it triggers permission prompts.
+**Critical Rule**: System audio permission is obtained by attempting `AudioHardwareCreateProcessTap` (tap probe) — there is no `CGRequestScreenCaptureAccess()` call for system audio. The result is cached in `PermissionManager.audioCaptureGranted`. Never use `SCShareableContent` in loops, timers, or callbacks — it triggers permission prompts.
 
 ## Permission Monitoring Architecture
 
@@ -153,14 +153,15 @@ Permission changes are detected through macOS system events, **not polling**:
 ### Synchronous vs Asynchronous Checks
 
 - **`refreshPermissions()`** (synchronous):
-  - Uses `CGPreflightScreenCaptureAccess()` and `AVCaptureDevice.authorizationStatus()`
+  - System audio: reads cached `audioCaptureGranted` (set by tap-probe at session start)
+  - Microphone: uses `AVCaptureDevice.authorizationStatus(for: .audio)`
   - Never triggers permission prompts
   - Safe to call in loops, callbacks, and monitoring
   - Use for: button-triggered checks, monitoring callbacks, onboarding screens
 
 - **`refreshPermissionsAsync()`** (asynchronous):
-  - Uses `SCShareableContent.excludingDesktopWindows()`
-  - **CAN trigger screen recording prompt if permission not granted**
+  - System audio: re-runs the tap probe to refresh `audioCaptureGranted`
+  - **May trigger system audio permission prompt if not yet granted**
   - Only use: in `didBecomeActiveNotification` after onboarding complete
   - **NEVER use**: in onboarding screens, timers, polling loops, or distributed notification handlers
 
@@ -559,7 +560,7 @@ resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
 
 ### Minimum macOS Version
 
-`AudioHardwareCreateProcessTap` is available starting in **macOS 14.2** (Sonoma). The app's deployment target must be macOS 14.2 or later to use tap-based system audio capture.
+`AudioHardwareCreateProcessTap` is available starting in **macOS 14.2** (Sonoma). The app's deployment target is **macOS 26.0** (`MACOSX_DEPLOYMENT_TARGET = 26.0`), which satisfies this requirement.
 
 ## Change History
 
