@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import os.lock
 import os.log
 
 // MARK: - Synchronizer State
@@ -136,8 +137,8 @@ final class AudioSynchronizer {
     /// Last-seen render hostTime (propagated to AlignedFrame for downstream metadata)
     private var lastRenderHostTime: UInt64 = 0
     
-    /// Lock for state access
-    private let stateLock = NSLock()
+    /// Lock for state access (RT-safe: os_unfair_lock has priority donation, no priority inversion)
+    private let stateLock = OSAllocatedUnfairLock()
     
     // MARK: - Initialization
     
@@ -193,16 +194,19 @@ final class AudioSynchronizer {
     ) {
         renderRing.push(samples: samples, count: count, sampleTime: sampleTime, hostTime: hostTime)
 
-        // Track render hostTime for propagation to AlignedFrame
-        lastRenderHostTime = hostTime
-        
         // Update drift tracker with render timing
         driftTracker.updateRender(sampleTime: sampleTime, hostTime: hostTime, sampleCount: count)
-        
+
+        // Protect shared state: lastRenderHostTime and handleDiscontinuity writes
+        stateLock.lock()
+        // Track render hostTime for propagation to AlignedFrame
+        lastRenderHostTime = hostTime
+
         // Check for discontinuity
         if renderRing.hasDiscontinuity {
             handleDiscontinuity(source: "render")
         }
+        stateLock.unlock()
     }
     
     /// Push capture (mic) samples
@@ -218,14 +222,17 @@ final class AudioSynchronizer {
         hostTime: UInt64
     ) {
         captureRing.push(samples: samples, count: count, sampleTime: sampleTime, hostTime: hostTime)
-        
+
         // Update drift tracker with capture timing
         driftTracker.updateCapture(sampleTime: sampleTime, hostTime: hostTime, sampleCount: count)
-        
+
+        // Protect shared state: handleDiscontinuity writes
+        stateLock.lock()
         // Check for discontinuity
         if captureRing.hasDiscontinuity {
             handleDiscontinuity(source: "capture")
         }
+        stateLock.unlock()
     }
     
     /// Get next aligned frame for AEC processing
@@ -441,18 +448,28 @@ final class AudioSynchronizer {
     
     /// Handle discontinuity from either stream
     private func handleDiscontinuity(source: String) {
-        if state != .unstable {
+        // Always refresh cooldown timer — repeated discontinuities must extend the
+        // cooldown window so canTransitionToStable() doesn't prematurely recover.
+        lastDiscontinuityTime = Date()
+
+        // Always count every discontinuity event for diagnostics
+        stats.discontinuities += 1
+
+        let isNewTransition = state != .unstable
+        if isNewTransition {
             state = .unstable
-            lastDiscontinuityTime = Date()
-            stats.discontinuities += 1
+        }
 
+        let logDiscontinuities = self.stats.discontinuities
+        if isNewTransition {
             logger.warning("Discontinuity detected from \(source)")
+        } else {
+            logger.info("Repeated discontinuity from \(source) (cooldown extended)")
+        }
 
-            let logDiscontinuities = self.stats.discontinuities
-            Task {
-                await DiagnosticLogger.shared.log(.aec,
-                    "SYNC_DISCONTINUITY: source=\(source), total=\(logDiscontinuities)")
-            }
+        Task {
+            await DiagnosticLogger.shared.log(.aec,
+                "SYNC_DISCONTINUITY: source=\(source), total=\(logDiscontinuities), repeated=\(!isNewTransition)")
         }
         
         // Clear discontinuity flags

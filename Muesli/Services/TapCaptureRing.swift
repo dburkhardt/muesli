@@ -135,16 +135,19 @@ final class TapCaptureRing {
         lock.lock()
         defer { lock.unlock() }
         
-        // Check for discontinuity using sample time
-        if lastSampleTime > 0 {
-            let deltaSamples = sampleTime - lastSampleTime
-            let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
-            
-            if deltaSamples <= 0 || deltaSamples > threshold {
-                hasDiscontinuity = true
+        // Check for discontinuity using sample time (skip if invalid: sentinel -1)
+        if sampleTime >= 0 {
+            if lastSampleTime > 0 {
+                let deltaSamples = sampleTime - lastSampleTime
+                let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
+
+                if deltaSamples <= 0 || deltaSamples > threshold {
+                    hasDiscontinuity = true
+                }
             }
+            lastSampleTime = sampleTime + Float64(sampleCount)
         }
-        lastSampleTime = sampleTime + Float64(sampleCount)
+        // When sampleTime < 0 (invalid), preserve lastSampleTime for next valid check
         
         // Handle overflow: drop oldest samples if needed
         let overflow = count + sampleCount - capacity

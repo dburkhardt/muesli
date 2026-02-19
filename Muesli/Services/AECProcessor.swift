@@ -60,6 +60,9 @@ final class AECProcessor {
         var isAdaptationFrozen: Bool = false
         var stats = AECStats()
         var outputBuffer = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+        /// Pre-allocated silence buffer — fed to AEC3 render path when adaptation is frozen
+        /// to starve the adaptive filter without disrupting audio output.
+        var silenceBuffer = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
     }
 
     /// RT-safe state lock for all mutable processor state.
@@ -160,8 +163,18 @@ final class AECProcessor {
                 return (false, changed, frozen, false)
             }
 
-            let feedSucceeded = samples.withUnsafeBufferPointer { ptr in
-                bridge.processRenderFrame(ptr.baseAddress!)
+            // When adaptation is frozen, feed silence to AEC3's render path.
+            // This starves the adaptive filter (no far-end reference) without
+            // disrupting capture-side audio output.
+            let feedSucceeded: Bool
+            if state.isAdaptationFrozen {
+                feedSucceeded = state.silenceBuffer.withUnsafeBufferPointer { ptr in
+                    bridge.processRenderFrame(ptr.baseAddress!)
+                }
+            } else {
+                feedSucceeded = samples.withUnsafeBufferPointer { ptr in
+                    bridge.processRenderFrame(ptr.baseAddress!)
+                }
             }
 
             if !feedSucceeded {
@@ -406,6 +419,9 @@ final class AECProcessor {
             }
         } else if state.isAdaptationFrozen {
             // Unfreeze when stable returns (any mode).
+            // Reset the bridge to clear stale internal delay estimates accumulated
+            // while the adaptive filter was starved with silence.
+            state.bridge?.reset()
             state.isAdaptationFrozen = false
             state.stats.adaptationFrozen = false
         }

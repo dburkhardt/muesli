@@ -857,7 +857,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let samples = floatChannelData[0]
 
         // Use sample time if available, otherwise derive from host time
-        let sampleTime = time.isSampleTimeValid ? time.sampleTime : 0
+        let sampleTime: Float64 = time.isSampleTimeValid ? Float64(time.sampleTime) : Float64(-1)
         let hostTime = time.hostTime
         let startSampleIndex = captureSampleIndexCounter.withLock { index -> Int64 in
             let start = index

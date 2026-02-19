@@ -138,6 +138,11 @@ fi
 # Check if WebRTC framework is available (not checked into git, optional dependency)
 WEBRTC_FRAMEWORK_PATH="${PROJECT_ROOT}/Muesli/Frameworks/webrtc_audio_processing.xcframework"
 if [ ! -d "${WEBRTC_FRAMEWORK_PATH}" ]; then
+    if [ "$IS_CI_BUILD" = true ]; then
+        log_error "WebRTC framework not found at ${WEBRTC_FRAMEWORK_PATH}"
+        log_error "Release CI builds MUST include real WebRTC AEC — stub fallback is not allowed"
+        exit 1
+    fi
     log_warning "WebRTC framework not found at ${WEBRTC_FRAMEWORK_PATH}"
     log_info "Building without WebRTC AEC support (stub implementation)"
     # Create a stub library to satisfy the -lwebrtc-audio-all linker flag.

@@ -307,10 +307,14 @@ final class CoreAudioTapManager: @unchecked Sendable {
     /// Handle IOProc callback
     /// RT-SAFE CHECKLIST (per plan Phase 4):
     /// - ✅ No malloc/new (uses pre-allocated buffers)
-    /// - ✅ No locks (only callback invocation)
     /// - ✅ No Objective-C/Swift ARC work
     /// - ✅ No logging (deferred to worker thread)
     /// - ✅ No syscalls
+    /// - ⚠️ Locks: The delegated audioCallback chain acquires ~6 sequential
+    ///   OSAllocatedUnfairLock instances (ring buffers, synchronizer stateLock,
+    ///   AECProcessor stateLock). These are RT-safe: os_unfair_lock provides
+    ///   priority donation, preventing priority inversion. No NSLock or
+    ///   pthread_mutex is used in the callback path.
     /// Note: rollingRMS access is not atomic but acceptable for monitoring-only purposes
     private func handleIOProc(
         inputData: UnsafePointer<AudioBufferList>?,
@@ -345,8 +349,9 @@ final class CoreAudioTapManager: @unchecked Sendable {
         lastFrameCount = frameCount
         lastChannelCount = buffer.mNumberChannels
         
-        // Extract timing info
-        let sampleTime = inputTime.pointee.mSampleTime
+        // Extract timing info (validate sampleTime flag; use -1 sentinel when invalid)
+        let sampleTimeValid = (inputTime.pointee.mFlags.rawValue & AudioTimeStampFlags.sampleTimeValid.rawValue) != 0
+        let sampleTime = sampleTimeValid ? inputTime.pointee.mSampleTime : Float64(-1)
         let hostTime = inputTime.pointee.mHostTime
         
         // Update RMS for monitoring (simple moving average)

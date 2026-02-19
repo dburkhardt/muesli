@@ -160,11 +160,12 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
         NSLog(@"[WebRTCAEC] Initialized with WebRTC AEC3 v2.x, sampleRate=%d, frameSize=%d",
               sampleRate, kFrameSize);
 #else
-        // Stub implementation - pass through audio without echo cancellation
-        _lastError = WebRTCAECErrorNone;
-        _isReady = YES;
-        
-        NSLog(@"[WebRTCAEC] Initialized in STUB mode (WebRTC library not available)");
+        // Stub implementation - WebRTC library not available
+        // Mark as NOT ready so callers know AEC is non-functional
+        _lastError = WebRTCAECErrorInitFailed;
+        _isReady = NO;
+
+        NSLog(@"[WebRTCAEC] Initialized in STUB mode (WebRTC library not available) — isReady=NO");
 #endif
     }
     return self;
