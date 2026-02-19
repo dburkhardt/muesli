@@ -669,7 +669,6 @@ prompt_app_support_action() {
                 break
                 ;;
             *)
-                print_error "Invalid choice. Please enter 1, 2, or 3."
                 ;;
         esac
     done
@@ -699,20 +698,19 @@ prompt_mounted_dmg_action() {
     echo ""
     
     while true; do
-        read -p "Eject these DMG volumes? (yes/no): " response
+        read -p "Eject these DMG volumes? [y/n]: " response
         case "$response" in
-            yes|YES|y|Y)
+            y|Y|yes|YES)
                 EJECT_DMGS=true
                 print_success "DMG volumes will be ejected"
                 break
                 ;;
-            no|NO|n|N)
+            n|N|no|NO)
                 EJECT_DMGS=false
                 print_info "DMG volumes will be kept mounted"
                 break
                 ;;
             *)
-                print_error "Please answer 'yes' or 'no'"
                 ;;
         esac
     done
@@ -743,20 +741,19 @@ prompt_trash_deletion() {
     echo ""
     
     while true; do
-        read -p "Delete these permanently? (yes/no): " response
+        read -p "Delete these permanently? [y/n]: " response
         case "$response" in
-            yes|YES)
+            y|Y|yes|YES)
                 DELETE_TRASH_APPS=true
                 print_warning "Trash apps will be PERMANENTLY deleted"
                 break
                 ;;
-            no|NO|n|N)
+            n|N|no|NO)
                 DELETE_TRASH_APPS=false
                 print_info "Trash apps will be kept"
                 break
                 ;;
             *)
-                print_error "Please type 'yes' or 'no' (full word for deletion)"
                 ;;
         esac
     done
@@ -804,20 +801,19 @@ prompt_per_bundle_artifacts() {
     echo ""
     
     while true; do
-        read -p "Delete these artifacts? (yes/no): " response
+        read -p "Delete these artifacts? [y/n]: " response
         case "$response" in
-            yes|YES|y|Y)
+            y|Y|yes|YES)
                 CLEAN_PER_BUNDLE_ARTIFACTS=true
                 print_success "Per-bundle artifacts will be deleted"
                 break
                 ;;
-            no|NO|n|N)
+            n|N|no|NO)
                 CLEAN_PER_BUNDLE_ARTIFACTS=false
                 print_info "Per-bundle artifacts will be kept"
                 break
                 ;;
             *)
-                print_error "Please answer 'yes' or 'no'"
                 ;;
         esac
     done
@@ -1038,20 +1034,15 @@ show_summary() {
 }
 
 confirm_uninstall() {
-    while true; do
-        read -p "Continue with uninstall? (yes/no): " response
-        case "$response" in
-            yes|YES|y|Y)
-                return 0
-                ;;
-            no|NO|n|N)
-                return 1
-                ;;
-            *)
-                print_error "Please answer 'yes' or 'no'"
-                ;;
-        esac
-    done
+    echo ""
+    echo -e "Type ${RED}uninstall${NC} to confirm, or anything else to cancel:"
+    echo ""
+    read -p "> " response
+    if [ "$response" = "uninstall" ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # ============================================================================
@@ -1181,6 +1172,41 @@ move_recordings() {
         return 1
     fi
     
+    return 0
+}
+
+delete_recordings() {
+    if [ ! -d "$RECORDINGS_DIR" ]; then
+        print_info "Recordings directory not found"
+        return 0
+    fi
+
+    print_info "Deleting recordings..."
+
+    local deleted=0
+    local failed=0
+    while IFS= read -r -d '' recording; do
+        local recording_name=$(basename "$recording")
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_recording" "$recording"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete recording: $recording_name"
+            deleted=$((deleted + 1))
+        elif rm -rf "$recording" 2>/dev/null; then
+            log_action "deleted_recording" "$recording"
+            deleted=$((deleted + 1))
+        else
+            log_action "delete_recording_failed" "$recording"
+            print_error "Failed to delete: $recording_name"
+            failed=$((failed + 1))
+        fi
+    done < <(find "$RECORDINGS_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+
+    print_success "Deleted $deleted recording(s)"
+    if [ $failed -gt 0 ]; then
+        print_warning "$failed recording(s) failed to delete"
+        return 1
+    fi
+
     return 0
 }
 
@@ -1580,9 +1606,11 @@ execute_uninstall() {
     # Log start of uninstall
     log_action "uninstall_started" "$(date)"
     
-    # Move recordings first (if requested)
+    # Handle recordings first (move or delete as requested)
     if [ "$RECORDING_ACTION" = "move" ]; then
         move_recordings || print_warning "Recording move failed, continuing with uninstall..."
+    elif [ "$RECORDING_ACTION" = "delete" ]; then
+        delete_recordings
     fi
     
     # 1. Unregister apps from Launch Services BEFORE deleting them
