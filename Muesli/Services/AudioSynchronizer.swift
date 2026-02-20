@@ -128,6 +128,12 @@ final class AudioSynchronizer {
     
     /// Current device topology mode
     private var topologyMode: DeviceTopologyMode = .unknown
+
+    /// Session ID for log correlation (short 8-char UUID prefix)
+    private var sessionID: String = "none"
+
+    /// Last seeded delay in samples (set at stable-transition, -1 if never seeded)
+    private var seededDelaySamples: Int = -1
     
     /// Statistics
     private var stats = SynchronizerStats()
@@ -171,11 +177,12 @@ final class AudioSynchronizer {
     // MARK: - Public API
     
     /// Configure for device topology
-    func configure(topologyMode: DeviceTopologyMode) {
+    func configure(topologyMode: DeviceTopologyMode, sessionID: String = "none") {
         stateLock.lock()
         defer { stateLock.unlock() }
-        
+
         self.topologyMode = topologyMode
+        self.sessionID = sessionID
         
         // In headset mode, use more conservative settings
         if topologyMode == .headset {
@@ -273,6 +280,7 @@ final class AudioSynchronizer {
                 // the correct delay immediately. Without seeding, currentDelaySamples starts
                 // at 0 and slews at ~2ms/sec — taking ~90s to reach a typical 175ms lead.
                 delayController.seed(delaySamples: renderLeadSamples)
+                seededDelaySamples = renderLeadSamples
                 logger.info("Synchronizer transitioned to stable from priming, seeded delay=\(renderLeadSamples)samples")
                 Task {
                     await DiagnosticLogger.shared.log(.aec,
@@ -294,6 +302,7 @@ final class AudioSynchronizer {
                 let renderLeadSamples = renderRing.available - captureRing.available
                 // Re-seed on recovery from unstable — the lead may have changed
                 delayController.seed(delaySamples: renderLeadSamples)
+                seededDelaySamples = renderLeadSamples
                 logger.info("Synchronizer transitioned to stable from unstable, seeded delay=\(renderLeadSamples)samples")
                 Task {
                     await DiagnosticLogger.shared.log(.aec,
@@ -412,6 +421,14 @@ final class AudioSynchronizer {
         defer { stateLock.unlock() }
         return Int(Double(delayController.currentDelaySamples) / Double(Self.sampleRate) * 1000)
     }
+
+    /// Last seeded delay in milliseconds (set at stable-transition). -1 if never seeded.
+    var seededDelayMs: Int {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if seededDelaySamples < 0 { return -1 }
+        return Int(Double(seededDelaySamples) / Double(Self.sampleRate) * 1000)
+    }
     
     /// Get current statistics
     func getStats() -> SynchronizerStats {
@@ -444,6 +461,7 @@ final class AudioSynchronizer {
         lastDiscontinuityTime = Date()
         outputSampleIndex = 0
         lastRenderHostTime = 0
+        seededDelaySamples = -1
 
         stats.discontinuities += 1
 
@@ -469,6 +487,7 @@ final class AudioSynchronizer {
         lastDiscontinuityTime = nil   // No cooldown for fresh session
         outputSampleIndex = 0
         lastRenderHostTime = 0
+        seededDelaySamples = -1
         stats = SynchronizerStats()   // Fresh stats
 
         logger.info("Synchronizer reset for new session")

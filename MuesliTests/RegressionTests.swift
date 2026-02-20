@@ -1336,4 +1336,170 @@ final class RegressionTests: XCTestCase {
         XCTAssertEqual(stats.lastStreamDelayMs, -1,
             "lastStreamDelayMs should be -1 before first setStreamDelayMs call")
     }
+
+    // MARK: - AudioSynchronizer Delay Path Regression Tests (Feb 2026)
+
+    /// Regression test: coarseDelayMs and seededDelayMs reflect the render lead at stable transition.
+    /// Bug: Without seeding, coarseDelayMs starts at 0 and slews at ~2ms/sec — AEC3 with
+    /// use_external_delay_estimator=true cannot converge because the delay hint is wrong for ~90s.
+    /// Fix: AudioSynchronizer.seed() is called at stable transition with the observed render lead.
+    func testSynchronizerDelayMatchesRenderLeadAtStableTransition() {
+        let config = AudioSynchronizer.TimingConfig(
+            minNoDiscontinuitySeconds: 0.0,
+            discontinuityDebounceSeconds: 0.0
+        )
+        let synchronizer = AudioSynchronizer(timingConfig: config)
+
+        let silence = [Float](repeating: 0, count: 480)
+
+        // Push 15 render frames (150ms lead) — within [100ms, 300ms] stable band
+        let renderFrameCount = 15
+        for i in 0..<renderFrameCount {
+            silence.withUnsafeBufferPointer { ptr in
+                synchronizer.pushRender(
+                    samples: ptr.baseAddress!, count: 480,
+                    sampleTime: Float64(i * 480), hostTime: 0
+                )
+            }
+        }
+
+        // Push 1 capture frame
+        silence.withUnsafeBufferPointer { ptr in
+            synchronizer.pushCapture(
+                samples: ptr.baseAddress!, count: 480,
+                sampleTime: 0, hostTime: 0
+            )
+        }
+
+        // Trigger stable transition via getAlignedFrame
+        let frame = synchronizer.getAlignedFrame()
+        XCTAssertNotNil(frame, "Should produce aligned frame with sufficient render lead")
+        XCTAssertEqual(synchronizer.state, .stable)
+
+        // The render lead at transition = renderAvailable - captureAvailable.
+        // After getAlignedFrame pops 1 capture frame, capture available = 0.
+        // Render available depends on how many samples were discarded during alignment,
+        // but seededDelayMs should reflect the lead at transition time.
+        // With 15 render frames (7200 samples) and 1 capture frame (480 samples),
+        // the lead was 7200 - 480 = 6720 samples = 140ms.
+        let expectedLeadSamples = (renderFrameCount * 480) - 480  // 6720
+        let expectedLeadMs = Int(Double(expectedLeadSamples) / 48000.0 * 1000)  // 140
+
+        XCTAssertEqual(synchronizer.seededDelayMs, expectedLeadMs,
+            "seededDelayMs should match the render lead at stable transition")
+        XCTAssertGreaterThan(synchronizer.coarseDelayMs, 0,
+            "coarseDelayMs should be non-zero after stable transition seeding")
+    }
+
+    // MARK: - CoarseDelayController Slew Rate Regression Test (Feb 2026)
+
+    /// Regression test: CoarseDelayController.update() respects the slew rate limit.
+    /// The slew rate is 48 samples/sec (1ms/sec at 48kHz). A large instantaneous change
+    /// in observed delay should NOT cause an instantaneous jump in currentDelaySamples.
+    /// Without slew limiting, AEC3's adaptive filter would see sudden delay discontinuities
+    /// that force a full re-convergence cycle.
+    func testCoarseDelayControllerSlewRateLimit() {
+        let controller = CoarseDelayController()
+
+        // Seed at 0, then try to jump to 4800 samples (100ms) via update()
+        // The deadband is 720 samples, so 4800 > 720 — update should apply slew limiting.
+        let targetDelay = 4800
+
+        // Call update once — the slew should limit the change
+        controller.update(observedDelaySamples: targetDelay)
+
+        // With maxSlewRateSamplesPerSecond = 48 and a small elapsed time (~microseconds),
+        // the max slew per tick should be very small (min 1 sample per update call).
+        // The key invariant: currentDelaySamples < targetDelay after a single update.
+        XCTAssertGreaterThan(controller.currentDelaySamples, 0,
+            "update() should move currentDelaySamples toward target")
+        XCTAssertLessThan(controller.currentDelaySamples, targetDelay,
+            "Single update() should not jump to target — slew rate must limit the change")
+
+        // Call update rapidly 10 times — total elapsed time is still small
+        for _ in 0..<10 {
+            controller.update(observedDelaySamples: targetDelay)
+        }
+
+        // After rapid updates with minimal elapsed time, the cumulative change should still
+        // be well below the target (each tick allows at most ~48 * elapsed_seconds samples)
+        XCTAssertLessThan(controller.currentDelaySamples, targetDelay / 2,
+            "Rapid updates with minimal elapsed time should not reach target — slew rate is bounded")
+    }
+
+    // MARK: - Session Reset vs ResetForNewSession Regression Test (Feb 2026)
+
+    /// Regression test: resetForNewSession() clears cooldown, reset() sets cooldown.
+    /// Bug: Using reset() between recordings carries over the discontinuity cooldown from
+    /// the previous session, causing a 5-second delay before the synchronizer can reach
+    /// stable state. resetForNewSession() was added to fix this — it sets
+    /// lastDiscontinuityTime = nil so canTransitionToStable() has no cooldown to wait for.
+    func testResetForNewSessionClearsCooldownWhileResetPreservesIt() {
+        let config = AudioSynchronizer.TimingConfig(
+            minNoDiscontinuitySeconds: 10.0,  // Long cooldown to make the difference observable
+            discontinuityDebounceSeconds: 0.0
+        )
+        let synchronizer = AudioSynchronizer(timingConfig: config)
+
+        let silence = [Float](repeating: 0, count: 480)
+
+        // Helper: push enough frames for stable transition (15 render + 1 capture)
+        func pushFramesForStable() {
+            for i in 0..<15 {
+                silence.withUnsafeBufferPointer { ptr in
+                    synchronizer.pushRender(
+                        samples: ptr.baseAddress!, count: 480,
+                        sampleTime: Float64(i * 480), hostTime: 0
+                    )
+                }
+            }
+            silence.withUnsafeBufferPointer { ptr in
+                synchronizer.pushCapture(
+                    samples: ptr.baseAddress!, count: 480,
+                    sampleTime: 0, hostTime: 0
+                )
+            }
+        }
+
+        // --- Test reset() path: cooldown blocks stable transition ---
+
+        // First, reach stable
+        pushFramesForStable()
+        _ = synchronizer.getAlignedFrame()
+        XCTAssertEqual(synchronizer.state, .stable, "Should reach stable initially")
+
+        // reset() sets lastDiscontinuityTime = Date(), creating a 10-second cooldown
+        synchronizer.reset()
+        XCTAssertEqual(synchronizer.state, .initializing)
+
+        // Push frames again — should NOT reach stable because cooldown is active
+        pushFramesForStable()
+        _ = synchronizer.getAlignedFrame()
+
+        // With minNoDiscontinuitySeconds=10 and only microseconds elapsed,
+        // canTransitionToStable() returns false (cooldown not elapsed)
+        XCTAssertNotEqual(synchronizer.state, .stable,
+            "reset() should set cooldown that blocks stable transition")
+
+        // --- Test resetForNewSession() path: no cooldown ---
+
+        synchronizer.resetForNewSession()
+        XCTAssertEqual(synchronizer.state, .initializing)
+
+        // Push frames — should reach stable immediately (no cooldown)
+        pushFramesForStable()
+        let frame = synchronizer.getAlignedFrame()
+
+        XCTAssertNotNil(frame, "resetForNewSession() should allow immediate stable transition")
+        XCTAssertEqual(synchronizer.state, .stable,
+            "resetForNewSession() should clear cooldown, allowing immediate stable transition")
+
+        // Verify stats were also cleared (fresh session)
+        let stats = synchronizer.getStats()
+        // Only 1 frame processed (from the getAlignedFrame call above)
+        XCTAssertLessThanOrEqual(stats.framesProcessed, 1,
+            "resetForNewSession() should clear framesProcessed")
+        XCTAssertEqual(stats.discontinuities, 0,
+            "resetForNewSession() should clear discontinuity count")
+    }
 }

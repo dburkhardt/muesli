@@ -56,8 +56,18 @@ final class AECProcessor {
     static let sampleRate: Int32 = 48000
     
     // MARK: - Properties
-    
+
     private let logger = Logger(subsystem: "com.muesli.app", category: "AECProcessor")
+
+    /// Session ID for log correlation (short 8-char UUID prefix, set via configure())
+    private var sessionID: String = "none"
+
+    /// Reference to the synchronizer for telemetry queries (seeded delay, stable state).
+    /// Set via configure(topology:sessionID:synchronizer:).
+    private weak var synchronizerRef: AudioSynchronizer?
+
+    /// Sustained delay-mismatch tracking for DELAY_MISMATCH warning.
+    private var delayMismatchStartFrame: Int64 = -1
 
     private struct State: @unchecked Sendable {
         var bridge: WebRTCAECBridge?
@@ -103,8 +113,15 @@ final class AECProcessor {
     }
     
     /// Configure AEC for device topology
-    /// - Parameter topology: Current device topology mode
-    func configure(topology: DeviceTopologyMode) {
+    /// - Parameters:
+    ///   - topology: Current device topology mode
+    ///   - sessionID: Short session UUID for log correlation (default "none")
+    ///   - synchronizer: AudioSynchronizer reference for telemetry queries (optional)
+    func configure(topology: DeviceTopologyMode, sessionID: String = "none", synchronizer: AudioSynchronizer? = nil) {
+        self.sessionID = sessionID
+        self.synchronizerRef = synchronizer
+        self.delayMismatchStartFrame = -1
+
         let logMode = stateLock.withLock { state -> AECMode in
             state.topologyMode = topology
 
@@ -133,9 +150,10 @@ final class AECProcessor {
             logger.info("AEC mode: CONSERVATIVE (unknown topology)")
         }
 
+        let logSessionID = self.sessionID
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "AEC_CONFIG: mode=\(logMode), topology=\(topology)")
+                "session=\(logSessionID) AEC_CONFIG: mode=\(logMode), topology=\(topology)")
         }
     }
     
@@ -194,9 +212,10 @@ final class AECProcessor {
         }
 
         if result.shouldLogGatingChange {
+            let logSessionID = self.sessionID
             Task {
                 await DiagnosticLogger.shared.log(.aec,
-                    "AEC_GATING: frozen=\(result.logFrozen), stable=\(isStable)")
+                    "session=\(logSessionID) AEC_GATING: frozen=\(result.logFrozen), stable=\(isStable)")
             }
         }
 
@@ -259,9 +278,10 @@ final class AECProcessor {
         }
 
         if result.shouldLogGatingChange {
+            let logSessionID = self.sessionID
             Task {
                 await DiagnosticLogger.shared.log(.aec,
-                    "AEC_GATING: frozen=\(result.logFrozen), stable=\(isStable)")
+                    "session=\(logSessionID) AEC_GATING: frozen=\(result.logFrozen), stable=\(isStable)")
             }
         }
 
@@ -280,9 +300,10 @@ final class AECProcessor {
         }
         
         logger.info("AEC adaptation frozen")
-        
+
+        let logSessionID = self.sessionID
         Task {
-            await DiagnosticLogger.shared.log(.aec, "AEC_FREEZE")
+            await DiagnosticLogger.shared.log(.aec, "session=\(logSessionID) AEC_FREEZE")
         }
     }
     
@@ -294,9 +315,10 @@ final class AECProcessor {
         }
         
         logger.info("AEC adaptation unfrozen")
-        
+
+        let logSessionID = self.sessionID
         Task {
-            await DiagnosticLogger.shared.log(.aec, "AEC_UNFREEZE")
+            await DiagnosticLogger.shared.log(.aec, "session=\(logSessionID) AEC_UNFREEZE")
         }
     }
     
@@ -332,9 +354,10 @@ final class AECProcessor {
 
         let statsErle = statsSnapshot.erleDb
         let statsDelay = statsSnapshot.delayMs
+        let logSessionID = self.sessionID
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "AEC_RESET: erle=\(statsErle)dB, delay=\(statsDelay)ms")
+                "session=\(logSessionID) AEC_RESET: erle=\(statsErle)dB, delay=\(statsDelay)ms")
         }
     }
     
@@ -357,6 +380,7 @@ final class AECProcessor {
 
     /// Log AEC telemetry at a regular interval (call from worker loop).
     /// Logs ERLE, delay estimate, mode, feed counts, and signal RMS every `intervalFrames` capture frames.
+    /// Also fires early at frame 100 (~1s) and 200 (~2s) for fast diagnostics.
     /// - Parameters:
     ///   - workerStats: Optional AudioWorkerStats for render lead distribution.
     ///   - renderRmsLinear: Rolling RMS of the render (far-end) signal (linear scale).
@@ -370,7 +394,11 @@ final class AECProcessor {
         let shouldLog: Bool
         let intervalFrames: Int64 = 1000  // ~10 seconds at 100 frames/sec
 
-        if stats.framesProcessed - lastTelemetryFrameCount >= intervalFrames {
+        // Early-fire at frame 100 (~1s) and 200 (~2s) for fast diagnostics
+        let earlyFire = (lastTelemetryFrameCount < 100 && stats.framesProcessed >= 100)
+            || (lastTelemetryFrameCount < 200 && stats.framesProcessed >= 200)
+
+        if earlyFire || stats.framesProcessed - lastTelemetryFrameCount >= intervalFrames {
             lastTelemetryFrameCount = stats.framesProcessed
             shouldLog = true
         } else {
@@ -383,7 +411,21 @@ final class AECProcessor {
         let renderRmsDb = renderRmsLinear > 0 ? 20.0 * log10(renderRmsLinear) : -96.0
         let captureRmsDb = captureRmsLinear > 0 ? 20.0 * log10(captureRmsLinear) : -96.0
 
-        var msg = "AEC_TELEMETRY: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
+        // Query synchronizer for seeded delay and stable state
+        let syncSeededDelayMs: Int
+        let syncIsStable: Bool
+        let syncDelayMs: Int
+        if let sync = synchronizerRef {
+            syncSeededDelayMs = sync.seededDelayMs
+            syncIsStable = sync.isStable
+            syncDelayMs = sync.coarseDelayMs
+        } else {
+            syncSeededDelayMs = -1
+            syncIsStable = false
+            syncDelayMs = -1
+        }
+
+        var msg = "session=\(sessionID) AEC_TELEMETRY: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
         msg += ", delay=\(stats.delayMs)ms"
         msg += ", streamDelay=\(stats.lastStreamDelayMs)ms"
         msg += ", mode=\(stats.currentMode)"
@@ -392,6 +434,8 @@ final class AECProcessor {
         msg += ", frozen=\(stats.adaptationFrozen)"
         msg += ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
         msg += ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
+        msg += ", seededDelay=\(syncSeededDelayMs)ms"
+        msg += ", stable=\(syncIsStable)"
 
         if let ws = workerStats {
             msg += ", renderLead=\(ws.renderLeadFrames)frames"
@@ -400,6 +444,40 @@ final class AECProcessor {
 
         Task {
             await DiagnosticLogger.shared.log(.aec, msg)
+        }
+
+        // DELAY_AUDIT: compare bridge delay vs synchronizer delay
+        let bridgeDelayMs = stats.delayMs
+        let delta = bridgeDelayMs - syncDelayMs
+        let auditMsg = "session=\(sessionID) DELAY_AUDIT: bridgeDelayMs=\(bridgeDelayMs)"
+            + ", synchronizerDelayMs=\(syncDelayMs)"
+            + ", delta=\(delta)ms"
+        Task {
+            await DiagnosticLogger.shared.log(.aec, auditMsg)
+        }
+
+        // DELAY_MISMATCH: warn when |sync - bridge| > 20ms sustained for >3s with healthy RMS
+        let mismatchThresholdMs = 20
+        let mismatchSustainedFrames: Int64 = 300  // ~3 seconds at 100 frames/sec
+        let hasHealthyRms = renderRmsLinear > 0.001 && captureRmsLinear > 0.001
+        if abs(delta) > mismatchThresholdMs && hasHealthyRms {
+            if delayMismatchStartFrame < 0 {
+                delayMismatchStartFrame = stats.framesProcessed
+            }
+            let sustained = stats.framesProcessed - delayMismatchStartFrame
+            if sustained >= mismatchSustainedFrames {
+                let warnMsg = "session=\(sessionID) DELAY_MISMATCH: |sync-bridge|=\(abs(delta))ms"
+                    + " sustained \(String(format: "%.1f", Double(sustained) / 100.0))s"
+                    + ", bridgeDelayMs=\(bridgeDelayMs)"
+                    + ", synchronizerDelayMs=\(syncDelayMs)"
+                    + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
+                    + ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
+                Task {
+                    await DiagnosticLogger.shared.log(.aec, warnMsg)
+                }
+            }
+        } else {
+            delayMismatchStartFrame = -1
         }
 
         // Detect stable-but-non-converging condition:
@@ -416,7 +494,7 @@ final class AECProcessor {
             && stats.erleDb < erleThresholdDb
             && renderRmsLinear > 0.001  // render has actual signal (not silence)
         {
-            let nonConvergingMsg = "AEC_NONCONVERGING: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
+            let nonConvergingMsg = "session=\(sessionID) AEC_NONCONVERGING: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
                 + " after \(stats.framesProcessed) frames"
                 + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
                 + ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
@@ -462,11 +540,12 @@ final class AECProcessor {
             logger.error("Failed to initialize AEC: \(error.localizedDescription)")
         }
 
+        let logSessionID = self.sessionID
         Task {
             if initSucceeded {
-                await DiagnosticLogger.shared.log(.aec, "AEC_INIT: WebRTC AEC3")
+                await DiagnosticLogger.shared.log(.aec, "session=\(logSessionID) AEC_INIT: WebRTC AEC3")
             } else if let msg = initErrorMsg {
-                await DiagnosticLogger.shared.log(.aec, "AEC_INIT_FAILED: \(msg)")
+                await DiagnosticLogger.shared.log(.aec, "session=\(logSessionID) AEC_INIT_FAILED: \(msg)")
             }
         }
     }

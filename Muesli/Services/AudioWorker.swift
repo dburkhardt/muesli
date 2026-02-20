@@ -105,6 +105,24 @@ final class AudioWorker {
     private var captureRmsAccumulator: Double = 0
     private var rmsFrameCount: Int = 0
 
+    /// Render-silence detection for AEC freeze/reset.
+    /// Counts consecutive render frames with RMS < silenceThreshold.
+    private var consecutiveSilentRenderFrames: Int64 = 0
+    /// Number of capture frames processed while render was silent.
+    private var captureFramesDuringRenderSilence: Int64 = 0
+    /// Whether AEC is currently frozen due to prolonged render silence.
+    private var renderSilenceFrozen: Bool = false
+    /// Render silence threshold (linear RMS).
+    private static let renderSilenceThreshold: Float = 0.001
+    /// Frames of silence before freezing AEC (5 seconds at 10ms/frame = 500 frames).
+    private static let renderSilenceFreezeFrames: Int64 = 500
+    /// Milestone for TAP_RENDER_SILENT log at 30s.
+    private static let renderSilence30sFrames: Int64 = 3000
+    /// Whether 5s silence milestone was already logged.
+    private var loggedSilence5s: Bool = false
+    /// Whether 30s silence milestone was already logged.
+    private var loggedSilence30s: Bool = false
+
     /// Circular buffer for processing time history (O(1) insert, no heap allocs after init).
     private let processingTimeHistorySize = 100
     private var processingTimesRing: [Double]
@@ -226,6 +244,11 @@ final class AudioWorker {
         renderRmsAccumulator = 0
         captureRmsAccumulator = 0
         rmsFrameCount = 0
+        consecutiveSilentRenderFrames = 0
+        captureFramesDuringRenderSilence = 0
+        renderSilenceFrozen = false
+        loggedSilence5s = false
+        loggedSilence30s = false
         processingTimesWriteIndex = 0
         processingTimesCount = 0
 
@@ -297,6 +320,59 @@ final class AudioWorker {
                 let renderRms = computeRMS(renderFrameBuffer)
                 renderRmsAccumulator += Double(renderRms)
                 rmsFrameCount += 1
+
+                // Track render silence for AEC freeze/reset
+                if renderRms < Self.renderSilenceThreshold {
+                    consecutiveSilentRenderFrames += 1
+
+                    // Freeze AEC at 5s of silence to prevent filter corruption
+                    if consecutiveSilentRenderFrames >= Self.renderSilenceFreezeFrames && !renderSilenceFrozen {
+                        renderSilenceFrozen = true
+                        aecProcessor.freezeAdaptation()
+                        logger.warning("Render silent for 5s — freezing AEC adaptation")
+                    }
+
+                    // Log TAP_RENDER_SILENT at milestones
+                    if consecutiveSilentRenderFrames >= Self.renderSilenceFreezeFrames && !loggedSilence5s {
+                        loggedSilence5s = true
+                        let silentMs = consecutiveSilentRenderFrames * 10
+                        let captDuring = captureFramesDuringRenderSilence
+                        Task {
+                            await DiagnosticLogger.shared.log(.aec,
+                                "TAP_RENDER_SILENT: silentMs=\(silentMs), captureActive=true, captureFramesDuringSilence=\(captDuring)")
+                        }
+                    }
+                    if consecutiveSilentRenderFrames >= Self.renderSilence30sFrames && !loggedSilence30s {
+                        loggedSilence30s = true
+                        let silentMs = consecutiveSilentRenderFrames * 10
+                        let captDuring = captureFramesDuringRenderSilence
+                        Task {
+                            await DiagnosticLogger.shared.log(.aec,
+                                "TAP_RENDER_SILENT: silentMs=\(silentMs), captureActive=true, captureFramesDuringSilence=\(captDuring)")
+                        }
+                    }
+                } else if consecutiveSilentRenderFrames >= Self.renderSilenceFreezeFrames {
+                    // Render resumed after prolonged silence — reset AEC and unfreeze
+                    let silentFrames = consecutiveSilentRenderFrames
+                    let silentMs = silentFrames * 10
+                    let captDuring = captureFramesDuringRenderSilence
+                    aecProcessor.reset()
+                    aecProcessor.unfreezeAdaptation()
+                    renderSilenceFrozen = false
+                    consecutiveSilentRenderFrames = 0
+                    captureFramesDuringRenderSilence = 0
+                    loggedSilence5s = false
+                    loggedSilence30s = false
+                    logger.info("Render resumed after \(silentMs)ms silence — AEC reset")
+                    Task {
+                        await DiagnosticLogger.shared.log(.aec,
+                            "AEC_RENDER_RESUME: silentFrames=\(silentFrames), silentMs=\(silentMs), captureFramesDuringSilence=\(captDuring)")
+                    }
+                } else {
+                    // Short silence ended, just reset counter
+                    consecutiveSilentRenderFrames = 0
+                    captureFramesDuringRenderSilence = 0
+                }
             }
         }
 
@@ -316,15 +392,26 @@ final class AudioWorker {
             let captureRms = computeRMS(captureFrameBuffer)
             captureRmsAccumulator += Double(captureRms)
 
+            // Track capture frames during render silence
+            if consecutiveSilentRenderFrames > 0 {
+                captureFramesDuringRenderSilence += 1
+            }
+
             let processStart = DispatchTime.now()
             let processedCapture: [Float]
             if aecEnabled {
-                // Set render-to-capture delay before each capture frame.
-                // AEC3 compiled with use_external_delay_estimator=true requires this call
-                // to know the acoustic echo path delay. Without it, AEC3 assumes delay=0
-                // and cannot converge — ERLE stays pinned at ~0 dB regardless of signal quality.
-                let delayMs = synchronizer.coarseDelayMs
-                let delaySet = aecProcessor.setStreamDelayMs(delayMs)
+                // Pass 0 as the stream delay hint to AEC3.
+                //
+                // The synchronizer's coarseDelayMs measures the render-ring priming lead
+                // (~130-175ms) — a pipeline buffering artifact, not the acoustic echo path
+                // delay (typically 5-30ms). Passing the priming lead to set_stream_delay_ms()
+                // causes AEC3's adaptive filter to misalign by ~150ms, preventing convergence.
+                //
+                // With delay=0, AEC3 uses its own internal cross-correlation estimator to find
+                // the true acoustic lag. The render priming lead still ensures render frames
+                // arrive before capture frames for correct temporal alignment — we just don't
+                // misreport pipeline depth as acoustic delay.
+                let delaySet = aecProcessor.setStreamDelayMs(0)
                 if !delaySet {
                     lock.lock()
                     stats.framesMissed += 1

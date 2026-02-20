@@ -163,6 +163,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// File output drain timer task handle.
     private var fileOutputDrainTask: Task<Void, Never>?
 
+    /// Current session ID for log correlation (short 8-char UUID prefix)
+    private var currentSessionID: String = "none"
+
     // MARK: - Callbacks
 
     private var bufferHandler: AudioBufferHandler?
@@ -304,10 +307,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
 
         // Configure synchronizer and AEC for topology
+        currentSessionID = String(UUID().uuidString.prefix(8))
         synchronizer.resetForNewSession()
         aecProcessor.reset()
-        synchronizer.configure(topologyMode: topologyMode)
-        aecProcessor.configure(topology: topologyMode)
+        synchronizer.configure(topologyMode: topologyMode, sessionID: currentSessionID)
+        aecProcessor.configure(topology: topologyMode, sessionID: currentSessionID, synchronizer: synchronizer)
         resetAECRingsAndCounters()
 
         // Set up route change listener
@@ -989,8 +993,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         if newTopology != topologyMode {
             topologyMode = newTopology
-            synchronizer.configure(topologyMode: newTopology)
-            aecProcessor.configure(topology: newTopology)
+            synchronizer.configure(topologyMode: newTopology, sessionID: currentSessionID)
+            aecProcessor.configure(topology: newTopology, sessionID: currentSessionID, synchronizer: synchronizer)
         }
 
         // Reset synchronizer to handle the discontinuity
