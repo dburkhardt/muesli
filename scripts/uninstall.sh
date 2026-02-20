@@ -915,7 +915,8 @@ show_summary() {
         echo ""
     fi
     
-    # TCC Permissions (always reset — entries may exist even without apundles)
+    # TCC Permissions (always reset — entries may exist even without bundles)
+    has_items=1
     echo "  TCC Permissions:"
     local tcc_ids=()
     for idx in "${SELECTED_BUNDLES[@]}"; do
@@ -933,18 +934,19 @@ show_summary() {
     echo ""
 
     # UserDefaults
-    if [ ${#SELECTED_BUNDLES[@]} -gt 0 ]; then
-        echo "  UserDefaults:"
-        local unique_ids=()
-        for idx in "${SELECTED_BUNDLES[@]}"; do
-            local bundle_id="${APP_BUNDLE_IDS[$idx]}"
-            if [[ ! " ${unique_ids[@]} " =~ " ${bundle_id} " ]]; then
-                unique_ids+=("$bundle_id")
-                echo "    - $bundle_id"
-            fi
-        done
-        echo ""
+    echo "  UserDefaults:"
+    local unique_ids=()
+    for idx in "${SELECTED_BUNDLES[@]}"; do
+        local bundle_id="${APP_BUNDLE_IDS[$idx]}"
+        if [[ ! " ${unique_ids[@]} " =~ " ${bundle_id} " ]]; then
+            unique_ids+=("$bundle_id")
+            echo "    - $bundle_id"
+        fi
+    done
+    if [ ${#unique_ids[@]} -eq 0 ]; then
+        echo "    - com.muesli.app"
     fi
+    echo ""
     
     # Recordings
     if [ "$RECORDING_ACTION" = "move" ] && [ -n "$RECORDING_DESTINATION" ]; then
