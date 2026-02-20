@@ -76,6 +76,13 @@ final class MuesliViewModel {
         modelManager.isActiveModelReady
     }
 
+    /// Whether recording can be started — true when any model is ready.
+    /// A compiling active model does NOT block start if another model is ready.
+    var canStartRecording: Bool {
+        guard activeSession == nil else { return false }
+        return modelManager.hasAnyReadyModel
+    }
+
     /// Whether any model (WhisperKit or LLM) is currently downloading
     var isAnyModelDownloading: Bool {
         modelManager.isAnyModelDownloading || llmManager.isAnyModelDownloading

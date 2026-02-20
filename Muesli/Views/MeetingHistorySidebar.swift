@@ -75,7 +75,7 @@ struct MeetingHistorySidebar: View {
                 },
                 label: {
                     HStack(spacing: 4) {
-                        if !viewModel.isActiveModelReady && viewModel.activeSession == nil {
+                        if !viewModel.modelManager.hasAnyReadyModel && viewModel.activeSession == nil {
                             ProgressView()
                                 .controlSize(.mini)
                                 .scaleEffect(0.7)
@@ -96,7 +96,7 @@ struct MeetingHistorySidebar: View {
                 }
             )
             .buttonStyle(.plain)
-            .disabled(viewModel.activeSession != nil || !viewModel.isActiveModelReady)
+            .disabled(!viewModel.canStartRecording)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

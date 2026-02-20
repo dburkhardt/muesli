@@ -111,6 +111,8 @@ protocol ModelManagerProtocol: AnyObject {
     var modelPath: URL? { get }
     var hasModel: Bool { get }
     var isActiveModelReady: Bool { get }
+    var hasAnyReadyModel: Bool { get }
+    var firstReadyModel: ModelManager.ModelSize? { get }
     var modelDirectory: URL { get }
 
     func pathForModel(_ model: ModelManager.ModelSize) -> URL?

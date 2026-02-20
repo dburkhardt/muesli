@@ -22,7 +22,16 @@ final class MockModelManager: ModelManagerProtocol, @unchecked Sendable {
         guard let active = activeModel else { return false }
         return downloadStates[active] == .completed
     }
-    
+
+    var hasAnyReadyModel: Bool {
+        downloadStates.values.contains { $0 == .completed }
+    }
+
+    var firstReadyModel: ModelManager.ModelSize? {
+        if let active = activeModel, downloadStates[active] == .completed { return active }
+        return ModelManager.ModelSize.allCases.first { downloadStates[$0] == .completed }
+    }
+
     var modelDirectory: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("MockMuesliModels")
     }

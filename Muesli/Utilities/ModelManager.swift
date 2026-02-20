@@ -119,7 +119,18 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         guard let active = activeModel else { return false }
         return downloadStates[active] == .completed
     }
-    
+
+    /// Whether any downloaded model is fully ready (downloaded AND compiled)
+    var hasAnyReadyModel: Bool {
+        downloadStates.values.contains { $0 == .completed }
+    }
+
+    /// First model in `.completed` state, preferring the active model
+    var firstReadyModel: ModelManager.ModelSize? {
+        if let active = activeModel, downloadStates[active] == .completed { return active }
+        return ModelManager.ModelSize.allCases.first { downloadStates[$0] == .completed }
+    }
+
     // MARK: - Storage Keys (use centralized AppStorageKeys)
     
     // MARK: - Initialization

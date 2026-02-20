@@ -79,6 +79,7 @@
 		B1000027241D1A1D00000044 /* PermissionManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000028241D1A1D00000044 /* PermissionManagerTests.swift */; };
 		B1000029241D1A1D00000045 /* MicrophoneManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000030241D1A1D00000045 /* MicrophoneManagerTests.swift */; };
 		B1000031241D1A1D00000046 /* MeetingHistoryServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000032241D1A1D00000046 /* MeetingHistoryServiceTests.swift */; };
+		MM00001241D1A1D00000051 /* ModelManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MM00002241D1A1D00000051 /* ModelManagerTests.swift */; };
 		B9B34DC6BB1FC3C4008155BC /* AudioTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11744CAB97AEED154448FD67 /* AudioTypes.swift */; };
 		'BI00001241D1A1D00000103' = {isa = PBXBuildFile; fileRef = BI00002241D1A1D00000103; };
 		C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000002241D1A1D00000050 /* PreferencesManager.swift */; };
@@ -197,6 +198,7 @@
 		B1000028241D1A1D00000044 /* PermissionManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManagerTests.swift; sourceTree = "<group>"; };
 		B1000030241D1A1D00000045 /* MicrophoneManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophoneManagerTests.swift; sourceTree = "<group>"; };
 		B1000032241D1A1D00000046 /* MeetingHistoryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryServiceTests.swift; sourceTree = "<group>"; };
+		MM00002241D1A1D00000051 /* ModelManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManagerTests.swift; sourceTree = "<group>"; };
 		'BI00002241D1A1D00000103' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildInfo.swift; sourceTree = "<group>"; };
 		C1000002241D1A1D00000050 /* PreferencesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManager.swift; sourceTree = "<group>"; };
 		C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryManager.swift; sourceTree = "<group>"; };
@@ -428,6 +430,7 @@
 				B1000028241D1A1D00000044 /* PermissionManagerTests.swift */,
 				B1000030241D1A1D00000045 /* MicrophoneManagerTests.swift */,
 				B1000032241D1A1D00000046 /* MeetingHistoryServiceTests.swift */,
+				MM00002241D1A1D00000051 /* ModelManagerTests.swift */,
 				EC00002241D1A1D00000047,
 				CA00002241D1A1D00000048,
 				TPT0002241D1A1D00000049,
@@ -761,6 +764,7 @@
 				B1000027241D1A1D00000044 /* PermissionManagerTests.swift in Sources */,
 				B1000029241D1A1D00000045 /* MicrophoneManagerTests.swift in Sources */,
 				B1000031241D1A1D00000046 /* MeetingHistoryServiceTests.swift in Sources */,
+				MM00001241D1A1D00000051 /* ModelManagerTests.swift in Sources */,
 				EC00001241D1A1D00000047,
 				CA00001241D1A1D00000048,
 				TPT0001241D1A1D00000049,
