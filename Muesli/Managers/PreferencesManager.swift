@@ -254,7 +254,7 @@ final class PreferencesManager {
         }
 
         #if DEBUG
-        _isEchoCancellationEnabled = savedValue
+        let effectiveValue = savedValue
         #else
         // Release: force AEC on, migrating stale false values from prior RC/beta installs
         if !savedValue {
@@ -266,10 +266,11 @@ final class PreferencesManager {
                 }
             }
         }
-        _isEchoCancellationEnabled = true
+        let effectiveValue = true
         #endif
 
-        echoCancellationLock.withLock { $0 = _isEchoCancellationEnabled }
+        _isEchoCancellationEnabled = effectiveValue
+        echoCancellationLock.withLock { $0 = effectiveValue }
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()
