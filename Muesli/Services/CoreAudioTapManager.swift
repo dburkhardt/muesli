@@ -203,13 +203,22 @@ final class CoreAudioTapManager: @unchecked Sendable {
     func stop() {
         stateLock.lock()
         defer { stateLock.unlock() }
-        
+
         guard state == .running || state == .initializing else {
             return
         }
-        
+
         cleanupTap()
         state = .idle
+
+        // Reset IOProc counters for the next session
+        ioProcCallCount = 0
+        ioProcNilDataCount = 0
+        ioProcNoBuffersCount = 0
+        ioProcNilMDataCount = 0
+        ioProcSuccessCount = 0
+        hasLoggedFirstAudio = false
+
         logger.info("Tap stopped")
     }
     
@@ -289,13 +298,16 @@ final class CoreAudioTapManager: @unchecked Sendable {
             ioProcID = nil
             throw CoreAudioTapError.deviceStartFailed
         }
-        
+
+        deviceStartTime = CFAbsoluteTimeGetCurrent()
+        hasLoggedFirstAudio = false
+
         print("[TAP DEBUG] Device started successfully")
     }
     
     /// Counter for IOProc calls (for debugging)
     private var ioProcCallCount: Int = 0
-    
+
     /// Debug state tracking for IOProc
     private var ioProcNilDataCount: Int = 0
     private var ioProcNoBuffersCount: Int = 0
@@ -303,6 +315,12 @@ final class CoreAudioTapManager: @unchecked Sendable {
     private var ioProcSuccessCount: Int = 0
     private var lastFrameCount: UInt32 = 0
     private var lastChannelCount: UInt32 = 0
+
+    /// Time at which the IOProc was started (for first-audio latency measurement)
+    private var deviceStartTime: CFAbsoluteTime = 0
+
+    /// Whether the first non-silent frame has been observed (for settling latency log)
+    private var hasLoggedFirstAudio: Bool = false
     
     /// Handle IOProc callback
     /// RT-SAFE CHECKLIST (per plan Phase 4):
@@ -348,15 +366,47 @@ final class CoreAudioTapManager: @unchecked Sendable {
         ioProcSuccessCount += 1
         lastFrameCount = frameCount
         lastChannelCount = buffer.mNumberChannels
-        
+
         // Extract timing info (validate sampleTime flag; use -1 sentinel when invalid)
         let sampleTimeValid = (inputTime.pointee.mFlags.rawValue & AudioTimeStampFlags.sampleTimeValid.rawValue) != 0
         let sampleTime = sampleTimeValid ? inputTime.pointee.mSampleTime : Float64(-1)
         let hostTime = inputTime.pointee.mHostTime
-        
+
         // Update RMS for monitoring (simple moving average)
         updateRMS(samples: samples, frameCount: Int(frameCount), channels: Int(buffer.mNumberChannels))
-        
+
+        // Log the latency from device start to first non-silent audio frame.
+        // This measures how long macOS takes to route audio to a new aggregate device —
+        // the core metric needed to prove/disprove the probe-interference hypothesis.
+        // -96 dBFS corresponds to rollingRMS ≈ 0 (effectively silence).
+        if !hasLoggedFirstAudio && rollingRMS > 0.001 {
+            hasLoggedFirstAudio = true
+            let latencyMs = (CFAbsoluteTimeGetCurrent() - deviceStartTime) * 1000
+            let callsBeforeAudio = ioProcSuccessCount
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "TAP_FIRST_AUDIO: latencyMs=\(String(format: "%.0f", latencyMs))"
+                    + ", ioProcCallsBeforeAudio=\(callsBeforeAudio)"
+                    + ", rms=\(String(format: "%.4f", self.rollingRMS))")
+            }
+        }
+
+        // Log IOProc call counts at 5s intervals to distinguish "called but silent"
+        // from "not called at all" during the probe-interference window.
+        if ioProcSuccessCount == 50 || ioProcSuccessCount == 100 || ioProcSuccessCount == 500 {
+            let callCount = ioProcSuccessCount
+            let rms = rollingRMS
+            let latencyMs = (CFAbsoluteTimeGetCurrent() - deviceStartTime) * 1000
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "TAP_IOPROC_STATS: calls=\(callCount)"
+                    + ", rms=\(String(format: "%.4f", rms))"
+                    + ", uptimeMs=\(String(format: "%.0f", latencyMs))"
+                    + ", nilData=\(self.ioProcNilDataCount)"
+                    + ", noBuffers=\(self.ioProcNoBuffersCount)")
+            }
+        }
+
         // Call the audio callback
         audioCallback?(samples, frameCount, sampleTime, hostTime)
     }
