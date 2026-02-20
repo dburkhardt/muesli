@@ -313,6 +313,24 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         // Set up route change listener
         setupRouteChangeListener()
 
+        // Brief settling delay before starting the tap.
+        // A permission probe tap (from handleDidBecomeActive or pre-recording permission check)
+        // may have run just before this point. Although the probe calls AudioDeviceStop +
+        // AudioDeviceDestroyIOProcID + destroyDevice() synchronously, macOS releases the
+        // audio hardware route asynchronously. If the recording tap starts too quickly,
+        // it races with the still-live probe aggregate device and receives silence on its
+        // render ring for ~20 seconds — preventing AEC3 from converging.
+        // 300ms is enough for macOS to complete the async aggregate device teardown.
+        do {
+            try await Task.sleep(for: .milliseconds(300))
+        } catch {
+            if let token = routeChangeToken {
+                CoreAudioHelpers.removeRouteChangeListener(token)
+                routeChangeToken = nil
+            }
+            throw error
+        }
+
         // Start the tap for system audio
         do {
             print("[TAP DEBUG] Calling tapManager.start()...")

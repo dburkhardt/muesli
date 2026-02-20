@@ -80,6 +80,12 @@ final class PermissionManager: PermissionManagerProtocol {
     /// Tracks whether a system-audio permission probe is currently running
     private var systemAudioProbeTask: Task<Bool, Never>?
 
+    /// Set to true by RecordingController when a recording session is active.
+    /// The background re-probe in handleDidBecomeActive() is suppressed while recording
+    /// to prevent the probe's aggregate device from interfering with the recording tap's
+    /// audio hardware route (root cause of "stable but non-converging" AEC failure).
+    var isActivelyRecording: Bool = false
+
     /// Exposes probe-in-flight state for UI gating
     var isSystemAudioProbeInFlight: Bool {
         systemAudioProbeTask != nil
@@ -136,6 +142,19 @@ final class PermissionManager: PermissionManagerProtocol {
             // Background re-probe: converge the tap permission cache with reality.
             // The cached UserDefaults key may be stale if the user granted/revoked
             // permission externally via System Settings.
+            //
+            // SUPPRESSED during active recording: the probe creates a temporary aggregate
+            // device that competes with the recording tap for the audio hardware route.
+            // This causes the recording tap's render ring to receive silence for ~20 seconds,
+            // preventing AEC3 from converging (ERLE stays pinned at ~0.2 dB).
+            guard !isActivelyRecording else {
+                Task {
+                    await DiagnosticLogger.shared.log(.permission,
+                        "Background re-probe skipped — recording in progress")
+                }
+                return
+            }
+
             Task { @MainActor in
                 let probeResult = await self.triggerSystemAudioPermissionPrompt()
                 let cachedValue = UserDefaults.standard.bool(forKey: self.systemAudioPermissionDefaultsKey)

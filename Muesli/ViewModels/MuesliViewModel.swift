@@ -595,8 +595,19 @@ final class MuesliViewModel {
         transcriptionCoordinator.setTranscriptionMode(transcriptionMode)
         
         // Wire up RecordingController callbacks to ViewModel state
+        self.recordingController.onSessionStarted = { [weak self] _ in
+            // Suppress the background permission re-probe while recording.
+            // The probe creates a temporary aggregate device that competes with the
+            // recording tap for the audio hardware route, starving AEC3's render ring
+            // for ~20 seconds and preventing echo cancellation convergence.
+            self?.permissionManager.isActivelyRecording = true
+        }
+
         self.recordingController.onSessionCompleted = { [weak self] _, outputDirectory in
             guard let self = self else { return }
+
+            // Re-enable the background permission re-probe now that recording has ended.
+            self.permissionManager.isActivelyRecording = false
             
             // Refresh history first to ensure the new meeting is available
             self.refreshMeetingHistory()
