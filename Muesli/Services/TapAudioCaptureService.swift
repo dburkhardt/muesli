@@ -430,14 +430,24 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         logger.info("Tap-based audio capture started")
 
         let logTopology = self.topologyMode
-        let logAECEnabled = isAECEnabled()
+        let logAECRequested = isAECEnabled()
+        #if DEBUG
+        let logBuild = "DEBUG"
+        let logAECEffective = logAECRequested
+        if UserDefaults.standard.bool(forKey: "aecDebugForceOff") && !logAECRequested {
+            logger.warning("AEC_DEBUG_OVERRIDE_ACTIVE: AEC forced off via aecDebugForceOff defaults key")
+        }
+        #else
+        let logBuild = "RELEASE"
+        let logAECEffective = true
+        #endif
         // Detect if this session started after permission recovery: the UserDefaults key was
         // previously unset (false) and was just written to true by the tap-start code above.
         // We read it here after the tap succeeded, so it reflects the real post-recovery state.
         let logPermissionWasCached = UserDefaults.standard.object(forKey: "systemAudioPermissionGranted") != nil
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "TAP_CAPTURE_START: topology=\(logTopology), aecEnabled=\(logAECEnabled), permissionWasCached=\(logPermissionWasCached)")
+                "TAP_CAPTURE_START: topology=\(logTopology), aecRequested=\(logAECRequested), aecEffective=\(logAECEffective), build=\(logBuild), permissionWasCached=\(logPermissionWasCached)")
         }
     }
 

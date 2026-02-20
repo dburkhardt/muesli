@@ -431,10 +431,14 @@ struct RecordingDetailView: View {
             
             Divider()
             
-            // Echo Cancellation toggle
+            #if DEBUG
             Toggle(isOn: $viewModel.isEchoCancellationEnabled) {
                 Text("Echo Cancellation")
             }
+            #else
+            Text("Echo Cancellation (Auto)")
+                .foregroundStyle(.secondary)
+            #endif
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "gearshape.fill")

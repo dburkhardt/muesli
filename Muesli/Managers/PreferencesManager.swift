@@ -134,7 +134,12 @@ final class PreferencesManager {
     
     /// Thread-safe getter for audio callbacks (nonisolated)
     nonisolated var echoCancellationEnabledForAudioCallback: Bool {
-        echoCancellationLock.withLock { $0 }
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: AppStorageKeys.aecDebugForceOff) {
+            return false
+        }
+        #endif
+        return echoCancellationLock.withLock { $0 }
     }
     
     // MARK: - AEC Delay Mode
@@ -231,6 +236,12 @@ final class PreferencesManager {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.exportDirectory)
     }
     
+    /// Testable pure function: given the stored preference value and build mode,
+    /// returns the effective AEC enabled state. In Release, always returns true.
+    static func effectiveAECEnabled(storedValue: Bool, isRelease: Bool) -> Bool {
+        isRelease ? true : storedValue
+    }
+
     // MARK: - Initialization
 
     init() {
@@ -241,8 +252,24 @@ final class PreferencesManager {
         } else {
             savedValue = true  // Default: AEC enabled for new installations
         }
+
+        #if DEBUG
         _isEchoCancellationEnabled = savedValue
-        echoCancellationLock.withLock { $0 = savedValue }
+        #else
+        // Release: force AEC on, migrating stale false values from prior RC/beta installs
+        if !savedValue {
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.echoCancellationEnabled)
+            if !UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone) {
+                UserDefaults.standard.set(true, forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+                Task {
+                    await DiagnosticLogger.shared.log(.aec, "AEC_PREF_MIGRATED_FALSE_TO_TRUE")
+                }
+            }
+        }
+        _isEchoCancellationEnabled = true
+        #endif
+
+        echoCancellationLock.withLock { $0 = _isEchoCancellationEnabled }
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()

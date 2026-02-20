@@ -479,7 +479,11 @@ final class MuesliViewModel {
             NSLog("[TAP DEBUG] Creating new TapAudioCaptureService")
             self.audioCaptureService = TapAudioCaptureService(
                 isAECEnabled: { [weak preferencesManager] in
-                    preferencesManager?.echoCancellationEnabledForAudioCallback ?? true
+                    #if DEBUG
+                    return preferencesManager?.echoCancellationEnabledForAudioCallback ?? true
+                    #else
+                    return true
+                    #endif
                 }
             )
         }

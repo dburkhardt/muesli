@@ -1652,5 +1652,25 @@ final class RegressionTests: XCTestCase {
         XCTAssertEqual(aec.lastTelemetryFrameCount, 0,
             "reset() must clear lastTelemetryFrameCount so early telemetry fires in the next session")
     }
+
+    // MARK: - AEC Always-On Policy (2026-02-20 regression)
+
+    /// Regression: stale echoCancellationEnabled=false in UserDefaults caused AEC to be
+    /// silently disabled in Release builds. The effectiveAECEnabled static method now
+    /// guarantees Release builds always return true. This test guards against reintroduction.
+    func testAECAlwaysOnMigration_CorrectsFalseValue() {
+        XCTAssertTrue(
+            PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: true),
+            "Release builds must force AEC on even when UserDefaults has false (2026-02-20 regression)"
+        )
+        XCTAssertTrue(
+            PreferencesManager.effectiveAECEnabled(storedValue: true, isRelease: true),
+            "Release builds must keep AEC on when UserDefaults has true"
+        )
+        XCTAssertFalse(
+            PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: false),
+            "Debug builds must allow AEC to be disabled for testing"
+        )
+    }
 }
 

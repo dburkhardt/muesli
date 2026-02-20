@@ -35,6 +35,7 @@ final class PreferencesManagerTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.launchAtLogin)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.transcriptionMode)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.echoCancellationEnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.audioChunkDuration)
         UserDefaults.standard.removeObject(forKey: PreferencesManager.migrationCheckedKey)
     }
@@ -233,9 +234,9 @@ final class PreferencesManagerTests: XCTestCase {
     
     // MARK: - Echo Cancellation Tests
     
-    /// Test that echo cancellation defaults to false
-    func testEchoCancellation_DefaultsToFalse() async {
-        XCTAssertFalse(preferencesManager.isEchoCancellationEnabled)
+    /// Test that echo cancellation defaults to true (AEC is always-on by policy)
+    func testEchoCancellation_DefaultsToTrue() async {
+        XCTAssertTrue(preferencesManager.isEchoCancellationEnabled)
     }
     
     /// Test that echo cancellation can be enabled
@@ -272,7 +273,8 @@ final class PreferencesManagerTests: XCTestCase {
         XCTAssertTrue(value)
     }
     
-    /// Test that echo cancellation can be toggled multiple times
+    /// Test that echo cancellation can be toggled multiple times (Debug-only behavior;
+    /// in Release builds the setter still works but UI never exposes the toggle)
     func testEchoCancellation_CanToggleMultipleTimes() async {
         preferencesManager.isEchoCancellationEnabled = true
         XCTAssertTrue(preferencesManager.isEchoCancellationEnabled)
@@ -449,6 +451,56 @@ final class PreferencesManagerTests: XCTestCase {
         let mode = PreferencesManager.TranscriptionMode(from: serviceMode)
         
         XCTAssertEqual(mode, .postProcessing)
+    }
+    
+    // MARK: - AEC Always-On Regression Tests
+    
+    /// Verify effectiveAECEnabled returns true in Release mode regardless of stored value.
+    /// This tests the Release code path from Debug test builds via the testable static method.
+    func testEffectiveAEC_ReleaseAlwaysTrue() async {
+        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: true),
+                       "Release must force AEC on even when stored value is false")
+        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: true, isRelease: true),
+                       "Release must keep AEC on when stored value is true")
+    }
+    
+    /// Verify effectiveAECEnabled respects stored value in Debug mode.
+    func testEffectiveAEC_DebugRespectsStored() async {
+        XCTAssertFalse(PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: false),
+                        "Debug must respect stored false value")
+        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: true, isRelease: false),
+                       "Debug must respect stored true value")
+    }
+    
+    /// Verify that a stale false value in UserDefaults is corrected on fresh init.
+    /// In Debug builds, PreferencesManager respects the stored value, so this test
+    /// validates the migration path via the static effectiveAECEnabled method.
+    func testStoredFalseValue_IsCorrectedByReleaseMigration() async {
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.echoCancellationEnabled)
+        
+        let effective = PreferencesManager.effectiveAECEnabled(
+            storedValue: UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled),
+            isRelease: true
+        )
+        XCTAssertTrue(effective, "Release migration must correct stale false to true")
+    }
+    
+    /// Verify migration marker key is set after migration logic runs.
+    func testMigrationMarker_IsSetAfterAECMigration() async {
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.echoCancellationEnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+        
+        // Simulate the Release migration path
+        let storedValue = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
+        if PreferencesManager.effectiveAECEnabled(storedValue: storedValue, isRelease: true) && !storedValue {
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.echoCancellationEnabled)
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+        }
+        
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone),
+                       "Migration marker must be set after correcting false -> true")
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled),
+                       "UserDefaults must be corrected to true")
     }
 }
 

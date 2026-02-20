@@ -53,6 +53,14 @@ enum AppStorageKeys {
     /// Whether echo cancellation is enabled
     static let echoCancellationEnabled = "echoCancellationEnabled"
     
+    /// One-time migration marker: AEC forced to always-on in Release
+    static let aecAlwaysOnMigrationDone = "aecAlwaysOnMigrationDone"
+    
+    #if DEBUG
+    /// Debug-only: force AEC off for testing (ignored in Release builds)
+    static let aecDebugForceOff = "aecDebugForceOff"
+    #endif
+    
     /// AEC delay mode: how stream delay is computed for echo cancellation
     static let aecDelayMode = "aecDelayMode"
     

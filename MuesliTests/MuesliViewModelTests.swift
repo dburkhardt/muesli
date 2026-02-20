@@ -981,6 +981,8 @@ final class MuesliViewModelTests: XCTestCase {
     }
     
     // MARK: - Echo Cancellation Tests (CRITICAL)
+    // Note: Toggle behavior is Debug-only. In Release builds, AEC is always on
+    // and the UI toggle is hidden. These tests validate the Debug path.
     
     func testEchoCancellationToggle() async {
         let viewModel = MuesliViewModel(skipInitialLoad: true)
