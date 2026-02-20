@@ -174,18 +174,23 @@ From `Muesli/Muesli.entitlements`:
 
 ### Build Script Behavior
 
-From `scripts/build-and-launch.sh` (lines 504-545):
+From `scripts/build-and-launch.sh`:
 
 ```bash
-# Current behavior - runs on EVERY build
-tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null
-tccutil reset Microphone "$BUNDLE_ID" 2>/dev/null
+# Current behavior - only runs when --reset-tcc flag is provided
+if [ "$RESET_TCC" = true ]; then
+    tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null
+    tccutil reset Microphone "$BUNDLE_ID" 2>/dev/null
+fi
 ```
 
 The build script currently:
 1. Registers the app with Launch Services
-2. **Resets Screen Recording permission** (`tccutil reset ScreenCapture $BUNDLE_ID`)
-3. **Resets Microphone permission** (`tccutil reset Microphone $BUNDLE_ID`)
+2. **Optionally resets TCC permissions** (only when `--reset-tcc` is passed)
+   - `tccutil reset ScreenCapture $BUNDLE_ID`
+   - `tccutil reset Microphone $BUNDLE_ID`
+
+By default (without `--reset-tcc`), TCC permissions are preserved across builds. Use `./scripts/build-and-launch.sh --reset-tcc` only when testing the onboarding flow.
 
 This forces users to re-grant permissions on every build, even though the code signature is stable.
 
@@ -550,7 +555,7 @@ Benefits:
 When using worktree isolation (different bundle IDs per branch):
 - TCC permissions are **per-bundle-ID**, so each worktree has separate permissions
 - First build in a new worktree requires granting permissions once
-- The `--reset-tcc` flag and `test-onboarding.sh` script automatically detect the current branch's bundle ID from `.worktree-config.json`
+- The `--reset-tcc` flag and `test-onboarding.sh` script use the bundle ID hardcoded in `build-and-launch.sh` (`com.muesli.app`); per-branch bundle IDs must be reset manually if needed
 - To manually reset permissions for a specific worktree bundle ID:
   ```bash
   tccutil reset ScreenCapture com.muesli.app.xxx
@@ -752,7 +757,7 @@ grep PRODUCT_BUNDLE_IDENTIFIER Muesli.xcodeproj/project.pbxproj | head -1
 cat .worktree-config.json
 ```
 
-**Solution**: This is intentional for worktree isolation. Each bundle ID has separate permissions. Run `./scripts/configure-worktree.sh` to set up properly, or use `tccutil reset` for the branch-specific bundle ID.
+**Solution**: This is intentional for worktree isolation. Each bundle ID has separate TCC permissions. Use `tccutil reset ScreenCapture <bundle-id>` and `tccutil reset Microphone <bundle-id>` for the branch-specific bundle ID, then relaunch the app to re-grant permissions.
 
 ---
 
@@ -921,7 +926,7 @@ If migrating to sandboxed distribution:
 - [spec/local_testing_workflow.md](../spec/local_testing_workflow.md) - Local development best practices
 - [spec/git_workflow.md](../spec/git_workflow.md) - Branch management and worktrees
 - [docs/debug-logs/2026-01-15_screen-recording-permission-detection.md](../docs/debug-logs/2026-01-15_screen-recording-permission-detection.md) - TCC detection improvements and stable signing evidence
-- [scripts/configure-worktree.sh](../scripts/configure-worktree.sh) - Worktree bundle ID configuration
+- [spec/git_workflow.md](../spec/git_workflow.md) - Worktree and branch management
 
 ## References
 

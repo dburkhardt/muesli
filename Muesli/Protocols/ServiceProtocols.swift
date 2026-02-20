@@ -54,15 +54,6 @@ protocol MeetingHistoryServiceProtocol {
     func loadOriginalTranscript(for meeting: MeetingHistoryItem) -> String?
 }
 
-// MARK: - MeetingAppDetectorProtocol
-
-/// Protocol for MeetingAppDetector to enable mocking in tests
-@MainActor
-protocol MeetingAppDetectorProtocol {
-    func detectMeetingApps() async -> [MeetingAppDetector.DetectedApp]
-    func refreshApps() async -> [MeetingAppDetector.DetectedApp]
-}
-
 // MARK: - PermissionManagerProtocol
 
 /// Protocol for PermissionManager to enable mocking in tests

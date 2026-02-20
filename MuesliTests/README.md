@@ -153,11 +153,11 @@ The test suite covers:
 
 ## Note on Testing Approach
 
-Since `MuesliViewModel` currently creates its own service instances internally, tests verify behavior through the public API. The mock implementations are prepared for Phase 1+ of the refactor when dependency injection is added.
+`MuesliViewModel` supports dependency injection via its initializer — all major services and managers can be passed in at construction time, enabling full mock substitution in tests. Tests verify behavior through both the public API and injected mock implementations.
 
 Key testing principles:
 - Test observable state changes
 - Verify computed properties
 - Test state transitions
 - Document UserDefaults keys
-- Prepare mocks for future DI support
+- Use injectable init (`MuesliViewModel(audioCaptureService:transcriptionService:...)`) for unit isolation

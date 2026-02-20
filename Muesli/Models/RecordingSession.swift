@@ -99,7 +99,6 @@ final class RecordingSession: Identifiable {
     var transcriptText: String = ""
     var recordingStartTime: Date?
     var outputDirectory: URL?
-    var selectedApp: MeetingAppDetector.DetectedApp?
     
     /// Whether the recording is currently initializing (loading model, etc.)
     var isInitializing: Bool = false
@@ -111,9 +110,7 @@ final class RecordingSession: Identifiable {
     var isRecordingOnly: Bool = false
     
     /// Description of the audio source for UI display
-    var audioSourceDescription: String {
-        selectedApp?.name ?? "All System Audio"
-    }
+    let audioSourceDescription: String = "All System Audio"
     
     // MARK: - Transcript Blocks (for new block-based display)
     

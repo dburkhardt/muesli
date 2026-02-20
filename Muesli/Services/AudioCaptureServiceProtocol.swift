@@ -119,9 +119,6 @@ protocol AudioCaptureServiceProtocol: Actor {
     /// Start audio capture (all system audio)
     func startCapture() async throws
 
-    /// Start audio capture for a specific app
-    func startCapture(forBundleIdentifier bundleIdentifier: String) async throws
-
     /// Stop audio capture
     func stopCapture() async throws
 }

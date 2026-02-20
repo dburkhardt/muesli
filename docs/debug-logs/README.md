@@ -68,7 +68,7 @@ grep -r "denied" docs/debug-logs/
 **By affected file:**
 ```bash
 grep -r "PermissionManager.swift" docs/debug-logs/
-grep -r "AudioCaptureService.swift" docs/debug-logs/
+grep -r "TapAudioCaptureService.swift" docs/debug-logs/
 ```
 
 ## Categories

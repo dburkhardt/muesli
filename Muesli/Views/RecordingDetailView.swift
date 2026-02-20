@@ -378,54 +378,7 @@ struct RecordingDetailView: View {
             
             Divider()
             
-            // Submenu 2: Audio Source (shows current, can change only when not recording)
-            Menu("Audio Source") {
-                // "All System Audio" option
-                Button(
-                    action: {
-                        if !session.isRecording {
-                            session.selectedApp = nil
-                        }
-                    },
-                    label: {
-                        HStack {
-                            Text("All System Audio")
-                            if session.selectedApp == nil {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                )
-                .disabled(session.isRecording)
-                
-                if !viewModel.availableMeetingApps.isEmpty {
-                    Divider()
-                    
-                    // Detected apps
-                    ForEach(viewModel.availableMeetingApps) { app in
-                        Button(
-                            action: {
-                                if !session.isRecording {
-                                    session.selectedApp = app
-                                }
-                            },
-                            label: {
-                                HStack {
-                                    Text(app.name)
-                                    if session.selectedApp?.bundleIdentifier == app.bundleIdentifier {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        )
-                        .disabled(session.isRecording)
-                    }
-                }
-            }
-            
-            Divider()
-            
-            // Submenu 3: Transcription Model
+            // Submenu 2: Transcription Model
             // Disable during switching or first-time model compilation
             transcriptionModelMenu
             
@@ -453,12 +406,6 @@ struct RecordingDetailView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onAppear {
-            // Refresh available apps when menu appears
-            Task {
-                await viewModel.refreshMeetingApps()
-            }
-        }
     }
     
     // MARK: - Transcription Model Menu

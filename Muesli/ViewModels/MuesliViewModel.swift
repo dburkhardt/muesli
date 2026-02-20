@@ -25,10 +25,6 @@ final class MuesliViewModel {
     /// Refinement coordinator (injected, source of truth for refinement state)
     let refinementCoordinator: RefinementCoordinator
     
-    // MARK: - App Detection
-    
-    var availableMeetingApps: [MeetingAppDetector.DetectedApp] = []
-    
     // MARK: - Permissions
     
     var hasScreenRecordingPermission: Bool = false
@@ -143,7 +139,6 @@ final class MuesliViewModel {
     private let audioCaptureService: any AudioCaptureServiceProtocol
     private let fileOutputService: FileOutputService
     private let transcriptionService: TranscriptionService
-    private let meetingAppDetector: MeetingAppDetector
     /// Permission manager (exposed for onboarding view)
     let permissionManager: PermissionManager
     let microphoneManager: MicrophoneManager
@@ -448,7 +443,6 @@ final class MuesliViewModel {
     ///   - audioCaptureService: Service for capturing audio (injectable for testing)
     ///   - fileOutputService: Service for file output (injectable for testing)
     ///   - transcriptionService: Service for transcription (injectable for testing)
-    ///   - meetingAppDetector: Service for detecting meeting apps (injectable for testing)
     ///   - permissionManager: Manager for permissions (injectable for testing)
     ///   - microphoneManager: Manager for microphone devices (injectable for testing)
     ///   - meetingHistoryService: Service for meeting history (injectable for testing)
@@ -461,7 +455,6 @@ final class MuesliViewModel {
         audioCaptureService: (any AudioCaptureServiceProtocol)? = nil,
         fileOutputService: FileOutputService? = nil,
         transcriptionService: TranscriptionService? = nil,
-        meetingAppDetector: MeetingAppDetector? = nil,
         permissionManager: PermissionManager? = nil,
         microphoneManager: MicrophoneManager? = nil,
         meetingHistoryService: MeetingHistoryService? = nil,
@@ -495,7 +488,6 @@ final class MuesliViewModel {
             chunkDuration: preferencesManager.audioChunkDuration
         )
         
-        self.meetingAppDetector = meetingAppDetector ?? MeetingAppDetector()
         self.permissionManager = permissionManager ?? PermissionManager()
         self.microphoneManager = microphoneManager ?? MicrophoneManager()
         self.meetingHistoryService = meetingHistoryService ?? MeetingHistoryService()
@@ -653,10 +645,7 @@ final class MuesliViewModel {
             )
         }
         
-        // Load available meeting apps
-        Task {
-            await refreshMeetingApps()
-        }
+
         
         // Note: Meeting history is already loaded by MeetingHistoryManager's init
         // No need to call loadMeetingHistory() here as historyManager handles it
@@ -736,12 +725,6 @@ final class MuesliViewModel {
         modelManager.reset()
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
-    }
-    
-    // MARK: - Meeting App Detection
-    
-    func refreshMeetingApps() async {
-        availableMeetingApps = await meetingAppDetector.detectMeetingApps()
     }
     
     // MARK: - Recording Actions

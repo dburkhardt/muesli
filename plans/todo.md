@@ -314,7 +314,7 @@ Main Window (post-onboarding)
 - Description: Build test suite that uses known audio files with expected transcripts to verify end-to-end transcription accuracy
 - Notes: Create fixture directory with sample audio files (CAF format) and their expected transcript outputs
 - Tests should verify: audio processing pipeline, transcription accuracy, timestamp generation, file output format
-- Related: MuesliTests/, TranscriptionService.swift, AudioCaptureService.swift
+- Related: MuesliTests/, TranscriptionService.swift, TapAudioCaptureService.swift
 
 ---
 

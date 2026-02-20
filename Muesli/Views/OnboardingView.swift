@@ -275,9 +275,11 @@ struct OnboardingView: View {
                     HoverableLink(title: "Check Again") {
                         Task {
                             await DiagnosticLogger.shared.log(.onboarding, "Check Again tapped (system audio)")
+                            // Re-probe with a live tap attempt rather than reading the cached
+                            // state — the cache is still false from the initial deny.
+                            _ = await viewModel.requestScreenRecordingPermission()
+                            viewModel.refreshPermissions()
                         }
-                        // Use synchronous check to avoid triggering prompts
-                        viewModel.refreshPermissions()
                     }
                 }
             } else {

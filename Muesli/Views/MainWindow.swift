@@ -44,10 +44,6 @@ struct MainWindow: View {
                 Text(message)
             }
         }
-        .task {
-            // Refresh available apps when window opens
-            await viewModel.refreshMeetingApps()
-        }
     }
     
     // MARK: - Header
@@ -93,45 +89,6 @@ struct MainWindow: View {
             Text("Ready to Record")
                 .font(.headline)
                 .foregroundStyle(.secondary)
-            
-            // App picker
-            VStack(spacing: 12) {
-                Text("Select a meeting app:")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                
-                HStack(spacing: 8) {
-                    Picker("Meeting App", selection: $session.selectedApp) {
-                        Text("Select app...").tag(nil as MeetingAppDetector.DetectedApp?)
-                        ForEach(viewModel.availableMeetingApps) { app in
-                            Text(app.name).tag(app as MeetingAppDetector.DetectedApp?)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(width: 200)
-                    
-                Button(
-                    action: {
-                        Task {
-                            await viewModel.refreshMeetingApps()
-                        }
-                    },
-                    label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                )
-                .buttonStyle(.borderless)
-                .help("Refresh app list")
-                }
-                
-                if viewModel.availableMeetingApps.isEmpty {
-                    Text("No meeting apps detected. Start Zoom, Teams, or a browser with Google Meet.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 300)
-                }
-            }
             
             // Transcription mode selector
             VStack(spacing: 8) {
@@ -360,12 +317,11 @@ struct MainWindow: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 10)
-                        .background(session.selectedApp != nil ? Color.accentColor : Color.gray)
+                        .background(Color.accentColor)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
             )
             .buttonStyle(.plain)
-            .disabled(session.selectedApp == nil)
                 
                 Spacer()
                 

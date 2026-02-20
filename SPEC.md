@@ -317,7 +317,7 @@ For browser-based meetings (Google Meet), we detect the browser app as meeting c
 
 **Size**: 520pt wide × ~580-600pt tall (fixed content window)
 
-**Flow** (4 screens):
+**Flow** (5 screens):
 
 **Screen 1 - Welcome**:
 ```
@@ -375,7 +375,7 @@ For browser-based meetings (Google Meet), we detect the browser app as meeting c
 └─────────────────────────────────────────────────┘
 ```
 
-**Screen 4 - Model Setup**:
+**Screen 4 - Model Setup (Whisper)**:
 ```
 ┌─────────────────────────────────────────────────┐
 │                                                 │
@@ -386,15 +386,36 @@ For browser-based meetings (Google Meet), we detect the browser app as meeting c
 │   Muesli uses WhisperKit for on-device          │
 │   transcription. Choose your model:             │
 │                                                 │
-│   Model: [ base ▼ ]                             │
+│   Model: [ Small ▼ ]                            │
 │                                                 │
-│   [ Download Model (~150MB) ]                   │
+│   [ Download Model (~500MB) ]                   │
 │                                                 │
 │   ━━━━━━━━━━░░░░░░░░░░░░░  45%                 │
 │                                                 │
 │   — or —                                        │
 │                                                 │
 │   [ Use Existing Model... ]                     │
+│                                                 │
+│              [ Continue ]                       │
+└─────────────────────────────────────────────────┘
+```
+
+**Screen 5 - LLM Setup**:
+```
+┌─────────────────────────────────────────────────┐
+│                                                 │
+│                    ✨                           │
+│                                                 │
+│         Transcript Refinement (Optional)        │
+│                                                 │
+│   Optionally download a local LLM to polish     │
+│   your transcripts after recording.             │
+│                                                 │
+│   Model: [ Llama 3.2 3B ▼ ]                    │
+│                                                 │
+│   [ Download LLM (~2GB) ]                       │
+│                                                 │
+│   ━━━━━━━━━━░░░░░░░░░░░░░  45%                 │
 │                                                 │
 │              [ Finish Setup ]                   │
 └─────────────────────────────────────────────────┘
@@ -428,8 +449,8 @@ All Muesli data is stored in `~/Library/Application Support/Muesli/` to avoid pe
 │   └── ...
 └── Models/                        # WhisperKit transcription models
     └── models/argmaxinc/whisperkit-coreml/
-        ├── openai_whisper-base/
         ├── openai_whisper-small/
+        ├── openai_whisper-medium/
         └── ...
 ```
 
@@ -519,15 +540,15 @@ External tools can use the export folder to:
 **Version Compatibility**: The `.muesli-export` marker file contains `version=1.0` and `format=markdown+json` to help external tools verify compatibility.
 
 ### Recordings Directory
-│   │   ├── microphone.caf         # Microphone audio (user's voice)
-│   │   ├── transcript.md          # Markdown transcript with speaker labels
-│   │   └── transcript.original.md # Original transcript (if refined)
-│   └── ...
-└── Models/                        # WhisperKit transcription models
-    └── models/argmaxinc/whisperkit-coreml/
-        ├── openai_whisper-base/
-        ├── openai_whisper-small/
-        └── ...
+
+Each recording is saved in a timestamped UUID directory:
+
+```
+~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD_HH-MM_[UUID]/
+├── audio.caf              # System audio (meeting participants)
+├── microphone.caf         # Microphone audio (user's voice)
+├── transcript.md          # Markdown transcript with speaker labels
+└── transcript.original.md # Original transcript (if refined)
 ```
 
 ### LLM Models
@@ -634,7 +655,7 @@ The MVP is complete. All core features are implemented and functional.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Menu bar app | ✅ | Runs as LSUIElement (no dock icon) |
+| Menu bar app | ✅ | Menu bar app (LSUIElement=false; appears in Dock) |
 | Audio capture | ✅ | System audio via Core Audio taps, mic via AVAudioEngine |
 | Real-time transcription | ✅ | WhisperKit with "Me" vs "Them" speaker labels |
 | File output | ✅ | CAF audio + Markdown transcript |
@@ -647,7 +668,7 @@ The MVP is complete. All core features are implemented and functional.
 
 ### Model Support
 
-- **Transcription**: WhisperKit models (tiny, base, small, medium, large-v3, large-v3-turbo)
+- **Transcription**: WhisperKit models (small, medium, large-v3, large-v3-turbo)
 - **Refinement**: MLX LLM models (Llama 3.2 variants)
 
 ### Deep Dive Documentation
@@ -668,7 +689,7 @@ For detailed behavior specifications, see the `spec/` folder:
 
 ```xml
 <key>LSUIElement</key>
-<true/>
+<false/>
 <key>NSAudioCaptureUsageDescription</key>
 <string>Muesli needs System Audio Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.</string>
 <key>NSScreenCaptureUsageDescription</key>
@@ -685,9 +706,13 @@ For detailed behavior specifications, see the `spec/` folder:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.15.0")
+    .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.15.0"),
+    // MLX packages (for LLM-based transcript refinement)
+    .package(url: "https://github.com/ml-explore/mlx-swift-examples.git", branch: "main"),
 ]
 ```
+
+The MLX packages (`MLXLLM`, `MLXLMCommon`) are used for on-device LLM transcript refinement.
 
 ### System Frameworks
 

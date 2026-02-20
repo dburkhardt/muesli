@@ -18,10 +18,8 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     // MARK: - Call Tracking
     
     var startCaptureCallCount: Int = 0
-    var startCaptureWithBundleIDCallCount: Int = 0
     var stopCaptureCallCount: Int = 0
     var setMicrophoneDeviceCallCount: Int = 0
-    var lastBundleIdentifier: String?
     var lastMicrophoneDeviceID: String?
     
     // MARK: - Handlers
@@ -66,17 +64,6 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
     
     func startCapture() async throws {
         startCaptureCallCount += 1
-        
-        if shouldFailStartCapture {
-            throw startCaptureError
-        }
-        
-        isRecording = true
-    }
-    
-    func startCapture(forBundleIdentifier bundleIdentifier: String) async throws {
-        startCaptureWithBundleIDCallCount += 1
-        lastBundleIdentifier = bundleIdentifier
         
         if shouldFailStartCapture {
             throw startCaptureError
@@ -165,10 +152,8 @@ actor MockAudioCaptureService: AudioCaptureServiceProtocol {
         shouldFailStartCapture = false
         shouldFailStopCapture = false
         startCaptureCallCount = 0
-        startCaptureWithBundleIDCallCount = 0
         stopCaptureCallCount = 0
         setMicrophoneDeviceCallCount = 0
-        lastBundleIdentifier = nil
         lastMicrophoneDeviceID = nil
         bufferHandler = nil
         interruptedHandler = nil

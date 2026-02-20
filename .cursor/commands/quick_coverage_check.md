@@ -40,7 +40,7 @@ import json
 import sys
 
 # File to check (change this)
-target_file = "AudioCaptureService.swift"
+target_file = "TapAudioCaptureService.swift"
 
 with open('coverage.json', 'r') as f:
     data = json.load(f)
@@ -75,7 +75,7 @@ if not found:
 EOF
 ```
 
-Change `target_file = "AudioCaptureService.swift"` to check different files.
+Change `target_file = "TapAudioCaptureService.swift"` to check different files.
 
 ---
 

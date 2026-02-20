@@ -183,19 +183,40 @@ gh release delete v0.1.0-test --yes  # Delete release
 1. Go to GitHub → Actions → Release workflow
 2. Click "Run workflow"
 3. Enter a test version like `0.1.0-test`
-4. Select `feature/release-infrastructure` branch (or wherever you're testing)
+4. Select the branch to test from (usually `main` or a feature branch)
 5. Monitor the workflow run
 6. Verify the release is created correctly
 7. Delete the test release when done
 
-## Required GitHub Permissions
+## Required GitHub Permissions and Secrets
 
 The workflow requires the following permissions (already configured in the workflow):
 
-- **contents: write** - For creating releases, pushing commits, and uploading assets
-- **GITHUB_TOKEN** - Automatically provided by GitHub Actions
+- **contents: write** — For creating releases, pushing commits, and uploading assets
+- **attestations: write** — For generating artifact attestations
+- **id-token: write** — Required for OIDC-based artifact attestations
+- **GITHUB_TOKEN** — Automatically provided by GitHub Actions
 
-No additional secrets or configuration needed!
+### Code Signing and Notarization Secrets
+
+The release workflow signs and notarizes the app with Apple credentials stored as repository secrets:
+
+| Secret | Purpose |
+|--------|---------|
+| `DEVELOPER_ID_CERT_P12` | Base64-encoded Developer ID Application certificate (.p12) |
+| `DEVELOPER_ID_CERT_PASSWORD` | Password for the .p12 certificate |
+| `APPLE_ID` | Apple ID used for notarization (e.g. `dev@example.com`) |
+| `APPLE_TEAM_ID` | 10-character Apple Team ID |
+| `APPLE_APP_PASSWORD` | App-specific password for notarytool |
+
+When all five secrets are present, the workflow automatically:
+1. Imports the Developer ID certificate into the runner's keychain
+2. Signs the app bundle with `Developer ID Application`
+3. Signs the DMG with the same identity
+4. Submits the DMG to Apple's notarization service via `xcrun notarytool`
+5. Staples the notarization ticket to the DMG
+
+If any secret is absent (e.g. forks, unsigned test builds), signing and notarization are skipped and users will see a Gatekeeper warning. The `skip_notarization` workflow dispatch input can also be set to `"true"` to force an unsigned build.
 
 ## Version Numbering
 
@@ -380,14 +401,14 @@ The release infrastructure uses modern, generally-adopted tools:
 
 Potential improvements to the release infrastructure:
 
-1. **Code signing**: Sign with Apple Developer certificate
-2. **Notarization**: Notarize the app with Apple
-3. **Auto-update metadata**: Generate appcast.xml for Sparkle
-4. **Homebrew formula**: Auto-update Homebrew Cask formula
-5. **Version bump automation**: Script to update Version.xcconfig and create tag
-6. **Build artifacts**: Archive build logs and symbols for debugging
-7. **Cross-version testing**: Test upgrades from previous versions
-8. **Release-please integration**: Fully automated releases from conventional commits
+1. **Auto-update metadata**: Generate appcast.xml for Sparkle
+2. **Homebrew formula**: Auto-update Homebrew Cask formula
+3. **Version bump automation**: Script to update Version.xcconfig and create tag
+4. **Build artifacts**: Archive build logs and symbols for debugging
+5. **Cross-version testing**: Test upgrades from previous versions
+6. **Release-please integration**: Fully automated releases from conventional commits
+
+> **Already implemented**: Code signing (Developer ID Application) and Apple notarization are fully operational in the release workflow — see the [Required GitHub Permissions and Secrets](#required-github-permissions-and-secrets) section above.
 
 ## References
 

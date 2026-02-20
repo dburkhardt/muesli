@@ -364,7 +364,7 @@ Before creating a release tag, verify:
 **Edge Cases**:
 - [ ] Multiple recordings in succession
 - [ ] Recording during app restart
-- [ ] Different Whisper models (tiny, base, small)
+- [ ] Different Whisper models (small, medium, large-v3, large-v3-turbo)
 - [ ] Different microphone devices
 - [ ] Long recordings (30+ minutes)
 - [ ] No internet connection (on-device still works)
@@ -622,12 +622,13 @@ Simple, agent-friendly branching. All work happens in feature branches merged to
 - **System audio permission model**: Use tap-probe at session start to determine permission status; do not rely on `CGPreflightScreenCaptureAccess()` as a preflight. Cache the tap-probe result in UserDefaults.
 - **RT audio callback constraints**: No heap allocation, no Objective-C, no locks in the IOProc callback. Use lock-free ring buffers for all audio handoff from the real-time thread to Swift.
 - **WhisperKit sample rate**: WhisperKit requires 16 kHz mono audio. Always resample from the 48 kHz capture rate using `TranscriptionService.resampleToWhisperFormat()`.
-- **macOS version requirement**: `AudioHardwareCreateProcessTap` is macOS 14.2+. The app requires macOS 14.2 or later.
+- **macOS version requirement**: `AudioHardwareCreateProcessTap` requires macOS 14.2+. The app's deployment target is macOS 26.0.
 
 ## Reference
 
 **Dependencies**:
 - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — on-device speech-to-text
+- [MLXLLM / MLXLMCommon](https://github.com/ml-explore/mlx-swift-examples) — on-device LLM transcript refinement
 - Core Audio / AVAudioEngine — system audio capture via process taps
 - GitHub CLI (`gh`) — for PR management from command line
 

@@ -808,7 +808,6 @@ final class MuesliViewModelTests: XCTestCase {
         XCTAssertTrue(session.transcriptText.isEmpty)
         XCTAssertNil(session.recordingStartTime)
         XCTAssertNil(session.outputDirectory)
-        XCTAssertNil(session.selectedApp)
         XCTAssertFalse(session.isInitializing)
         XCTAssertFalse(session.isMicrophoneMuted)
         XCTAssertFalse(session.wasInterrupted)
@@ -819,18 +818,7 @@ final class MuesliViewModelTests: XCTestCase {
     
     func testRecordingSessionAudioSourceDescription() async {
         let session = RecordingSession()
-        
-        // Without selected app
         XCTAssertEqual(session.audioSourceDescription, "All System Audio")
-        
-        // With selected app
-        let mockApp = MeetingAppDetector.DetectedApp(
-            id: "com.zoom.xos",
-            name: "Zoom",
-            bundleIdentifier: "com.zoom.xos"
-        )
-        session.selectedApp = mockApp
-        XCTAssertEqual(session.audioSourceDescription, "Zoom")
     }
     
     func testRecordingSessionElapsedTimeString() async {

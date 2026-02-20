@@ -354,9 +354,8 @@ final class RecordingController {
             return  // Already recording
         }
         
-        // Create a new session with no app filter (captures all system audio)
+        // Create a new session (captures all system audio)
         let session = createSession()
-        session.selectedApp = nil  // All system audio
         
         // Use saved microphone preference, or fall back to default if none set
         if microphoneManager.selectedDeviceID == nil {
@@ -415,11 +414,7 @@ final class RecordingController {
             await ensureAudioHandlersConfigured()
             
             // Start audio capture IMMEDIATELY (before model check)
-            if let app = session.selectedApp {
-                try await audioCaptureService.startCapture(forBundleIdentifier: app.bundleIdentifier)
-            } else {
-                try await audioCaptureService.startCapture()
-            }
+            try await audioCaptureService.startCapture()
             
             // Audio is now flowing and being saved to disk
             session.recordingStartTime = Date()
@@ -524,12 +519,7 @@ final class RecordingController {
         }
 
         // Fallback: show error on session (legacy path)
-        // Add context for specific cases
-        if case .noContentToCapture = error, let app = session.selectedApp {
-            session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
-        } else {
-            session.showError(muesliError)
-        }
+        session.showError(muesliError)
         cleanupFailedSession(session)
     }
     
@@ -562,6 +552,8 @@ final class RecordingController {
         session.state = .idle
         activeSession = nil
         resetMuteState()
+        // Reset isActivelyRecording so permission re-probing is not permanently suppressed.
+        onSessionCompleted?(session, nil)
         
         if fileOutputService.isWriting {
             Task {
@@ -622,6 +614,8 @@ final class RecordingController {
         session.state = .idle
         activeSession = nil
         resetMuteState()
+        // Reset isActivelyRecording so permission re-probing is not permanently suppressed.
+        onSessionCompleted?(session, nil)
     }
     
     private func performStopRecording(for session: RecordingSession) {
@@ -854,6 +848,8 @@ final class RecordingController {
                 session.showError(.outputDirectoryCreationFailed)
                 activeSession = nil
                 resetMuteState()
+                // Reset isActivelyRecording so permission re-probing is not permanently suppressed.
+                onSessionCompleted?(session, nil)
                 return
             }
             
@@ -890,7 +886,7 @@ final class RecordingController {
             session.showErrorMessage("Recording saved. The stream was interrupted.")
         }
         
-        onRefreshHistory?()
+        onSessionCompleted?(session, session.outputDirectory)
         activeSession = nil
         resetMuteState()
     }
@@ -941,7 +937,6 @@ final class RecordingController {
             session.resumeCount = meeting.segmentCount
             session.segmentNumber = meeting.segmentCount + 1
             session.meetingTitle = meeting.title
-            session.selectedApp = nil
             
             activeSession = session
             let mutedState = session.isMicrophoneMuted

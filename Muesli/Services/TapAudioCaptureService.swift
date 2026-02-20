@@ -453,15 +453,6 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
     }
 
-    /// Start audio capture for a specific app (for API compatibility - tap captures all audio anyway)
-    /// - Parameter bundleIdentifier: Ignored - tap captures all system audio except Muesli
-    func startCapture(forBundleIdentifier bundleIdentifier: String) async throws {
-        // Note: Core Audio tap captures all system audio except Muesli
-        // The bundle identifier is ignored for compatibility with the old API
-        logger.info("startCapture(forBundleIdentifier:) called - tap captures all system audio")
-        try await startCapture()
-    }
-
     /// Stop audio capture
     func stopCapture() async throws {
         guard isRecording else {
