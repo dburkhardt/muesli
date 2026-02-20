@@ -291,6 +291,18 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         print("[TAP DEBUG] Detected topology: \(topologyMode)")
         logger.info("Detected topology: \(String(describing: self.topologyMode))")
 
+        // Log the AEC initialization sequence. The order here is critical:
+        // 1. resetForNewSession() — full reset, no cooldown carry-over (vs reset() which carries cooldown)
+        // 2. aecProcessor.reset() — clear WebRTC AEC3 internal state
+        // 3. configure() — set topology-aware mode AFTER reset so mode is applied to fresh state
+        // Any deviation from this order (e.g., configure before reset) can leave stale delay
+        // estimates in the AEC3 filter, causing the "stable but non-converging" failure mode.
+        let logTopologyForInit = self.topologyMode
+        Task {
+            await DiagnosticLogger.shared.log(.aec,
+                "AEC_INIT_SEQUENCE: topology=\(logTopologyForInit), steps=[resetForNewSession, aecReset, syncConfigure, aecConfigure]")
+        }
+
         // Configure synchronizer and AEC for topology
         synchronizer.resetForNewSession()
         aecProcessor.reset()
@@ -397,9 +409,13 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         let logTopology = self.topologyMode
         let logAECEnabled = isAECEnabled()
+        // Detect if this session started after permission recovery: the UserDefaults key was
+        // previously unset (false) and was just written to true by the tap-start code above.
+        // We read it here after the tap succeeded, so it reflects the real post-recovery state.
+        let logPermissionWasCached = UserDefaults.standard.object(forKey: "systemAudioPermissionGranted") != nil
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "TAP_CAPTURE_START: topology=\(logTopology), aecEnabled=\(logAECEnabled)")
+                "TAP_CAPTURE_START: topology=\(logTopology), aecEnabled=\(logAECEnabled), permissionWasCached=\(logPermissionWasCached)")
         }
     }
 

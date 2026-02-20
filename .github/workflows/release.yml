@@ -106,6 +106,36 @@ jobs:
             echo "❌ WebRTC XCFramework not found — release builds MUST include real WebRTC AEC"
             exit 1
           fi
+
+      - name: Fingerprint WebRTC AEC dependency
+        id: webrtc-fingerprint
+        run: |
+          echo "Computing WebRTC XCFramework fingerprint..."
+          XCFW_DIR="Muesli/Frameworks/webrtc_audio_processing.xcframework"
+
+          # Compute SHA-256 over all static library files in the xcframework.
+          # Sort paths for determinism across runs.
+          FINGERPRINT=$(find "$XCFW_DIR" -name "*.a" | sort | xargs shasum -a 256 | shasum -a 256 | awk '{print $1}')
+
+          echo "WebRTC AEC Fingerprint: ${FINGERPRINT}"
+          echo "fingerprint=${FINGERPRINT}" >> $GITHUB_OUTPUT
+
+          # Write fingerprint file for artifact upload
+          echo "{\"fingerprint\": \"${FINGERPRINT}\", \"workflow\": \"release\", \"ref\": \"${GITHUB_REF}\", \"sha\": \"${GITHUB_SHA}\"}" > webrtc-fingerprint.json
+          cat webrtc-fingerprint.json
+
+          echo "## WebRTC AEC Fingerprint" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**SHA-256:** \`${FINGERPRINT}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Use this fingerprint to verify the release artifact uses the same WebRTC binary as CI." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload WebRTC fingerprint artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-fingerprint-release-${{ github.sha }}
+          path: webrtc-fingerprint.json
+          retention-days: 90
       
       - name: Install create-dmg and fileicon
         run: |

@@ -208,6 +208,32 @@ jobs:
             echo "⚠️ WebRTC XCFramework not found - WebRTC AEC will run in stub mode"
           fi
 
+      - name: Fingerprint WebRTC AEC dependency
+        id: webrtc-fingerprint-release
+        run: |
+          XCFW_DIR="Muesli/Frameworks/webrtc_audio_processing.xcframework"
+          if [ -d "$XCFW_DIR" ]; then
+            # Compute SHA-256 over all static library files — same method as release workflow.
+            # CI uses cache key: webrtc-v1.3-{OS}-{arch}-xcode26.2-{script_hash}
+            # Release uses:      webrtc-v1.3-{OS}-{arch}-release-{script_hash}
+            # Both use the same build script, so fingerprints should match when scripts match.
+            FINGERPRINT=$(find "$XCFW_DIR" -name "*.a" | sort | xargs shasum -a 256 | shasum -a 256 | awk '{print $1}')
+            echo "WebRTC AEC Fingerprint (build-release job): ${FINGERPRINT}"
+            echo "fingerprint=${FINGERPRINT}" >> $GITHUB_OUTPUT
+            echo "{\"fingerprint\": \"${FINGERPRINT}\", \"workflow\": \"ci-build-release\", \"ref\": \"${GITHUB_REF}\", \"sha\": \"${GITHUB_SHA}\"}" > webrtc-fingerprint-ci.json
+          else
+            echo "fingerprint=none" >> $GITHUB_OUTPUT
+            echo "⚠️ XCFramework not present, fingerprint skipped"
+          fi
+
+      - name: Upload WebRTC fingerprint artifact
+        if: steps.webrtc-fingerprint-release.outputs.fingerprint != 'none'
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-fingerprint-ci-${{ github.sha }}
+          path: webrtc-fingerprint-ci.json
+          retention-days: 30
+
       - name: Build Muesli (Release)
         run: |
           set -o pipefail

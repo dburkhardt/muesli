@@ -30,6 +30,10 @@ struct AECStats {
     var framesSkipped: Int64 = 0
     var adaptationFrozen: Bool = false
     var currentMode: AECMode = .off
+    /// Rolling RMS of the render (far-end) signal, in linear scale (updated per telemetry interval).
+    var renderRmsLinear: Float = 0
+    /// Rolling RMS of the capture (near-end/mic) signal, in linear scale (updated per telemetry interval).
+    var captureRmsLinear: Float = 0
 }
 
 // MARK: - AEC Processor
@@ -328,12 +332,20 @@ final class AECProcessor {
     // MARK: - Periodic Telemetry
 
     /// Interval counter for telemetry logging (tracks capture frames processed).
-    private var lastTelemetryFrameCount: Int64 = 0
+    /// Internal (not private) so AudioWorker can read it to detect when a log was emitted.
+    var lastTelemetryFrameCount: Int64 = 0
 
     /// Log AEC telemetry at a regular interval (call from worker loop).
-    /// Logs ERLE, delay estimate, mode, and feed counts every `intervalFrames` capture frames.
-    /// - Parameter workerStats: Optional AudioWorkerStats for render lead distribution.
-    func logPeriodicTelemetry(workerStats: AudioWorkerStats? = nil) {
+    /// Logs ERLE, delay estimate, mode, feed counts, and signal RMS every `intervalFrames` capture frames.
+    /// - Parameters:
+    ///   - workerStats: Optional AudioWorkerStats for render lead distribution.
+    ///   - renderRmsLinear: Rolling RMS of the render (far-end) signal (linear scale).
+    ///   - captureRmsLinear: Rolling RMS of the capture (near-end/mic) signal (linear scale).
+    func logPeriodicTelemetry(
+        workerStats: AudioWorkerStats? = nil,
+        renderRmsLinear: Float = 0,
+        captureRmsLinear: Float = 0
+    ) {
         let stats = getStats()
         let shouldLog: Bool
         let intervalFrames: Int64 = 1000  // ~10 seconds at 100 frames/sec
@@ -347,12 +359,18 @@ final class AECProcessor {
 
         guard shouldLog else { return }
 
+        // Convert linear RMS to dBFS for logging
+        let renderRmsDb = renderRmsLinear > 0 ? 20.0 * log10(renderRmsLinear) : -96.0
+        let captureRmsDb = captureRmsLinear > 0 ? 20.0 * log10(captureRmsLinear) : -96.0
+
         var msg = "AEC_TELEMETRY: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
         msg += ", delay=\(stats.delayMs)ms"
         msg += ", mode=\(stats.currentMode)"
         msg += ", processed=\(stats.framesProcessed)"
         msg += ", skipped=\(stats.framesSkipped)"
         msg += ", frozen=\(stats.adaptationFrozen)"
+        msg += ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
+        msg += ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
 
         if let ws = workerStats {
             msg += ", renderLead=\(ws.renderLeadFrames)frames"
@@ -361,6 +379,30 @@ final class AECProcessor {
 
         Task {
             await DiagnosticLogger.shared.log(.aec, msg)
+        }
+
+        // Detect stable-but-non-converging condition:
+        // If we have been stable for >30 seconds (>3000 frames processed) but ERLE is still
+        // very low (<2 dB), AEC3 has likely not converged. This can happen when:
+        //   - The render/mic signal energy is too low (near silence)
+        //   - The release build uses a stale/incompatible WebRTC artifact
+        //   - The initialization sequence was incorrect (e.g., configure before reset)
+        let erleThresholdDb: Float = 2.0
+        let convergenceMinFrames: Int64 = 3000  // ~30 seconds at 100 frames/sec
+        if stats.currentMode != .off
+            && stats.framesProcessed >= convergenceMinFrames
+            && !stats.adaptationFrozen
+            && stats.erleDb < erleThresholdDb
+            && renderRmsLinear > 0.001  // render has actual signal (not silence)
+        {
+            let nonConvergingMsg = "AEC_NONCONVERGING: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
+                + " after \(stats.framesProcessed) frames"
+                + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
+                + ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
+                + ", mode=\(stats.currentMode)"
+            Task {
+                await DiagnosticLogger.shared.log(.aec, nonConvergingMsg)
+            }
         }
     }
 

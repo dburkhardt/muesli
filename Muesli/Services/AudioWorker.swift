@@ -100,6 +100,11 @@ final class AudioWorker {
     private var renderFedCount: Int64 = 0
     private var captureFedCount: Int64 = 0
 
+    /// Accumulated RMS sums for the current telemetry interval (reset after each telemetry log).
+    private var renderRmsAccumulator: Double = 0
+    private var captureRmsAccumulator: Double = 0
+    private var rmsFrameCount: Int = 0
+
     /// Circular buffer for processing time history (O(1) insert, no heap allocs after init).
     private let processingTimeHistorySize = 100
     private var processingTimesRing: [Double]
@@ -218,6 +223,9 @@ final class AudioWorker {
         stats.isRunning = isRunning
         renderFedCount = 0
         captureFedCount = 0
+        renderRmsAccumulator = 0
+        captureRmsAccumulator = 0
+        rmsFrameCount = 0
         processingTimesWriteIndex = 0
         processingTimesCount = 0
 
@@ -284,6 +292,11 @@ final class AudioWorker {
                 _ = aecProcessor.feedRenderFrame(renderFrameBuffer, isStable: synchronizer.isStable)
                 renderFedCount += 1
                 renderFedThisIteration += 1
+
+                // Accumulate render RMS for telemetry
+                let renderRms = computeRMS(renderFrameBuffer)
+                renderRmsAccumulator += Double(renderRms)
+                rmsFrameCount += 1
             }
         }
 
@@ -298,6 +311,10 @@ final class AudioWorker {
             guard let metadata else {
                 break
             }
+
+            // Accumulate capture RMS for telemetry
+            let captureRms = computeRMS(captureFrameBuffer)
+            captureRmsAccumulator += Double(captureRms)
 
             let processStart = DispatchTime.now()
             let processedCapture: [Float]
@@ -360,8 +377,31 @@ final class AudioWorker {
         let currentStats = stats
         lock.unlock()
 
-        // Periodic AEC telemetry (~every 10 seconds)
-        aecProcessor.logPeriodicTelemetry(workerStats: currentStats)
+        // Compute rolling RMS averages for this telemetry window
+        let avgRenderRms = rmsFrameCount > 0 ? Float(renderRmsAccumulator / Double(rmsFrameCount)) : 0
+        let avgCaptureRms = rmsFrameCount > 0 ? Float(captureRmsAccumulator / Double(rmsFrameCount)) : 0
+
+        // Periodic AEC telemetry (~every 10 seconds); reset RMS accumulators after logging
+        let prevFrameCount = aecProcessor.lastTelemetryFrameCount
+        aecProcessor.logPeriodicTelemetry(
+            workerStats: currentStats,
+            renderRmsLinear: avgRenderRms,
+            captureRmsLinear: avgCaptureRms
+        )
+        // Reset accumulators when a telemetry log was emitted
+        if aecProcessor.lastTelemetryFrameCount != prevFrameCount {
+            renderRmsAccumulator = 0
+            captureRmsAccumulator = 0
+            rmsFrameCount = 0
+        }
+    }
+
+    /// Compute RMS amplitude of a mono Float32 frame.
+    private func computeRMS(_ samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sumSq: Float = 0
+        for s in samples { sumSq += s * s }
+        return (sumSq / Float(samples.count)).squareRoot()
     }
 
     /// Update processing time statistics using circular buffer (O(1), no allocations).

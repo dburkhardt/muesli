@@ -1149,4 +1149,131 @@ final class RegressionTests: XCTestCase {
 
         XCTAssertTrue(true, "Permission recovery reuses OnboardingView in .permissionRecovery mode")
     }
+
+    // MARK: - AEC Release/Debug Divergence Regression Tests (Phase 5–7, Feb 2026)
+
+    /// Regression test: AEC topology-mode to AEC-mode mapping is correct
+    /// Documents the spec: unknown → conservative, speakerphone → aggressive, headset → off.
+    /// If this mapping changes, AEC behaviour changes in all builds.
+    func testAECModeTopologyMapping() {
+        let aec = AECProcessor()
+
+        aec.configure(topology: .unknown)
+        XCTAssertEqual(aec.mode, .conservative,
+            "Unknown topology should use conservative AEC")
+
+        aec.configure(topology: .speakerphone)
+        XCTAssertEqual(aec.mode, .aggressive,
+            "Speakerphone topology should use aggressive AEC")
+
+        aec.configure(topology: .headset)
+        XCTAssertEqual(aec.mode, .off,
+            "Headset topology should disable AEC to avoid near-field artefacts")
+    }
+
+    /// Regression test: AEC init sequence — reset BEFORE configure, not after.
+    /// Bug category: "stable but non-converging" — can occur when configure() is called before
+    /// reset() so the AEC3 filter carries over stale delay estimates from a prior session.
+    ///
+    /// Required sequence at every session start (including post-permission-recovery):
+    ///   1. synchronizer.resetForNewSession()  — no cooldown carry-over
+    ///   2. aecProcessor.reset()               — clear AEC3 internal state
+    ///   3. synchronizer.configure(topology:)  — apply topology to fresh state
+    ///   4. aecProcessor.configure(topology:)  — apply mode to fresh state
+    ///
+    /// This test verifies that calling reset() after configure() re-applies the correct mode.
+    func testAECInitSequenceResetBeforeConfigure() {
+        let aec = AECProcessor()
+
+        // Simulate a prior session with aggressive mode
+        aec.configure(topology: .speakerphone)
+        XCTAssertEqual(aec.mode, .aggressive)
+
+        // Correct sequence: reset first, then configure for new topology
+        aec.reset()
+        aec.configure(topology: .unknown)
+        XCTAssertEqual(aec.mode, .conservative,
+            "After reset+configure, mode should reflect new topology, not prior session's mode")
+
+        // Verify frozen state is cleared by reset
+        XCTAssertFalse(aec.isAdaptationFrozen,
+            "After reset, adaptation should not be frozen")
+    }
+
+    /// Regression test: AEC stats fields are zero-initialised after reset()
+    /// When AEC3 is reset, ERLE should read 0 dB (not a stale value from a previous session).
+    /// A stale non-zero ERLE after reset would cause the non-converging detector to miss the condition.
+    func testAECStatsZeroAfterReset() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)  // aggressive mode so AEC is active
+
+        // Feed a small number of silence frames to initialise internal state
+        let silence = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+        for _ in 0..<10 {
+            aec.feedRenderFrame(silence, isStable: true)
+            _ = aec.processCaptureFrame(silence, isStable: true)
+        }
+
+        // Reset and verify stats are cleared
+        aec.reset()
+        let stats = aec.getStats()
+
+        XCTAssertEqual(stats.framesProcessed, 0,
+            "framesProcessed should be 0 after reset")
+        XCTAssertEqual(stats.framesSkipped, 0,
+            "framesSkipped should be 0 after reset")
+        XCTAssertFalse(stats.adaptationFrozen,
+            "adaptationFrozen should be false after reset")
+        // Note: erleDb may not be exactly 0 (depends on bridge implementation),
+        // but framesProcessed must be 0 so the non-converging detector doesn't fire immediately.
+    }
+
+    /// Regression test: AEC non-converging condition is detectable via stats fields.
+    /// This test documents the threshold used by logPeriodicTelemetry's AEC_NONCONVERGING detector:
+    ///   - framesProcessed >= 3000 (~30 seconds)
+    ///   - erleDb < 2.0 dB
+    ///   - mode != .off
+    ///   - isAdaptationFrozen == false
+    ///
+    /// On silence input, ERLE is 0 dB because there is no echo to cancel.
+    /// The detector therefore fires on silence if the render RMS threshold (>0.001) is not met.
+    /// A release build with a stale/incompatible WebRTC artifact may show 0.2 dB ERLE on real audio,
+    /// which also satisfies the < 2 dB threshold — the detector will log AEC_NONCONVERGING.
+    func testAECNonConvergingConditionIsDetectable() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)  // aggressive mode
+
+        let silence = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+        let framesToProcess: Int = 3001  // Just above the 3000-frame threshold
+
+        for _ in 0..<framesToProcess {
+            aec.feedRenderFrame(silence, isStable: true)
+            _ = aec.processCaptureFrame(silence, isStable: true)
+        }
+
+        let stats = aec.getStats()
+
+        // Verify the conditions that trigger AEC_NONCONVERGING are detectable
+        XCTAssertGreaterThanOrEqual(stats.framesProcessed, 3000,
+            "framesProcessed should exceed convergence threshold of 3000")
+        XCTAssertNotEqual(stats.currentMode, .off,
+            "mode must not be .off for non-converging detection to fire")
+        XCTAssertFalse(stats.adaptationFrozen,
+            "adaptation must not be frozen for non-converging detection to fire")
+        // ERLE on pure silence is 0.0 dB — well below the 2.0 dB threshold
+        XCTAssertLessThan(stats.erleDb, 2.0,
+            "ERLE on silence should be below 2.0 dB (0.0 dB means no echo reduction)")
+    }
+
+    /// Regression test: lastTelemetryFrameCount is accessible for RMS accumulator reset in AudioWorker.
+    /// AudioWorker reads aecProcessor.lastTelemetryFrameCount before and after calling
+    /// logPeriodicTelemetry() to detect when a log was emitted, then resets the RMS accumulators.
+    /// This requires lastTelemetryFrameCount to be internal (not private).
+    func testAECLastTelemetryFrameCountIsAccessible() {
+        let aec = AECProcessor()
+        // If this compiles, lastTelemetryFrameCount is accessible (not private).
+        let initialCount = aec.lastTelemetryFrameCount
+        XCTAssertEqual(initialCount, 0,
+            "lastTelemetryFrameCount should start at 0")
+    }
 }
