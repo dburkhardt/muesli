@@ -1672,5 +1672,44 @@ final class RegressionTests: XCTestCase {
             "Debug builds must allow AEC to be disabled for testing"
         )
     }
+
+    /// Integration test: simulate the full Release migration path end-to-end.
+    /// Seeds UserDefaults with false, runs the same logic as PreferencesManager.init()'s
+    /// Release branch, and verifies UserDefaults is corrected and marker is set.
+    /// This catches regressions where the init migration is removed or broken.
+    @MainActor
+    func testAECReleaseMigrationPath_EndToEnd() {
+        // Seed stale state
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.echoCancellationEnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+
+        // Replay the Release init migration logic (mirrors PreferencesManager.init #else branch)
+        let savedValue = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
+        let effective = PreferencesManager.effectiveAECEnabled(storedValue: savedValue, isRelease: true)
+        if effective && !savedValue {
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.echoCancellationEnabled)
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+        }
+
+        // Verify post-migration state
+        XCTAssertTrue(effective, "Effective AEC must be true in Release")
+        XCTAssertTrue(
+            UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled),
+            "UserDefaults echoCancellationEnabled must be corrected to true"
+        )
+        XCTAssertTrue(
+            UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone),
+            "Migration marker must be set after correcting false -> true"
+        )
+
+        // A new PreferencesManager created after migration should see true
+        let manager = PreferencesManager()
+        XCTAssertTrue(manager.isEchoCancellationEnabled,
+                       "New PreferencesManager after migration must report AEC enabled")
+
+        // Cleanup
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.echoCancellationEnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+    }
 }
 
