@@ -324,7 +324,12 @@ final class AudioWorker {
                 // to know the acoustic echo path delay. Without it, AEC3 assumes delay=0
                 // and cannot converge — ERLE stays pinned at ~0 dB regardless of signal quality.
                 let delayMs = synchronizer.coarseDelayMs
-                aecProcessor.setStreamDelayMs(delayMs)
+                let delaySet = aecProcessor.setStreamDelayMs(delayMs)
+                if !delaySet {
+                    lock.lock()
+                    stats.framesMissed += 1
+                    lock.unlock()
+                }
 
                 processedCapture = aecProcessor.processCaptureFrame(
                     captureFrameBuffer,

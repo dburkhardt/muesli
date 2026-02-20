@@ -34,6 +34,8 @@ struct AECStats {
     var renderRmsLinear: Float = 0
     /// Rolling RMS of the capture (near-end/mic) signal, in linear scale (updated per telemetry interval).
     var captureRmsLinear: Float = 0
+    /// Last delay value fed to AEC3 via setStreamDelayMs (ms). -1 if never set.
+    var lastStreamDelayMs: Int = -1
 }
 
 // MARK: - AEC Processor
@@ -308,7 +310,11 @@ final class AECProcessor {
         guard delayMs >= 0 else { return false }
         return stateLock.withLock { state -> Bool in
             guard let bridge = state.bridge, bridge.isReady else { return false }
-            return bridge.setStreamDelayMs(Int32(delayMs))
+            let ok = bridge.setStreamDelayMs(Int32(delayMs))
+            if ok {
+                state.stats.lastStreamDelayMs = delayMs
+            }
+            return ok
         }
     }
 
@@ -379,6 +385,7 @@ final class AECProcessor {
 
         var msg = "AEC_TELEMETRY: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
         msg += ", delay=\(stats.delayMs)ms"
+        msg += ", streamDelay=\(stats.lastStreamDelayMs)ms"
         msg += ", mode=\(stats.currentMode)"
         msg += ", processed=\(stats.framesProcessed)"
         msg += ", skipped=\(stats.framesSkipped)"

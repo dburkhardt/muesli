@@ -168,6 +168,25 @@ final class CoarseDelayController {
         }
     }
     
+    /// Seed the delay estimate directly from a known render-lead measurement.
+    /// Use at stable-transition time when the render lead is directly observable
+    /// from buffer depths — bypasses slew limiting so AEC3 gets the correct delay
+    /// immediately rather than ramping from 0 over ~90 seconds.
+    /// - Parameter delaySamples: Known render-to-capture offset in samples
+    func seed(delaySamples: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let clamped = max(Self.minDelaySamples, min(Self.maxDelaySamples, delaySamples))
+        currentDelaySamples = clamped
+        targetDelaySamples = clamped
+        // Reset history so variance/stability tracking reflects the seeded value
+        delayHistory.removeAll()
+        delayHistory.append(clamped)
+
+        logger.info("CoarseDelayController seeded: \(clamped) samples (\(String(format: "%.1f", Double(clamped)/48.0))ms)")
+    }
+
     /// Reset the controller
     func reset() {
         lock.lock()

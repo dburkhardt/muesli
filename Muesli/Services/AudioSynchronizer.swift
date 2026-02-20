@@ -269,17 +269,21 @@ final class AudioSynchronizer {
                 lastStableTime = Date()
                 delayController.unfreezeAdaptation()
                 let renderLeadSamples = renderRing.available - captureRing.available
-                logger.info("Synchronizer transitioned to stable from priming")
+                // Seed the delay controller with the observed render lead so AEC3 receives
+                // the correct delay immediately. Without seeding, currentDelaySamples starts
+                // at 0 and slews at ~2ms/sec — taking ~90s to reach a typical 175ms lead.
+                delayController.seed(delaySamples: renderLeadSamples)
+                logger.info("Synchronizer transitioned to stable from priming, seeded delay=\(renderLeadSamples)samples")
                 Task {
                     await DiagnosticLogger.shared.log(.aec,
-                        "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples")
+                        "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples, seededDelay=\(renderLeadSamples)samples")
                 }
             } else {
                 // Continue priming - wait for render lead
                 return nil
             }
             fallthrough
-            
+
         case .unstable:
             // During unstable state, still output frames but mark as unstable
             // Re-check stability conditions
@@ -288,10 +292,12 @@ final class AudioSynchronizer {
                 lastStableTime = Date()
                 delayController.unfreezeAdaptation()
                 let renderLeadSamples = renderRing.available - captureRing.available
-                logger.info("Synchronizer transitioned to stable from unstable")
+                // Re-seed on recovery from unstable — the lead may have changed
+                delayController.seed(delaySamples: renderLeadSamples)
+                logger.info("Synchronizer transitioned to stable from unstable, seeded delay=\(renderLeadSamples)samples")
                 Task {
                     await DiagnosticLogger.shared.log(.aec,
-                        "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples")
+                        "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples, seededDelay=\(renderLeadSamples)samples")
                 }
             }
             fallthrough
