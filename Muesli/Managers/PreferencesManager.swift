@@ -236,41 +236,106 @@ final class PreferencesManager {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.exportDirectory)
     }
     
-    /// Testable pure function: given the stored preference value and build mode,
-    /// returns the effective AEC enabled state. In Release, always returns true.
+    // MARK: - AEC Startup Policy
+
+    /// Tri-state for a stored UserDefaults boolean: distinguishes "never set" from explicit false.
+    enum StoredBool: Equatable, CustomStringConvertible {
+        case unset
+        case value(Bool)
+
+        var description: String {
+            switch self {
+            case .unset: return "unset"
+            case .value(let b): return "\(b)"
+            }
+        }
+
+        init(forKey key: String, defaults: UserDefaults = .standard) {
+            if defaults.object(forKey: key) != nil {
+                self = .value(defaults.bool(forKey: key))
+            } else {
+                self = .unset
+            }
+        }
+    }
+
+    /// Decision object returned by the AEC startup policy function.
+    struct AECStartupDecision: Equatable {
+        let effectiveValue: Bool
+        let shouldWriteEnabled: Bool
+        let shouldSetMigrationDone: Bool
+    }
+
+    /// Pure function: given the stored preference, build mode, and migration state,
+    /// returns what init() should do. Testable without UserDefaults side-effects.
+    static func resolveAECStartupPolicy(
+        storedPref: StoredBool,
+        isRelease: Bool,
+        migrationAlreadyDone: Bool
+    ) -> AECStartupDecision {
+        let savedValue: Bool
+        switch storedPref {
+        case .unset: savedValue = true
+        case .value(let b): savedValue = b
+        }
+
+        if isRelease {
+            let needsWrite = !savedValue
+            let needsMigrationMark = needsWrite && !migrationAlreadyDone
+            return AECStartupDecision(
+                effectiveValue: true,
+                shouldWriteEnabled: needsWrite,
+                shouldSetMigrationDone: needsMigrationMark
+            )
+        } else {
+            return AECStartupDecision(
+                effectiveValue: savedValue,
+                shouldWriteEnabled: false,
+                shouldSetMigrationDone: false
+            )
+        }
+    }
+
+    /// Convenience wrapper for backward compatibility.
     static func effectiveAECEnabled(storedValue: Bool, isRelease: Bool) -> Bool {
-        isRelease ? true : storedValue
+        resolveAECStartupPolicy(
+            storedPref: .value(storedValue),
+            isRelease: isRelease,
+            migrationAlreadyDone: false
+        ).effectiveValue
     }
 
     // MARK: - Initialization
 
     init() {
-        // Load persisted echo cancellation state (default to true if not set)
-        let savedValue: Bool
-        if UserDefaults.standard.object(forKey: AppStorageKeys.echoCancellationEnabled) != nil {
-            savedValue = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
-        } else {
-            savedValue = true  // Default: AEC enabled for new installations
-        }
+        let storedPref = StoredBool(forKey: AppStorageKeys.echoCancellationEnabled)
+        let migrationDone = UserDefaults.standard.object(forKey: AppStorageKeys.aecAlwaysOnMigrationDone) != nil
+            && UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
 
         #if DEBUG
-        let effectiveValue = savedValue
+        let isRelease = false
         #else
-        // Release: force AEC on, migrating stale false values from prior RC/beta installs
-        if !savedValue {
-            UserDefaults.standard.set(true, forKey: AppStorageKeys.echoCancellationEnabled)
-            if !UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone) {
-                UserDefaults.standard.set(true, forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
-                Task {
-                    await DiagnosticLogger.shared.log(.aec, "AEC_PREF_MIGRATED_FALSE_TO_TRUE")
-                }
-            }
-        }
-        let effectiveValue = true
+        let isRelease = true
         #endif
 
-        _isEchoCancellationEnabled = effectiveValue
-        echoCancellationLock.withLock { $0 = effectiveValue }
+        let decision = Self.resolveAECStartupPolicy(
+            storedPref: storedPref,
+            isRelease: isRelease,
+            migrationAlreadyDone: migrationDone
+        )
+
+        if decision.shouldWriteEnabled {
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.echoCancellationEnabled)
+        }
+        if decision.shouldSetMigrationDone {
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+            Task {
+                await DiagnosticLogger.shared.log(.aec, "AEC_PREF_MIGRATED_FALSE_TO_TRUE")
+            }
+        }
+
+        _isEchoCancellationEnabled = decision.effectiveValue
+        echoCancellationLock.withLock { $0 = decision.effectiveValue }
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()

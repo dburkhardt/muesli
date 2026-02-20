@@ -259,6 +259,48 @@ jobs:
             exit 1
           fi
 
+      - name: Verify AEC policy guards
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Release/Muesli.app -maxdepth 0 -type d | head -1)
+          BINARY="$APP_PATH/Contents/MacOS/Muesli"
+          FAIL=0
+
+          # Release binary must not contain debug-only AEC override key
+          if strings "$BINARY" | grep -q "aecDebugForceOff"; then
+            echo "❌ Release binary contains aecDebugForceOff debug key"
+            FAIL=1
+          else
+            echo "✅ No debug AEC override in Release binary"
+          fi
+
+          # Required AEC observability fields must exist in source
+          for FIELD in "aecStoredPref=" "aecEffective="; do
+            if ! grep -q "$FIELD" Muesli/Services/TapAudioCaptureService.swift; then
+              echo "❌ Missing $FIELD in TapAudioCaptureService logging"
+              FAIL=1
+            fi
+          done
+          [ $FAIL -eq 0 ] && echo "✅ AEC log fields present in source"
+
+          # Testable policy function must exist (guards against accidental removal)
+          if ! grep -q "resolveAECStartupPolicy" Muesli/Managers/PreferencesManager.swift; then
+            echo "❌ resolveAECStartupPolicy missing from PreferencesManager"
+            FAIL=1
+          else
+            echo "✅ AEC startup policy function present"
+          fi
+
+          # Policy tests must exist (guards against test removal)
+          if ! grep -q "testAECPolicy_Matrix" MuesliTests/PreferencesManagerTests.swift; then
+            echo "❌ testAECPolicy_Matrix missing from PreferencesManagerTests"
+            FAIL=1
+          else
+            echo "✅ AEC policy matrix test present"
+          fi
+
+          [ $FAIL -ne 0 ] && exit 1
+          echo "✅ All AEC policy guards passed"
+
   summary:
     name: CI Summary
     runs-on: ubuntu-latest

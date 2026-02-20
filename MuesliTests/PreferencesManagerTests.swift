@@ -453,54 +453,66 @@ final class PreferencesManagerTests: XCTestCase {
         XCTAssertEqual(mode, .postProcessing)
     }
     
-    // MARK: - AEC Always-On Regression Tests
-    
-    /// Verify effectiveAECEnabled returns true in Release mode regardless of stored value.
-    /// This tests the Release code path from Debug test builds via the testable static method.
-    func testEffectiveAEC_ReleaseAlwaysTrue() async {
-        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: true),
-                       "Release must force AEC on even when stored value is false")
-        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: true, isRelease: true),
-                       "Release must keep AEC on when stored value is true")
-    }
-    
-    /// Verify effectiveAECEnabled respects stored value in Debug mode.
-    func testEffectiveAEC_DebugRespectsStored() async {
-        XCTAssertFalse(PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: false),
-                        "Debug must respect stored false value")
-        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: true, isRelease: false),
-                       "Debug must respect stored true value")
-    }
-    
-    /// Verify that a stale false value in UserDefaults is corrected on fresh init.
-    /// In Debug builds, PreferencesManager respects the stored value, so this test
-    /// validates the migration path via the static effectiveAECEnabled method.
-    func testStoredFalseValue_IsCorrectedByReleaseMigration() async {
-        UserDefaults.standard.set(false, forKey: AppStorageKeys.echoCancellationEnabled)
-        
-        let effective = PreferencesManager.effectiveAECEnabled(
-            storedValue: UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled),
-            isRelease: true
-        )
-        XCTAssertTrue(effective, "Release migration must correct stale false to true")
-    }
-    
-    /// Verify migration marker key is set after migration logic runs.
-    func testMigrationMarker_IsSetAfterAECMigration() async {
-        UserDefaults.standard.set(false, forKey: AppStorageKeys.echoCancellationEnabled)
-        UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
-        
-        // Simulate the Release migration path
-        let storedValue = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
-        if PreferencesManager.effectiveAECEnabled(storedValue: storedValue, isRelease: true) && !storedValue {
-            UserDefaults.standard.set(true, forKey: AppStorageKeys.echoCancellationEnabled)
-            UserDefaults.standard.set(true, forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+    // MARK: - AEC Startup Policy Matrix Tests
+
+    /// Matrix test: (stored: unset/false/true × isRelease: true/false) → decision
+    func testAECPolicy_Matrix() async {
+        typealias SB = PreferencesManager.StoredBool
+        typealias D = PreferencesManager.AECStartupDecision
+
+        let cases: [(SB, Bool, Bool, D, String)] = [
+            // stored               isRelease  migDone  expected                                                                  label
+            (.unset,                true,      false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "unset×release"),
+            (.unset,                false,     false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "unset×debug"),
+            (.value(true),          true,      false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "true×release"),
+            (.value(true),          false,     false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "true×debug"),
+            (.value(false),         true,      false,   D(effectiveValue: true,  shouldWriteEnabled: true,  shouldSetMigrationDone: true),  "false×release"),
+            (.value(false),         false,     false,   D(effectiveValue: false, shouldWriteEnabled: false, shouldSetMigrationDone: false), "false×debug"),
+        ]
+
+        for (stored, isRelease, migDone, expected, label) in cases {
+            let result = PreferencesManager.resolveAECStartupPolicy(
+                storedPref: stored, isRelease: isRelease, migrationAlreadyDone: migDone
+            )
+            XCTAssertEqual(result, expected, label)
         }
-        
-        XCTAssertTrue(UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone),
-                       "Migration marker must be set after correcting false -> true")
-        XCTAssertTrue(UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled),
-                       "UserDefaults must be corrected to true")
+    }
+
+    /// When migration was already done, should not re-mark migration even for stored false.
+    func testAECPolicy_MigrationAlreadyDone_SkipsMigrationMarker() async {
+        let result = PreferencesManager.resolveAECStartupPolicy(
+            storedPref: .value(false), isRelease: true, migrationAlreadyDone: true
+        )
+        XCTAssertTrue(result.effectiveValue)
+        XCTAssertTrue(result.shouldWriteEnabled)
+        XCTAssertFalse(result.shouldSetMigrationDone,
+            "Should not re-mark migration when already done")
+    }
+
+    /// Integration test: fresh install (unset key) through the shared helper used by init().
+    func testAECPolicy_Integration_FreshInstall() async {
+        clearUserDefaults()
+
+        let stored = PreferencesManager.StoredBool(forKey: AppStorageKeys.echoCancellationEnabled)
+        let migDone = UserDefaults.standard.object(forKey: AppStorageKeys.aecAlwaysOnMigrationDone) != nil
+            && UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+
+        let decision = PreferencesManager.resolveAECStartupPolicy(
+            storedPref: stored, isRelease: true, migrationAlreadyDone: migDone
+        )
+
+        XCTAssertEqual(stored, .unset, "Fresh install must see echoCancellationEnabled as unset")
+        XCTAssertTrue(decision.effectiveValue, "Fresh install effective AEC must be true")
+        XCTAssertFalse(decision.shouldWriteEnabled, "Unset defaults to true; no write needed")
+        XCTAssertFalse(decision.shouldSetMigrationDone, "No migration needed on fresh install")
+    }
+
+    /// Backward-compat: effectiveAECEnabled convenience still works.
+    func testEffectiveAEC_BackwardCompat() async {
+        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: true))
+        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: true, isRelease: true))
+        XCTAssertFalse(PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: false))
+        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: true, isRelease: false))
     }
 }
 

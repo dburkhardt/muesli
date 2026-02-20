@@ -430,9 +430,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         logger.info("Tap-based audio capture started")
 
         let logTopology = self.topologyMode
-        // Read raw UserDefaults to expose the ground-truth preference, bypassing the
-        // guarded isAECEnabled() closure which already forces true in Release.
-        let logAECStoredPref = UserDefaults.standard.bool(forKey: "echoCancellationEnabled")
+        // Read raw UserDefaults as tri-state so fresh installs log "unset" instead of
+        // a misleading "false" (bool(forKey:) collapses unset → false).
+        let aecStoredObj = UserDefaults.standard.object(forKey: "echoCancellationEnabled")
+        let logAECStoredPref: String = aecStoredObj.map { "\($0 as? Bool ?? false)" } ?? "unset"
         let logAECEffective = isAECEnabled()
         #if DEBUG
         let logBuild = "DEBUG"
