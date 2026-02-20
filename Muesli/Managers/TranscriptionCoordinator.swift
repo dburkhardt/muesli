@@ -235,24 +235,53 @@ final class TranscriptionCoordinator {
             modelState = .notAvailable
             return .notAvailable
         }
+
+        // If the preferred model is still compiling/downloading, fall back to the first ready
+        // model for this session so recording starts immediately without blocking the user.
+        // The user's preference is unchanged — once the preferred model finishes compiling it
+        // will be used in the next session.
+        let modelToUse: ModelManager.ModelSize
+        let activeState = modelManager.downloadState(for: activeModel)
+        let isActiveModelBusy: Bool
+        switch activeState {
+        case .compiling, .downloading:
+            isActiveModelBusy = true
+        default:
+            isActiveModelBusy = false
+        }
+
+        if isActiveModelBusy,
+           let ready = modelManager.firstReadyModel,
+           ready != activeModel {
+            logger.info("MODEL_FALLBACK_FOR_SESSION: preferred=\(activeModel.rawValue) is busy (\(String(describing: activeState))), using \(ready.rawValue) for this session")
+            Task {
+                await DiagnosticLogger.shared.log(.transcription,
+                    "MODEL_FALLBACK_FOR_SESSION: preferred=\(activeModel.rawValue) busy, fallback=\(ready.rawValue)")
+            }
+            modelToUse = ready
+        } else {
+            modelToUse = activeModel
+        }
         
         // Validate model
-        guard modelManager.validateModel(activeModel),
-              let modelPath = modelManager.pathForModel(activeModel) else {
-            // Only mark corrupted on validation errors
-            modelManager.markModelCorrupted(activeModel)
-            
+        guard modelManager.validateModel(modelToUse),
+              let modelPath = modelManager.pathForModel(modelToUse) else {
+            // Only mark corrupted on validation errors (only applies to preferred active model)
+            if modelToUse == activeModel {
+                modelManager.markModelCorrupted(activeModel)
+            }
+
             // Try fallback
             if let fallback = modelManager.getFirstValidModel() {
                 modelManager.setActiveModel(fallback)
-                
+
                 // Notify user of model switch
-                let error = MuesliError.modelCorrupted(modelName: "\(activeModel)")
-                onModelSwitched?(activeModel, fallback, error)
-                
+                let error = MuesliError.modelCorrupted(modelName: "\(modelToUse)")
+                onModelSwitched?(modelToUse, fallback, error)
+
                 return await prepareModel()  // Retry with fallback
             }
-            
+
             modelState = .notAvailable
             return .notAvailable
         }
@@ -327,22 +356,22 @@ final class TranscriptionCoordinator {
             return .ready
         } catch {
             modelState = .failed(error)
-            
+
             // Only mark corrupted on specific initialization errors, not temporary failures
             if isInitializationError(error) {
-                modelManager.markModelCorrupted(activeModel)
+                modelManager.markModelCorrupted(modelToUse)
             }
-            
+
             if let fallback = modelManager.getFirstValidModel() {
                 modelManager.setActiveModel(fallback)
                 isInitialized = false
-                
+
                 // Notify user of model switch
-                onModelSwitched?(activeModel, fallback, error)
-                
+                onModelSwitched?(modelToUse, fallback, error)
+
                 return await prepareModel()  // Retry with fallback
             }
-            
+
             return .failed(error)
         }
     }

@@ -77,6 +77,11 @@ enum AppStorageKeys {
     
     /// Dictionary of model paths (stored as [String: String] - model rawValue to path)
     static let whisperModelPaths = "whisperModelPaths"
+
+    /// Dictionary of compile stamps (stored as [String: String] - model rawValue to stamp string)
+    /// Stamp format: "\(modelRawValue)|\(folderPath)|\(folderModTime)|\(appVersion)"
+    /// Used to skip redundant CoreML compilation probes on subsequent launches.
+    static let whisperModelCompileStamps = "whisperModelCompileStamps"
     
     // MARK: - LLM Models
     

@@ -97,6 +97,7 @@
 		E1000005241D1A1D00000072 /* MuesliError.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000006241D1A1D00000072 /* MuesliError.swift */; };
 		E83D43D0A25FBD04284F00E9 /* TapAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD94A92AC2E88688FAD211F /* TapAudioCaptureService.swift */; };
 		'CA00001241D1A1D00000048' = {isa = PBXBuildFile; fileRef = CA00002241D1A1D00000048; };
+		'RT00001241D1A1D00000050' = {isa = PBXBuildFile; fileRef = RT00002241D1A1D00000050; };
 		'EC00001241D1A1D00000047' = {isa = PBXBuildFile; fileRef = EC00002241D1A1D00000047; };
 		'TPT0001241D1A1D00000049' = {isa = PBXBuildFile; fileRef = TPT0002241D1A1D00000049; };
 		F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000002241D1A1D00000080 /* AudioConfiguration.swift */; };
@@ -215,6 +216,7 @@
 		E1000006241D1A1D00000072 /* MuesliError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuesliError.swift; sourceTree = "<group>"; };
 		EAD94A92AC2E88688FAD211F /* TapAudioCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TapAudioCaptureService.swift; path = Muesli/Services/TapAudioCaptureService.swift; sourceTree = SOURCE_ROOT; };
 		'CA00002241D1A1D00000048' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreAudioTapTests.swift; sourceTree = "<group>"; };
+		'RT00002241D1A1D00000050' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegressionTests.swift; sourceTree = "<group>"; };
 		'EC00002241D1A1D00000047' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoCancellationServiceTests.swift; sourceTree = "<group>"; };
 		'TPT0002241D1A1D00000049' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptProcessorTests.swift; sourceTree = "<group>"; };
 		ECBD460EA8184AA5AD56F062 /* DriftTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DriftTracker.swift; path = Muesli/Services/DriftTracker.swift; sourceTree = SOURCE_ROOT; };
@@ -433,6 +435,7 @@
 				MM00002241D1A1D00000051 /* ModelManagerTests.swift */,
 				EC00002241D1A1D00000047,
 				CA00002241D1A1D00000048,
+				RT00002241D1A1D00000050,
 				TPT0002241D1A1D00000049,
 				B100001D241D1A1D00000040 /* Protocols */,
 				B100001E241D1A1D00000040 /* Mocks */,
@@ -767,6 +770,7 @@
 				MM00001241D1A1D00000051 /* ModelManagerTests.swift in Sources */,
 				EC00001241D1A1D00000047,
 				CA00001241D1A1D00000048,
+				RT00001241D1A1D00000050,
 				TPT0001241D1A1D00000049,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

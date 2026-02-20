@@ -415,11 +415,49 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
 
     /// Trigger compilation probe for the active model on app launch.
     /// Call this after init has set activeModel.
+    /// Skips compilation if the compile stamp matches (model folder unchanged, same app version).
     /// Fast (~1-2s) if CoreML cache is warm; full compilation if cache was evicted.
     func probeActiveModelCompilation() {
         guard let active = activeModel, downloadedModels.contains(active) else { return }
+
+        if compileStampIsValid(for: active) {
+            // Stamp matches — CoreML cache should be warm, skip probe.
+            Self.logger.info("MODEL_COMPILE_PROBE_SKIPPED: \(active.displayName) — compile stamp is current")
+            // Model remains .completed; no state change needed.
+            return
+        }
+
+        Self.logger.info("MODEL_COMPILE_PROBE_START: \(active.displayName) — compile stamp missing or stale")
         downloadStates[active] = .compiling
         startCompilation(for: active)
+    }
+
+    // MARK: - Compile Stamp Helpers
+
+    /// Build the compile stamp string for a model.
+    /// Format: "<modelRawValue>|<folderPath>|<folderModTime>|<appVersion>"
+    private func buildCompileStamp(for model: ModelSize) -> String? {
+        guard let folderURL = pathForModel(model) else { return nil }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: folderURL.path)
+        let modTime = (attrs?[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        return "\(model.rawValue)|\(folderURL.path)|\(modTime)|\(appVersion)"
+    }
+
+    /// Returns true if the persisted compile stamp for `model` matches the current stamp.
+    private func compileStampIsValid(for model: ModelSize) -> Bool {
+        guard let current = buildCompileStamp(for: model) else { return false }
+        let stamps = UserDefaults.standard.dictionary(forKey: AppStorageKeys.whisperModelCompileStamps) as? [String: String] ?? [:]
+        return stamps[model.rawValue] == current
+    }
+
+    /// Persist the compile stamp for `model` after successful compilation.
+    func saveCompileStamp(for model: ModelSize) {
+        guard let stamp = buildCompileStamp(for: model) else { return }
+        var stamps = UserDefaults.standard.dictionary(forKey: AppStorageKeys.whisperModelCompileStamps) as? [String: String] ?? [:]
+        stamps[model.rawValue] = stamp
+        UserDefaults.standard.set(stamps, forKey: AppStorageKeys.whisperModelCompileStamps)
+        Self.logger.debug("Saved compile stamp for \(model.displayName)")
     }
     
     // MARK: - Download
@@ -658,6 +696,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
 
                 let duration = Date().timeIntervalSince(startTime)
                 self.downloadStates[model] = .completed
+                self.saveCompileStamp(for: model)
 
                 Task {
                     await DiagnosticLogger.shared.log(
@@ -817,5 +856,6 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.downloadedWhisperModels)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.whisperModelPaths)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.whisperModelCompileStamps)
     }
 }

@@ -1,3 +1,5 @@
+import AVFoundation
+import CoreMedia
 @testable import Muesli
 import XCTest
 
@@ -1502,4 +1504,153 @@ final class RegressionTests: XCTestCase {
         XCTAssertEqual(stats.discontinuities, 0,
             "resetForNewSession() should clear discontinuity count")
     }
+
+    // MARK: - Compile Stamp (Feb 2026)
+
+    /// Regression test: probeActiveModelCompilation() must NOT set .compiling when stamp is valid.
+    ///
+    /// Bug: Every app launch triggered a full CoreML compilation probe for Large v3 Turbo,
+    ///      causing a long "compiling" spinner on every launch even when the model was already cached.
+    /// Fix: A compile stamp is persisted in UserDefaults (model + path + mod-time + app-version).
+    ///      probeActiveModelCompilation() skips compilation and logs MODEL_COMPILE_PROBE_SKIPPED
+    ///      when the stamp matches the current state.
+    ///
+    /// Done when: launching the app multiple times without changing model files does not
+    /// re-enter .compiling state.
+    @MainActor
+    func testCompileProbeSkippedWhenStampIsValid() async throws {
+        // Use a real (skipScan) ModelManager so we can exercise saveCompileStamp
+        let modelManager = ModelManager(skipScan: true)
+
+        // Manually register a downloaded model with a path that resolves
+        let tempModelDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MuesliStampTest_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempModelDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempModelDir) }
+
+        // Also clean up the UserDefaults stamp key after the test
+        defer {
+            UserDefaults.standard.removeObject(forKey: AppStorageKeys.whisperModelCompileStamps)
+        }
+
+        let model = ModelManager.ModelSize.small
+        modelManager.downloadedModels.insert(model)
+        modelManager.downloadStates[model] = .completed
+        modelManager.modelPaths[model] = tempModelDir
+        modelManager.activeModel = model
+
+        // Step 1: Save a valid compile stamp for the model
+        modelManager.saveCompileStamp(for: model)
+
+        // Step 2: Call probeActiveModelCompilation() — stamp should be current,
+        //         so it must NOT change the state to .compiling.
+        modelManager.probeActiveModelCompilation()
+
+        // The stamp is valid → state remains .completed (probe skipped)
+        XCTAssertEqual(
+            modelManager.downloadStates[model], .completed,
+            "probeActiveModelCompilation() must leave state as .completed when stamp is valid"
+        )
+    }
+
+    /// Regression test: probeActiveModelCompilation() must set .compiling when stamp is missing.
+    ///
+    /// Done when: first launch (no stamp) or after model folder changes triggers compilation.
+    @MainActor
+    func testCompileProbeStartsWhenStampIsMissing() async throws {
+        let modelManager = ModelManager(skipScan: true)
+
+        let tempModelDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MuesliStampTestMissing_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempModelDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempModelDir) }
+        defer {
+            UserDefaults.standard.removeObject(forKey: AppStorageKeys.whisperModelCompileStamps)
+        }
+
+        let model = ModelManager.ModelSize.small
+        modelManager.downloadedModels.insert(model)
+        modelManager.downloadStates[model] = .completed
+        modelManager.modelPaths[model] = tempModelDir
+        modelManager.activeModel = model
+
+        // No stamp saved → probeActiveModelCompilation() must transition to .compiling
+        modelManager.probeActiveModelCompilation()
+
+        XCTAssertEqual(
+            modelManager.downloadStates[model], .compiling,
+            "probeActiveModelCompilation() must set .compiling when stamp is missing"
+        )
+    }
+
+    // MARK: - Session Fallback to firstReadyModel (Feb 2026)
+
+    /// Regression test: prepareModel() uses firstReadyModel when preferred model is compiling.
+    ///
+    /// Bug: When Large v3 Turbo was compiling at session start, recording would block waiting
+    ///      for it to finish, even though Large v3 was fully ready.
+    /// Fix: prepareModel() checks if activeModel is .compiling/.downloading and falls back to
+    ///      firstReadyModel for the session. User preference is unchanged.
+    ///
+    /// Done when: with Turbo compiling and Large ready, recording starts immediately using Large.
+    @MainActor
+    func testPrepareModelUsesFallbackWhenPreferredIsCompiling() async throws {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+
+        // Setup: Large (preferred) is compiling; Small is ready
+        mockModelManager.addDownloadedModel(.small, setActive: false)
+        mockModelManager.downloadStates[.large] = .compiling
+        mockModelManager.downloadedModels.insert(.large)
+        mockModelManager.mockModelPaths[.large] = mockModelManager.modelDirectory.appendingPathComponent("large")
+        mockModelManager.activeModel = .large  // user prefers large
+
+        let coordinator = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        // prepareModel() should fall back to Small for this session
+        let state = await coordinator.prepareModel()
+
+        // Session should be ready (using the fallback model)
+        XCTAssertTrue(state.isReady,
+            "prepareModel() should succeed using fallback model when preferred is compiling")
+
+        // User preference must NOT have changed
+        XCTAssertEqual(mockModelManager.activeModel, .large,
+            "User's preferred model (large) must not be changed after session fallback")
+
+        // setActiveModel should NOT have been called (preference unchanged)
+        XCTAssertEqual(mockModelManager.setActiveModelCallCount, 0,
+            "setActiveModel must not be called during session fallback")
+    }
+
+    // MARK: - AEC Telemetry Counter Reset (Feb 2026)
+
+    /// Regression test: AECProcessor.reset() must clear lastTelemetryFrameCount and
+    /// delayMismatchStartFrame so every new session emits early AEC_TELEMETRY at ~1s/~2s.
+    ///
+    /// Bug: After a long first session, lastTelemetryFrameCount was, say, 5000.
+    ///      On the next session, frames 100 and 200 would never trigger early telemetry
+    ///      (because 100 < 5000 and the "already fired" guard was hit), so diagnostics
+    ///      missed the critical first 20 seconds.
+    /// Fix: reset() now explicitly resets lastTelemetryFrameCount = 0
+    ///      and delayMismatchStartFrame = -1.
+    ///
+    /// Done when: each recording session emits early AEC_TELEMETRY at ~1s/~2s
+    ///            regardless of prior sessions.
+    func testAECResetClearsTelemetryCounters() {
+        let aec = AECProcessor()
+
+        // Simulate a long session: manually advance the telemetry counter
+        aec.lastTelemetryFrameCount = 5000
+
+        // reset() should clear everything
+        aec.reset()
+
+        XCTAssertEqual(aec.lastTelemetryFrameCount, 0,
+            "reset() must clear lastTelemetryFrameCount so early telemetry fires in the next session")
+    }
 }
+

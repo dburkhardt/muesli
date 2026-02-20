@@ -349,7 +349,12 @@ final class AECProcessor {
             state.stats.currentMode = state.mode
             return state.stats
         }
-        
+
+        // Reset session-scoped telemetry counters so each new recording session
+        // emits early AEC_TELEMETRY at ~1s/~2s regardless of prior sessions.
+        lastTelemetryFrameCount = 0
+        delayMismatchStartFrame = -1
+
         logger.info("AEC reset")
 
         let statsErle = statsSnapshot.erleDb
