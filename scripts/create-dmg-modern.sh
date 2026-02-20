@@ -131,8 +131,38 @@ BUILD_LOG="${PROJECT_ROOT}/build-release-${TIMESTAMP}.txt"
 # In CI mode, disable xcodebuild signing (we sign manually with Developer ID later)
 SIGNING_FLAGS=""
 if [ "$IS_CI_BUILD" = true ]; then
-    SIGNING_FLAGS="CODE_SIGN_IDENTITY= CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
+    SIGNING_FLAGS="CODE_SIGN_IDENTITY= CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
     log_info "xcodebuild signing disabled for CI build"
+fi
+
+# Check if WebRTC framework is available (not checked into git, optional dependency)
+WEBRTC_FRAMEWORK_PATH="${PROJECT_ROOT}/Muesli/Frameworks/webrtc_audio_processing.xcframework"
+if [ ! -d "${WEBRTC_FRAMEWORK_PATH}" ]; then
+    if [ "$IS_CI_BUILD" = true ]; then
+        log_error "WebRTC framework not found at ${WEBRTC_FRAMEWORK_PATH}"
+        log_error "Release CI builds MUST include real WebRTC AEC — stub fallback is not allowed"
+        exit 1
+    fi
+    log_warning "WebRTC framework not found at ${WEBRTC_FRAMEWORK_PATH}"
+    log_info "Building without WebRTC AEC support (stub implementation)"
+    # Create a stub library to satisfy the -lwebrtc-audio-all linker flag.
+    # The WebRTCAECBridge.mm compiles with WEBRTC_AVAILABLE=0 (stub implementation)
+    # but the project still has -lwebrtc-audio-all in OTHER_LDFLAGS.
+    STUB_DIR="${BUILD_DIR}/webrtc-stub"
+    mkdir -p "${STUB_DIR}"
+    echo "void __webrtc_stub(void) {}" > "${STUB_DIR}/stub.c"
+    clang -c -arch arm64 "${STUB_DIR}/stub.c" -o "${STUB_DIR}/stub_arm64.o"
+    clang -c -arch x86_64 "${STUB_DIR}/stub.c" -o "${STUB_DIR}/stub_x86_64.o"
+    ar rcs "${STUB_DIR}/libwebrtc-audio-all_arm64.a" "${STUB_DIR}/stub_arm64.o"
+    ar rcs "${STUB_DIR}/libwebrtc-audio-all_x86_64.a" "${STUB_DIR}/stub_x86_64.o"
+    lipo -create "${STUB_DIR}/libwebrtc-audio-all_arm64.a" "${STUB_DIR}/libwebrtc-audio-all_x86_64.a" \
+        -output "${STUB_DIR}/libwebrtc-audio-all.a"
+    log_info "Created universal stub libwebrtc-audio-all.a for CI build"
+
+    # Place stub in the expected framework directory so linker search paths find it
+    FRAMEWORK_STUB_DIR="${PROJECT_ROOT}/Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64"
+    mkdir -p "${FRAMEWORK_STUB_DIR}"
+    cp "${STUB_DIR}/libwebrtc-audio-all.a" "${FRAMEWORK_STUB_DIR}/"
 fi
 
 if ! xcodebuild \

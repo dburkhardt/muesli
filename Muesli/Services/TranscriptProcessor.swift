@@ -228,11 +228,43 @@ final class TranscriptProcessor {
         }
         
         // Detect repetitive text (common hallucination pattern)
-        // e.g. "Thank you. Thank you. Thank you."
-        if let firstWord = words.first, words.count >= 3 {
-            let isAllSameWord = words.allSatisfy { $0 == firstWord }
-            if isAllSameWord {
+        // e.g. "Thank you. Thank you. Thank you." or "Yes. Yes. Yes. Yes."
+        if words.count >= 3 {
+            // Check all-same-word: "yes yes yes yes"
+            if let firstWord = words.first, words.allSatisfy({ $0 == firstWord }) {
                 return true
+            }
+
+            // Check dominant-word repetition: if any single word makes up >= 60% of
+            // all words, it's almost certainly a hallucination (e.g. "yes of course yes yes yes")
+            var wordCounts: [String: Int] = [:]
+            for word in words { wordCounts[word, default: 0] += 1 }
+            if let maxCount = wordCounts.values.max(),
+               Double(maxCount) / Double(words.count) >= 0.6,
+               words.count >= 4 {
+                return true
+            }
+
+            // Check repeating n-gram pattern: "thank you thank you thank you"
+            // Look for 1-3 word phrases that repeat 3+ times consecutively
+            for gramSize in 1...min(3, words.count / 3) {
+                var repeatCount = 1
+                var maxRepeat = 1
+                let gram = Array(words.prefix(gramSize))
+                var i = gramSize
+                while i + gramSize <= words.count {
+                    let next = Array(words[i..<(i + gramSize)])
+                    if next == gram {
+                        repeatCount += 1
+                        maxRepeat = max(maxRepeat, repeatCount)
+                    } else {
+                        repeatCount = 1
+                    }
+                    i += gramSize
+                }
+                if maxRepeat >= 3 {
+                    return true
+                }
             }
         }
         

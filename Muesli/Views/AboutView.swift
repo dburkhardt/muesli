@@ -119,7 +119,7 @@ struct AboutView: View {
             buildDetailsSection
             
             // Copyright
-            Text("© 2024 Muesli")
+            Text("© 2026 Muesli")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             
@@ -220,6 +220,7 @@ struct AboutView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 4)
+                .padding(.bottom, 8)
             }
         }
         .padding(.vertical, 8)

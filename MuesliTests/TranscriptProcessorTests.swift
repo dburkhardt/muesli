@@ -232,9 +232,54 @@ final class TranscriptProcessorTests: XCTestCase {
             speaker: .me
         )
         processor.processSegment(segment)
-        
+
         // Should filter repetitive text
         XCTAssertEqual(processor.blocks.count, 0, "Should filter repetitive hallucination")
+    }
+
+    /// Test filtering "Yes. Yes. Yes. Yes." hallucination
+    func testFilterRepeatedYesHallucination() {
+        let segment = TranscriptionService.TranscriptSegment(
+            text: "Yes. Yes. Yes. Yes.",
+            timestamp: 0.0,
+            speaker: .them
+        )
+        processor.processSegment(segment)
+        XCTAssertEqual(processor.blocks.count, 0, "Should filter repeated 'yes' hallucination")
+    }
+
+    /// Test filtering dominant-word hallucination pattern
+    func testFilterDominantWordHallucination() {
+        let segment = TranscriptionService.TranscriptSegment(
+            text: "Yes of course yes yes yes yes",
+            timestamp: 0.0,
+            speaker: .them
+        )
+        processor.processSegment(segment)
+        XCTAssertEqual(processor.blocks.count, 0, "Should filter dominant-word hallucination")
+    }
+
+    /// Test filtering n-gram repetition hallucination
+    func testFilterNGramRepetitionHallucination() {
+        let segment = TranscriptionService.TranscriptSegment(
+            text: "I think I think I think I think",
+            timestamp: 0.0,
+            speaker: .me
+        )
+        processor.processSegment(segment)
+        XCTAssertEqual(processor.blocks.count, 0, "Should filter n-gram repetitive hallucination")
+    }
+
+    /// Test that legitimate repetitive speech is NOT filtered
+    func testPreserveLegitimateRepetitiveSpeech() {
+        // A sentence that has some repetition but is real speech
+        let segment = TranscriptionService.TranscriptSegment(
+            text: "I went to the store and then I went to the park",
+            timestamp: 0.0,
+            speaker: .me
+        )
+        processor.processSegment(segment)
+        XCTAssertEqual(processor.blocks.count, 1, "Should preserve legitimate speech with some repetition")
     }
     
     /// Test preserving actual content (non-artifact text)
@@ -299,7 +344,9 @@ final class TranscriptProcessorTests: XCTestCase {
     /// Test creating new block when word limit exceeded
     func testCreateNewBlockWordLimitExceeded() {
         // Create a segment with many words (over 75 word limit)
-        let longText = String(repeating: "word ", count: 80) // 80 words
+        // Use varied words to avoid hallucination detection
+        let words = (1...80).map { "word\($0)" }
+        let longText = words.joined(separator: " ")
         let segment1 = TranscriptionService.TranscriptSegment(
             text: longText,
             timestamp: 0.0,
@@ -308,8 +355,9 @@ final class TranscriptProcessorTests: XCTestCase {
         processor.processSegment(segment1)
         
         XCTAssertEqual(processor.blocks.count, 1)
+        guard processor.blocks.count >= 1 else { return }
         XCTAssertTrue(processor.blocks[0].wordCount >= 75)
-        
+
         // Next segment from same speaker should create new block
         let segment2 = TranscriptionService.TranscriptSegment(
             text: "This should be a new block",
@@ -317,8 +365,9 @@ final class TranscriptProcessorTests: XCTestCase {
             speaker: .me
         )
         processor.processSegment(segment2)
-        
+
         XCTAssertEqual(processor.blocks.count, 2, "Should create new block after word limit exceeded")
+        guard processor.blocks.count >= 2 else { return }
         XCTAssertEqual(processor.blocks[1].text, "This should be a new block")
     }
     

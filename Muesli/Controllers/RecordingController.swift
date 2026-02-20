@@ -1,8 +1,8 @@
+import AVFoundation
 import CoreMedia
 import Foundation
 import os.lock
 import os.log
-import ScreenCaptureKit
 import SwiftUI
 
 /// Controller responsible for recording lifecycle management
@@ -16,11 +16,10 @@ final class RecordingController {
     
     // MARK: - Dependencies
     
-    private let audioCaptureService: AudioCaptureService
+    private let audioCaptureService: any AudioCaptureServiceProtocol
     private let fileOutputService: FileOutputService
     private let transcriptionService: TranscriptionService
     private let transcriptionCoordinator: TranscriptionCoordinator
-    private let echoCancellationService: EchoCancellationService
     private let preferencesManager: PreferencesManager
     private let microphoneManager: MicrophoneManager
     private let exportService: ExportService
@@ -89,15 +88,18 @@ final class RecordingController {
     
     /// Called when split view visibility should change
     var onSplitViewVisibilityChanged: ((Bool) -> Void)?
+
+    /// Called when a permission error is detected during recording start.
+    /// Parameters: (missingScreen: Bool, missingMic: Bool)
+    var onPermissionRecoveryNeeded: ((Bool, Bool) -> Void)?
     
     // MARK: - Initialization
     
     init(
-        audioCaptureService: AudioCaptureService,
+        audioCaptureService: any AudioCaptureServiceProtocol,
         fileOutputService: FileOutputService,
         transcriptionService: TranscriptionService,
         transcriptionCoordinator: TranscriptionCoordinator,
-        echoCancellationService: EchoCancellationService,
         preferencesManager: PreferencesManager,
         microphoneManager: MicrophoneManager,
         exportService: ExportService,
@@ -107,7 +109,6 @@ final class RecordingController {
         self.fileOutputService = fileOutputService
         self.transcriptionService = transcriptionService
         self.transcriptionCoordinator = transcriptionCoordinator
-        self.echoCancellationService = echoCancellationService
         self.preferencesManager = preferencesManager
         self.microphoneManager = microphoneManager
         self.exportService = exportService
@@ -132,6 +133,13 @@ final class RecordingController {
         transcriptionCoordinator.onWarning = { [weak self] category, message, details, canRetry in
             Task { @MainActor in
                 self?.warningManager.addWarning(category, message: message, details: details, canRetry: canRetry)
+            }
+        }
+        
+        // TranscriptionCoordinator warning dismissal (auto-dismiss when model ready)
+        transcriptionCoordinator.onWarningDismissed = { [weak self] category in
+            Task { @MainActor in
+                self?.warningManager.dismissWarnings(for: category)
             }
         }
         
@@ -160,48 +168,33 @@ final class RecordingController {
     /// Must be called (and awaited) before audioCaptureService.startCapture()
     private func ensureAudioHandlersConfigured() async {
         let fileService = self.fileOutputService
-        let transcriptService = self.transcriptionService
         let transcriptionCoordinator = self.transcriptionCoordinator
-        let aecService = self.echoCancellationService
-        let prefs = self.preferencesManager
         let audioCaptureServiceRef = self.audioCaptureService
-        
+
         // Capture locks directly to avoid @MainActor isolation in callback
         let muteLock = self.isMicrophoneMutedLock
-        let aecLock = prefs.echoCancellationLock
-        
+        let ingestionQueue = DispatchQueue(label: "com.muesli.app.transcription.ingestion", qos: .userInitiated)
+        let micBatchBuffer = OSAllocatedUnfairLock(initialState: [Float]())
+        let renderBatchBuffer = OSAllocatedUnfairLock(initialState: [Float]())
+        let batchThreshold = 9600  // 200ms at 48kHz
+
         await audioCaptureServiceRef.setBufferHandler { [weak self] buffer, type in
                 // Wrap entire handler in error handling for graceful degradation
                 do {
-                    // NO direct self capture in processing - only use captured locks and services (thread-safe)
-                    let isMicMuted = muteLock.withLock { $0 }
-                    let isAECEnabled = aecLock.withLock { $0 }
-                    
-                    let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
-                    
                     switch type {
                     case .system:
                         try RecordingController.handleSystemAudioBuffer(
                             buffer,
-                            timestamp: timestamp,
-                            isAECEnabled: isAECEnabled,
-                            fileService: fileService,
-                            transcriptionCoordinator: transcriptionCoordinator,
-                            aecService: aecService
+                            fileService: fileService
                         )
-                        
+
                     case .microphone:
                         try RecordingController.handleMicrophoneAudioBuffer(
                             buffer,
-                            timestamp: timestamp,
-                            isMicMuted: isMicMuted,
-                            isAECEnabled: isAECEnabled,
-                            fileService: fileService,
-                            transcriptionCoordinator: transcriptionCoordinator,
-                            aecService: aecService
+                            fileService: fileService
                         )
                     }
-                    
+
                     // Reset error counter on success
                     Task { @MainActor in
                         self?.audioErrorCounter = 0
@@ -212,13 +205,13 @@ final class RecordingController {
                         guard let self = self else { return }
                         self.logger.error("Audio buffer processing error: \(error)")
                         self.audioErrorCounter += 1
-                        
+
                         // If too many consecutive errors, stop recording gracefully
                         if self.audioErrorCounter > self.maxConsecutiveAudioErrors {
                             self.logger.error(
                                 "Too many consecutive audio errors (\(self.audioErrorCounter)), stopping recording"
                             )
-                            
+
                             if let session = self.activeSession {
                                 session.interruptionReason = "Audio processing error"
                                 self.handleCaptureInterrupted(error: error)
@@ -227,136 +220,108 @@ final class RecordingController {
                     }
                 }
             }
-            
+
             // Set up stream interruption handler
             await audioCaptureServiceRef.setInterruptedHandler { [weak self] error in
                 Task { @MainActor in
                     self?.handleCaptureInterrupted(error: error)
                 }
             }
-            
+
         // Set up audio level handler
         await audioCaptureServiceRef.setLevelHandler { [weak self] level, type in
             Task { @MainActor in
                 self?.updateAudioLevel(level, type: type)
             }
         }
-        
-        // Set up audio warning handler (for mic failures, etc.)
-        await audioCaptureServiceRef.setWarningHandler { [weak self] message, details, canRetry in
+
+        // Set up audio warning handler (for mic failures, system audio issues, etc.)
+        await audioCaptureServiceRef.setWarningHandler { [weak self] category, message, details, canRetry in
             Task { @MainActor in
-                self?.warningManager.addWarning(.microphone, message: message, details: details, canRetry: canRetry)
+                self?.warningManager.addWarning(category, message: message, details: details, canRetry: canRetry)
+            }
+        }
+
+        // Set up processed mic handler (48kHz mono -> batched -> 16kHz -> transcription)
+        await audioCaptureServiceRef.setProcessedMicHandler { [weak self] frame in
+            ingestionQueue.async {
+                guard self != nil else { return }
+                let isMicMuted = muteLock.withLock { $0 }
+                guard !isMicMuted else { return }
+
+                let batch: [Float]? = micBatchBuffer.withLock { buffer in
+                    buffer.append(contentsOf: frame.samples)
+                    guard buffer.count >= batchThreshold else { return nil }
+                    let output = buffer
+                    buffer.removeAll(keepingCapacity: true)
+                    return output
+                }
+
+                guard let batch else { return }
+                let samples16k = TranscriptionService.resampleToWhisperFormat(
+                    batch,
+                    sourceSampleRate: Double(frame.sampleRate),
+                    sourceChannels: 1
+                )
+
+                Task { @MainActor in
+                    guard self != nil else { return }
+                    transcriptionCoordinator.bufferMicrophoneAudio(samples16k)
+                }
+            }
+        }
+
+        // Set up processed render handler (48kHz mono -> batched -> 16kHz -> transcription)
+        await audioCaptureServiceRef.setProcessedRenderHandler { [weak self] frame in
+            ingestionQueue.async {
+                guard self != nil else { return }
+
+                let batch: [Float]? = renderBatchBuffer.withLock { buffer in
+                    buffer.append(contentsOf: frame.samples)
+                    guard buffer.count >= batchThreshold else { return nil }
+                    let output = buffer
+                    buffer.removeAll(keepingCapacity: true)
+                    return output
+                }
+
+                guard let batch else { return }
+                let samples16k = TranscriptionService.resampleToWhisperFormat(
+                    batch,
+                    sourceSampleRate: Double(frame.sampleRate),
+                    sourceChannels: 1
+                )
+
+                Task { @MainActor in
+                    guard self != nil else { return }
+                    transcriptionCoordinator.bufferSystemAudio(samples16k)
+                }
             }
         }
     }
-    
+
     // MARK: - Audio Buffer Processing Helpers
-    
-    /// Process system audio buffer (extracted for error handling)
+
+    /// Process system audio buffer — file output only
+    /// Transcription is now handled by the AEC-processed audio callback from TapAudioCaptureService
     private static nonisolated func handleSystemAudioBuffer(
         _ buffer: CMSampleBuffer,
-        timestamp: CMTime,
-        isAECEnabled: Bool,
-        fileService: FileOutputService,
-        transcriptionCoordinator: TranscriptionCoordinator,
-        aecService: EchoCancellationService
+        fileService: FileOutputService
     ) throws {
-        // Store system audio for AEC reference (if AEC enabled)
-        if isAECEnabled {
-            if let systemSamples = EchoCancellationService.extractSamples(from: buffer) {
-                aecService.storeSystemAudio(samples: systemSamples, timestamp: timestamp)
-            }
-        }
-        
-        // Save to file (always)
         fileService.appendAudioBuffer(buffer, type: .system)
-        
-        // Feed to transcription coordinator (handles buffering during model load)
-        let samples = TranscriptionService.resampleToWhisperFormat(
-            buffer,
-            sourceSampleRate: 48000,
-            sourceChannels: 2
-        )
-        if let samples = samples {
-            Task { @MainActor in
-                transcriptionCoordinator.bufferSystemAudio(samples)
-            }
-        }
     }
     
-    /// Process microphone audio buffer (extracted for error handling)
+
+    /// Process microphone audio buffer — file output only
+    /// Transcription is now handled by the AEC-processed audio callback from TapAudioCaptureService
     private static nonisolated func handleMicrophoneAudioBuffer(
         _ buffer: CMSampleBuffer,
-        timestamp: CMTime,
-        isMicMuted: Bool,
-        isAECEnabled: Bool,
-        fileService: FileOutputService,
-        transcriptionCoordinator: TranscriptionCoordinator,
-        aecService: EchoCancellationService
+        fileService: FileOutputService
     ) throws {
-        // Get the actual sample rate from the incoming buffer (may be 44100Hz, 48000Hz, etc.)
-        var sourceSampleRate: Int = 48000  // default
-        if let formatDesc = CMSampleBufferGetFormatDescription(buffer),
-           let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) {
-            sourceSampleRate = Int(asbd.pointee.mSampleRate)
-        }
-        
-        // Extract microphone samples at native rate (NOT necessarily 48kHz!)
-        let micSamplesNative = EchoCancellationService.extractSamples(from: buffer)
-        guard let micSamplesNative = micSamplesNative else {
-            // Fallback: save original buffer
-            fileService.appendAudioBuffer(buffer, type: .microphone)
-            return
-        }
-        
-        // Apply AEC if enabled (operates at native sample rate)
-        let processedSamplesNative: [Float]
-        if isAECEnabled {
-            processedSamplesNative = aecService.processMicrophoneAudio(
-                microphoneSamples: micSamplesNative,
-                micTimestamp: timestamp
-            )
-        } else {
-            processedSamplesNative = micSamplesNative
-        }
-        
-        // Convert to stereo CMSampleBuffer for file output (FileOutputService expects 48kHz stereo)
-        // CRITICAL: Pass the actual source sample rate so resampling works correctly
-        // This fixes the pitch issue when mic is at 44100Hz but file expects 48000Hz
-        if let processedBuffer = EchoCancellationService.createSampleBuffer(
-            from: processedSamplesNative,
-            timestamp: timestamp,
-            sourceSampleRate: sourceSampleRate,
-            targetSampleRate: 48000
-        ) {
-            fileService.appendAudioBuffer(processedBuffer, type: .microphone)
-        } else {
-            // Fallback: save original if conversion fails
-            fileService.appendAudioBuffer(buffer, type: .microphone)
-        }
-        
-        // Skip microphone audio for transcription if muted
-        if isMicMuted {
-            return
-        }
-        
-        // Feed to transcription coordinator (handles buffering during model load)
-        // Use high-quality AVAudioConverter resampling with the actual source sample rate
-        let resampled = TranscriptionService.resampleSamples(
-            samples: processedSamplesNative,
-            sourceSampleRate: Double(sourceSampleRate),  // Use actual mic sample rate (may be 44100Hz)
-            sourceChannels: 1,  // Mic is mono
-            targetSampleRate: 16000,
-            targetChannels: 1,
-            isInterleaved: false
-        )
-        if let resampled = resampled {
-            Task { @MainActor in
-                transcriptionCoordinator.bufferMicrophoneAudio(resampled)
-            }
-        }
+        // Save raw mic audio to file (always, even when muted — mute only affects transcription
+        // which is handled by the processed audio callback)
+        fileService.appendAudioBuffer(buffer, type: .microphone)
     }
-    
+
     // MARK: - Session Management
     
     /// Create a new recording session
@@ -365,7 +330,7 @@ final class RecordingController {
     }
     
     /// Update audio level for the active session (throttled to ~30fps)
-    private func updateAudioLevel(_ level: Float, type: AudioCaptureService.AudioType) {
+    private func updateAudioLevel(_ level: Float, type: AudioStreamType) {
         guard let session = activeSession else { return }
         let now = Date()
         
@@ -389,9 +354,8 @@ final class RecordingController {
             return  // Already recording
         }
         
-        // Create a new session with no app filter (captures all system audio)
+        // Create a new session (captures all system audio)
         let session = createSession()
-        session.selectedApp = nil  // All system audio
         
         // Use saved microphone preference, or fall back to default if none set
         if microphoneManager.selectedDeviceID == nil {
@@ -434,34 +398,29 @@ final class RecordingController {
     private func startRecordingAsync(for session: RecordingSession) async {
         // Clear any previous warnings at start of new recording
         warningManager.clearAll()
-        
+
         do {
             // Start file output FIRST
             session.outputDirectory = try fileOutputService.startWriting()
             
             // Configure microphone preference before starting capture
-            // Pass selected mic device to AudioCaptureService for AVAudioEngine capture
+            // Pass selected mic device to audio capture service for AVAudioEngine capture
             let selectedMicID = microphoneManager.selectedDeviceID
             await audioCaptureService.setMicrophoneDevice(selectedMicID)
-            
+
             // CRITICAL: Ensure audio handlers are configured BEFORE starting capture
             // This fixes the race condition where handlers weren't set when capture started
             
             await ensureAudioHandlersConfigured()
             
             // Start audio capture IMMEDIATELY (before model check)
-            if let app = session.selectedApp {
-                try await audioCaptureService.startCapture(forBundleIdentifier: app.bundleIdentifier)
-            } else {
-                try await audioCaptureService.startCapture()
-            }
+            try await audioCaptureService.startCapture()
             
-            // Audio is now flowing and being saved to disk ✅
+            // Audio is now flowing and being saved to disk
             session.recordingStartTime = Date()
             session.state = .recording
             session.startDisplayTimer()
-            echoCancellationService.reset()
-            
+
             // Mark initialization as completing audio setup
             session.isInitializing = false
             
@@ -469,7 +428,7 @@ final class RecordingController {
             Task {
                 await prepareTranscriptionAsync(for: session)
             }
-        } catch let error as AudioCaptureService.CaptureError {
+        } catch let error as AudioCaptureError {
             handleCaptureError(error, for: session)
         } catch {
             handleGenericError(error, for: session)
@@ -520,32 +479,67 @@ final class RecordingController {
         }
     }
     
-    private func handleCaptureError(_ error: AudioCaptureService.CaptureError, for session: RecordingSession) {
+    private func handleCaptureError(_ error: AudioCaptureError, for session: RecordingSession) {
         let muesliError: MuesliError
         switch error {
         case .noContentToCapture:
             muesliError = .noAudioContent
         case .permissionDenied, .streamStartFailed:
             muesliError = .screenRecordingDenied
+        case .microphoneStartFailed:
+            muesliError = .microphoneDenied
         default:
             muesliError = .captureStartFailed(underlying: error)
         }
-        
-        // Add context for specific cases
-        if case .noContentToCapture = error, let app = session.selectedApp {
-            session.showErrorMessage("Could not find \(app.name). Make sure it's running and has a window open.")
-        } else {
-            session.showError(muesliError)
+
+        // For permission-related errors, try permission recovery flow
+        switch error {
+        case .permissionDenied, .streamStartFailed:
+            let missingTap = !UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
+            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+            // If both checks say granted (false negative), default to missingTap
+            // since system audio tap is what actually failed
+            let effectiveMissingTap = missingTap || (!missingTap && !missingMic)
+            if let callback = onPermissionRecoveryNeeded {
+                logger.warning("Permission error during capture start, triggering recovery: missingTap=\(effectiveMissingTap), missingMic=\(missingMic)")
+                callback(effectiveMissingTap, missingMic)
+                cleanupFailedSession(session)
+                return
+            }
+        case .microphoneStartFailed:
+            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+            if missingMic, let callback = onPermissionRecoveryNeeded {
+                logger.warning("Microphone permission error during capture start, triggering recovery")
+                callback(false, true)
+                cleanupFailedSession(session)
+                return
+            }
+        default:
+            break
         }
+
+        // Fallback: show error on session (legacy path)
+        session.showError(muesliError)
         cleanupFailedSession(session)
     }
     
     private func handleGenericError(_ error: Error, for session: RecordingSession) {
         let errorMsg = error.localizedDescription
-        
+
         let muesliError: MuesliError
         if errorMsg.contains("TCC") || errorMsg.contains("declined") || errorMsg.contains("permission") {
             muesliError = .screenRecordingDenied
+
+            // Try permission recovery for TCC/permission errors
+            let missingTap = !UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
+            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+            let effectiveMissingTap = missingTap || (!missingTap && !missingMic)
+            if let callback = onPermissionRecoveryNeeded {
+                logger.warning("Generic permission error during capture, triggering recovery: missingTap=\(effectiveMissingTap), missingMic=\(missingMic)")
+                callback(effectiveMissingTap, missingMic)
+                cleanupFailedSession(session)
+                return
+            }
         } else {
             muesliError = .captureStartFailed(underlying: error)
         }
@@ -558,6 +552,8 @@ final class RecordingController {
         session.state = .idle
         activeSession = nil
         resetMuteState()
+        // Reset isActivelyRecording so permission re-probing is not permanently suppressed.
+        onSessionCompleted?(session, nil)
         
         if fileOutputService.isWriting {
             Task {
@@ -605,7 +601,6 @@ final class RecordingController {
         
         do {
             try await audioCaptureService.stopCapture()
-            echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
             let directory = try? await fileOutputService.stopWriting()
             
@@ -619,6 +614,8 @@ final class RecordingController {
         session.state = .idle
         activeSession = nil
         resetMuteState()
+        // Reset isActivelyRecording so permission re-probing is not permanently suppressed.
+        onSessionCompleted?(session, nil)
     }
     
     private func performStopRecording(for session: RecordingSession) {
@@ -633,9 +630,8 @@ final class RecordingController {
         
         do {
             try await audioCaptureService.stopCapture()
-            echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
-            
+
             // Stop file writing and get output directory
             let directory: URL
             do {
@@ -841,9 +837,8 @@ final class RecordingController {
         session.stopDisplayTimer()
         
         do {
-            echoCancellationService.reset()
             await transcriptionCoordinator.stopTranscription()
-            
+
             // Stop file writing and get output directory
             let directory: URL
             do {
@@ -853,6 +848,8 @@ final class RecordingController {
                 session.showError(.outputDirectoryCreationFailed)
                 activeSession = nil
                 resetMuteState()
+                // Reset isActivelyRecording so permission re-probing is not permanently suppressed.
+                onSessionCompleted?(session, nil)
                 return
             }
             
@@ -889,7 +886,7 @@ final class RecordingController {
             session.showErrorMessage("Recording saved. The stream was interrupted.")
         }
         
-        onRefreshHistory?()
+        onSessionCompleted?(session, session.outputDirectory)
         activeSession = nil
         resetMuteState()
     }
@@ -940,7 +937,6 @@ final class RecordingController {
             session.resumeCount = meeting.segmentCount
             session.segmentNumber = meeting.segmentCount + 1
             session.meetingTitle = meeting.title
-            session.selectedApp = nil
             
             activeSession = session
             let mutedState = session.isMicrophoneMuted
@@ -962,7 +958,7 @@ final class RecordingController {
                 segmentNumber: session.segmentNumber
             )
             
-            // Pass selected mic device to AudioCaptureService for AVAudioEngine capture
+            // Pass selected mic device to audio capture service for AVAudioEngine capture
             let selectedMicID = microphoneManager.selectedDeviceID
             await audioCaptureService.setMicrophoneDevice(selectedMicID)
             
@@ -980,7 +976,7 @@ final class RecordingController {
             session.startDisplayTimer()
             
             transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
-        } catch let error as AudioCaptureService.CaptureError {
+        } catch let error as AudioCaptureError {
             if let session = activeSession {
                 handleCaptureError(error, for: session)
             }
@@ -1083,5 +1079,15 @@ final class RecordingController {
     
     private func resetMuteState() {
         isMicrophoneMutedLock.withLock { $0 = false }
+    }
+
+    // MARK: - Microphone Device Selection
+    
+    func handleMicrophoneDeviceChange(_ deviceID: String?) {
+        guard let session = activeSession, session.isRecording else { return }
+        
+        Task {
+            await audioCaptureService.setMicrophoneDevice(deviceID)
+        }
     }
 }

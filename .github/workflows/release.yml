@@ -34,6 +34,7 @@ jobs:
     name: Build and Release Muesli
     # Use macos-26 (Tahoe) to get macOS 26 SDK for liquid glass button styling
     runs-on: macos-26
+    timeout-minutes: 90
     
     # Job-level env vars from secrets (for use in step conditions)
     env:
@@ -55,6 +56,9 @@ jobs:
         with:
           xcode-version: 'latest-stable'
       
+      - name: Download Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
       - name: Cache Homebrew packages
         uses: actions/cache@v5
         with:
@@ -75,6 +79,63 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
+
+      - name: Cache WebRTC XCFramework
+        id: cache-webrtc
+        uses: actions/cache@v5
+        with:
+          path: Muesli/Frameworks/webrtc_audio_processing.xcframework
+          key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
+
+      - name: Install WebRTC Build Dependencies
+        if: steps.cache-webrtc.outputs.cache-hit != 'true'
+        run: brew install meson ninja pkg-config
+
+      - name: Build WebRTC XCFramework
+        if: steps.cache-webrtc.outputs.cache-hit != 'true'
+        run: ./scripts/build-webrtc-aec.sh
+        timeout-minutes: 25
+
+      - name: Verify WebRTC XCFramework
+        run: |
+          echo "Checking XCFramework for release build..."
+          if [ -d "Muesli/Frameworks/webrtc_audio_processing.xcframework" ]; then
+            lipo -info Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/*.a 2>/dev/null || echo "XCFramework present (architecture check skipped)"
+            echo "✅ WebRTC XCFramework verified for release"
+          else
+            echo "❌ WebRTC XCFramework not found — release builds MUST include real WebRTC AEC"
+            exit 1
+          fi
+
+      - name: Fingerprint WebRTC AEC dependency
+        id: webrtc-fingerprint
+        run: |
+          echo "Computing WebRTC XCFramework fingerprint..."
+          XCFW_DIR="Muesli/Frameworks/webrtc_audio_processing.xcframework"
+
+          # Compute SHA-256 over all static library files in the xcframework.
+          # Sort paths for determinism across runs.
+          FINGERPRINT=$(find "$XCFW_DIR" -name "*.a" | sort | xargs shasum -a 256 | shasum -a 256 | awk '{print $1}')
+
+          echo "WebRTC AEC Fingerprint: ${FINGERPRINT}"
+          echo "fingerprint=${FINGERPRINT}" >> $GITHUB_OUTPUT
+
+          # Write fingerprint file for artifact upload
+          echo "{\"fingerprint\": \"${FINGERPRINT}\", \"workflow\": \"release\", \"ref\": \"${GITHUB_REF}\", \"sha\": \"${GITHUB_SHA}\"}" > webrtc-fingerprint.json
+          cat webrtc-fingerprint.json
+
+          echo "## WebRTC AEC Fingerprint" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**SHA-256:** \`${FINGERPRINT}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Use this fingerprint to verify the release artifact uses the same WebRTC binary as CI." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload WebRTC fingerprint artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-fingerprint-release-${{ github.sha }}
+          path: webrtc-fingerprint.json
+          retention-days: 90
       
       - name: Install create-dmg and fileicon
         run: |
@@ -456,12 +517,18 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           
           echo "Deploying website to GitHub Pages..."
-          
-          # Push updates to main branch (GitHub Pages serves from main/docs/)
-          git push origin HEAD:main || {
-            echo "⚠️  Failed to push website updates"
-            echo "This is non-critical; the release was successful"
-          }
+
+          # Safety check: only push if the tag commit is a descendant of main
+          git fetch origin main
+          if git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+            git push origin HEAD:main || {
+              echo "⚠️  Failed to push website updates"
+              echo "This is non-critical; the release was successful"
+            }
+          else
+            echo "⚠️  Tag commit is not a descendant of main, skipping website push"
+            echo "This is expected for RC tags from feature branches"
+          fi
           
           echo "✅ Website deployment complete"
       

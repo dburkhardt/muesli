@@ -9,31 +9,37 @@ struct UnifiedHistoryView: View {
     var body: some View {
         @Bindable var history = historyManager
         
-        VStack(spacing: 0) {
-            // Warning banners (if any active warnings)
-            if viewModel.warningManager.hasActiveWarnings {
-                WarningBannerStack(
-                    warnings: viewModel.warningManager.activeWarnings,
-                    onDismiss: { id in
-                        viewModel.warningManager.dismissWarning(id)
-                    },
-                    onCopy: { id in
-                        viewModel.warningManager.copyWarningDetails(id)
-                    }
-                )
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 0) {
+                // Warning banners (if any active warnings)
+                if viewModel.warningManager.hasActiveWarnings {
+                    WarningBannerStack(
+                        warnings: viewModel.warningManager.activeWarnings,
+                        onDismiss: { id in
+                            viewModel.warningManager.dismissWarning(id)
+                        },
+                        onCopy: { id in
+                            viewModel.warningManager.copyWarningDetails(id)
+                        }
+                    )
+                }
+                
+                // Header with title and start button
+                headerView
+                
+                Divider()
+                
+                // Meeting list
+                if historyManager.groupedHistory.isEmpty {
+                    emptyStateView
+                } else {
+                    meetingListView
+                }
             }
             
-            // Header with title and start button
-            headerView
-            
-            Divider()
-            
-            // Meeting list
-            if historyManager.groupedHistory.isEmpty {
-                emptyStateView
-            } else {
-                meetingListView
-            }
+            // Floating download indicator (shown when model download in progress)
+            DownloadIndicatorView(viewModel: viewModel)
+                .padding()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
@@ -87,10 +93,18 @@ struct UnifiedHistoryView: View {
                 },
                 label: {
                     HStack(spacing: 4) {
-                        Text("New")
-                            .font(.system(size: 13, weight: .medium))
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .semibold))
+                        if !viewModel.modelManager.hasAnyReadyModel && viewModel.activeSession == nil {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.7)
+                            Text("Preparing...")
+                                .font(.system(size: 13, weight: .medium))
+                        } else {
+                            Text("New")
+                                .font(.system(size: 13, weight: .medium))
+                            Image(systemName: "plus")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12)
@@ -100,7 +114,7 @@ struct UnifiedHistoryView: View {
                 }
             )
             .buttonStyle(.plain)
-            .disabled(viewModel.activeSession != nil)
+            .disabled(!viewModel.canStartRecording)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)

@@ -105,11 +105,11 @@ final class PermissionManagerTests: XCTestCase {
         XCTAssertFalse(granted)
     }
     
-    func testRequestScreenRecordingPermission_InTestEnvironment_DoesNotCrash() {
+    func testRequestScreenRecordingPermission_InTestEnvironment_DoesNotCrash() async {
         // Given: Test environment
         
         // When: Requesting permission
-        permissionManager.requestScreenRecordingPermission()
+        _ = await permissionManager.requestScreenRecordingPermission()
         
         // Then: Should not crash or show dialog (test mode)
         // Test passes if no exception thrown

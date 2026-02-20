@@ -55,6 +55,7 @@ The export system automatically exports meeting transcripts and metadata to a st
 #### ExportService
 
 **Location**: `Muesli/Services/ExportService.swift`
+**Conforms to**: `ExportServiceProtocol` (defined in `Muesli/Protocols/ServiceProtocols.swift`)
 
 **Responsibilities**:
 - Create and manage export directory structure
@@ -71,6 +72,10 @@ func generateManifest(for meetings: [MeetingHistoryItem]) throws
 func createVersionMarker() throws
 func setExportDirectory(_ url: URL)
 func resetToDefaultExportDirectory()
+
+var onWarning: ((String, String) -> Void)?
+// Callback invoked when a non-fatal warning occurs during export
+// (e.g., partial write, fallback path used). Parameters are (title, message).
 ```
 
 #### PreferencesManager
@@ -84,6 +89,7 @@ var exportDirectory: URL // Default: ~/Library/Application Support/Muesli/Export
 **Methods**:
 ```swift
 func resetExportDirectory()
+// Internally calls exportService.resetToDefaultExportDirectory()
 ```
 
 #### Integration Points
@@ -392,27 +398,27 @@ Logs can be viewed with Console.app filtering for:
 
 ### Test Coverage
 
-Comprehensive test suite with **44 test cases** covering:
+Test suite with **37 test cases** across 4 classes (all in `MuesliTests/`):
 
-1. **ExportServiceTests** (29 tests)
+1. **ExportServiceTests** (22 tests, in `ExportServiceTests.swift`)
    - Directory creation and management
    - Single and bulk meeting export
    - Manifest generation
    - Edge cases (empty data, special characters, etc.)
    - File operations and error handling
 
-2. **PreferencesManagerExportTests** (5 tests)
+2. **PreferencesManagerExportTests** (5 tests, in `ExportServiceTests.swift`)
    - Export preferences persistence
    - Default values
    - Configuration changes
 
-3. **ExportIntegrationTests** (8 tests)
+3. **ExportIntegrationTests** (8 tests, in `ExportIntegrationTests.swift`)
    - ViewModel delegation
    - End-to-end export flow
    - Error handling
    - MockExportService behavior
 
-4. **AppStorageKeysExportTests** (2 tests)
+4. **AppStorageKeysExportTests** (2 tests, in `ExportIntegrationTests.swift`)
    - Key definitions
    - Uniqueness validation
 
@@ -565,6 +571,24 @@ for meeting in manifest.meetings {
 - Verify tool has read access to Application Support directory
 - Check tool's version compatibility with export format 1.0
 
+## Best Practices
+
+### System Audio Permission Model
+- The app uses a tap-probe at session start to determine system audio availability; there is no `CGPreflightScreenCaptureAccess()` preflight call.
+- The result of the tap-probe is cached in `UserDefaults` so subsequent sessions can reference it without re-probing.
+
+### Real-Time Audio Callback Constraints
+- IOProc (real-time audio callbacks) must never perform heap allocation, Objective-C messaging, or lock acquisition.
+- Violating these constraints causes priority inversion, audio glitches, or watchdog termination.
+
+### WhisperKit Audio Format
+- WhisperKit requires **16 kHz mono** audio input.
+- Both system audio and microphone capture at **48 kHz**; always resample before passing buffers to WhisperKit (see `TranscriptionService.resampleToWhisperFormat()`).
+
+### macOS Version Requirements
+- `AudioHardwareCreateProcessTap` is available on **macOS 14.2+**.
+- The app deployment target is **macOS 26.0**, which satisfies the 14.2+ API requirement.
+
 ## Future Enhancements (Phase 2)
 
 Planned improvements for future releases:
@@ -598,6 +622,6 @@ Planned improvements for future releases:
 
 - **SPEC.md**: Overall product specification
 - **AGENTS.md**: Development guidelines and commands
-- **plans/TODO.md**: Feature tracking and roadmap
+- **plans/todo.md**: Feature tracking and roadmap
 - **Muesli/Services/ExportService.swift**: Implementation
 - **MuesliTests/ExportServiceTests.swift**: Test suite

@@ -30,8 +30,14 @@ See [`template.md`](template.md) for the standard debug log format.
 
 ### 2026
 
+#### February
+
+- [2026-02-18: Mid-Session Permission Recovery](2026-02-18_mid-session-permission-recovery.md) - Permission-denied errors during recording start silently failed with no UI feedback
+- [2026-02-17: Microphone Sample Rate Race Condition](2026-02-17_mic-sample-rate-race.md) - Cached micFormatDesc overwritten with wrong sample rate, causing sped-up microphone playback
+
 #### January
 
+- [2026-01-24: AEC Zero Match Rate Bug](2026-01-24_aec-zero-match-rate.md) - Echo cancellation shows 0% match rate despite successful stream sync (IN PROGRESS)
 - [2026-01-22: CI Code Signing Workflow Bug](2026-01-22_ci-signing-workflow-bug.md) - Workflow checked undefined env vars instead of secrets
 - [2026-01-15: Screen Recording Permission Detection Unreliable](2026-01-15_screen-recording-permission-detection.md) - CGPreflightScreenCaptureAccess() fails with ad-hoc signing
 
@@ -62,7 +68,7 @@ grep -r "denied" docs/debug-logs/
 **By affected file:**
 ```bash
 grep -r "PermissionManager.swift" docs/debug-logs/
-grep -r "AudioCaptureService.swift" docs/debug-logs/
+grep -r "TapAudioCaptureService.swift" docs/debug-logs/
 ```
 
 ## Categories

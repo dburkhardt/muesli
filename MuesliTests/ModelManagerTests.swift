@@ -801,7 +801,51 @@ final class ModelManagerTests: XCTestCase {
         // But the migration code only clears tiny/base, not small
         // Actually checking the code - if validation fails, it falls through to getFirstValidModel
         // and if that returns nil, the preference remains unchanged
-        XCTAssertTrue(saved == "small" || saved == nil, 
+        XCTAssertTrue(saved == "small" || saved == nil,
             "Valid model 'small' should not be cleared by migration (may be nil if validation failed)")
+    }
+
+    // MARK: - Ready Model Availability Tests
+
+    func testHasAnyReadyModelReturnsFalseWhenAllIdle() {
+        // All models start as .idle (skipScan = true)
+        XCTAssertFalse(modelManager.hasAnyReadyModel, "Should be false when no model is completed")
+    }
+
+    func testHasAnyReadyModelReturnsTrueWhenOneCompleted() {
+        modelManager.downloadStates[.small] = .completed
+        XCTAssertTrue(modelManager.hasAnyReadyModel, "Should be true when at least one model is completed")
+    }
+
+    func testHasAnyReadyModelReturnsTrueWhenActiveIsCompilingButOtherCompleted() {
+        // Active model is still compiling; a different model is completed
+        modelManager.activeModel = .large
+        modelManager.downloadStates[.large] = .compiling
+        modelManager.downloadStates[.small] = .completed
+        XCTAssertTrue(modelManager.hasAnyReadyModel,
+            "Should be true when a non-active model is completed even if active is compiling")
+    }
+
+    func testFirstReadyModelPrefersActiveModel() {
+        modelManager.downloadStates[.small] = .completed
+        modelManager.downloadStates[.medium] = .completed
+        modelManager.downloadedModels.insert(.small)
+        modelManager.downloadedModels.insert(.medium)
+        modelManager.activeModel = .medium
+
+        XCTAssertEqual(modelManager.firstReadyModel, .medium,
+            "Should prefer active model when it is completed")
+    }
+
+    func testFirstReadyModelFallsBackToNonActiveWhenActiveIsCompiling() {
+        modelManager.downloadedModels.insert(.small)
+        modelManager.downloadedModels.insert(.large)
+        modelManager.downloadStates[.small] = .completed
+        modelManager.downloadStates[.large] = .compiling
+        modelManager.activeModel = .large
+
+        // firstReadyModel should return .small since .large is compiling
+        XCTAssertEqual(modelManager.firstReadyModel, .small,
+            "Should fall back to first completed model when active is compiling")
     }
 }

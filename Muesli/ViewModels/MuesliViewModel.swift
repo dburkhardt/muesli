@@ -2,7 +2,6 @@ import CoreMedia
 import Foundation
 import os.lock
 import os.log
-import ScreenCaptureKit
 import SwiftUI
 
 /// Main ViewModel for the Muesli app
@@ -25,10 +24,6 @@ final class MuesliViewModel {
     
     /// Refinement coordinator (injected, source of truth for refinement state)
     let refinementCoordinator: RefinementCoordinator
-    
-    // MARK: - App Detection
-    
-    var availableMeetingApps: [MeetingAppDetector.DetectedApp] = []
     
     // MARK: - Permissions
     
@@ -70,20 +65,85 @@ final class MuesliViewModel {
         modelManager.modelPath
     }
     
+    // MARK: - Model Download State (for background download indicator)
+
+    /// Whether the active model is fully ready (downloaded AND compiled)
+    var isActiveModelReady: Bool {
+        modelManager.isActiveModelReady
+    }
+
+    /// Whether recording can be started — true when any model is ready.
+    /// A compiling active model does NOT block start if another model is ready.
+    var canStartRecording: Bool {
+        guard activeSession == nil else { return false }
+        return modelManager.hasAnyReadyModel
+    }
+
+    /// Whether any model (WhisperKit or LLM) is currently downloading
+    var isAnyModelDownloading: Bool {
+        modelManager.isAnyModelDownloading || llmManager.isAnyModelDownloading
+    }
+
+    /// Whether any model (WhisperKit or LLM) is currently downloading or compiling
+    var isAnyModelBusy: Bool {
+        modelManager.isAnyModelBusy || llmManager.isAnyModelDownloading
+    }
+
+    /// Active downloads/compilations with progress information (for UI indicator)
+    /// Returns array of tuples: (model name, progress 0.0-1.0 for downloads, -1 for compiling)
+    var activeDownloads: [(name: String, progress: Double)] {
+        var downloads: [(name: String, progress: Double)] = []
+
+        // Check WhisperKit models
+        for model in ModelManager.ModelSize.allCases {
+            let state = modelManager.downloadState(for: model)
+            switch state {
+            case .downloading(let progress):
+                downloads.append((name: model.displayName, progress: progress))
+            case .compiling:
+                downloads.append((name: model.displayName, progress: -1))
+            default:
+                break
+            }
+        }
+
+        // Check LLM models
+        for model in LLMManager.LLMModel.allCases {
+            if case .downloading(let progress) = llmManager.downloadState(for: model) {
+                downloads.append((name: model.displayName, progress: progress))
+            }
+        }
+
+        return downloads
+    }
+    
+    /// Cancel all active model downloads
+    func cancelActiveDownloads() {
+        // Cancel WhisperKit downloads
+        for model in ModelManager.ModelSize.allCases {
+            if modelManager.isDownloading(model) {
+                modelManager.cancelDownload(model)
+            }
+        }
+        
+        // Cancel LLM downloads
+        for model in LLMManager.LLMModel.allCases {
+            if llmManager.isDownloading(model) {
+                llmManager.cancelDownload(model)
+            }
+        }
+    }
+    
     // MARK: - Services (injectable for testing)
     
-    private let audioCaptureService: AudioCaptureService
+    private let audioCaptureService: any AudioCaptureServiceProtocol
     private let fileOutputService: FileOutputService
     private let transcriptionService: TranscriptionService
-    private let meetingAppDetector: MeetingAppDetector
     /// Permission manager (exposed for onboarding view)
     let permissionManager: PermissionManager
     let microphoneManager: MicrophoneManager
     private let meetingHistoryService: MeetingHistoryService
     private let exportService: ExportService
-    
-    // Echo cancellation service (optional - can be enabled/disabled)
-    private let echoCancellationService: EchoCancellationService
     
     // Transcription coordinator (manages model lifecycle and audio buffering)
     private let transcriptionCoordinator: TranscriptionCoordinator
@@ -366,6 +426,12 @@ final class MuesliViewModel {
     func toggleMicrophoneMute() {
         recordingController.toggleMicrophoneMute()
     }
+
+    /// Select microphone device and apply to active recording if needed
+    func selectMicrophoneDevice(_ deviceID: String?) {
+        microphoneManager.setSelectedDeviceID(deviceID)
+        recordingController.handleMicrophoneDeviceChange(deviceID)
+    }
     
     // MARK: - Initialization
     
@@ -377,31 +443,44 @@ final class MuesliViewModel {
     ///   - audioCaptureService: Service for capturing audio (injectable for testing)
     ///   - fileOutputService: Service for file output (injectable for testing)
     ///   - transcriptionService: Service for transcription (injectable for testing)
-    ///   - meetingAppDetector: Service for detecting meeting apps (injectable for testing)
     ///   - permissionManager: Manager for permissions (injectable for testing)
     ///   - microphoneManager: Manager for microphone devices (injectable for testing)
     ///   - meetingHistoryService: Service for meeting history (injectable for testing)
-    ///   - echoCancellationService: Service for echo cancellation (injectable for testing)
     ///   - llmManager: LLM Manager for transcript refinement (injectable, shared instance)
     ///   - skipInitialLoad: If true, skips loading meeting history from disk (for testing)
     init(
         preferencesManager: PreferencesManager = PreferencesManager(),
         historyManager: MeetingHistoryManager? = nil,
         refinementCoordinator: RefinementCoordinator? = nil,
-        audioCaptureService: AudioCaptureService? = nil,
+        audioCaptureService: (any AudioCaptureServiceProtocol)? = nil,
         fileOutputService: FileOutputService? = nil,
         transcriptionService: TranscriptionService? = nil,
-        meetingAppDetector: MeetingAppDetector? = nil,
         permissionManager: PermissionManager? = nil,
         microphoneManager: MicrophoneManager? = nil,
         meetingHistoryService: MeetingHistoryService? = nil,
-        echoCancellationService: EchoCancellationService? = nil,
         llmManager: LLMManager? = nil,
         exportService: ExportService? = nil,
         skipInitialLoad: Bool = false
     ) {
         // Initialize services (use provided or create defaults)
-        self.audioCaptureService = audioCaptureService ?? AudioCaptureService()
+        // Use TapAudioCaptureService (Core Audio taps)
+        NSLog("[TAP DEBUG] MuesliViewModel.init - creating audio capture service...")
+        if audioCaptureService != nil {
+            NSLog("[TAP DEBUG] Using provided audioCaptureService: %@", String(describing: type(of: audioCaptureService!)))
+            self.audioCaptureService = audioCaptureService!
+        } else {
+            NSLog("[TAP DEBUG] Creating new TapAudioCaptureService")
+            self.audioCaptureService = TapAudioCaptureService(
+                isAECEnabled: { [weak preferencesManager] in
+                    #if DEBUG
+                    return preferencesManager?.echoCancellationEnabledForAudioCallback ?? true
+                    #else
+                    return true
+                    #endif
+                }
+            )
+        }
+        NSLog("[TAP DEBUG] audioCaptureService type: %@", String(describing: type(of: self.audioCaptureService)))
         self.fileOutputService = fileOutputService ?? FileOutputService()
         
         // Initialize transcription service with chunk duration from preferences
@@ -409,18 +488,11 @@ final class MuesliViewModel {
             chunkDuration: preferencesManager.audioChunkDuration
         )
         
-        self.meetingAppDetector = meetingAppDetector ?? MeetingAppDetector()
         self.permissionManager = permissionManager ?? PermissionManager()
         self.microphoneManager = microphoneManager ?? MicrophoneManager()
         self.meetingHistoryService = meetingHistoryService ?? MeetingHistoryService()
         self.exportService = exportService ?? ExportService()
-        self.echoCancellationService = echoCancellationService ?? EchoCancellationService(
-            filterLength: 256,
-            learningRate: 0.3,
-            sampleRate: 48000,
-            maxDelayMs: 100
-        )
-        
+
         // Initialize managers (skip scanning during tests to avoid file system/Documents prompts)
         self.modelManager = ModelManager(skipScan: skipInitialLoad)
         
@@ -449,7 +521,6 @@ final class MuesliViewModel {
             fileOutputService: self.fileOutputService,
             transcriptionService: self.transcriptionService,
             transcriptionCoordinator: self.transcriptionCoordinator,
-            echoCancellationService: self.echoCancellationService,
             preferencesManager: preferencesManager,
             microphoneManager: self.microphoneManager,
             exportService: self.exportService
@@ -520,14 +591,26 @@ final class MuesliViewModel {
         // refresh microphone devices. This is safe because permission is already granted.
         if self.permissionManager.hasMicrophonePermission {
             self.microphoneManager.refreshDevices()
+            self.microphoneManager.startListeningForDeviceChanges()
         }
         
         // Set initial transcription mode
         transcriptionCoordinator.setTranscriptionMode(transcriptionMode)
         
         // Wire up RecordingController callbacks to ViewModel state
+        self.recordingController.onSessionStarted = { [weak self] _ in
+            // Suppress the background permission re-probe while recording.
+            // The probe creates a temporary aggregate device that competes with the
+            // recording tap for the audio hardware route, starving AEC3's render ring
+            // for ~20 seconds and preventing echo cancellation convergence.
+            self?.permissionManager.isActivelyRecording = true
+        }
+
         self.recordingController.onSessionCompleted = { [weak self] _, outputDirectory in
             guard let self = self else { return }
+
+            // Re-enable the background permission re-probe now that recording has ended.
+            self.permissionManager.isActivelyRecording = false
             
             // Refresh history first to ensure the new meeting is available
             self.refreshMeetingHistory()
@@ -554,11 +637,15 @@ final class MuesliViewModel {
         self.recordingController.onSplitViewVisibilityChanged = { [weak self] visible in
             self?.isSplitViewVisible = visible
         }
-        
-        // Load available meeting apps
-        Task {
-            await refreshMeetingApps()
+
+        self.recordingController.onPermissionRecoveryNeeded = { missingScreen, missingMic in
+            AppDelegate.shared?.requestPermissionRecovery(
+                missingScreen: missingScreen,
+                missingMic: missingMic
+            )
         }
+        
+
         
         // Note: Meeting history is already loaded by MeetingHistoryManager's init
         // No need to call loadMeetingHistory() here as historyManager handles it
@@ -586,8 +673,8 @@ final class MuesliViewModel {
         hasMicrophonePermission = permissionManager.hasMicrophonePermission
     }
     
-    func requestScreenRecordingPermission() {
-        permissionManager.requestScreenRecordingPermission()
+    func requestScreenRecordingPermission() async -> Bool {
+        await permissionManager.requestScreenRecordingPermission()
     }
     
     func openScreenRecordingSettings() {
@@ -597,10 +684,11 @@ final class MuesliViewModel {
     func requestMicrophonePermission() async {
         hasMicrophonePermission = await permissionManager.requestMicrophonePermission()
         
-        // If permission was granted, refresh microphone devices
+        // If permission was granted, refresh microphone devices and start listening for changes
         // This was deferred during init to avoid triggering the permission prompt
         if hasMicrophonePermission {
             microphoneManager.refreshDevices()
+            microphoneManager.startListeningForDeviceChanges()
         }
     }
     
@@ -636,12 +724,7 @@ final class MuesliViewModel {
         hasCompletedOnboarding = false
         modelManager.reset()
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.hasCompletedOnboarding)
-    }
-    
-    // MARK: - Meeting App Detection
-    
-    func refreshMeetingApps() async {
-        availableMeetingApps = await meetingAppDetector.detectMeetingApps()
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
     }
     
     // MARK: - Recording Actions
@@ -656,6 +739,14 @@ final class MuesliViewModel {
         // Clear selection before recording
         selectedMeeting = nil
         selectedMeetingIDs.removeAll()
+        
+        // Check if model is available - if downloading, show info banner
+        if !modelManager.hasModel && isAnyModelDownloading {
+            // Model is downloading - recording will be audio-only until ready
+            // The RecordingController's prepareTranscriptionAsync will handle this,
+            // but we can proactively set up for auto-reprocessing via TranscriptionCoordinator
+            logger.info("Starting recording while model is downloading - will auto-reprocess when ready")
+        }
         
         recordingController.quickStartRecording()
         isSplitViewVisible = true

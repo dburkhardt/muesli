@@ -9,14 +9,15 @@
 ## Quick Reference
 
 ```bash
-# Run all tests (unit + UI)
+# Run all tests included in the shared scheme (currently MuesliTests only)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 
-# Run unit tests only
+# Run unit tests explicitly
 xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test -only-testing:MuesliTests 2>&1 | tee "test-${TIMESTAMP}.txt"
 
-# Run UI tests only
+# Run UI tests (MuesliUITests target exists but is NOT in the shared scheme by default;
+# add it to the scheme in Xcode or use -only-testing to include it explicitly)
 xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test -only-testing:MuesliUITests 2>&1 | tee "test-${TIMESTAMP}.txt"
 
 # Run specific test class
@@ -35,6 +36,8 @@ xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test -o
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug test 2>&1 | tee "/tmp/muesli-test-${TIMESTAMP}.txt"
 ```
+
+> **Note**: The shared scheme (`Muesli.xcscheme`) currently includes only the `MuesliTests` target. `MuesliUITests` exists but is not wired into the shared scheme; use `-only-testing:MuesliUITests` to run UI tests explicitly.
 
 **Why use `tee`?**
 - Captures output to file for multiple queries

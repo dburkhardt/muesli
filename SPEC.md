@@ -4,7 +4,7 @@
 
 ## Overview
 
-**Muesli** is a local-first meeting transcription app for macOS. It captures audio from video conferencing apps (Zoom, Teams, Google Meet) along with microphone input, transcribes in real-time using on-device AI (WhisperKit), and saves both the audio recording and transcript for later use.
+**Muesli** is a local-first meeting transcription app for macOS. It captures system audio plus microphone input, transcribes in real-time using on-device AI (WhisperKit), and saves audio plus transcript for later review and refinement.
 
 Think of it as a local, privacy-focused alternative to Granola—without cloud dependencies for transcription.
 
@@ -32,21 +32,19 @@ Think of it as a local, privacy-focused alternative to Granola—without cloud d
 ### First Launch
 
 1. App opens an onboarding window explaining what Muesli does
-2. User is guided through granting Screen Recording permission
+2. User is guided through granting System Audio Recording permission
 3. User is guided through granting Microphone permission
 4. User downloads or selects an existing WhisperKit transcription model
 5. Once setup is complete, onboarding finishes
-6. App transitions to menu bar mode (window closes, icon appears in menu bar)
+6. App opens the main window (menu bar remains available at all times)
 
 ### Starting a Recording
 
-1. User clicks menu bar icon → "New Recording" (opens a new session window)
-2. In the session window, user sees "Ready to Record" with an app picker dropdown
-3. User selects the meeting app to capture audio from (Zoom, Chrome, etc.)
-4. User optionally enters a meeting title
-5. User clicks "Start Recording"
-6. Window transitions to recording state showing live transcript
-7. Menu bar shows recording status with "Stop Recording" option
+1. User clicks menu bar icon → "Start Recording" (or clicks "New" in the main window)
+2. Muesli starts a recording session in the main window split view
+3. User can optionally enter/edit the meeting title during recording
+4. Live transcript appears as audio is processed
+5. Menu bar shows recording status with "Stop Recording" option
 
 ### During Recording
 
@@ -57,18 +55,15 @@ Think of it as a local, privacy-focused alternative to Granola—without cloud d
 
 ### Stopping a Recording
 
-1. User clicks "Stop Recording" in menu bar or session window
+1. User clicks "Stop Recording" in the menu bar or main window
 2. Recording is saved to `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD_HH-MM_[UUID]/`
    - Folder name uses timestamp + UUID for uniqueness (e.g., `2026-01-15_14-30_A1B2C3D4-E5F6-7890-ABCD-EF1234567890`)
    - Meeting title is stored in `transcript.md` header, not in folder name
    - This ensures stable folder names even when titles change, supporting future history features
    - Using Application Support instead of Documents avoids permission prompts and follows macOS best practices
 3. Folder contains `audio.caf`, `microphone.caf`, and `transcript.md`
-4. Session window shows "Recording Saved!" completion state with:
-   - "Open in Finder" button to view saved files
-   - "New Recording" button to open a fresh session window
-5. Completed session windows remain open for transcript review
-6. User can close old windows manually when done
+   - Resumed recordings may include additional segment files such as `audio_2.caf` and `microphone_2.caf`
+4. Meeting history refreshes and the completed meeting remains selectable in the split view
 
 ### Ongoing Use
 
@@ -86,29 +81,25 @@ Think of it as a local, privacy-focused alternative to Granola—without cloud d
 ┌─────────────────────────────────────────────────────────┐
 │                      MuesliApp                          │
 │  ┌─────────────────┐  ┌─────────────────────────────┐  │
-│  │  MenuBarExtra   │  │    WindowGroup (sessions)   │  │
-│  │  (quick access) │  │  ┌─────────────────────┐    │  │
-│  └─────────────────┘  │  │  SessionWindowView  │    │  │
-│                       │  │  (per-window state) │    │  │
-│                       │  └─────────────────────┘    │  │
-│                       └─────────────────────────────┘  │
+│  │  MenuBarExtra   │  │      Main Window            │  │
+│  │  (quick access) │  │  (`Window` id: "main")      │  │
+│  └─────────────────┘  └─────────────────────────────┘  │
 │                              │                          │
-│         ┌────────────────────┼────────────────────┐    │
-│         ▼                    ▼                    ▼    │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────┐ │
-│  │MuesliViewModel│    │RecordingSession│   │MainWindow│ │
-│  │ (app state)  │    │ (per-window)  │   │  (view)  │ │
-│  └──────────────┘    └──────────────┘    └──────────┘ │
-│         │                                              │
-│         ▼                                              │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐   │
-│  │AudioCapture  │ │Transcription │ │ FileOutput   │   │
-│  │  Service     │ │   Service    │ │   Service    │   │
-│  └──────────────┘ └──────────────┘ └──────────────┘   │
+│                      ┌───────▼────────┐                 │
+│                      │ MuesliViewModel │                 │
+│                      │  (coordinator)  │                 │
+│                      └───────┬────────┘                 │
+│                              │                          │
+│      ┌───────────────────────┼──────────────────────┐   │
+│      ▼                       ▼                      ▼   │
+│  RecordingController   MeetingHistoryManager   RefinementCoordinator
+│      │                                                 │
+│      ▼                                                 ▼
+│  TapAudioCaptureService  TranscriptionCoordinator  ExportService
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Multi-Window Architecture**: Each recording session gets its own window. The `MuesliViewModel` holds shared app state (detected apps, permissions, services), while `RecordingSession` holds per-window state (meeting title, transcript, recording status). Completed sessions remain open for review; "New Recording" opens a fresh window.
+**Window Architecture**: The app uses a single main `Window` (`id: "main"`) for recording/history workflows, plus on-demand windows (`modelManagement`, `completedMeeting`, `about`) and a dedicated onboarding `NSWindow` managed by `AppDelegate`.
 
 ### State Architecture
 
@@ -189,22 +180,26 @@ The audio pipeline uses parallel capture with separate files for system and micr
 
 ```
 ┌──────────────────────┐    ┌──────────────────────┐
-│  SCStream            │    │  AVAudioEngine       │
-│  (ScreenCaptureKit)  │    │  (CoreAudio)         │
+│  Core Audio Tap      │    │  AVAudioEngine       │
+│  (Output Mix)        │    │  (Microphone)        │
 │                      │    │                      │
-│  System audio from   │    │  User's microphone   │
-│  meeting app         │    │  (device selectable) │
+│  System audio        │    │  User's microphone   │
+│  (Muesli excluded)   │    │  (device selectable) │
 └──────────┬───────────┘    └──────────┬───────────┘
            │                           │
-           │ CMSampleBuffer            │ CMSampleBuffer
-           │ (48kHz stereo)            │ (48kHz mono)
+           │ 48kHz stereo              │ 48kHz mono
            └───────────┬───────────────┘
                        │
                        ▼
-           ┌───────────────────────────┐
-           │     RecordingController   │
-           │     (buffer handler)      │
-           └───────────┬───────────────┘
+    ┌───────────────────────────────┐
+    │ TapAudioCaptureService        │
+    │ (synchronizer + AEC worker)   │
+    └──────────────┬────────────────┘
+                   │
+                   ▼
+          ┌───────────────────────────┐
+          │     RecordingController   │
+          └───────────┬───────────────┘
                        │
            ┌───────────┴───────────┐
            │                       │
@@ -225,11 +220,11 @@ The audio pipeline uses parallel capture with separate files for system and micr
 - Separate files allow independent post-processing
 - Users can reprocess with different speaker assignments
 
-**Note**: Microphone capture uses AVAudioEngine instead of ScreenCaptureKit's `captureMicrophone` because SCK always uses the system default mic and ignores user device selection. See `spec/audio_pipeline.md` for details.
+**Note**: Microphone capture uses AVAudioEngine (not tap capture APIs) so users can choose their input device and switch devices during recording.
 
 ### Meeting App Detection
 
-Use `NSWorkspace` to detect running applications, filter for known meeting apps:
+Use `NSWorkspace` to detect running applications and surface known meeting apps:
 
 ```swift
 let meetingAppBundleIDs = [
@@ -241,7 +236,7 @@ let meetingAppBundleIDs = [
 ]
 ```
 
-For browser-based meetings (Google Meet), we capture the browser's audio. The user selects which app to capture.
+For browser-based meetings (Google Meet), we detect the browser app as meeting context. Capture itself is tap-based (system output), so app detection is metadata/UI guidance rather than a hard capture filter.
 
 ---
 
@@ -249,16 +244,19 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 
 ### Menu Bar
 
-**Icon**: Simple waveform or "M" glyph, 18x18 points
+**Icon**: Template menu bar icon, rendered at 16x16 points
 
 **Dropdown (idle state)**:
 ```
 ┌─────────────────────────┐
-│ Start Recording     ▶  │  (submenu with app list)
+│ Start Recording         │
 ├─────────────────────────┤
 │ Open Muesli             │
 ├─────────────────────────┤
 │ Preferences...          │
+│ Debug Info...           │
+│ Check for Updates...    │
+├─────────────────────────┤
 │ Quit Muesli             │
 └─────────────────────────┘
 ```
@@ -267,9 +265,10 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 ```
 ┌─────────────────────────┐
 │ ● Recording (02:34)     │
+│ Capturing: All System   │
 │ Stop Recording          │
 ├─────────────────────────┤
-│ Open Muesli             │
+│ Show Recording Window   │
 ├─────────────────────────┤
 │ Quit Muesli             │
 └─────────────────────────┘
@@ -279,7 +278,7 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 
 **Size**: Contextual based on view mode:
 - **Unified list view** (no recording, no meeting selected): 420pt wide × 600pt tall
-- **Split view** (recording active or meeting selected): 750-900pt wide × 650pt tall
+- **Split view** (recording active or meeting selected): 900pt wide × 650pt tall
 
 **Layout**:
 ```
@@ -316,9 +315,9 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 
 ### Onboarding Window
 
-**Size**: 500pt wide × 400pt tall (fixed)
+**Size**: 520pt wide × ~580-600pt tall (fixed content window)
 
-**Flow** (4 screens):
+**Flow** (5 screens):
 
 **Screen 1 - Welcome**:
 ```
@@ -376,7 +375,7 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 └─────────────────────────────────────────────────┘
 ```
 
-**Screen 4 - Model Setup**:
+**Screen 4 - Model Setup (Whisper)**:
 ```
 ┌─────────────────────────────────────────────────┐
 │                                                 │
@@ -387,15 +386,36 @@ For browser-based meetings (Google Meet), we capture the browser's audio. The us
 │   Muesli uses WhisperKit for on-device          │
 │   transcription. Choose your model:             │
 │                                                 │
-│   Model: [ base ▼ ]                             │
+│   Model: [ Small ▼ ]                            │
 │                                                 │
-│   [ Download Model (~150MB) ]                   │
+│   [ Download Model (~500MB) ]                   │
 │                                                 │
 │   ━━━━━━━━━━░░░░░░░░░░░░░  45%                 │
 │                                                 │
 │   — or —                                        │
 │                                                 │
 │   [ Use Existing Model... ]                     │
+│                                                 │
+│              [ Continue ]                       │
+└─────────────────────────────────────────────────┘
+```
+
+**Screen 5 - LLM Setup**:
+```
+┌─────────────────────────────────────────────────┐
+│                                                 │
+│                    ✨                           │
+│                                                 │
+│         Transcript Refinement (Optional)        │
+│                                                 │
+│   Optionally download a local LLM to polish     │
+│   your transcripts after recording.             │
+│                                                 │
+│   Model: [ Llama 3.2 3B ▼ ]                    │
+│                                                 │
+│   [ Download LLM (~2GB) ]                       │
+│                                                 │
+│   ━━━━━━━━━━░░░░░░░░░░░░░  45%                 │
 │                                                 │
 │              [ Finish Setup ]                   │
 └─────────────────────────────────────────────────┘
@@ -429,8 +449,8 @@ All Muesli data is stored in `~/Library/Application Support/Muesli/` to avoid pe
 │   └── ...
 └── Models/                        # WhisperKit transcription models
     └── models/argmaxinc/whisperkit-coreml/
-        ├── openai_whisper-base/
         ├── openai_whisper-small/
+        ├── openai_whisper-medium/
         └── ...
 ```
 
@@ -520,15 +540,15 @@ External tools can use the export folder to:
 **Version Compatibility**: The `.muesli-export` marker file contains `version=1.0` and `format=markdown+json` to help external tools verify compatibility.
 
 ### Recordings Directory
-│   │   ├── microphone.caf         # Microphone audio (user's voice)
-│   │   ├── transcript.md          # Markdown transcript with speaker labels
-│   │   └── transcript.original.md # Original transcript (if refined)
-│   └── ...
-└── Models/                        # WhisperKit transcription models
-    └── models/argmaxinc/whisperkit-coreml/
-        ├── openai_whisper-base/
-        ├── openai_whisper-small/
-        └── ...
+
+Each recording is saved in a timestamped UUID directory:
+
+```
+~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD_HH-MM_[UUID]/
+├── audio.caf              # System audio (meeting participants)
+├── microphone.caf         # Microphone audio (user's voice)
+├── transcript.md          # Markdown transcript with speaker labels
+└── transcript.original.md # Original transcript (if refined)
 ```
 
 ### LLM Models
@@ -635,8 +655,8 @@ The MVP is complete. All core features are implemented and functional.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Menu bar app | ✅ | Runs as LSUIElement (no dock icon) |
-| Audio capture | ✅ | System audio via ScreenCaptureKit, mic via AVAudioEngine |
+| Menu bar app | ✅ | Menu bar app (LSUIElement=false; appears in Dock) |
+| Audio capture | ✅ | System audio via Core Audio taps, mic via AVAudioEngine |
 | Real-time transcription | ✅ | WhisperKit with "Me" vs "Them" speaker labels |
 | File output | ✅ | CAF audio + Markdown transcript |
 | Onboarding | ✅ | Permission flow + model download |
@@ -648,7 +668,7 @@ The MVP is complete. All core features are implemented and functional.
 
 ### Model Support
 
-- **Transcription**: WhisperKit models (tiny, base, small, medium, large-v3, large-v3-turbo)
+- **Transcription**: WhisperKit models (small, medium, large-v3, large-v3-turbo)
 - **Refinement**: MLX LLM models (Llama 3.2 variants)
 
 ### Deep Dive Documentation
@@ -669,7 +689,9 @@ For detailed behavior specifications, see the `spec/` folder:
 
 ```xml
 <key>LSUIElement</key>
-<true/>
+<false/>
+<key>NSAudioCaptureUsageDescription</key>
+<string>Muesli needs System Audio Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.</string>
 <key>NSScreenCaptureUsageDescription</key>
 <string>Muesli needs Screen Recording access to capture audio from meeting apps like Zoom, Teams, and Google Meet.</string>
 <key>NSMicrophoneUsageDescription</key>
@@ -684,16 +706,21 @@ For detailed behavior specifications, see the `spec/` folder:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0")
+    .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.15.0"),
+    // MLX packages (for LLM-based transcript refinement)
+    .package(url: "https://github.com/ml-explore/mlx-swift-examples.git", branch: "main"),
 ]
 ```
+
+The MLX packages (`MLXLLM`, `MLXLMCommon`) are used for on-device LLM transcript refinement.
 
 ### System Frameworks
 
 - SwiftUI
-- ScreenCaptureKit
 - AVFoundation
 - CoreMedia
+- CoreAudio
+- AudioToolbox
 
 ---
 

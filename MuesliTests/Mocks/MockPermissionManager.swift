@@ -44,8 +44,10 @@ final class MockPermissionManager: PermissionManagerProtocol {
         return screenRecordingPermissionAsyncResult
     }
     
-    func requestScreenRecordingPermission() {
+    func requestScreenRecordingPermission() async -> Bool {
         requestScreenRecordingCallCount += 1
+        hasScreenRecordingPermission = screenRecordingPermissionAsyncResult
+        return screenRecordingPermissionAsyncResult
     }
     
     func openScreenRecordingSettings() {

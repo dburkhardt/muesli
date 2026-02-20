@@ -171,7 +171,7 @@ if total_lines > 0:
     print('🎯 PRIORITY ACTION ITEMS:')
     print('-' * 70)
     print('Focus testing efforts on these critical services:')
-    print('  1. AudioCaptureService.swift - Core audio capture')
+    print('  1. TapAudioCaptureService.swift - Core audio capture')
     print('  2. TranscriptionService.swift - WhisperKit integration')
     print('  3. FileOutputService.swift - File I/O operations')
     print('  4. RecordingController.swift - Recording lifecycle')
@@ -209,7 +209,7 @@ For line-by-line coverage visualization:
 
 ### Critical Files (Must be ≥80%)
 
-1. **AudioCaptureService.swift** - System audio and microphone capture
+1. **TapAudioCaptureService.swift** - System audio and microphone capture
 2. **TranscriptionService.swift** - WhisperKit integration and processing
 3. **FileOutputService.swift** - Transcript and audio file writing
 4. **RecordingController.swift** - Recording state management
@@ -292,14 +292,13 @@ OVERALL PROJECT COVERAGE: 9.98%
 ❌ BELOW THRESHOLD: 60.02% below 70% minimum
 Need ~12,854 more covered lines to reach 70%
 
-🔴 CRITICAL AudioCaptureService.swift         1.57% (8/511)
+🔴 CRITICAL TapAudioCaptureService.swift      <low>% (<n>/<total>)
 ```
 
 **Translation:** 
-- Project has 9.98% coverage (very low)
-- Need about 13,000 more covered lines to reach 70% threshold
-- AudioCaptureService is critical and only has 1.57% coverage
-- This file should be the #1 priority for adding tests
+- Project has low coverage
+- TapAudioCaptureService is critical and should be the #1 priority for adding tests
+- (Note: `AudioCaptureService.swift` has been removed; it was replaced by `TapAudioCaptureService.swift`)
 
 ---
 

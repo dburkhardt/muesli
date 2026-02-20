@@ -44,7 +44,11 @@ enum AudioConfiguration {
     // MARK: - Buffer Management
     
     /// Maximum time to buffer audio while model loads (seconds)
-    static let bufferTimeoutSeconds: TimeInterval = 30.0
+    /// This is a generous timeout (5 minutes) to cover even the largest models
+    /// on the slowest supported hardware. Memory is bounded by maxBufferSamples,
+    /// not this timeout - we use a rolling 30s buffer regardless of how long
+    /// we wait. This timeout is just a safety net for genuinely broken situations.
+    static let bufferTimeoutSeconds: TimeInterval = 300.0
     
     /// Maximum buffer size in samples (30 seconds at 16kHz = 480,000 samples)
     static let maxBufferSamples: Int = 480_000
@@ -73,4 +77,71 @@ enum AudioConfiguration {
     
     /// Maximum retries for model loading
     static let maxModelRetries: Int = 3
+    
+    // MARK: - Echo Cancellation (AEC)
+    
+    /// Acoustic delay for AEC (milliseconds)
+    /// This accounts for DAC + acoustic propagation + ADC latency
+    /// Typical range: 15-50ms depending on audio hardware
+    /// Default: 50ms (conservative for laptop speakers with room reflections)
+    static let aecAcousticDelayMs: Int = 50
+    
+    /// AEC filter length (number of taps)
+    /// At 48kHz: 1024 taps = ~21ms of echo path modeling
+    /// Longer filters handle longer echo delays but require more computation
+    static let aecFilterLength: Int = 1024
+    
+    /// AEC learning rate (NLMS step size)
+    /// Higher values adapt faster but may be less stable
+    /// Typical range: 0.1-0.5
+    static let aecLearningRate: Float = 0.2
+    
+    /// AEC gap detection threshold (milliseconds).
+    /// Gaps larger than this are filled with silence to maintain sample count continuity.
+    /// Default: 50ms (above typical ScreenCaptureKit jitter of ~10-30ms)
+    /// Reference: https://nonstrict.eu/blog/2024/handling-audio-capture-gaps-on-macos
+    static let aecGapThresholdMs: Int = 50
+    
+    /// Maximum gap to fill with silence (milliseconds).
+    /// Larger gaps are clamped and logged as warnings (may indicate stream restart).
+    /// Default: 500ms = 24000 samples @ 48kHz (96KB max allocation)
+    static let aecMaxGapMs: Int = 500
+    
+    /// Maximum number of system audio buffers to keep for AEC reference lookup.
+    /// At ~20ms per buffer, 150 buffers covers ~3 seconds of audio.
+    /// This accommodates clock drift between mic and system audio streams (~1-2% drift is common).
+    static let maxSystemAudioBuffers: Int = 150
+    
+    // MARK: - AEC Debugging (Debug Builds Only)
+    
+    #if DEBUG
+    /// Enable verbose AEC diagnostic logging
+    /// When enabled, logs RMS levels, match quality, and filter state every Nth buffer
+    /// WARNING: May impact real-time performance; use only for debugging
+    /// Enable via: `defaults write com.muesli.app aecVerboseLogging -bool true`
+    static var aecVerboseLogging: Bool {
+        get { UserDefaults.standard.bool(forKey: "aecVerboseLogging") }
+        set { UserDefaults.standard.set(newValue, forKey: "aecVerboseLogging") }
+    }
+    
+    /// Log sampling interval for verbose AEC diagnostics
+    /// Logs every Nth buffer to minimize performance impact (~2-3 logs/second at 10)
+    static let aecLogSampleInterval: Int = 10
+    
+    /// Enable/disable AEC gap fill for diagnostic testing.
+    /// When disabled, gaps are detected but NOT filled with silence.
+    /// WARNING: Disabling causes sample count drift and may break AEC sync.
+    /// DO NOT SHIP with this disabled - diagnostic use only.
+    /// Enable via: `defaults write com.muesli.app aecEnableGapFill -bool false`
+    static var aecEnableGapFill: Bool {
+        get {
+            // Default to true if not explicitly set
+            if UserDefaults.standard.object(forKey: "aecEnableGapFill") == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: "aecEnableGapFill")
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "aecEnableGapFill") }
+    }
+    #endif
 }

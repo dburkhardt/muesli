@@ -1129,7 +1129,7 @@ final class FileOutputServiceTests: XCTestCase {
         // When: Appending concurrently
         DispatchQueue.concurrentPerform(iterations: 10) { i in
             let buffer = createTestAudioBuffer()
-            let type: AudioCaptureService.AudioType = i % 2 == 0 ? .system : .microphone
+            let type: AudioStreamType = i % 2 == 0 ? .system : .microphone
             service.appendAudioBuffer(buffer, type: type)
         }
         

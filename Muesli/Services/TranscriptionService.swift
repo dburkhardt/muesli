@@ -45,6 +45,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         let startTime: Date
         let systemOffset: Int
         let micOffset: Int
+        /// Cumulative sample offset for system audio (for audio-timeline timestamps)
+        let systemCumulativeOffset: Int
+        /// Cumulative sample offset for mic audio (for audio-timeline timestamps)
+        let micCumulativeOffset: Int
     }
     
     // MARK: - Properties
@@ -66,6 +70,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Overlap tracking: track how many samples have been processed
         var systemProcessedSamples: Int = 0
         var micProcessedSamples: Int = 0
+        // Cumulative sample counters for audio-timeline timestamps
+        var systemTotalSamplesReceived: Int = 0
+        var micTotalSamplesReceived: Int = 0
     }
     private let bufferState = OSAllocatedUnfairLock(initialState: BufferState())
     
@@ -153,6 +160,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             state.micAudioBuffer.removeAll()
             state.systemProcessedSamples = 0
             state.micProcessedSamples = 0
+            state.systemTotalSamplesReceived = 0
+            state.micTotalSamplesReceived = 0
             state.isProcessing = true
         }
         
@@ -188,6 +197,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         bufferState.withLock { state in
             guard state.isProcessing else { return }
             state.systemAudioBuffer.append(contentsOf: samples)
+            state.systemTotalSamplesReceived += samples.count
         }
     }
     
@@ -197,6 +207,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         bufferState.withLock { state in
             guard state.isProcessing else { return }
             state.micAudioBuffer.append(contentsOf: samples)
+            state.micTotalSamplesReceived += samples.count
         }
     }
     
@@ -228,17 +239,22 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             let time = state.recordingStartTime ?? Date()
             var sysOffset = 0
             var micOffset = 0
-            
+            var sysCumulativeOffset = 0
+            var micCumulativeOffset = 0
+
             // Extract system audio chunk with overlap
             if state.systemAudioBuffer.count >= minSamplesForProcessing {
                 // For first chunk, start at 0. For subsequent chunks, include overlap
                 let startIndex = state.systemProcessedSamples > 0 ?
                     max(0, state.systemProcessedSamples - overlapSamples) : 0
                 let endIndex = startIndex + minSamplesForProcessing
-                
+
                 if endIndex <= state.systemAudioBuffer.count {
                     sysChunk = Array(state.systemAudioBuffer[startIndex..<endIndex])
                     sysOffset = startIndex
+                    // Compute cumulative offset: total received minus what remains in buffer after this chunk,
+                    // plus where we started reading within the buffer.
+                    sysCumulativeOffset = state.systemTotalSamplesReceived - state.systemAudioBuffer.count + startIndex
                     // Remove samples up to endIndex (but keep overlap for next chunk)
                     let samplesToRemove = endIndex - overlapSamples
                     if samplesToRemove > 0 {
@@ -250,15 +266,16 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                     }
                 }
             }
-            
+
             // Extract mic audio chunk with overlap
             if state.micAudioBuffer.count >= minSamplesForProcessing {
                 let startIndex = state.micProcessedSamples > 0 ? max(0, state.micProcessedSamples - overlapSamples) : 0
                 let endIndex = startIndex + minSamplesForProcessing
-                
+
                 if endIndex <= state.micAudioBuffer.count {
                     micChunk = Array(state.micAudioBuffer[startIndex..<endIndex])
                     micOffset = startIndex
+                    micCumulativeOffset = state.micTotalSamplesReceived - state.micAudioBuffer.count + startIndex
                     let samplesToRemove = endIndex - overlapSamples
                     if samplesToRemove > 0 {
                         state.micAudioBuffer.removeFirst(samplesToRemove)
@@ -269,16 +286,18 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                     }
                 }
             }
-            
+
             return ChunkInfo(
                 systemChunk: sysChunk,
                 micChunk: micChunk,
                 startTime: time,
                 systemOffset: sysOffset,
-                micOffset: micOffset
+                micOffset: micOffset,
+                systemCumulativeOffset: sysCumulativeOffset,
+                micCumulativeOffset: micCumulativeOffset
             )
         }
-        
+
         // Process system audio ("Them") with VAD check
         if let chunk = chunkInfo.systemChunk, hasVoiceActivity(chunk) {
             Task { await DiagnosticLogger.shared.log(.transcription,
@@ -288,10 +307,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 speaker: .them,
                 whisperKit: whisperKit,
                 startTime: chunkInfo.startTime,
-                offset: chunkInfo.systemOffset
+                cumulativeSampleOffset: chunkInfo.systemCumulativeOffset
             )
         }
-        
+
         // Process mic audio ("Me") with VAD check
         if let chunk = chunkInfo.micChunk, hasVoiceActivity(chunk) {
             Task { await DiagnosticLogger.shared.log(.transcription,
@@ -301,21 +320,25 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 speaker: .me,
                 whisperKit: whisperKit,
                 startTime: chunkInfo.startTime,
-                offset: chunkInfo.micOffset
+                cumulativeSampleOffset: chunkInfo.micCumulativeOffset
             )
         }
     }
     
     private func processRemainingAudio() async {
         guard isInitialized, let whisperKit = whisperKit else { return }
-        
-        let (remainingSystem, remainingMic, startTime) = bufferState.withLock { state -> ([Float], [Float], Date) in
+
+        let (remainingSystem, remainingMic, startTime, sysCumulativeOffset, micCumulativeOffset) = bufferState.withLock {
+            state -> ([Float], [Float], Date, Int, Int) in
             let sys = state.systemAudioBuffer
             let mic = state.micAudioBuffer
             let time = state.recordingStartTime ?? Date()
+            // Cumulative offset for remaining audio: total received minus what's left in the buffer
+            let sysOffset = state.systemTotalSamplesReceived - state.systemAudioBuffer.count
+            let micOffset = state.micTotalSamplesReceived - state.micAudioBuffer.count
             state.systemAudioBuffer.removeAll()
             state.micAudioBuffer.removeAll()
-            return (sys, mic, time)
+            return (sys, mic, time, sysOffset, micOffset)
         }
         
         // Log remaining audio for debugging
@@ -334,15 +357,15 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // This prevents short/noisy trailing audio from generating hallucinations
         if !remainingSystem.isEmpty && hasVoiceActivity(remainingSystem) {
             logger.info("Processing remaining system audio (passed VAD)")
-            await transcribeChunk(remainingSystem, speaker: .them, whisperKit: whisperKit, startTime: startTime)
+            await transcribeChunk(remainingSystem, speaker: .them, whisperKit: whisperKit, startTime: startTime, cumulativeSampleOffset: sysCumulativeOffset)
         } else if !remainingSystem.isEmpty {
             logger.info("Skipping remaining system audio (failed VAD)")
         }
-        
+
         // Process remaining mic audio ONLY if it passes VAD check
         if !remainingMic.isEmpty && hasVoiceActivity(remainingMic) {
             logger.info("Processing remaining mic audio (passed VAD)")
-            await transcribeChunk(remainingMic, speaker: .me, whisperKit: whisperKit, startTime: startTime)
+            await transcribeChunk(remainingMic, speaker: .me, whisperKit: whisperKit, startTime: startTime, cumulativeSampleOffset: micCumulativeOffset)
         } else if !remainingMic.isEmpty {
             logger.info("Skipping remaining mic audio (failed VAD)")
         }
@@ -361,9 +384,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             usePrefillPrompt: true,
             usePrefillCache: true,
             suppressBlank: true,                     // Prevent "[BLANK_AUDIO]" hallucinations
-            compressionRatioThreshold: 2.4,          // Detect repetitive hallucinations
-            logProbThreshold: -1.0,                  // Reject low-confidence outputs
-            noSpeechThreshold: 0.6                   // Better silence detection
+            compressionRatioThreshold: 1.8,          // Aggressively detect repetitive hallucinations
+            logProbThreshold: -0.7,                  // Reject low-confidence outputs more strictly
+            noSpeechThreshold: 0.5                   // More sensitive silence detection
         )
     }
     
@@ -372,22 +395,22 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         speaker: TranscriptSegment.Speaker,
         whisperKit: WhisperKit,
         startTime: Date,
-        offset: Int = 0
+        cumulativeSampleOffset: Int = 0
     ) async {
         do {
             // Transcribe the audio chunk with optimized decoding options
             let options = buildDecodingOptions()
             let results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
-            
+
             guard let result = results.first,
                   !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
                 return
             }
-            
-            // Calculate timestamp relative to recording start, accounting for offset
-            let offsetTime = Double(offset) / Double(sampleRate)
-            let timestamp = Date().timeIntervalSince(startTime) + offsetTime
+
+            // Use audio-timeline timestamp (cumulative samples / sample rate) instead of wall-clock.
+            // Wall-clock (Date().timeIntervalSince(startTime)) drifts by chunk accumulation + inference latency.
+            let timestamp = Double(cumulativeSampleOffset) / Double(sampleRate)
             
             let segment = TranscriptSegment(
                 text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -746,9 +769,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             let inputBufferRef = inputBuffer  // Capture for closure
             var inputProvided = OSAllocatedUnfairLock(initialState: false)
             let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-                let wasProvided = inputProvided.withLock { provided in
-                    if !provided {
-                        provided = true
+                let wasProvided = inputProvided.withLock {
+                    if !$0 {
+                        $0 = true
                         return false
                     }
                     return true
@@ -906,7 +929,24 @@ extension TranscriptionService {
             isInterleaved: true  // CMSampleBuffer provides interleaved audio
         )
     }
-    
+
+    /// Resample pre-extracted Float samples to WhisperKit format (16kHz mono).
+    /// Used by the AEC pipeline which delivers already-extracted mono 48kHz samples.
+    static func resampleToWhisperFormat(
+        _ samples: [Float],
+        sourceSampleRate: Double,
+        sourceChannels: Int
+    ) -> [Float] {
+        return resampleWithAVAudioConverter(
+            samples: samples,
+            sourceSampleRate: sourceSampleRate,
+            sourceChannels: sourceChannels,
+            targetSampleRate: 16000,
+            targetChannels: 1,
+            isInterleaved: false  // Already mono, no interleaving
+        ) ?? samples  // Pass-through on failure to preserve audio
+    }
+
     /// Resample audio samples using AVAudioConverter
     /// - Parameters:
     ///   - samples: Input samples (mono or stereo, interleaved or not)

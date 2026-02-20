@@ -73,6 +73,7 @@ declare -a APP_BUNDLE_IDS=()
 declare -a APP_BUNDLE_TYPES=()
 declare -a SELECTED_BUNDLES=()
 declare -a DERIVED_DATA_FOLDERS=()
+declare -a SELECTED_DERIVED_DATA=()
 
 # New arrays for comprehensive cleanup
 declare -a MOUNTED_DMG_APPS=()
@@ -437,6 +438,94 @@ interactive_select_bundles() {
     fi
 }
 
+interactive_select_derived_data() {
+    if [ ${#DERIVED_DATA_FOLDERS[@]} -eq 0 ]; then
+        return
+    fi
+
+    print_header "DERIVEDDATA FOLDERS"
+
+    echo "Found the following DerivedData folder(s):"
+    echo ""
+
+    local -a selected=()
+    for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+        selected[$i]=1
+    done
+
+    for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+        local folder="${DERIVED_DATA_FOLDERS[$i]}"
+        local folder_name=$(basename "$folder")
+        local folder_size=$(du -sh "$folder" 2>/dev/null | cut -f1)
+
+        if [ "${selected[$i]}" -eq 1 ]; then
+            echo "  [x] $((i+1)). $folder_name ($folder_size)"
+        else
+            echo "  [ ] $((i+1)). $folder_name ($folder_size)"
+        fi
+    done
+
+    echo ""
+    echo "DerivedData contains build caches. Deleting saves disk space but"
+    echo "requires a full rebuild (~5-8 min) next time."
+    echo ""
+    echo "Enter numbers to toggle, 'all'/'none', or Enter to continue:"
+
+    while true; do
+        read -p "> " input
+
+        if [ -z "$input" ]; then
+            break
+        elif [ "$input" = "all" ]; then
+            for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+                selected[$i]=1
+            done
+        elif [ "$input" = "none" ]; then
+            for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+                selected[$i]=0
+            done
+        else
+            for num in $input; do
+                if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1 ] && [ "$num" -le ${#DERIVED_DATA_FOLDERS[@]} ]; then
+                    local idx=$((num-1))
+                    if [ "${selected[$idx]}" -eq 1 ]; then
+                        selected[$idx]=0
+                    else
+                        selected[$idx]=1
+                    fi
+                fi
+            done
+        fi
+
+        # Redisplay
+        echo ""
+        for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+            local folder="${DERIVED_DATA_FOLDERS[$i]}"
+            local folder_name=$(basename "$folder")
+            local folder_size=$(du -sh "$folder" 2>/dev/null | cut -f1)
+            if [ "${selected[$i]}" -eq 1 ]; then
+                echo "  [x] $((i+1)). $folder_name ($folder_size)"
+            else
+                echo "  [ ] $((i+1)). $folder_name ($folder_size)"
+            fi
+        done
+        echo ""
+    done
+
+    SELECTED_DERIVED_DATA=()
+    for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+        if [ "${selected[$i]}" -eq 1 ]; then
+            SELECTED_DERIVED_DATA+=("$i")
+        fi
+    done
+
+    if [ ${#SELECTED_DERIVED_DATA[@]} -eq 0 ]; then
+        print_info "No DerivedData folders selected"
+    else
+        print_success "Selected ${#SELECTED_DERIVED_DATA[@]} DerivedData folder(s)"
+    fi
+}
+
 prompt_recording_action() {
     if [ "$RECORDINGS_COUNT" -eq 0 ]; then
         RECORDING_ACTION="none"
@@ -580,7 +669,6 @@ prompt_app_support_action() {
                 break
                 ;;
             *)
-                print_error "Invalid choice. Please enter 1, 2, or 3."
                 ;;
         esac
     done
@@ -610,20 +698,19 @@ prompt_mounted_dmg_action() {
     echo ""
     
     while true; do
-        read -p "Eject these DMG volumes? (yes/no): " response
+        read -p "Eject these DMG volumes? [y/n]: " response
         case "$response" in
-            yes|YES|y|Y)
+            y|Y|yes|YES)
                 EJECT_DMGS=true
                 print_success "DMG volumes will be ejected"
                 break
                 ;;
-            no|NO|n|N)
+            n|N|no|NO)
                 EJECT_DMGS=false
                 print_info "DMG volumes will be kept mounted"
                 break
                 ;;
             *)
-                print_error "Please answer 'yes' or 'no'"
                 ;;
         esac
     done
@@ -654,20 +741,19 @@ prompt_trash_deletion() {
     echo ""
     
     while true; do
-        read -p "Delete these permanently? (yes/no): " response
+        read -p "Delete these permanently? [y/n]: " response
         case "$response" in
-            yes|YES)
+            y|Y|yes|YES)
                 DELETE_TRASH_APPS=true
                 print_warning "Trash apps will be PERMANENTLY deleted"
                 break
                 ;;
-            no|NO|n|N)
+            n|N|no|NO)
                 DELETE_TRASH_APPS=false
                 print_info "Trash apps will be kept"
                 break
                 ;;
             *)
-                print_error "Please type 'yes' or 'no' (full word for deletion)"
                 ;;
         esac
     done
@@ -715,20 +801,19 @@ prompt_per_bundle_artifacts() {
     echo ""
     
     while true; do
-        read -p "Delete these artifacts? (yes/no): " response
+        read -p "Delete these artifacts? [y/n]: " response
         case "$response" in
-            yes|YES|y|Y)
+            y|Y|yes|YES)
                 CLEAN_PER_BUNDLE_ARTIFACTS=true
                 print_success "Per-bundle artifacts will be deleted"
                 break
                 ;;
-            no|NO|n|N)
+            n|N|no|NO)
                 CLEAN_PER_BUNDLE_ARTIFACTS=false
                 print_info "Per-bundle artifacts will be kept"
                 break
                 ;;
             *)
-                print_error "Please answer 'yes' or 'no'"
                 ;;
         esac
     done
@@ -778,10 +863,11 @@ show_summary() {
     fi
     
     # DerivedData
-    if [ ${#DERIVED_DATA_FOLDERS[@]} -gt 0 ]; then
+    if [ ${#SELECTED_DERIVED_DATA[@]} -gt 0 ]; then
         has_items=1
-        echo "  DerivedData (${#DERIVED_DATA_FOLDERS[@]} folders):"
-        for folder in "${DERIVED_DATA_FOLDERS[@]}"; do
+        echo "  DerivedData (${#SELECTED_DERIVED_DATA[@]} folders):"
+        for idx in "${SELECTED_DERIVED_DATA[@]}"; do
+            local folder="${DERIVED_DATA_FOLDERS[$idx]}"
             local folder_name=$(basename "$folder")
             echo "    - $folder_name"
         done
@@ -829,34 +915,38 @@ show_summary() {
         echo ""
     fi
     
-    # TCC Permissions
-    if [ ${#SELECTED_BUNDLES[@]} -gt 0 ]; then
-        echo "  TCC Permissions:"
-        local unique_ids=()
-        for idx in "${SELECTED_BUNDLES[@]}"; do
-            local bundle_id="${APP_BUNDLE_IDS[$idx]}"
-            if [[ ! " ${unique_ids[@]} " =~ " ${bundle_id} " ]]; then
-                unique_ids+=("$bundle_id")
-            fi
-        done
-        echo "    - Screen Recording for: ${unique_ids[*]}"
-        echo "    - Microphone for: ${unique_ids[*]}"
-        echo ""
+    # TCC Permissions (always reset — entries may exist even without bundles)
+    has_items=1
+    echo "  TCC Permissions:"
+    local tcc_ids=()
+    for idx in "${SELECTED_BUNDLES[@]}"; do
+        local bundle_id="${APP_BUNDLE_IDS[$idx]}"
+        if [[ ! " ${tcc_ids[@]} " =~ " ${bundle_id} " ]]; then
+            tcc_ids+=("$bundle_id")
+        fi
+    done
+    if [[ ! " ${tcc_ids[@]} " =~ " com.muesli.app " ]]; then
+        tcc_ids+=("com.muesli.app")
     fi
-    
+    echo "    - Screen Recording for: ${tcc_ids[*]}"
+    echo "    - Microphone for: ${tcc_ids[*]}"
+    echo "    - System Audio Capture for: ${tcc_ids[*]}"
+    echo ""
+
     # UserDefaults
-    if [ ${#SELECTED_BUNDLES[@]} -gt 0 ]; then
-        echo "  UserDefaults:"
-        local unique_ids=()
-        for idx in "${SELECTED_BUNDLES[@]}"; do
-            local bundle_id="${APP_BUNDLE_IDS[$idx]}"
-            if [[ ! " ${unique_ids[@]} " =~ " ${bundle_id} " ]]; then
-                unique_ids+=("$bundle_id")
-                echo "    - $bundle_id"
-            fi
-        done
-        echo ""
+    echo "  UserDefaults:"
+    local unique_ids=()
+    for idx in "${SELECTED_BUNDLES[@]}"; do
+        local bundle_id="${APP_BUNDLE_IDS[$idx]}"
+        if [[ ! " ${unique_ids[@]} " =~ " ${bundle_id} " ]]; then
+            unique_ids+=("$bundle_id")
+            echo "    - $bundle_id"
+        fi
+    done
+    if [ ${#unique_ids[@]} -eq 0 ]; then
+        echo "    - com.muesli.app"
     fi
+    echo ""
     
     # Recordings
     if [ "$RECORDING_ACTION" = "move" ] && [ -n "$RECORDING_DESTINATION" ]; then
@@ -946,20 +1036,15 @@ show_summary() {
 }
 
 confirm_uninstall() {
-    while true; do
-        read -p "Continue with uninstall? (yes/no): " response
-        case "$response" in
-            yes|YES|y|Y)
-                return 0
-                ;;
-            no|NO|n|N)
-                return 1
-                ;;
-            *)
-                print_error "Please answer 'yes' or 'no'"
-                ;;
-        esac
-    done
+    echo ""
+    echo -e "Type ${RED}uninstall${NC} to confirm, or anything else to cancel:"
+    echo ""
+    read -p "> " response
+    if [ "$response" = "uninstall" ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # ============================================================================
@@ -1092,6 +1177,41 @@ move_recordings() {
     return 0
 }
 
+delete_recordings() {
+    if [ ! -d "$RECORDINGS_DIR" ]; then
+        print_info "Recordings directory not found"
+        return 0
+    fi
+
+    print_info "Deleting recordings..."
+
+    local deleted=0
+    local failed=0
+    while IFS= read -r -d '' recording; do
+        local recording_name=$(basename "$recording")
+        if [ "$DRY_RUN" = true ]; then
+            log_action "would_delete_recording" "$recording"
+            echo -e "${YELLOW}[DRY RUN]${NC} Would delete recording: $recording_name"
+            deleted=$((deleted + 1))
+        elif rm -rf "$recording" 2>/dev/null; then
+            log_action "deleted_recording" "$recording"
+            deleted=$((deleted + 1))
+        else
+            log_action "delete_recording_failed" "$recording"
+            print_error "Failed to delete: $recording_name"
+            failed=$((failed + 1))
+        fi
+    done < <(find "$RECORDINGS_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+
+    print_success "Deleted $deleted recording(s)"
+    if [ $failed -gt 0 ]; then
+        print_warning "$failed recording(s) failed to delete"
+        return 1
+    fi
+
+    return 0
+}
+
 delete_app_bundles() {
     if [ ${#SELECTED_BUNDLES[@]} -eq 0 ]; then
         return 0
@@ -1117,13 +1237,14 @@ delete_app_bundles() {
 }
 
 delete_derived_data() {
-    if [ ${#DERIVED_DATA_FOLDERS[@]} -eq 0 ]; then
+    if [ ${#SELECTED_DERIVED_DATA[@]} -eq 0 ]; then
         return 0
     fi
-    
+
     print_info "Deleting DerivedData folders..."
-    
-    for folder in "${DERIVED_DATA_FOLDERS[@]}"; do
+
+    for idx in "${SELECTED_DERIVED_DATA[@]}"; do
+        local folder="${DERIVED_DATA_FOLDERS[$idx]}"
         local folder_name=$(basename "$folder")
         
         if [ "$DRY_RUN" = true ]; then
@@ -1302,12 +1423,8 @@ delete_login_items() {
 }
 
 reset_tcc_permissions() {
-    if [ ${#SELECTED_BUNDLES[@]} -eq 0 ]; then
-        return 0
-    fi
-    
     print_info "Resetting TCC permissions..."
-    
+
     # Get unique bundle IDs from selected bundles
     local unique_ids=()
     for idx in "${SELECTED_BUNDLES[@]}"; do
@@ -1316,7 +1433,7 @@ reset_tcc_permissions() {
             unique_ids+=("$bundle_id")
         fi
     done
-    
+
     # Also include bundle IDs from per-bundle artifacts being cleaned
     if [ "$CLEAN_PER_BUNDLE_ARTIFACTS" = true ]; then
         for dir in "${BUNDLE_CACHE_DIRS[@]}"; do
@@ -1326,36 +1443,39 @@ reset_tcc_permissions() {
             fi
         done
     fi
-    
+
+    # Always include the default bundle ID — TCC entries may exist even if no app
+    # bundles were found (e.g., app was already deleted but permissions remain)
+    if [[ ! " ${unique_ids[@]} " =~ " com.muesli.app " ]]; then
+        unique_ids+=("com.muesli.app")
+    fi
+
     for bundle_id in "${unique_ids[@]}"; do
         if [ "$DRY_RUN" = true ]; then
             log_action "would_reset_tcc" "$bundle_id"
             echo -e "${YELLOW}[DRY RUN]${NC} Would reset TCC permissions for: $bundle_id"
         else
-            # Reset Screen Recording permission
-            if tccutil reset ScreenCapture "$bundle_id" 2>/dev/null; then
-                log_action "reset_tcc_screen" "$bundle_id"
-                print_success "Reset Screen Recording for: $bundle_id"
-            else
-                print_warning "Could not reset Screen Recording for: $bundle_id"
-            fi
-            
-            # Reset Microphone permission
-            if tccutil reset Microphone "$bundle_id" 2>/dev/null; then
-                log_action "reset_tcc_mic" "$bundle_id"
-                print_success "Reset Microphone for: $bundle_id"
-            else
-                print_warning "Could not reset Microphone for: $bundle_id"
-            fi
+            # Reset all TCC services Muesli uses:
+            #   ScreenCapture  — screen recording (ScreenCaptureKit)
+            #   Microphone     — microphone access (AVAudioEngine)
+            #   ListenEvent    — system audio capture (Core Audio taps / NSAudioCaptureUsageDescription)
+            for svc in ScreenCapture Microphone ListenEvent; do
+                local svc_output
+                svc_output=$(tccutil reset "$svc" "$bundle_id" 2>&1)
+                local svc_exit=$?
+                if [ $svc_exit -eq 0 ]; then
+                    log_action "reset_tcc_$svc" "$bundle_id"
+                    print_success "Reset $svc for: $bundle_id"
+                else
+                    log_action "reset_tcc_${svc}_failed" "$bundle_id: $svc_output"
+                    print_warning "Could not reset $svc for: $bundle_id ($svc_output)"
+                fi
+            done
         fi
     done
 }
 
 delete_user_defaults() {
-    if [ ${#SELECTED_BUNDLES[@]} -eq 0 ]; then
-        return 0
-    fi
-    
     print_info "Deleting UserDefaults..."
     
     # Get unique bundle IDs
@@ -1366,6 +1486,22 @@ delete_user_defaults() {
             unique_ids+=("$bundle_id")
         fi
     done
+
+    # If no bundles were selected, fall back to known bundle IDs
+    if [ ${#unique_ids[@]} -eq 0 ]; then
+        # Prefer any discovered preference files
+        for file in "${BUNDLE_PREF_FILES[@]}"; do
+            local bundle_id=$(basename "$file" .plist)
+            if [[ ! " ${unique_ids[@]} " =~ " ${bundle_id} " ]]; then
+                unique_ids+=("$bundle_id")
+            fi
+        done
+    fi
+
+    # Final fallback to the default bundle ID
+    if [ ${#unique_ids[@]} -eq 0 ]; then
+        unique_ids=("com.muesli.app")
+    fi
     
     for bundle_id in "${unique_ids[@]}"; do
         if [ "$DRY_RUN" = true ]; then
@@ -1472,44 +1608,48 @@ execute_uninstall() {
     # Log start of uninstall
     log_action "uninstall_started" "$(date)"
     
-    # Move recordings first (if requested)
+    # Handle recordings first (move or delete as requested)
     if [ "$RECORDING_ACTION" = "move" ]; then
         move_recordings || print_warning "Recording move failed, continuing with uninstall..."
+    elif [ "$RECORDING_ACTION" = "delete" ]; then
+        delete_recordings
     fi
     
     # 1. Unregister apps from Launch Services BEFORE deleting them
     unregister_all_apps
-    
+
     # 2. Kill running processes
     kill_muesli_processes
-    
-    # 3. Delete app bundles (DerivedData, /Applications, ~/Applications)
-    delete_app_bundles
-    
-    # 4. Delete Trash apps (if user confirmed)
-    delete_trash_apps
-    
-    # 5. Eject mounted DMGs (if user confirmed)
-    eject_mounted_dmgs
-    
-    # 6. Delete DerivedData folders
-    delete_derived_data
-    
-    # 7. Delete project build directories
-    delete_project_build_dirs
-    
-    # 8. Reset TCC permissions
+
+    # 3. Reset TCC permissions BEFORE deleting app bundles
+    # On macOS 15+, tccutil may need the app bundle present to verify the
+    # code signing identity. Resetting after deletion could silently fail.
     reset_tcc_permissions
-    
+
+    # 4. Delete app bundles (DerivedData, /Applications, ~/Applications)
+    delete_app_bundles
+
+    # 5. Delete Trash apps (if user confirmed)
+    delete_trash_apps
+
+    # 6. Eject mounted DMGs (if user confirmed)
+    eject_mounted_dmgs
+
+    # 7. Delete DerivedData folders
+    delete_derived_data
+
+    # 8. Delete project build directories
+    delete_project_build_dirs
+
     # 9. Delete UserDefaults
     delete_user_defaults
-    
+
     # 10. Delete per-bundle caches/HTTP storages/preferences
     delete_per_bundle_artifacts
-    
+
     # 11. Delete Login Items
     delete_login_items
-    
+
     # 12. Delete Application Support (unless keeping recordings)
     delete_application_support || print_warning "Application Support deletion failed, continuing..."
     
@@ -1630,7 +1770,12 @@ main() {
     if [ ${#APP_BUNDLES[@]} -gt 0 ]; then
         interactive_select_bundles
     fi
-    
+
+    # DerivedData selection
+    if [ ${#DERIVED_DATA_FOLDERS[@]} -gt 0 ]; then
+        interactive_select_derived_data
+    fi
+
     # Mounted DMG handling
     prompt_mounted_dmg_action
     

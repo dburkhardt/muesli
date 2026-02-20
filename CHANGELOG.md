@@ -13,9 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Export to additional formats (PDF, DOCX)
 - Keyboard shortcuts for common actions
 
+## [0.6.0] - TBD
+
+### Added
+- **LLM Transcript Refinement**: Polish transcripts using on-device MLX LLM models (Llama 3.2 variants)
+- **LLM Onboarding Step**: Fifth onboarding screen for optional LLM model download
+- **Code Signing & Notarization**: App is now signed with Developer ID and notarized by Apple in the release workflow
+- **macOS 26 SDK**: Release builds target macOS 26 (Tahoe) with Liquid Glass button styling
+- **Expanded Model Support**: Supported WhisperKit models updated to Small, Medium, Large v3, and Large v3 Turbo (tiny/base removed)
+
+### Changed
+- Deployment target raised to macOS 26.0
+- `LSUIElement` set to `false` — app appears in the Dock (was previously agent-only)
+- Whisper model default changed from `base` to `small` in onboarding
+
 ## [0.1.2] - TBD
 
 ### Added
+- **WebRTC AEC3 Echo Cancellation**: Replaced NLMS with WebRTC AEC3 as the default echo cancellation implementation
+  - 2-3x better echo suppression (25-35 dB ERLE vs 10-15 dB)
+  - Built-in double-talk detection and non-linear processing
+  - Hybrid synchronization architecture handles 250-350ms mic-first timing offset
+  - NLMS preserved as fallback option (accessible via hidden preference)
 - **UI Testing Framework**: Comprehensive XCUITest suite for capturing screenshots of all major screens
 - **Screenshot Capture**: Automated screenshot generation for website and documentation (light/dark modes)
 - **Copy Transcript**: Added clipboard copy functionality with plain text and Markdown format options
@@ -53,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **On-device processing**: All transcription happens locally - no cloud services, complete privacy
 - **Menu bar interface**: Unobtrusive menu bar app with quick access to recordings
 - **Meeting app detection**: Automatically detects when common meeting apps are running
-- **Model management**: Download and switch between Whisper models (tiny, base, small, medium)
+- **Model management**: Download and switch between Whisper models (small, medium, large-v3, large-v3-turbo)
 - **Onboarding wizard**: Guided setup for permissions and model download
 - **Auto-updates**: Built-in update checker for new releases
 
@@ -72,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No speaker diarization in v0.1.0 (planned for future release)
 - English language models only (multilingual support planned)
 
-[unreleased]: https://github.com/dburkhardt/muesli/compare/v0.1.2...HEAD
+[unreleased]: https://github.com/dburkhardt/muesli/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/dburkhardt/muesli/compare/v0.1.2...v0.6.0
 [0.1.2]: https://github.com/dburkhardt/muesli/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/dburkhardt/muesli/releases/tag/v0.1.0

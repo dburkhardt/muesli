@@ -10,7 +10,7 @@
 
 The latest release is available as a DMG installer from our [GitHub releases page](https://github.com/dburkhardt/muesli/releases/latest).
 
-**Note:** Muesli is currently unsigned. When you first open it, macOS will show a security warning. Right-click the app in your Applications folder and choose "Open" to bypass Gatekeeper. See our [installation guide](https://dburkhardt.github.io/muesli/download.html) for detailed instructions.
+**Note:** Muesli is signed with a Developer ID certificate and notarized by Apple. It should open without any Gatekeeper warnings on macOS.
 
 **Requirements:**
 - macOS 26 or newer

@@ -208,7 +208,7 @@ struct ModelManagementView: View {
     @ViewBuilder
     private func whisperModelStatusView(for model: ModelManager.ModelSize) -> some View {
         let state = modelManager.downloadState(for: model)
-        
+
         switch state {
         case .idle, .checking:
             Button("Download") {
@@ -218,7 +218,7 @@ struct ModelManagementView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            
+
         case .downloading(let progress):
             HStack(spacing: 6) {
                 ProgressView(value: progress)
@@ -229,7 +229,16 @@ struct ModelManagementView: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 35, alignment: .trailing)
             }
-            
+
+        case .compiling:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Optimizing...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
         case .completed:
             HStack(spacing: 8) {
                 Image(systemName: "checkmark.circle.fill")
@@ -244,18 +253,23 @@ struct ModelManagementView: View {
                 .foregroundStyle(.red)
                 .controlSize(.small)
             }
-            
+
         case .failed(let error):
             VStack(alignment: .trailing, spacing: 4) {
                 HStack(spacing: 8) {
                     Button("Retry") {
-                        Task {
-                            await modelManager.downloadModel(model)
+                        // If model is downloaded but compilation failed, retry compilation only
+                        if modelManager.downloadedModels.contains(model) {
+                            modelManager.retryCompilation(model)
+                        } else {
+                            Task {
+                                await modelManager.downloadModel(model)
+                            }
                         }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    
+
                     Button {
                         modelToDelete = model
                         showDeleteConfirmation = true
@@ -266,7 +280,7 @@ struct ModelManagementView: View {
                     .foregroundStyle(.red)
                     .controlSize(.small)
                 }
-                
+
                 Text(error)
                     .font(.caption2)
                     .foregroundStyle(.red)

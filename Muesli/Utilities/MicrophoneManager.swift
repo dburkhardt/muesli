@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 import os.log
 
@@ -34,6 +35,12 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     
     private static let selectedDeviceIDKey = "selectedMicrophoneDeviceID"
     
+    /// Listener for device list changes (devices added/removed)
+    private var deviceListListenerID: AudioObjectPropertyListenerBlock?
+    
+    /// Whether the device change listener is active
+    private var isListeningForDeviceChanges = false
+    
     // MARK: - Initialization
     
     init() {
@@ -46,6 +53,71 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         // until after microphone permission has been granted during onboarding.
         // Call refreshDevices() explicitly when permission is confirmed.
         // See: spec/onboarding_flow.md "AVCaptureDevice and Permission Prompts"
+    }
+    
+    deinit {
+        // Note: Can't call MainActor-isolated method from deinit
+        // The listener will be automatically cleaned up when this object is deallocated
+    }
+    
+    // MARK: - Device Change Listening
+    
+    /// Start listening for device changes (call after permission is granted)
+    func startListeningForDeviceChanges() {
+        guard !isListeningForDeviceChanges else { return }
+        
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        let listenerBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            // Dispatch to main actor for UI updates
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.logger.info("Audio device list changed - refreshing")
+                self.refreshDevices()
+            }
+        }
+        
+        deviceListListenerID = listenerBlock
+        
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            DispatchQueue.main,
+            listenerBlock
+        )
+        
+        if status == noErr {
+            isListeningForDeviceChanges = true
+            logger.info("Started listening for audio device changes")
+        } else {
+            logger.warning("Failed to add device list change listener: \(status)")
+        }
+    }
+    
+    /// Stop listening for device changes
+    func stopListeningForDeviceChanges() {
+        guard isListeningForDeviceChanges, let listenerBlock = deviceListListenerID else { return }
+        
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            DispatchQueue.main,
+            listenerBlock
+        )
+        
+        deviceListListenerID = nil
+        isListeningForDeviceChanges = false
+        logger.info("Stopped listening for audio device changes")
     }
     
     // MARK: - Device Filtering

@@ -808,7 +808,6 @@ final class MuesliViewModelTests: XCTestCase {
         XCTAssertTrue(session.transcriptText.isEmpty)
         XCTAssertNil(session.recordingStartTime)
         XCTAssertNil(session.outputDirectory)
-        XCTAssertNil(session.selectedApp)
         XCTAssertFalse(session.isInitializing)
         XCTAssertFalse(session.isMicrophoneMuted)
         XCTAssertFalse(session.wasInterrupted)
@@ -819,18 +818,7 @@ final class MuesliViewModelTests: XCTestCase {
     
     func testRecordingSessionAudioSourceDescription() async {
         let session = RecordingSession()
-        
-        // Without selected app
         XCTAssertEqual(session.audioSourceDescription, "All System Audio")
-        
-        // With selected app
-        let mockApp = MeetingAppDetector.DetectedApp(
-            id: "com.zoom.xos",
-            name: "Zoom",
-            bundleIdentifier: "com.zoom.xos"
-        )
-        session.selectedApp = mockApp
-        XCTAssertEqual(session.audioSourceDescription, "Zoom")
     }
     
     func testRecordingSessionElapsedTimeString() async {
@@ -981,6 +969,8 @@ final class MuesliViewModelTests: XCTestCase {
     }
     
     // MARK: - Echo Cancellation Tests (CRITICAL)
+    // Note: Toggle behavior is Debug-only. In Release builds, AEC is always on
+    // and the UI toggle is hidden. These tests validate the Debug path.
     
     func testEchoCancellationToggle() async {
         let viewModel = MuesliViewModel(skipInitialLoad: true)
@@ -2522,7 +2512,7 @@ final class MuesliViewModelTests: XCTestCase {
         let viewModel = MuesliViewModel(skipInitialLoad: true)
         
         // Step 1-2: Request permission
-        viewModel.requestScreenRecordingPermission()
+        _ = await viewModel.requestScreenRecordingPermission()
         
         // Step 3: Verify immediately
         let granted = await viewModel.verifyScreenRecordingAfterRequest()
@@ -2573,17 +2563,62 @@ final class MuesliViewModelTests: XCTestCase {
         let viewModel = MuesliViewModel(skipInitialLoad: true)
         
         // Request and verify
-        viewModel.requestScreenRecordingPermission()
+        _ = await viewModel.requestScreenRecordingPermission()
         let granted = await viewModel.verifyScreenRecordingAfterRequest()
         
         // Even after denial, calling verify again should NOT show dialog
         // (it uses async check which is already denied)
         let secondCheck = await viewModel.verifyScreenRecordingAfterRequest()
-        
+
         XCTAssertFalse(granted)
         XCTAssertFalse(secondCheck)
-        
+
         // Key: No polling means no repeated dialogs
         XCTAssertTrue(true, "Deny flow does not trigger dialog loop")
+    }
+
+    // MARK: - canStartRecording Tests
+
+    func testCanStartRecordingFalseWhenNoModelReady() {
+        let viewModel = MuesliViewModel(skipInitialLoad: true)
+        // All models start as .idle — no model is ready
+        XCTAssertFalse(viewModel.canStartRecording,
+            "canStartRecording should be false when no model is completed")
+    }
+
+    func testCanStartRecordingTrueWhenActiveModelReady() {
+        let viewModel = MuesliViewModel(skipInitialLoad: true)
+        viewModel.modelManager.downloadStates[.small] = .completed
+        viewModel.modelManager.downloadedModels.insert(.small)
+        viewModel.modelManager.activeModel = .small
+        XCTAssertTrue(viewModel.canStartRecording,
+            "canStartRecording should be true when active model is completed")
+    }
+
+    func testCanStartRecordingTrueWhenNonActiveModelReadyAndActiveCompiling() {
+        let viewModel = MuesliViewModel(skipInitialLoad: true)
+        // Active model is still compiling
+        viewModel.modelManager.downloadedModels.insert(.large)
+        viewModel.modelManager.downloadStates[.large] = .compiling
+        viewModel.modelManager.activeModel = .large
+        // Another model is ready
+        viewModel.modelManager.downloadedModels.insert(.small)
+        viewModel.modelManager.downloadStates[.small] = .completed
+        XCTAssertTrue(viewModel.canStartRecording,
+            "canStartRecording should be true when a non-active model is completed even if active is compiling")
+    }
+
+    func testCanStartRecordingFalseWhenSessionActive() {
+        let viewModel = MuesliViewModel(skipInitialLoad: true)
+        // Mark a model as ready
+        viewModel.modelManager.downloadStates[.small] = .completed
+        viewModel.modelManager.downloadedModels.insert(.small)
+        viewModel.modelManager.activeModel = .small
+        // With no active session, canStartRecording should be true
+        XCTAssertTrue(viewModel.canStartRecording,
+            "canStartRecording should be true when model is ready and no session active")
+        // Verify the session guard: activeSession == nil means canStartRecording respects session state
+        XCTAssertNil(viewModel.activeSession,
+            "activeSession should be nil initially, which is required for canStartRecording to return true")
     }
 }

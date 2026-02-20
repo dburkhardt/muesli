@@ -5,60 +5,77 @@ on:
   pull_request:
     branches:
       - main
-  
+
   # Run on push to main (after merge)
   push:
     branches:
       - main
-  
+
   # Nightly builds at 2 AM UTC
   schedule:
     - cron: '0 2 * * *'
-  
+
   # Allow manual trigger
   workflow_dispatch:
 
 env:
   XCODE_VERSION: '26.2'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Build and Test
     runs-on: macos-26
-    
+    timeout-minutes: 30
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      
+
       - name: Select Xcode version
         run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer
-      
+
       - name: Show Xcode version
         run: xcodebuild -version
-      
+
       - name: Cache Swift Package Manager dependencies
         uses: actions/cache@v5
         with:
           path: |
-            .build
             ~/Library/Developer/Xcode/DerivedData/Muesli-*/SourcePackages
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
-      
-      - name: Build Muesli (Debug)
+
+      - name: Cache WebRTC XCFramework
+        id: cache-webrtc
+        uses: actions/cache@v5
+        with:
+          path: Muesli/Frameworks/webrtc_audio_processing.xcframework
+          key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.XCODE_VERSION }}-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
+
+      - name: Install WebRTC Build Dependencies
+        if: steps.cache-webrtc.outputs.cache-hit != 'true'
+        run: brew install meson ninja pkg-config
+
+      - name: Build WebRTC XCFramework
+        if: steps.cache-webrtc.outputs.cache-hit != 'true'
+        run: ./scripts/build-webrtc-aec.sh
+        timeout-minutes: 25
+
+      - name: Verify WebRTC XCFramework
         run: |
-          set -o pipefail
-          xcodebuild \
-            -project Muesli.xcodeproj \
-            -scheme Muesli \
-            -configuration Debug \
-            -destination 'platform=macOS' \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            build | xcpretty
-      
+          echo "Checking XCFramework..."
+          if [ -d "Muesli/Frameworks/webrtc_audio_processing.xcframework" ]; then
+            lipo -info Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/*.a 2>/dev/null || echo "XCFramework present (architecture check skipped)"
+            echo "✅ WebRTC XCFramework verified"
+          else
+            echo "⚠️ WebRTC XCFramework not found - WebRTC AEC will run in stub mode"
+          fi
+
       - name: Run tests with coverage
         run: |
           set -o pipefail
@@ -73,29 +90,29 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             test | xcpretty
-      
+
       - name: Generate coverage report
         run: |
           # Find the coverage file
           COVERAGE_FILE=$(find DerivedData -name "*.xcresult" | head -1)
-          
+
           if [ -z "$COVERAGE_FILE" ]; then
             echo "⚠️ No coverage file found"
             exit 0
           fi
-          
+
           echo "✅ Found coverage file: $COVERAGE_FILE"
-          
+
           # Export coverage to LCOV format
           xcrun xccov view --report --json "$COVERAGE_FILE" > coverage.json
-          
+
           # Convert to LCOV format using a simple script
           python3 << 'PYTHON_SCRIPT' > coverage.lcov || echo "⚠️ LCOV conversion failed, uploading JSON"
           import json
-          
+
           with open('coverage.json', 'r') as f:
               data = json.load(f)
-          
+
           print('TN:')
           for target in data.get('targets', []):
               for file_data in target.get('files', []):
@@ -109,9 +126,9 @@ jobs:
                       print(f'DA:{line},{exec_count}')
                   print('end_of_record')
           PYTHON_SCRIPT
-          
+
           echo "✅ Coverage report generated"
-      
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
@@ -119,30 +136,21 @@ jobs:
           flags: unittests
           name: muesli-coverage
           fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      
-      - name: Check for build warnings
-        run: |
-          if xcodebuild -project Muesli.xcodeproj -scheme Muesli -configuration Debug -destination 'platform=macOS' CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -i "warning:"; then
-            echo "⚠️ Build contains warnings"
-            exit 0  # Don't fail on warnings, just report them
-          else
-            echo "✅ No build warnings"
-          fi
-  
+
   lint:
     name: Swift Lint
     runs-on: macos-26
-    
+    timeout-minutes: 10
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      
+
       - name: Install SwiftLint
         run: brew install swiftlint
-      
+
       - name: Run SwiftLint
         run: |
           if [ -f .swiftlint.yml ]; then
@@ -151,29 +159,81 @@ jobs:
             echo "ℹ️ No .swiftlint.yml found, skipping lint"
           fi
         continue-on-error: true  # Advisory only - violations reported but don't block merges
-                                 # TODO: Remove after baseline cleanup (track in TODO.md)
-  
+                                 # TODO: Remove after baseline cleanup (track in plans/todo.md)
+
   build-release:
     name: Build Release Configuration
     runs-on: macos-26
-    
+    timeout-minutes: 30
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      
+
       - name: Select Xcode version
         run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer
-      
+
       - name: Cache Swift Package Manager dependencies
         uses: actions/cache@v5
         with:
           path: |
-            .build
             ~/Library/Developer/Xcode/DerivedData/Muesli-*/SourcePackages
           key: ${{ runner.os }}-spm-release-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-release-
-      
+
+      - name: Cache WebRTC XCFramework
+        id: cache-webrtc-release
+        uses: actions/cache@v5
+        with:
+          path: Muesli/Frameworks/webrtc_audio_processing.xcframework
+          key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.XCODE_VERSION }}-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
+
+      - name: Install WebRTC Build Dependencies
+        if: steps.cache-webrtc-release.outputs.cache-hit != 'true'
+        run: brew install meson ninja pkg-config
+
+      - name: Build WebRTC XCFramework
+        if: steps.cache-webrtc-release.outputs.cache-hit != 'true'
+        run: ./scripts/build-webrtc-aec.sh
+        timeout-minutes: 25
+
+      - name: Verify WebRTC XCFramework
+        run: |
+          echo "Checking XCFramework..."
+          if [ -d "Muesli/Frameworks/webrtc_audio_processing.xcframework" ]; then
+            lipo -info Muesli/Frameworks/webrtc_audio_processing.xcframework/macos-arm64_x86_64/*.a 2>/dev/null || echo "XCFramework present (architecture check skipped)"
+            echo "✅ WebRTC XCFramework verified"
+          else
+            echo "⚠️ WebRTC XCFramework not found - WebRTC AEC will run in stub mode"
+          fi
+
+      - name: Fingerprint WebRTC AEC dependency
+        id: webrtc-fingerprint-release
+        run: |
+          XCFW_DIR="Muesli/Frameworks/webrtc_audio_processing.xcframework"
+          if [ -d "$XCFW_DIR" ]; then
+            # Compute SHA-256 over all static library files — same method as release workflow.
+            # CI uses cache key: webrtc-v1.3-{OS}-{arch}-xcode26.2-{script_hash}
+            # Release uses:      webrtc-v1.3-{OS}-{arch}-release-{script_hash}
+            # Both use the same build script, so fingerprints should match when scripts match.
+            FINGERPRINT=$(find "$XCFW_DIR" -name "*.a" | sort | xargs shasum -a 256 | shasum -a 256 | awk '{print $1}')
+            echo "WebRTC AEC Fingerprint (build-release job): ${FINGERPRINT}"
+            echo "fingerprint=${FINGERPRINT}" >> $GITHUB_OUTPUT
+            echo "{\"fingerprint\": \"${FINGERPRINT}\", \"workflow\": \"ci-build-release\", \"ref\": \"${GITHUB_REF}\", \"sha\": \"${GITHUB_SHA}\"}" > webrtc-fingerprint-ci.json
+          else
+            echo "fingerprint=none" >> $GITHUB_OUTPUT
+            echo "⚠️ XCFramework not present, fingerprint skipped"
+          fi
+
+      - name: Upload WebRTC fingerprint artifact
+        if: steps.webrtc-fingerprint-release.outputs.fingerprint != 'none'
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-fingerprint-ci-${{ github.sha }}
+          path: webrtc-fingerprint-ci.json
+          retention-days: 30
+
       - name: Build Muesli (Release)
         run: |
           set -o pipefail
@@ -186,7 +246,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             build | xcpretty
-      
+
       - name: Verify app bundle
         run: |
           APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Release/Muesli.app -maxdepth 0 -type d | head -1)
@@ -198,13 +258,55 @@ jobs:
             echo "❌ App bundle not found"
             exit 1
           fi
-  
+
+      - name: Verify AEC policy guards
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Release/Muesli.app -maxdepth 0 -type d | head -1)
+          BINARY="$APP_PATH/Contents/MacOS/Muesli"
+          FAIL=0
+
+          # Release binary must not contain debug-only AEC override key
+          if strings "$BINARY" | grep -q "aecDebugForceOff"; then
+            echo "❌ Release binary contains aecDebugForceOff debug key"
+            FAIL=1
+          else
+            echo "✅ No debug AEC override in Release binary"
+          fi
+
+          # Required AEC observability fields must exist in source
+          for FIELD in "aecStoredPref=" "aecEffective="; do
+            if ! grep -q "$FIELD" Muesli/Services/TapAudioCaptureService.swift; then
+              echo "❌ Missing $FIELD in TapAudioCaptureService logging"
+              FAIL=1
+            fi
+          done
+          [ $FAIL -eq 0 ] && echo "✅ AEC log fields present in source"
+
+          # Testable policy function must exist (guards against accidental removal)
+          if ! grep -q "resolveAECStartupPolicy" Muesli/Managers/PreferencesManager.swift; then
+            echo "❌ resolveAECStartupPolicy missing from PreferencesManager"
+            FAIL=1
+          else
+            echo "✅ AEC startup policy function present"
+          fi
+
+          # Policy tests must exist (guards against test removal)
+          if ! grep -q "testAECPolicy_Matrix" MuesliTests/PreferencesManagerTests.swift; then
+            echo "❌ testAECPolicy_Matrix missing from PreferencesManagerTests"
+            FAIL=1
+          else
+            echo "✅ AEC policy matrix test present"
+          fi
+
+          [ $FAIL -ne 0 ] && exit 1
+          echo "✅ All AEC policy guards passed"
+
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
     needs: [test, lint, build-release]
     if: always()
-    
+
     steps:
       - name: Check results
         run: |
@@ -213,7 +315,7 @@ jobs:
           echo "- Test: ${{ needs.test.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Lint: ${{ needs.lint.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Release Build: ${{ needs.build-release.result }}" >> $GITHUB_STEP_SUMMARY
-          
+
           if [[ "${{ needs.test.result }}" == "failure" || "${{ needs.build-release.result }}" == "failure" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "❌ CI failed - please review the logs above" >> $GITHUB_STEP_SUMMARY

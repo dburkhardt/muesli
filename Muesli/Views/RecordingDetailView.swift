@@ -103,6 +103,11 @@ struct RecordingDetailView: View {
                     )
                 }
                 
+                // Audio-only mode banner (shown when model is downloading or compiling)
+                if session.isRecordingOnly && viewModel.isAnyModelBusy {
+                    audioOnlyBanner
+                }
+                
                 // Header with title and recording indicator
                 headerView(session: session)
                 
@@ -331,7 +336,7 @@ struct RecordingDetailView: View {
                 viewModel.toggleMicrophoneMute()
             },
             onSelectDevice: { deviceID in
-                viewModel.microphoneManager.setSelectedDeviceID(deviceID)
+                viewModel.selectMicrophoneDevice(deviceID)
             }
         )
     }
@@ -373,56 +378,20 @@ struct RecordingDetailView: View {
             
             Divider()
             
-            // Submenu 2: Audio Source (shows current, can change only when not recording)
-            Menu("Audio Source") {
-                // "All System Audio" option
-                Button(
-                    action: {
-                        if !session.isRecording {
-                            session.selectedApp = nil
-                        }
-                    },
-                    label: {
-                        HStack {
-                            Text("All System Audio")
-                            if session.selectedApp == nil {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                )
-                .disabled(session.isRecording)
-                
-                if !viewModel.availableMeetingApps.isEmpty {
-                    Divider()
-                    
-                    // Detected apps
-                    ForEach(viewModel.availableMeetingApps) { app in
-                        Button(
-                            action: {
-                                if !session.isRecording {
-                                    session.selectedApp = app
-                                }
-                            },
-                            label: {
-                                HStack {
-                                    Text(app.name)
-                                    if session.selectedApp?.bundleIdentifier == app.bundleIdentifier {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        )
-                        .disabled(session.isRecording)
-                    }
-                }
-            }
+            // Submenu 2: Transcription Model
+            // Disable during switching or first-time model compilation
+            transcriptionModelMenu
             
             Divider()
             
-            // Submenu 3: Transcription Model
-            // Disable during switching or first-time model compilation
-            transcriptionModelMenu
+            #if DEBUG
+            Toggle(isOn: $viewModel.isEchoCancellationEnabled) {
+                Text("Echo Cancellation")
+            }
+            #else
+            Text("Echo Cancellation (Auto)")
+                .foregroundStyle(.secondary)
+            #endif
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "gearshape.fill")
@@ -437,12 +406,6 @@ struct RecordingDetailView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onAppear {
-            // Refresh available apps when menu appears
-            Task {
-                await viewModel.refreshMeetingApps()
-            }
-        }
     }
     
     // MARK: - Transcription Model Menu
@@ -569,140 +532,7 @@ struct RecordingDetailView: View {
             }
         }
     }
-    
-    // MARK: - Completed Recording View
-    
-    private func completedRecordingView(session: RecordingSession) -> some View {
-        VStack(spacing: 16) {
-            // Header
-            HStack(spacing: 12) {
-                TextField("Meeting Title", text: Binding(
-                    get: { session.meetingTitle },
-                    set: { session.meetingTitle = $0 }
-                ))
-                .textFieldStyle(.plain)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.primary)
-                
-                Spacer()
-                
-                CompletedIndicator()
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            
-            Divider()
-            
-            // Content
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if session.transcriptText.isEmpty {
-                        VStack(spacing: 16) {
-                            Spacer()
-                            
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 48))
-                                .foregroundStyle(.green)
-                            
-                            Text("Recording Saved!")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                            
-                            Text("audio.caf + microphone.caf + transcript.md")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            
-                            if let directory = session.outputDirectory {
-                                Text(directory.lastPathComponent)
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                            }
-                            
-                            if session.isRetranscribing {
-                                HStack(spacing: 8) {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Re-transcribing with post-processing...")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.top, 8)
-                            }
-                            
-                            Spacer()
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        if session.isRetranscribing {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                                Text("Re-transcribing with post-processing...")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.bottom, 8)
-                        }
-                        
-                        Text(session.transcriptText)
-                            .font(.system(size: 14))
-                            .foregroundStyle(.primary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(20)
-            }
-            
-            // Footer
-            HStack(spacing: 12) {
-                Spacer()
-                
-            if let directory = session.outputDirectory {
-                Button(
-                    action: {
-                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: directory.path)
-                    },
-                    label: {
-                        Text("Open in Finder")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 10)
-                            .background(Color.accentColor)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                )
-                .buttonStyle(.plain)
-            }
-            
-            if session.canRetranscribe && !session.isRetranscribing {
-                Button(
-                    action: {
-                        viewModel.retranscribeWithPostProcessing(for: session)
-                    },
-                    label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.clockwise")
-                            Text("Re-transcribe")
-                        }
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.secondary.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                )
-                .buttonStyle(.plain)
-            }
-                
-                Spacer()
-            }
-            .padding(16)
-        }
-    }
-    
+
     // MARK: - Historical Meeting View with Floating Indicator
     
     private func historicalMeetingViewWithIndicator(meeting: MeetingHistoryItem) -> some View {
@@ -960,6 +790,42 @@ struct RecordingDetailView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Audio-Only Mode Banner
+    
+    /// Banner shown when recording in audio-only mode (model downloading)
+    private var audioOnlyBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 14))
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Recording audio only")
+                    .font(.system(size: 12, weight: .medium))
+                Text("Transcription will start when model download completes")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            
+            Spacer()
+            
+            // Show download progress if available
+            if let download = viewModel.activeDownloads.first {
+                HStack(spacing: 4) {
+                    ProgressView(value: download.progress)
+                        .progressViewStyle(.linear)
+                        .frame(width: 40)
+                    Text("\(Int(download.progress * 100))%")
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.orange.opacity(0.1))
     }
     
     // MARK: - Helpers

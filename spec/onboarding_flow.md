@@ -7,15 +7,15 @@ This document specifies the expected behavior of Muesli's onboarding flow, inclu
 The onboarding flow guides first-time users through granting necessary permissions and downloading required models. The flow must be:
 
 1. **Non-intrusive**: System permission prompts should only appear when the user explicitly requests them
-2. **Resumable**: Users can quit and return to continue where they left off
-3. **Smart**: Already-granted permissions should be automatically detected and skipped
+2. **Resumable (recovery mode)**: Recovery mode starts at the first missing permission step (derived from current permission state, not persisted)
+3. **Explicit**: First-time onboarding always requires user clicks to advance; already-granted permissions show as "granted" with an enabled Continue button
 
 ## Onboarding Steps
 
 | Step | Name | Purpose |
 |------|------|---------|
 | 0 | Welcome | Introduction screen, no permission checks |
-| 1 | Screen Recording | Request screen/audio capture permission |
+| 1 | System Audio Recording | Request system audio capture permission (uses the `kTCCServiceScreenCapture` TCC bucket — same as screen recording — but the UI labels it "System Audio Recording" to better describe what the app actually needs) |
 | 2 | Microphone | Request microphone access permission |
 | 3 | Model Setup | Download WhisperKit transcription model |
 | 4 | LLM Setup | (Optional) Download LLM for transcript refinement |
@@ -47,27 +47,29 @@ The onboarding flow guides first-time users through granting necessary permissio
 - Distributed notifications are reliable and event-driven
 - `AVCaptureDevice.authorizationStatus()` provides synchronous checks without side effects
 
-### Rule 3: Auto-Advance on Return
+### Rule 3: No Auto-Advance in First-Time Mode
 
-**Requirement**: When users quit and reopen the app, onboarding should automatically advance past already-completed steps.
-
-**Implementation**:
-- Save current step to `UserDefaults` (`onboardingCurrentStep` key)
-- On appear, check permissions using synchronous methods to avoid triggering prompts
-- Call `advanceBasedOnPermissions()` to skip completed steps
-- Auto-advance logic:
-  - If screen recording AND microphone granted → go to model setup
-  - If only screen recording granted → go to microphone step
-  - If no permissions → stay on current step
-
-### Rule 4: Step Persistence
-
-**Requirement**: The current onboarding step should persist across app launches.
+**Requirement**: During first-time onboarding, the user must explicitly click
+Continue/Get Started to advance through each step. If a permission is already
+granted when the user reaches that screen, show "Permission Already Granted"
+with an enabled Continue button.
 
 **Implementation**:
-- Save step on every navigation: `UserDefaults.set(step.rawValue, forKey: "onboardingCurrentStep")`
-- Restore on init: `OnboardingStep(rawValue: savedStep) ?? .welcome`
-- Clear saved step when onboarding completes
+- `advanceBasedOnPermissions()` returns immediately in first-time mode
+- Permission state is updated via `refreshPermissions()` which drives UI badges
+  and Continue button enablement
+- Auto-advance is only used in **recovery mode** (when a previously-completed
+  onboarding needs re-granted permissions)
+
+### Rule 4: Step Persistence (Recovery Mode Only)
+
+**Requirement**: Step persistence is only meaningful in recovery mode.
+First-time onboarding always starts at welcome.
+
+**Implementation**:
+- First-time mode: always init at `.welcome`, clear stale persisted step on appear
+- Recovery mode: starting step is **derived from which permissions are missing** (passed as `OnboardingMode.permissionRecovery(missingScreen:missingMic:)` at init); no UserDefaults step is read
+- There is no "resume from saved step" — step is always computed from current permission state, not persisted
 
 ## State Flow Diagram
 
@@ -86,38 +88,41 @@ The onboarding flow guides first-time users through granting necessary permissio
                          │           │
                          ▼           ▼
                     ┌────────┐  ┌─────────────────┐
-                    │  Main  │  │ Load saved step │
-                    │ Window │  │  from defaults  │
+                    │  Main  │  │ Always start at │
+                    │ Window │  │ welcome (clear  │
+                    │        │  │ stale step key) │
                     └────────┘  └─────────────────┘
                                         │
                                         ▼
                               ┌──────────────────┐
-                              │ savedStep == 0?  │
-                              │   (welcome)      │
+                              │   Show Welcome   │
+                              │   (no prompts,   │
+                              │  no auto-advance)│
                               └──────────────────┘
-                                   │        │
-                                  Yes       No
-                                   │        │
-                                   ▼        ▼
-                            ┌─────────┐  ┌────────────────────┐
-                            │ Show    │  │ Async permission   │
-                            │ Welcome │  │ check, then        │
-                            │ (no     │  │ advanceBasedOn     │
-                            │ prompt) │  │ Permissions()      │
-                            └─────────┘  └────────────────────┘
+                                        │
+                                  User clicks
+                                 "Get Started"
+                                        │
+                                        ▼
+                              ┌──────────────────┐
+                              │ Each screen shows │
+                              │ current permission│
+                              │ state; user must  │
+                              │ click Continue    │
+                              └──────────────────┘
 ```
 
 ## Permission Check APIs
 
 | API | Triggers Prompt? | Reliable? | Use Case |
 |-----|------------------|-----------|----------|
-| `CGPreflightScreenCaptureAccess()` | No | No (ad-hoc signing) | Initial checks only |
-| `CGRequestScreenCaptureAccess()` | Yes | N/A | **ONLY** when user clicks "Grant Permission" button |
-| `SCShareableContent.excludingDesktopWindows()` | Only if not granted | Yes | **AVOID** - use only for explicit permission requests |
-| `AVCaptureDevice.authorizationStatus(for: .audio)` | No | Yes | **PREFERRED** - use for all microphone checks |
-| `AVCaptureDevice.requestAccess(for: .audio)` | Yes (if undetermined) | Yes | **ONLY** when user clicks "Grant Permission" button |
+| `AudioHardwareCreateProcessTap` (probe) | Yes (first time) | Yes | **Primary** — triggers system audio permission prompt; result cached in `audioCaptureGranted` |
+| `CGPreflightScreenCaptureAccess()` | No | Partial (unreliable with ad-hoc signing) | Secondary fast-fail gate only |
+| `PermissionManager.checkScreenRecordingPermissionAsync()` | No | Yes | Read cached `audioCaptureGranted` from tap-probe result |
+| `AVCaptureDevice.authorizationStatus(for: .audio)` | No | Yes | **Preferred** for all microphone checks |
+| `AVCaptureDevice.requestAccess(for: .audio)` | Yes (if undetermined) | Yes | **Only** when user clicks "Grant Permission" button |
 
-**Critical Rule**: Use `AVCaptureDevice.authorizationStatus()` for all permission checks during monitoring. Never use `SCShareableContent` in loops, timers, or callbacks - it triggers permission prompts.
+**Critical Rule**: System audio permission is obtained by attempting `AudioHardwareCreateProcessTap` (tap probe) — there is no `CGRequestScreenCaptureAccess()` call for system audio. The result is cached in `PermissionManager.audioCaptureGranted`. Never use `SCShareableContent` in loops, timers, or callbacks — it triggers permission prompts.
 
 ## Permission Monitoring Architecture
 
@@ -137,7 +142,9 @@ Permission changes are detected through macOS system events, **not polling**:
 │ 2. App Activation Notification                                  │
 │    - Event: NSApplication.didBecomeActiveNotification           │
 │    - Fires when: User returns from System Settings              │
-│    - Handler: refreshPermissionsAsync() (only after onboarding) │
+│    - Handler: handleDidBecomeActive() — sync refreshPermissions()│
+│      + background triggerSystemAudioPermissionPrompt() if        │
+│      hasCompletedOnboarding; or awaitingAudioCapture/Mic flags   │
 │                                                                  │
 │ 3. Manual Checks (Button Clicks)                                │
 │    - Trigger: User clicks "Check Again" button                  │
@@ -148,14 +155,17 @@ Permission changes are detected through macOS system events, **not polling**:
 ### Synchronous vs Asynchronous Checks
 
 - **`refreshPermissions()`** (synchronous):
-  - Uses `CGPreflightScreenCaptureAccess()` and `AVCaptureDevice.authorizationStatus()`
+  - System audio: reads cached `audioCaptureGranted` (set by tap-probe at session start)
+  - Microphone: uses `AVCaptureDevice.authorizationStatus(for: .audio)`
   - Never triggers permission prompts
   - Safe to call in loops, callbacks, and monitoring
   - Use for: button-triggered checks, monitoring callbacks, onboarding screens
 
 - **`refreshPermissionsAsync()`** (asynchronous):
-  - Uses `SCShareableContent.excludingDesktopWindows()`
-  - **CAN trigger screen recording prompt if permission not granted**
+  - System audio: reads cached `audioCaptureGranted` (same as `refreshPermissions()` — **does not re-probe**)
+  - Microphone: uses `AVCaptureDevice.authorizationStatus(for: .audio)`
+  - **Does NOT trigger any permission prompt**
+  - The actual re-probe path is `triggerSystemAudioPermissionPrompt()`, called from the background `Task` in `handleDidBecomeActive()` only when `hasCompletedOnboarding` is true
   - Only use: in `didBecomeActiveNotification` after onboarding complete
   - **NEVER use**: in onboarding screens, timers, polling loops, or distributed notification handlers
 
@@ -219,19 +229,20 @@ private func checkAndNotifyPermissionChangesSynchronously() {
 ### Test: Auto-Advance After Permission Grant
 - Grant screen recording permission
 - Quit and reopen app
-- Verify app auto-advances to microphone step (not stuck on screen recording)
+- Verify app starts at welcome screen (first-time mode always starts at welcome)
+- Click "Get Started" → screen recording screen shows "granted" with enabled Continue
 
 ### Test: Step Persistence
 - Navigate to model setup step
 - Quit app
 - Reopen app
-- Verify app resumes at model setup step
+- Verify app starts at welcome screen (first-time mode does not restore saved step)
 
 ### Test: Complete Flow Skip
 - Grant all permissions and download model
 - Reset `hasCompletedOnboarding` but keep permissions
 - Reopen app
-- Verify onboarding auto-completes or advances to final step
+- Verify onboarding starts at welcome, each screen shows "granted", user clicks through
 
 ## Critical: No Polling Timers
 
@@ -242,7 +253,7 @@ Using `Timer.scheduledTimer()` to poll for permission changes causes:
 3. **Poor user experience** - dialogs appear at unexpected times
 
 ### Impact
-A polling timer that calls `refreshPermissionsAsync()` will trigger the screen recording permission dialog on the microphone screen, breaking the onboarding flow.
+A polling timer that calls `refreshPermissionsAsync()` during onboarding is still wrong — it creates unnecessary async work and violates the event-driven architecture. The actual permission prompt is triggered by `triggerSystemAudioPermissionPrompt()`, which is only safe to call when the user explicitly requests permission (button tap) or post-onboarding in `handleDidBecomeActive()`.
 
 ### Solution
 Use **event-driven architecture only**:
@@ -283,16 +294,36 @@ If `MicrophoneManager.refreshDevices()` is called during app init (before onboar
 `SCShareableContent.excludingDesktopWindows()` triggers the screen recording permission prompt. If called from notification observers or callbacks, the prompt appears at unexpected times.
 
 ### Solution
-1. In `didBecomeActiveNotification`, check `hasCompletedOnboarding` before calling `refreshPermissionsAsync()`
+1. In `didBecomeActiveNotification`, the handler is `handleDidBecomeActive()` — it uses only synchronous `refreshPermissions()` during onboarding and a background tap re-probe (`triggerSystemAudioPermissionPrompt()`) only post-onboarding
 2. In distributed notification observers, **always use synchronous checks** (`refreshPermissions()`)
-3. **Never call `refreshPermissionsAsync()` in callbacks, loops, or timers**
+3. **Never call `SCShareableContent` in callbacks, loops, or timers**
 
-Example from `PermissionManager.init()`:
+The observer wiring and branching live entirely in `handleDidBecomeActive()` (no async SCShareableContent path exists in the current implementation):
 ```swift
-guard UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding) else {
-    return  // Skip during onboarding - SCShareableContent would trigger prompt
+// PermissionManager.init() wires the observer:
+NotificationCenter.default.addObserver(
+    forName: NSApplication.didBecomeActiveNotification, ...
+) { [weak self] _ in
+    Task { @MainActor in await self?.handleDidBecomeActive() }
 }
-_ = await self?.refreshPermissionsAsync()
+
+// handleDidBecomeActive() branches on completion state + awaiting flags:
+if hasCompletedOnboarding {
+    _ = refreshPermissions()
+    Task { @MainActor in
+        // Background re-probe to converge cache (may trigger prompt)
+        let result = await triggerSystemAudioPermissionPrompt()
+        // update UserDefaults + audioCaptureGranted if changed
+    }
+} else if awaitingAudioCaptureFromSettings {
+    awaitingAudioCaptureFromSettings = false
+    _ = refreshPermissions(); permissionDidChange?(...)
+} else if awaitingMicrophoneFromSettings {
+    awaitingMicrophoneFromSettings = false
+    _ = refreshPermissions(); permissionDidChange?(...)
+} else {
+    _ = refreshPermissions()
+}
 ```
 
 ## Debugging Onboarding Issues
@@ -342,31 +373,36 @@ When there's a problem:
 
 ## Strict Step-Based Guards (Critical)
 
-### Rule: Step 0 (Welcome) is SAFE-ONLY
+### Rule: Onboarding is SAFE-ONLY
 
-**Requirement**: The welcome screen (step 0) must NEVER trigger any async permission checks.
+**Requirement**: During onboarding, `handleDidBecomeActive()` must NEVER trigger async permission probes. Only synchronous `refreshPermissions()` is used, gated by the awaiting-settings flags.
 
 **Implementation in `PermissionManager.handleDidBecomeActive()`**:
 
 ```swift
 if hasCompletedOnboarding {
-    // Post-onboarding: safe to use async refresh
-    _ = await refreshPermissionsAsync()
-} else if currentStep == 0 {
-    // STRICT GUARD: Welcome screen - ONLY safe sync check, NO async
+    // Post-onboarding: sync refresh + background re-probe to converge cache
     _ = refreshPermissions()
-} else if awaitingScreenRecordingFromSettings {
-    // User returned from System Settings - safe to check async
-    awaitingScreenRecordingFromSettings = false
-    _ = await checkScreenRecordingPermissionAsync()
-    permissionDidChange?(screenRecordingGranted, microphoneGranted)
+    Task { @MainActor in
+        let probeResult = await triggerSystemAudioPermissionPrompt()
+        // Update cache if reality diverged (e.g. user revoked in System Settings)
+        if probeResult != UserDefaults.standard.bool(forKey: systemAudioPermissionDefaultsKey) {
+            UserDefaults.standard.set(probeResult, forKey: systemAudioPermissionDefaultsKey)
+            audioCaptureGranted = probeResult
+            permissionDidChange?(audioCaptureGranted, microphoneGranted)
+        }
+    }
+} else if awaitingAudioCaptureFromSettings {
+    // User returned from System Settings after being sent there for audio permission
+    awaitingAudioCaptureFromSettings = false
+    _ = refreshPermissions()
+    permissionDidChange?(audioCaptureGranted, microphoneGranted)
 } else if awaitingMicrophoneFromSettings {
-    // User returned from System Settings - mic check is always safe
+    // User returned from System Settings after being sent there for mic permission
     awaitingMicrophoneFromSettings = false
     _ = refreshPermissions()
-    permissionDidChange?(screenRecordingGranted, microphoneGranted)
+    permissionDidChange?(audioCaptureGranted, microphoneGranted)
 } else {
-    // On permission screens but not awaiting settings return
     _ = refreshPermissions()
 }
 ```
@@ -375,7 +411,7 @@ if hasCompletedOnboarding {
 
 When the user clicks "Open System Settings", we mark that we're awaiting their return:
 
-1. **Screen Recording**: `markAwaitingScreenRecordingFromSettings()`
+1. **Audio Capture**: `markAwaitingAudioCaptureFromSettings()`
 2. **Microphone**: `markAwaitingMicrophoneFromSettings()`
 
 When the app becomes active and an awaiting flag is set, we use the appropriate check and clear the flag.
@@ -385,11 +421,10 @@ When the app becomes active and an awaiting flag is set, we use the appropriate 
 When the user clicks "Grant Permission", we verify the permission immediately:
 
 ```swift
-Button("Grant Screen Recording Access") {
-    viewModel.requestScreenRecordingPermission()
+Button("Grant System Audio Access") {
     screenRecordingRequested = true
     Task {
-        let granted = await viewModel.verifyScreenRecordingAfterRequest()
+        let granted = await viewModel.requestScreenRecordingPermission()
         if granted {
             withAnimation { setStep(.microphone) }
         }
@@ -398,25 +433,25 @@ Button("Grant Screen Recording Access") {
 }
 ```
 
-### Optimistic OR Pattern for Sync Checks
+### System Audio Permission Caching
 
-The sync `refreshPermissions()` uses optimistic OR for screen recording:
+`refreshPermissions()` should not use `CGPreflightScreenCaptureAccess()` to set
+System Audio Recording because that API reflects the Screen Recording bucket and
+can return true even when System Audio Recording is not granted. We only update
+the system-audio permission flag from explicit Core Audio tap probes and cache
+the result. See also: `spec/AEC_architecture.md §"Permission Model"` for details on tap-probe validation.
 
-```swift
-func refreshPermissions() -> (screenRecording: Bool, microphone: Bool) {
-    // CGPreflight can detect newly granted permission, but is unreliable
-    // with ad-hoc signing. Once cache is true, keep it true.
-    let preflightResult = CGPreflightScreenCaptureAccess()
-    screenRecordingGranted = preflightResult || screenRecordingGranted
-    
-    // Microphone check is always reliable
-    microphoneGranted = hasMicrophonePermission
-    
-    return (screenRecordingGranted, microphoneGranted)
-}
-```
+### isSystemAudioPermissionConfirmed Triple-Check Logic
 
-This allows detection of newly-granted permissions while preserving the cached true value.
+Before prompting the user or gating recording on system audio permission, the app performs a three-tier check:
+
+1. **Tier 1: Session flag (`isSystemAudioPermissionConfirmed`)** — A fast, in-memory boolean set to `true` once a successful tap-probe confirms system audio is available during the current app session. This avoids redundant OS calls on every permission query.
+
+2. **Tier 2: `CGPreflightScreenCaptureAccess()` fast-fail** — An OS-level synchronous gate. If this returns `false`, the TCC `kTCCServiceScreenCapture` bucket has not been granted and there is no point attempting a tap-probe. This check never triggers a permission prompt.
+
+3. **Tier 3: ViewModel cache (UserDefaults)** — The last confirmed tap-probe result is persisted in UserDefaults (`systemAudioPermissionGranted`). On app launch, this cached value is consulted before performing a fresh tap-probe so the app can display the correct UI state immediately without blocking on audio hardware.
+
+The checks are evaluated in order; the first tier that provides a definitive answer short-circuits the rest. A fresh tap-probe is only performed when all three tiers are inconclusive or stale.
 
 ## TCC Debugging
 
@@ -501,14 +536,17 @@ defaults delete com.muesli.app onboardingCurrentStep
 - [ ] Complete steps 1-2 (grant screen recording only)
 - [ ] Quit the app (Cmd+Q)
 - [ ] Relaunch the app
-- [ ] Verify app resumes on microphone screen (step 2)
+- [ ] Verify app starts at welcome screen (first-time always starts at welcome)
+- [ ] Click through: welcome → screen recording (shows granted) → microphone
 - [ ] Verify NO permission dialogs on launch
 
 **7. Already Granted Permissions**
 - [ ] Grant both permissions via System Settings before launching
-- [ ] Launch app
+- [ ] Clear `hasCompletedOnboarding`, launch app
 - [ ] Click "Get Started" on welcome screen
-- [ ] Verify app skips directly to model setup (step 3)
+- [ ] Verify system audio screen shows "System Audio Recording granted" with enabled Continue
+- [ ] Click Continue → microphone screen shows "Microphone granted" with enabled Continue
+- [ ] Click Continue → model setup screen shows
 
 ### Expected Console Output
 
@@ -518,6 +556,40 @@ Watch for these log messages:
 ```
 
 If you see a different bundle ID, TCC permissions may not work correctly.
+
+## Best Practices
+
+### System Audio Permission Model
+
+The system audio permission uses a **tap-probe** approach rather than a preflight API:
+
+- At session start, the app attempts to create a short-lived `AudioHardwareCreateProcessTap` to confirm system audio capture is allowed.
+- There is no dedicated `CGPreflightSystemAudioAccess()` API; the `CGPreflightScreenCaptureAccess()` call only checks the `kTCCServiceScreenCapture` TCC bucket and may not reflect actual tap availability.
+- The tap-probe result is cached in UserDefaults so subsequent launches can display the correct permission state without re-probing.
+
+### Real-Time Audio Callback Constraints
+
+IOProc and other real-time audio callbacks run on a high-priority, deadline-driven thread. Violating RT constraints causes audio glitches or dropouts:
+
+- **No heap allocation** (`malloc`, `new`, Swift `Array` growth, `String` interpolation)
+- **No Objective-C messaging** (ObjC runtime takes locks internally)
+- **No locks** (`os_unfair_lock`, `NSLock`, `pthread_mutex`) — use lock-free ring buffers instead
+- **No file I/O, logging, or network calls**
+
+### WhisperKit Audio Format Requirements
+
+WhisperKit requires **16 kHz mono Float32** audio. Both capture sources (system audio via Core Audio tap and microphone via AVAudioEngine) record at 48 kHz. Always resample before passing buffers to WhisperKit:
+
+```swift
+// System: 48 kHz stereo → 16 kHz mono
+resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
+// Mic: 48 kHz mono → 16 kHz mono
+resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 1)
+```
+
+### Minimum macOS Version
+
+`AudioHardwareCreateProcessTap` is available starting in **macOS 14.2** (Sonoma). The app's deployment target is **macOS 26.0** (`MACOSX_DEPLOYMENT_TARGET = 26.0`), which satisfies this requirement.
 
 ## Change History
 
@@ -536,3 +608,6 @@ If you see a different bundle ID, TCC permissions may not work correctly.
 | 2026-01-18 | Add optimistic OR for sync checks | Allows sync check to detect newly-granted permissions |
 | 2026-01-18 | Add bundle ID logging | Aids TCC debugging with different bundle IDs |
 | 2026-01-20 | Add diagnostic logging integration | File-based logs for debugging release build issues |
+| 2026-02-16 | **No auto-advance in first-time mode** | **Permissions already granted caused onboarding to skip all screens** |
+| 2026-02-16 | First-time mode always inits at welcome | Stale saved step caused skipping when combined with auto-advance |
+| 2026-02-16 | Clear stale step in resetOnboarding() | Prevents stale step persistence across onboarding resets |

@@ -43,7 +43,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
     var lastSavedBlocks: [TranscriptBlock]?
     var lastSavedTitle: String?
     var lastSavedFilename: String?
-    var appendedBufferTypes: [AudioCaptureService.AudioType] = []
+    var appendedBufferTypes: [AudioStreamType] = []
     
     // MARK: - FileOutputServiceProtocol
     
@@ -79,7 +79,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         return directory
     }
     
-    func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioCaptureService.AudioType) {
+    func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioStreamType) {
         appendAudioBufferCallCount += 1
         appendedBufferTypes.append(type)
     }

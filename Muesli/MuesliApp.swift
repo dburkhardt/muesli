@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import os.log
 import SwiftUI
@@ -197,21 +198,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Check if onboarding is needed
         if !UserDefaults.standard.bool(forKey: AppStorageKeys.hasCompletedOnboarding) {
             Task { @MainActor in
-                self.showOnboardingWindow()
+                self.showOnboardingWindow(mode: .firstTime)
             }
         } else {
-            // Open main window if onboarding is complete
+            // Onboarding complete - check if permissions are still valid
             Task { @MainActor in
-                // Small delay to ensure window system is ready
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                NSApplication.shared.activate(ignoringOtherApps: true)
-                if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
-                    window.makeKeyAndOrderFront(nil)
+                // Check permissions for recovery (fresh check, no cache)
+                let (hasTapCached, hasMic) = self.checkPermissionsForRecovery()
+
+                // Log permission check
+                await DiagnosticLogger.shared.log(
+                    .permission,
+                    "Permission check on launch: tapCached=\(hasTapCached), mic=\(hasMic)"
+                )
+
+                // Only mic is a hard requirement for recovery mode.
+                // Missing tap permission is handled gracefully at recording time
+                // (degrades to mic-only mode), so don't block the user.
+                if !hasMic {
+                    // Log recovery mode trigger
+                    await DiagnosticLogger.shared.log(
+                        .permission,
+                        "Entering permission recovery: missingMic=true"
+                    )
+
+                    // Show onboarding for permission recovery (mic only)
+                    self.showOnboardingWindow(mode: .permissionRecovery(
+                        missingScreen: false,
+                        missingMic: true
+                    ))
+                } else {
+                    // Normal launch - open main window
+                    // Small delay to ensure window system is ready
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+                        window.makeKeyAndOrderFront(nil)
+                    }
+                    
+                    // Check for updates after 5 seconds
+                    try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+                    await MuesliApp.sharedViewModel?.checkForUpdatesOnLaunch()
                 }
-                
-                // Check for updates after 5 seconds
-                try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-                await MuesliApp.sharedViewModel?.checkForUpdatesOnLaunch()
             }
         }
     }
@@ -252,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
-    private func showOnboardingWindow() {
+    private func showOnboardingWindow(mode: AppStorageKeys.OnboardingMode = .firstTime) {
         // Use the shared ViewModel from MuesliApp to ensure state synchronization
         guard let viewModel = MuesliApp.sharedViewModel else {
             MuesliApp.logger.error("Shared ViewModel not available")
@@ -264,15 +292,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // so we need to explicitly hide it when showing onboarding
         hideMainWindow()
         
-        let onboardingView = OnboardingView(viewModel: viewModel)
+        let onboardingView = OnboardingView(viewModel: viewModel, mode: mode)
         
         let hostingController = NSHostingController(rootView: onboardingView)
         
         let window = NSWindow(contentViewController: hostingController)
-        // Use dynamic app name in window title
+        // Use dynamic app name in window title for first-time, different title for recovery
         let appName = Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Muesli"
-        window.title = "Welcome to \(appName)"
-        window.styleMask = [.titled, .closable]
+        window.title = mode.isRecoveryMode ? mode.windowTitle : "Welcome to \(appName)"
+        
+        // In recovery mode: window is closable (user can dismiss and quit)
+        if mode.isRecoveryMode {
+            window.styleMask = [.titled, .closable]
+        } else {
+            window.styleMask = [.titled, .closable]
+        }
+        
         window.setContentSize(NSSize(width: 520, height: 580))
         window.center()
         window.isReleasedWhenClosed = false
@@ -280,6 +315,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.onboardingWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    /// Check permissions for recovery mode - uses fresh checks, not cached state
+    /// CRITICAL: Only uses synchronous, non-prompting APIs
+    /// Note: Only mic is a hard requirement. Tap permission is optional — if missing,
+    /// the app launches normally and degrades to mic-only at recording time.
+    private func checkPermissionsForRecovery() -> (hasTapCached: Bool, hasMic: Bool) {
+        // Use cached tap-probe result (consistent with PermissionManager and TapAudioCaptureService).
+        // CGPreflightScreenCaptureAccess() checks the wrong TCC bucket (Screen Recording, not System Audio).
+        let hasTapCached = UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
+
+        // AVCaptureDevice.authorizationStatus() is synchronous and doesn't trigger prompts
+        let hasMic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+
+        return (hasTapCached, hasMic)
+    }
+    
+    /// Trigger permission recovery from outside AppDelegate (e.g., ViewModel callback).
+    /// Guards against double-show if recovery window is already visible.
+    func requestPermissionRecovery(missingScreen: Bool, missingMic: Bool) {
+        if let window = onboardingWindow, window.isVisible { return }
+        showOnboardingWindow(mode: .permissionRecovery(
+            missingScreen: missingScreen,
+            missingMic: missingMic
+        ))
+    }
+
+    /// Called when permission recovery completes - closes onboarding and opens main window
+    func exitPermissionRecovery() {
+        // Log recovery completion
+        Task { @MainActor in
+            await DiagnosticLogger.shared.log(
+                .permission,
+                "Permission recovery completed successfully"
+            )
+        }
+        
+        // Close onboarding window
+        onboardingWindow?.close()
+        onboardingWindow = nil
+        
+        // Show main window (same as normal launch completion)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            
+            if let mainWindow = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+                mainWindow.makeKeyAndOrderFront(nil)
+            }
+        }
     }
     
     /// Hide the main window (used during onboarding)

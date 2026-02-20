@@ -35,6 +35,7 @@ final class PreferencesManagerTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.launchAtLogin)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.transcriptionMode)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.echoCancellationEnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.audioChunkDuration)
         UserDefaults.standard.removeObject(forKey: PreferencesManager.migrationCheckedKey)
     }
@@ -233,9 +234,9 @@ final class PreferencesManagerTests: XCTestCase {
     
     // MARK: - Echo Cancellation Tests
     
-    /// Test that echo cancellation defaults to false
-    func testEchoCancellation_DefaultsToFalse() async {
-        XCTAssertFalse(preferencesManager.isEchoCancellationEnabled)
+    /// Test that echo cancellation defaults to true (AEC is always-on by policy)
+    func testEchoCancellation_DefaultsToTrue() async {
+        XCTAssertTrue(preferencesManager.isEchoCancellationEnabled)
     }
     
     /// Test that echo cancellation can be enabled
@@ -272,7 +273,8 @@ final class PreferencesManagerTests: XCTestCase {
         XCTAssertTrue(value)
     }
     
-    /// Test that echo cancellation can be toggled multiple times
+    /// Test that echo cancellation can be toggled multiple times (Debug-only behavior;
+    /// in Release builds the setter still works but UI never exposes the toggle)
     func testEchoCancellation_CanToggleMultipleTimes() async {
         preferencesManager.isEchoCancellationEnabled = true
         XCTAssertTrue(preferencesManager.isEchoCancellationEnabled)
@@ -449,6 +451,68 @@ final class PreferencesManagerTests: XCTestCase {
         let mode = PreferencesManager.TranscriptionMode(from: serviceMode)
         
         XCTAssertEqual(mode, .postProcessing)
+    }
+    
+    // MARK: - AEC Startup Policy Matrix Tests
+
+    /// Matrix test: (stored: unset/false/true × isRelease: true/false) → decision
+    func testAECPolicy_Matrix() async {
+        typealias SB = PreferencesManager.StoredBool
+        typealias D = PreferencesManager.AECStartupDecision
+
+        let cases: [(SB, Bool, Bool, D, String)] = [
+            // stored               isRelease  migDone  expected                                                                  label
+            (.unset,                true,      false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "unset×release"),
+            (.unset,                false,     false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "unset×debug"),
+            (.value(true),          true,      false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "true×release"),
+            (.value(true),          false,     false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "true×debug"),
+            (.value(false),         true,      false,   D(effectiveValue: true,  shouldWriteEnabled: true,  shouldSetMigrationDone: true),  "false×release"),
+            (.value(false),         false,     false,   D(effectiveValue: false, shouldWriteEnabled: false, shouldSetMigrationDone: false), "false×debug"),
+        ]
+
+        for (stored, isRelease, migDone, expected, label) in cases {
+            let result = PreferencesManager.resolveAECStartupPolicy(
+                storedPref: stored, isRelease: isRelease, migrationAlreadyDone: migDone
+            )
+            XCTAssertEqual(result, expected, label)
+        }
+    }
+
+    /// When migration was already done, should not re-mark migration even for stored false.
+    func testAECPolicy_MigrationAlreadyDone_SkipsMigrationMarker() async {
+        let result = PreferencesManager.resolveAECStartupPolicy(
+            storedPref: .value(false), isRelease: true, migrationAlreadyDone: true
+        )
+        XCTAssertTrue(result.effectiveValue)
+        XCTAssertTrue(result.shouldWriteEnabled)
+        XCTAssertFalse(result.shouldSetMigrationDone,
+            "Should not re-mark migration when already done")
+    }
+
+    /// Integration test: fresh install (unset key) through the shared helper used by init().
+    func testAECPolicy_Integration_FreshInstall() async {
+        clearUserDefaults()
+
+        let stored = PreferencesManager.StoredBool(forKey: AppStorageKeys.echoCancellationEnabled)
+        let migDone = UserDefaults.standard.object(forKey: AppStorageKeys.aecAlwaysOnMigrationDone) != nil
+            && UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+
+        let decision = PreferencesManager.resolveAECStartupPolicy(
+            storedPref: stored, isRelease: true, migrationAlreadyDone: migDone
+        )
+
+        XCTAssertEqual(stored, .unset, "Fresh install must see echoCancellationEnabled as unset")
+        XCTAssertTrue(decision.effectiveValue, "Fresh install effective AEC must be true")
+        XCTAssertFalse(decision.shouldWriteEnabled, "Unset defaults to true; no write needed")
+        XCTAssertFalse(decision.shouldSetMigrationDone, "No migration needed on fresh install")
+    }
+
+    /// Backward-compat: effectiveAECEnabled convenience still works.
+    func testEffectiveAEC_BackwardCompat() async {
+        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: true))
+        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: true, isRelease: true))
+        XCTAssertFalse(PreferencesManager.effectiveAECEnabled(storedValue: false, isRelease: false))
+        XCTAssertTrue(PreferencesManager.effectiveAECEnabled(storedValue: true, isRelease: false))
     }
 }
 

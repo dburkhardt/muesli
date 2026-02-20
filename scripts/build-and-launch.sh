@@ -2,9 +2,9 @@
 # Build and launch Muesli with verification to prevent stale build issues
 #
 # ┌─────────────────────────────────────────────────────────────────────────┐
-# │  BUILD TIME: 5-8 minutes. Run with nohup and monitor via log file!     │
+# │  BUILD TIME: 5-8 minutes. Run the script and monitor via log file.     │
 # │                                                                         │
-# │  1. Start:   nohup ./scripts/build-and-launch.sh > /dev/null 2>&1 &    │
+# │  1. Start:   ./scripts/build-and-launch.sh                              │
 # │  2. Running: cat /tmp/muesli-build.lock                                 │
 # │  3. Monitor: tail -30 "$(ls -t /tmp/muesli-build-*.log | head -1)"      │
 # │  4. Done:    grep "Build & Launch Complete" /tmp/muesli-build-*.log     │
@@ -19,14 +19,16 @@
 # - Logs all output to /tmp/muesli-build-TIMESTAMP.log by default
 # - Uses deterministic DerivedData path (no wildcards)
 # - Prevents parallel builds with a lock file
-# - Clears ALL caches by default (DerivedData, Launch Services, Swift PM, module caches)
-# - Resets TCC permissions (Screen Recording, Microphone) before each build
+# - Preserves caches by default for fast rebuilds (~1-2 min vs 5-8 min)
+# - Only removes app bundles, keeps DerivedData intermediates
+# - TCC permissions persist across builds (use --reset-tcc for onboarding testing)
 # - Verifies the app was just built (modification time check)
 # - Uses full path with open -a to bypass Launch Services
 # - Confirms the correct process is running after launch
 #
 # Usage:
-#   ./scripts/build-and-launch.sh                  # Deep clean + build and launch (default)
+#   ./scripts/build-and-launch.sh                  # Fast rebuild (default)
+#   ./scripts/build-and-launch.sh --deep-clean     # Full cache clear if needed
 #   ./scripts/build-and-launch.sh --build-only     # Build without launching
 #   ./scripts/build-and-launch.sh --dry-run        # Show what would happen
 
@@ -43,13 +45,15 @@ SCRIPT_LOG="/tmp/muesli-build-${TIMESTAMP}.log"
 BUILD_LOG="/tmp/muesli-build-${TIMESTAMP}-xcodebuild.txt"
 
 # Default options
-# NOTE: DEEP_CLEAN=true by default - we always want a fully clean slate
-# Use --preserve-caches if you want to keep DerivedData/Launch Services/module caches
-ALWAYS_CLEAN=true
-DEEP_CLEAN=true
+# NOTE: PRESERVE_CACHES=true by default for faster rebuilds (~1-2 min vs 5-8 min)
+# Use --deep-clean if you encounter stale cache issues
+ALWAYS_CLEAN=false
+DEEP_CLEAN=false
+PRESERVE_CACHES=true
 BUILD_ONLY=false
 DRY_RUN=false
 ENABLE_LOGGING=true
+RESET_TCC=false
 
 # Lock file for preventing parallel builds
 LOCK_FILE="/tmp/muesli-build.lock"
@@ -87,11 +91,16 @@ for arg in "$@"; do
             DEEP_CLEAN=false
             shift
             ;;
+        --deep-clean)
+            # Force a full cache clear - use when encountering stale cache issues
+            DEEP_CLEAN=true
+            PRESERVE_CACHES=false
+            ALWAYS_CLEAN=true
+            shift
+            ;;
         --preserve-caches)
-            # Skip cache clearing - NOT recommended for normal use
-            # Only use if you're certain caches are valid and need faster rebuilds
-            # Stale caches are a common source of confusing build issues
-            DEEP_CLEAN=false
+            # Legacy flag - now the default behavior
+            # Kept for backward compatibility
             shift
             ;;
         --build-only)
@@ -107,36 +116,44 @@ for arg in "$@"; do
             ENABLE_LOGGING=false
             shift
             ;;
+        --reset-tcc)
+            # Opt-in to reset TCC permissions (for onboarding testing)
+            RESET_TCC=true
+            shift
+            ;;
         --help|-h)
             echo "Usage: $0 [options]"
             echo ""
             echo "Options:"
             echo "  --build-only       Build without launching the app"
+            echo "  --deep-clean       Force full cache clear (use if builds behave unexpectedly)"
             echo "  --dry-run          Show what would happen without doing it"
             echo "  --no-log           Disable logging to file (terminal output only)"
+            echo "  --reset-tcc        Reset TCC permissions (for onboarding testing)"
             echo "  --help, -h         Show this help message"
             echo ""
             echo "Advanced options (rarely needed):"
-            echo "  --preserve-caches  Skip cache clearing (NOT recommended - use only if you're"
-            echo "                     certain caches are valid and need a faster rebuild)"
-            echo "  --incremental      Use cached/incremental build (NOT recommended - may miss changes)"
+            echo "  --incremental      Skip xcodebuild clean (fastest, but may miss some changes)"
             echo ""
-            echo "Default behavior (DEEP CLEAN):"
+            echo "Default behavior (PRESERVE CACHES - fast rebuilds):"
             echo "  - Logs all output to /tmp/muesli-build-TIMESTAMP.log"
-            echo "  - Removes ALL caches (DerivedData, Launch Services, Swift PM, module caches)"
-            echo "  - Does a clean build to ensure all code changes are compiled"
-            echo "  - Resets TCC permissions (Screen Recording, Microphone)"
-            echo "  - Verifies correct app version is launched"
+            echo "  - Preserves DerivedData intermediates for incremental compilation"
+            echo "  - Removes only app bundles to ensure fresh binary"
+            echo "  - Runs 'xcodebuild clean build' to recompile changed sources"
+            echo "  - TCC permissions persist across builds (use --reset-tcc for onboarding testing)"
+            echo "  - Build time: ~1-2 minutes (vs 5-8 min with --deep-clean)"
             echo ""
             echo "Examples:"
-            echo "  $0                 # Deep clean + build and launch (ALWAYS use this)"
+            echo "  $0                 # Fast rebuild (default)"
+            echo "  $0 --deep-clean    # Full cache clear (use if something seems wrong)"
             echo "  $0 --build-only    # Build without launching"
-            echo "  $0 --dry-run       # Preview what would happen"
             exit 0
             ;;
-        --clean|--deep-clean)
-            # Legacy flags - now the default, kept for compatibility
-            print_info "Note: deep clean is now the default behavior"
+        --clean)
+            # Legacy flag - same as --deep-clean
+            DEEP_CLEAN=true
+            PRESERVE_CACHES=false
+            ALWAYS_CLEAN=true
             shift
             ;;
         *)
@@ -270,7 +287,7 @@ if [ "$STALE_DD_COUNT" -gt 0 ]; then
         print_info "Found $STALE_DD_COUNT stale Muesli folder(s) in Xcode DerivedData (will be cleaned)"
     else
         print_warning "Found $STALE_DD_COUNT stale Muesli folder(s) in ~/Library/Developer/Xcode/DerivedData"
-        print_info "These may contain old builds. Default behavior will clean them."
+        print_info "These may contain old builds. This run will NOT clean them."
     fi
 fi
 
@@ -310,7 +327,8 @@ if [ "$DEEP_CLEAN" = true ]; then
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY RUN] Would remove: $DERIVED_DATA"
         print_info "[DRY RUN] Would remove: ~/Library/Developer/Xcode/DerivedData/Muesli-*"
-        print_info "[DRY RUN] Would remove: Swift module caches"
+        print_info "[DRY RUN] Would preserve: Swift PM cache (MLX, WhisperKit, etc.)"
+        print_info "[DRY RUN] Would remove: Xcode module caches"
         print_info "[DRY RUN] Would clear Launch Services for: $BUNDLE_ID"
     else
         # Remove local DerivedData
@@ -321,22 +339,6 @@ if [ "$DEEP_CLEAN" = true ]; then
             print_info "No local DerivedData to remove"
         fi
         
-        # Remove ANY stale Muesli.app bundles in project directory (outside expected location)
-        # This prevents confusion when old builds exist in different directories
-        STALE_APPS=$(find "$PROJECT_DIR" -name "Muesli.app" -type d 2>/dev/null | grep -v "^$DERIVED_DATA" || true)
-        if [ -n "$STALE_APPS" ]; then
-            echo "$STALE_APPS" | while read -r stale_app; do
-                rm -rf "$stale_app"
-                print_warning "Removed stale app bundle: $stale_app"
-            done
-        fi
-        
-        # Also remove legacy build/ directory if it exists (old build location)
-        if [ -d "$PROJECT_DIR/build" ]; then
-            rm -rf "$PROJECT_DIR/build"
-            print_success "Removed legacy build/ directory"
-        fi
-        
         # Remove stale builds from standard Xcode DerivedData location
         STALE_FOLDERS=$(find ~/Library/Developer/Xcode/DerivedData -maxdepth 1 -name "Muesli-*" -type d 2>/dev/null || true)
         if [ -n "$STALE_FOLDERS" ]; then
@@ -345,11 +347,10 @@ if [ "$DEEP_CLEAN" = true ]; then
             print_success "Removed $STALE_COUNT stale Muesli folder(s) from Xcode DerivedData"
         fi
         
-        # Clear Swift Package Manager caches
-        if [ -d ~/Library/Caches/org.swift.swiftpm ]; then
-            rm -rf ~/Library/Caches/org.swift.swiftpm
-            print_success "Cleared Swift Package Manager cache"
-        fi
+        # Swift Package Manager cache is preserved by default
+        # This cache contains expensive-to-build dependencies like MLX that rarely change
+        # To force a full SPM rebuild, manually run: rm -rf ~/Library/Caches/org.swift.swiftpm
+        print_info "Swift Package Manager cache preserved (MLX, WhisperKit, etc.)"
         
         # Clear Xcode's module cache for this project
         if [ -d ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex ]; then
@@ -372,6 +373,30 @@ if [ "$DEEP_CLEAN" = true ]; then
         else
             print_warning "lsregister not found - skipping Launch Services cleanup"
         fi
+    fi
+    echo ""
+fi
+
+# ============================================================================
+# Preserve caches cleanup (opt-in via --preserve-caches)
+# ============================================================================
+
+if [ "$PRESERVE_CACHES" = true ]; then
+    print_step "Preserving caches (removing app bundles only)..."
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would keep: $DERIVED_DATA/Build/Intermediates.noindex"
+        print_info "[DRY RUN] Would remove: $DERIVED_DATA/Build/Products/Debug/*.app"
+        print_info "[DRY RUN] Would preserve: Swift PM cache and Xcode module cache"
+    else
+        # Keep DerivedData intermediates for fast rebuilds
+        if [ -d "$DERIVED_DATA/Build/Products/Debug" ]; then
+            rm -rf "$DERIVED_DATA/Build/Products/Debug"/*.app 2>/dev/null || true
+            print_success "Removed app bundles from Build/Products/Debug"
+        else
+            print_info "No Build/Products/Debug directory to clean"
+        fi
+        print_info "DerivedData intermediates preserved for incremental builds"
     fi
     echo ""
 fi
@@ -474,28 +499,6 @@ else
     fi
     print_success "App bundle exists"
     
-    # Check for duplicate app bundles (common source of confusion)
-    ALL_APP_BUNDLES=$(find "$PROJECT_DIR" -name "Muesli.app" -type d 2>/dev/null)
-    BUNDLE_COUNT=$(echo "$ALL_APP_BUNDLES" | grep -c "Muesli.app" || echo "0")
-    if [ "$BUNDLE_COUNT" -gt 1 ]; then
-        print_error "MULTIPLE Muesli.app bundles found! This can cause permission issues."
-        echo "$ALL_APP_BUNDLES" | while read -r bundle; do
-            TEAM_ID=$(codesign -dv "$bundle" 2>&1 | grep TeamIdentifier | cut -d= -f2)
-            print_info "  $bundle (TeamID: ${TEAM_ID:-not set})"
-        done
-        print_info "Run with deep clean (default) to remove stale bundles"
-        exit 1
-    fi
-    
-    # Verify code signature has TeamIdentifier set (prevents ad-hoc signing issues)
-    TEAM_ID=$(codesign -dv "$APP_PATH" 2>&1 | grep TeamIdentifier | cut -d= -f2)
-    if [ -z "$TEAM_ID" ] || [ "$TEAM_ID" = "not set" ]; then
-        print_warning "App is ad-hoc signed (no TeamIdentifier). TCC permissions may not persist."
-        print_info "Configure DEVELOPMENT_TEAM in project.pbxproj for stable signing."
-    else
-        print_success "App signed with TeamIdentifier: $TEAM_ID"
-    fi
-    
     # Check modification time (should be within last 2 minutes)
     if [[ $(find "$APP_PATH" -maxdepth 0 -mmin -2 2>/dev/null) ]]; then
         print_success "App was built within the last 2 minutes (fresh build confirmed)"
@@ -516,47 +519,67 @@ fi
 log ""
 
 # ============================================================================
-# Reset TCC Permissions (after build, so app exists in Launch Services)
+# Reset TCC Permissions (OPTIONAL - only when --reset-tcc flag provided)
 # ============================================================================
+# With stable code signing (DEVELOPMENT_TEAM), TCC permissions persist across builds.
+# Resetting is only needed when testing the onboarding flow.
 
-print_step "Resetting system permissions for ${BUNDLE_ID}..."
+if [ "$RESET_TCC" = true ]; then
+    print_step "Resetting system permissions for ${BUNDLE_ID}..."
+    
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would reset: tccutil reset ScreenCapture $BUNDLE_ID"
+        print_info "[DRY RUN] Would reset: tccutil reset Microphone $BUNDLE_ID"
+        print_info "[DRY RUN] Would reset: tccutil reset ListenEvent $BUNDLE_ID"
+    else
+        # Register the app with Launch Services first (so tccutil can find it)
+        LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+        if [ -x "$LSREGISTER" ] && [ -d "$APP_PATH" ]; then
+            "$LSREGISTER" -f "$APP_PATH" 2>/dev/null || true
+        fi
+        
+        # Temporarily disable exit-on-error for tccutil commands
+        # tccutil may return non-zero if no entries exist (which is fine)
+        set +e
+        
+        # Reset Screen Recording permission
+        tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null
+        SCREEN_EXIT=$?
+        if [ $SCREEN_EXIT -eq 0 ]; then
+            print_success "Reset Screen Recording permission"
+        else
+            print_info "Screen Recording: no entries to reset"
+        fi
+        
+        # Reset Microphone permission
+        tccutil reset Microphone "$BUNDLE_ID" 2>/dev/null
+        MIC_EXIT=$?
+        if [ $MIC_EXIT -eq 0 ]; then
+            print_success "Reset Microphone permission"
+        else
+            print_info "Microphone: no entries to reset"
+        fi
 
-if [ "$DRY_RUN" = true ]; then
-    print_info "[DRY RUN] Would reset: tccutil reset ScreenCapture $BUNDLE_ID"
-    print_info "[DRY RUN] Would reset: tccutil reset Microphone $BUNDLE_ID"
+        # Reset System Audio Capture permission (Core Audio taps)
+        tccutil reset ListenEvent "$BUNDLE_ID" 2>/dev/null
+        LISTEN_EXIT=$?
+        if [ $LISTEN_EXIT -eq 0 ]; then
+            print_success "Reset System Audio Capture permission"
+        else
+            print_info "System Audio Capture: no entries to reset"
+        fi
+
+        # Re-enable exit-on-error
+        set -e
+        
+        print_info "You will need to re-grant permissions on first launch"
+    fi
 else
-    # Register the app with Launch Services first (so tccutil can find it)
-    LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
-    if [ -x "$LSREGISTER" ] && [ -d "$APP_PATH" ]; then
-        "$LSREGISTER" -f "$APP_PATH" 2>/dev/null || true
-    fi
-    
-    # Temporarily disable exit-on-error for tccutil commands
-    # tccutil may return non-zero if no entries exist (which is fine)
-    set +e
-    
-    # Reset Screen Recording permission
-    tccutil reset ScreenCapture "$BUNDLE_ID" 2>/dev/null
-    SCREEN_EXIT=$?
-    if [ $SCREEN_EXIT -eq 0 ]; then
-        print_success "Reset Screen Recording permission"
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would skip TCC reset (permissions persist with stable signing)"
     else
-        print_info "Screen Recording: no entries to reset"
+        print_info "TCC reset skipped (permissions persist with stable signing)"
     fi
-    
-    # Reset Microphone permission
-    tccutil reset Microphone "$BUNDLE_ID" 2>/dev/null
-    MIC_EXIT=$?
-    if [ $MIC_EXIT -eq 0 ]; then
-        print_success "Reset Microphone permission"
-    else
-        print_info "Microphone: no entries to reset"
-    fi
-    
-    # Re-enable exit-on-error
-    set -e
-    
-    print_info "You will need to re-grant permissions on first launch"
 fi
 
 log ""

@@ -73,12 +73,13 @@ struct MenuBarView: View {
     private var idleMenuContent: some View {
         Group {
             // Quick start recording (captures all system audio)
-            Button("Start Recording") {
+            Button(viewModel.canStartRecording ? "Start Recording" : "Preparing Model...") {
                 viewModel.quickStartRecording()
                 openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)
             }
             .keyboardShortcut("r", modifiers: .command)
+            .disabled(!viewModel.canStartRecording)
             
             Divider()
             

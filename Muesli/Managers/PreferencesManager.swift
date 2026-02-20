@@ -107,23 +107,63 @@ final class PreferencesManager {
     /// Thread-safe storage for echo cancellation state (for synchronous access from audio callbacks)
     /// Uses OSAllocatedUnfairLock for proper synchronization
     /// Internal access for audio callback setup
-    let echoCancellationLock = OSAllocatedUnfairLock(initialState: false)
+    let echoCancellationLock = OSAllocatedUnfairLock(initialState: true)
+    
+    /// Backing storage for @Observable tracking
+    /// Note: The lock above is for thread-safe audio callback access; this property enables SwiftUI observation
+    private var _isEchoCancellationEnabled: Bool = true
     
     /// Whether echo cancellation is enabled
-    /// Uses a cached value for thread-safe access from audio callbacks
+    /// Uses a stored property for @Observable tracking, synced to lock for audio callbacks
     var isEchoCancellationEnabled: Bool {
-        get {
-            echoCancellationLock.withLock { $0 }
-        }
+        get { _isEchoCancellationEnabled }
         set {
+            let oldValue = _isEchoCancellationEnabled
+            _isEchoCancellationEnabled = newValue
             echoCancellationLock.withLock { $0 = newValue }
             UserDefaults.standard.set(newValue, forKey: AppStorageKeys.echoCancellationEnabled)
+            if oldValue != newValue {
+                logger.info("Echo cancellation toggled: \(oldValue) -> \(newValue)")
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "AEC_TOGGLE: \(oldValue) -> \(newValue)")
+                }
+            }
         }
     }
     
     /// Thread-safe getter for audio callbacks (nonisolated)
     nonisolated var echoCancellationEnabledForAudioCallback: Bool {
-        echoCancellationLock.withLock { $0 }
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: AppStorageKeys.aecDebugForceOff) {
+            return false
+        }
+        #endif
+        return echoCancellationLock.withLock { $0 }
+    }
+    
+    // MARK: - AEC Delay Mode
+
+    /// AEC delay mode determines how stream delay is computed for echo cancellation
+    enum AECDelayMode: String, CaseIterable {
+        case arrivalOnly
+        case arrivalPlusStreamDelay
+    }
+
+    /// AEC delay mode (advanced setting)
+    /// Default: .arrivalOnly — delay computed from render/capture arrival time difference only
+    var aecDelayMode: String {
+        get {
+            UserDefaults.standard.string(forKey: AppStorageKeys.aecDelayMode) ?? AECDelayMode.arrivalOnly.rawValue
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.aecDelayMode)
+        }
+    }
+
+    /// Get typed AEC delay mode
+    var aecDelayModeType: AECDelayMode {
+        AECDelayMode(rawValue: aecDelayMode) ?? .arrivalOnly
     }
     
     // MARK: - Audio Chunk Duration
@@ -196,12 +236,106 @@ final class PreferencesManager {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.exportDirectory)
     }
     
+    // MARK: - AEC Startup Policy
+
+    /// Tri-state for a stored UserDefaults boolean: distinguishes "never set" from explicit false.
+    enum StoredBool: Equatable, CustomStringConvertible {
+        case unset
+        case value(Bool)
+
+        var description: String {
+            switch self {
+            case .unset: return "unset"
+            case .value(let b): return "\(b)"
+            }
+        }
+
+        init(forKey key: String, defaults: UserDefaults = .standard) {
+            if defaults.object(forKey: key) != nil {
+                self = .value(defaults.bool(forKey: key))
+            } else {
+                self = .unset
+            }
+        }
+    }
+
+    /// Decision object returned by the AEC startup policy function.
+    struct AECStartupDecision: Equatable {
+        let effectiveValue: Bool
+        let shouldWriteEnabled: Bool
+        let shouldSetMigrationDone: Bool
+    }
+
+    /// Pure function: given the stored preference, build mode, and migration state,
+    /// returns what init() should do. Testable without UserDefaults side-effects.
+    static func resolveAECStartupPolicy(
+        storedPref: StoredBool,
+        isRelease: Bool,
+        migrationAlreadyDone: Bool
+    ) -> AECStartupDecision {
+        let savedValue: Bool
+        switch storedPref {
+        case .unset: savedValue = true
+        case .value(let b): savedValue = b
+        }
+
+        if isRelease {
+            let needsWrite = !savedValue
+            let needsMigrationMark = needsWrite && !migrationAlreadyDone
+            return AECStartupDecision(
+                effectiveValue: true,
+                shouldWriteEnabled: needsWrite,
+                shouldSetMigrationDone: needsMigrationMark
+            )
+        } else {
+            return AECStartupDecision(
+                effectiveValue: savedValue,
+                shouldWriteEnabled: false,
+                shouldSetMigrationDone: false
+            )
+        }
+    }
+
+    /// Convenience wrapper for backward compatibility.
+    static func effectiveAECEnabled(storedValue: Bool, isRelease: Bool) -> Bool {
+        resolveAECStartupPolicy(
+            storedPref: .value(storedValue),
+            isRelease: isRelease,
+            migrationAlreadyDone: false
+        ).effectiveValue
+    }
+
     // MARK: - Initialization
 
     init() {
-        // Load persisted echo cancellation state into the lock
-        let savedValue = UserDefaults.standard.bool(forKey: AppStorageKeys.echoCancellationEnabled)
-        echoCancellationLock.withLock { $0 = savedValue }
+        let storedPref = StoredBool(forKey: AppStorageKeys.echoCancellationEnabled)
+        let migrationDone = UserDefaults.standard.object(forKey: AppStorageKeys.aecAlwaysOnMigrationDone) != nil
+            && UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+
+        #if DEBUG
+        let isRelease = false
+        #else
+        let isRelease = true
+        #endif
+
+        let decision = Self.resolveAECStartupPolicy(
+            storedPref: storedPref,
+            isRelease: isRelease,
+            migrationAlreadyDone: migrationDone
+        )
+
+        if decision.shouldWriteEnabled {
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.echoCancellationEnabled)
+        }
+        if decision.shouldSetMigrationDone {
+            UserDefaults.standard.set(true, forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+            Task {
+                await DiagnosticLogger.shared.log(.aec, "AEC_PREF_MIGRATED_FALSE_TO_TRUE")
+            }
+        }
+
+        _isEchoCancellationEnabled = decision.effectiveValue
+        echoCancellationLock.withLock { $0 = decision.effectiveValue }
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()

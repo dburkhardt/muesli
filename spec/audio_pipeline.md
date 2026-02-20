@@ -5,8 +5,8 @@ This document specifies how Muesli captures, processes, and transcribes audio fr
 ## Overview
 
 The audio pipeline handles two parallel streams:
-1. **System Audio**: Captured from meeting apps (Zoom, Teams, Meet) via ScreenCaptureKit
-2. **Microphone Audio**: Captured from the user's selected microphone via AVAudioEngine
+1. **System Audio**: Captured from meeting apps (Zoom, Teams, Meet) via Core Audio taps (`AudioHardwareCreateProcessTap`)
+2. **Microphone Audio**: Captured from the user's selected microphone via AVAudioEngine (managed by TapAudioCaptureService)
 
 Both streams are simultaneously:
 - Written to disk as CAF files (for playback/reprocessing)
@@ -14,51 +14,51 @@ Both streams are simultaneously:
 
 ## Architecture
 
+### Core Audio Taps Architecture
+
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          AudioCaptureService                             │
-│  ┌─────────────────────────┐     ┌─────────────────────────────────┐   │
-│  │      SCStream           │     │     MicrophoneCaptureEngine     │   │
-│  │  (ScreenCaptureKit)     │     │       (AVAudioEngine)           │   │
-│  │                         │     │                                  │   │
-│  │  System audio from      │     │  User's microphone via          │   │
-│  │  selected meeting app   │     │  CoreAudio device selection     │   │
-│  └──────────┬──────────────┘     └──────────────┬──────────────────┘   │
-│             │                                    │                       │
-│             │ CMSampleBuffer                     │ CMSampleBuffer        │
-│             │ (48kHz stereo)                     │ (48kHz mono)          │
-│             └─────────────┬──────────────────────┘                       │
-└───────────────────────────┼──────────────────────────────────────────────┘
-                            │
-                            ▼
-          ┌─────────────────┴─────────────────┐
-          │         Buffer Handler            │
-          │    (RecordingController)          │
-          └─────────────────┬─────────────────┘
-                            │
-            ┌───────────────┴───────────────┐
-            │                               │
-            ▼                               ▼
-┌───────────────────────┐       ┌───────────────────────────────┐
-│   FileOutputService   │       │   TranscriptionCoordinator    │
-│                       │       │                               │
-│  System → audio.caf   │       │   Buffers audio while model   │
-│  Mic → microphone.caf │       │   loads, then forwards to:    │
-│                       │       │                               │
-│  (48kHz Float32 LPCM) │       │   TranscriptionService        │
-└───────────────────────┘       └───────────────┬───────────────┘
-                                                │
-                                                ▼
-                                ┌───────────────────────────────┐
-                                │     TranscriptionService      │
-                                │                               │
-                                │  1. Resample 48kHz → 16kHz    │
-                                │  2. Buffer 5-second chunks    │
-                                │  3. WhisperKit transcription  │
-                                │  4. Return segments with      │
-                                │     speaker labels            │
-                                └───────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                 Output Tap (Core Audio)                      │
+│     (default output mix; excludes Muesli process)            │
+│   Tap-only aggregate device (NO mic subdevice)               │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+                    TapCaptureRing (render)
+
+┌─────────────────────────────────────────────────────────────┐
+│                 Mic Capture (AVAudioEngine)                  │
+│        (supports user device selection)                      │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+                    MicCaptureRing (capture)
+
+                 ┌─────────────────────────────────┐
+                 │          AudioSynchronizer       │
+                 │  - sample-index timeline         │
+                 │  - bounded jitter buffers        │
+                 │  - discontinuity detection       │
+                 │  - coarse delay controller       │
+                 │  - drift tracker + resampler     │
+                 └─────────────────┬───────────────┘
+                                   │
+                                   ▼
+                         AECProcessor (render→capture)
+                                   │
+                ┌──────────────────┴──────────────────┐
+                │                                      │
+                ▼                                      ▼
+       FileOutputService                   TranscriptionService
 ```
+
+Key advantages of Core Audio taps:
+- **Single clock domain**: Tap and mic use same sample rate clock
+- **Sample-index alignment**: Precise pairing without timestamp drift
+- **Process exclusion**: True exclusion of Muesli's own audio output
+- **Lower latency**: Direct device access vs ScreenCaptureKit buffering
+
+> **Note:** See the Core Audio Taps Architecture diagram above for the current pipeline layout.
 
 ## Sample Rate Reference
 
@@ -80,7 +80,7 @@ All audio constants are centralized in `AudioConfiguration.swift`:
 enum AudioConfiguration {
     // Sample rates
     static let whisperSampleRate: Int = 16000      // WhisperKit requirement
-    static let captureSampleRate: Int = 48000      // ScreenCaptureKit default
+    static let captureSampleRate: Int = 48000      // Core Audio tap / AVAudioEngine default
     static let microphoneSampleRate: Int = 48000   // AVAudioEngine default
     
     // Transcription
@@ -89,7 +89,7 @@ enum AudioConfiguration {
     
     // Buffering
     static let maxBufferSamples: Int = 480_000     // 30 seconds at 16kHz
-    static let bufferTimeoutSeconds: TimeInterval = 30.0
+    static let bufferTimeoutSeconds: TimeInterval = 300.0  // 5-minute safety net (memory bounded by maxBufferSamples)
     
     // Voice activity detection
     static let vadThreshold: Float = 0.01         // RMS threshold (~-40dB)
@@ -103,10 +103,10 @@ ScreenCaptureKit's `captureMicrophone` API (macOS 15+) has two issues:
 1. **No device selection**: Always uses system default microphone, ignoring user preference
 2. **Reliability**: Observed to return all-zero samples in some configurations
 
-The `MicrophoneCaptureEngine` class wraps AVAudioEngine to provide:
+TapAudioCaptureService manages mic via AVAudioEngine, providing:
 - Explicit device selection via `AudioObjectSetPropertyData`
 - Consistent Float32 sample format
-- Conversion to CMSampleBuffer for compatibility with the rest of the pipeline
+- Integration with the Core Audio tap pipeline for synchronized capture
 
 ## File Output
 
@@ -187,6 +187,44 @@ Chunk 3:           |████████|
 4. Once model is ready, buffered audio is processed
 5. If model takes >30 seconds, timeout triggers
 
+## Echo Cancellation (AEC)
+
+The Echo Cancellation Service removes echo from microphone audio when the user's speakers play system audio (e.g., meeting participants' voices).
+
+### AEC Warmup Period
+
+The Echo Cancellation Service requires a warmup period at the start of each recording:
+
+1. **First ~12 buffers from each stream:** Both audio streams deliver samples while delivery offset is calculated
+2. **During warmup:** Microphone audio passes through unprocessed (no echo cancellation)
+3. **After warmup:** AEC activates with correct stream alignment
+
+**Configuration:** `kBuffersToAverage = 12` (defined in `EchoCancellationServiceWebRTC.SyncState`)
+
+**Expected warmup duration:**
+- Typical buffer: ~4096 samples at 48kHz (~85ms per buffer)
+- Conservative estimate: 12 buffers x 85ms = ~1.0 second
+- Practical observation: ~1 second (buffers interleave rapidly from both streams)
+- Timeout fallback: 5 seconds (forces pass-through mode if sync fails)
+
+### Why Warmup is Necessary
+
+The warmup period exists because:
+1. **NLMS algorithm needs reference data:** Echo prediction requires a history of system audio samples
+2. **Stream timing must be measured:** Delivery offset between system audio and microphone must be calculated
+3. **Sample-count synchronization:** Unlike timestamp-based sync, sample-count alignment needs to observe buffer delivery patterns
+
+### User Impact
+
+The first ~1 second of recording may have echo. This is acceptable for meeting recordings where the first few seconds are typically introductions, silence, or "Can you hear me?" exchanges.
+
+### Fallback Behavior
+
+If sample rate resampling fails (mic not at 48kHz and can't be resampled), AEC is **disabled for the entire recording session**. This ensures:
+- Audio is still recorded correctly (no data loss)
+- No corrupt AEC output from mismatched sample rates
+- User is warned via UI notification
+
 ## Thread Safety
 
 ### CMSampleBuffer Handling
@@ -208,10 +246,10 @@ func handleBuffer(_ buffer: CMSampleBuffer) {
 
 ### Audio Callback Context
 
-Audio callbacks from ScreenCaptureKit and AVAudioEngine run on high-priority queues:
+Audio callbacks from CoreAudioTapManager IOProc and AVAudioEngine tap run on real-time priority threads:
 
-- **Never block** in callback handlers
-- **Don't acquire locks** that might be held elsewhere
+- **Never block** in callback handlers (no heap allocation, no Objective-C messaging, no locks)
+- **Lock-free ring buffer handoff**: IOProc writes samples into `TapCaptureRing`/`MicCaptureRing`; a separate Swift worker thread (`AudioWorker`) reads from the rings and dispatches to downstream consumers
 - **Queue work** for async processing if needed
 
 ## Debugging Guide
@@ -227,9 +265,10 @@ Audio callbacks from ScreenCaptureKit and AVAudioEngine run on high-priority que
 ### No Microphone Audio
 
 1. Check microphone permission granted
-2. Verify `MicrophoneCaptureEngine` started successfully
+2. Verify AVAudioEngine started successfully in `TapAudioCaptureService`
 3. Check selected device ID exists and is valid
 4. Look for "Warning: Microphone capture failed to start" in logs
+5. Verify `MicCaptureRing` is receiving samples (check AudioWorker drain loop)
 
 ### Audio Gaps or Dropouts
 
@@ -344,12 +383,25 @@ Long transcription segments are split into multiple `TranscriptBlock` objects:
 
 | File | Responsibility |
 |------|----------------|
-| `AudioCaptureService.swift` | ScreenCaptureKit + AVAudioEngine capture |
+| `TapAudioCaptureService.swift` | Coordinates Core Audio tap + AVAudioEngine mic capture |
+| `CoreAudioTapManager.swift` | Creates and manages `AudioHardwareCreateProcessTap` for system audio |
+| `AggregateDeviceManager.swift` | Builds tap-only aggregate devices for process exclusion |
+| `AudioSynchronizer.swift` | Sample-index timeline, jitter buffering, drift tracking |
+| `AudioWorker.swift` | Swift worker thread draining ring buffers to downstream consumers |
+| `TapCaptureRing.swift` | Lock-free ring buffer for system audio (IOProc writes, worker reads) |
+| `MicCaptureRing.swift` | Lock-free ring buffer for microphone audio |
+| `AECProcessor.swift` | Echo cancellation (render-to-capture NLMS) |
 | `FileOutputService.swift` | AVAssetWriter dual-file output |
 | `TranscriptionService.swift` | WhisperKit integration, resampling, **loadAudioFile()** |
 | `TranscriptionCoordinator.swift` | Model lifecycle, audio buffering, **reprocessTranscript()** |
 | `AudioConfiguration.swift` | Centralized constants |
-| `EchoCancellationService.swift` | Sample extraction utilities |
+
+## Best Practices
+
+- **System audio permission model**: Use tap-probe at session start (attempt `AudioHardwareCreateProcessTap` and observe the result) rather than calling `CGPreflightScreenCaptureAccess()` as a preflight. Cache the permission result in `UserDefaults` so subsequent launches can skip the probe.
+- **RT audio callback constraints**: IOProc callbacks run on a real-time thread. No heap allocation, no Objective-C messaging, no lock acquisition. Use only lock-free ring buffers (`TapCaptureRing`, `MicCaptureRing`) to hand off samples.
+- **WhisperKit sample rate**: WhisperKit requires 16 kHz mono audio. Always resample from the 48 kHz capture rate using `TranscriptionService.resampleToWhisperFormat()`.
+- **Minimum macOS version**: `AudioHardwareCreateProcessTap` is available on macOS 14.2+. The app deployment target is **macOS 26.0** (`MACOSX_DEPLOYMENT_TARGET = 26.0` in `project.pbxproj`), which satisfies this requirement.
 
 ## Change History
 

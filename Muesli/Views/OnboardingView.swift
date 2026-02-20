@@ -1,10 +1,15 @@
+import AppKit
+import CoreGraphics
 import SwiftUI
 
-/// Multi-step onboarding flow for first-run setup
+/// Multi-step onboarding flow for first-run setup and permission recovery
 struct OnboardingView: View {
     @Bindable var viewModel: MuesliViewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
+    
+    /// Mode for this onboarding session (first-time vs permission recovery)
+    let mode: AppStorageKeys.OnboardingMode
     
     /// Use the viewModel's modelManager so state is shared
     private var modelManager: ModelManager {
@@ -17,6 +22,14 @@ struct OnboardingView: View {
     }
     @State private var currentStep: OnboardingStep
     @State private var showFilePicker = false
+
+    /// Alert shown when user tries to close recovery window
+    @State private var showQuitAlert = false
+    
+    // MARK: - Background Download State
+    
+    /// Whether user has initiated at least one download (enables Continue button)
+    @State private var userHasInitiatedDownload = false
     
     // Using centralized AppStorageKeys for onboarding state
     
@@ -32,11 +45,32 @@ struct OnboardingView: View {
         case llmSetup = 4
     }
     
-    init(viewModel: MuesliViewModel) {
+    init(viewModel: MuesliViewModel, mode: AppStorageKeys.OnboardingMode = .firstTime) {
         self.viewModel = viewModel
-        // Restore saved step, defaulting to welcome
-        let savedStep = UserDefaults.standard.integer(forKey: AppStorageKeys.onboardingCurrentStep)
-        _currentStep = State(initialValue: OnboardingStep(rawValue: savedStep) ?? .welcome)
+        self.mode = mode
+        
+        // In recovery mode: start at the first missing permission step
+        // In first-time mode: always start at welcome
+        if mode.isRecoveryMode {
+            // Calculate starting step based on which permissions are missing
+            switch mode {
+            case .permissionRecovery(let missingScreen, let missingMic):
+                if missingScreen {
+                    _currentStep = State(initialValue: .screenRecording)
+                } else if missingMic {
+                    _currentStep = State(initialValue: .microphone)
+                } else {
+                    // Fallback - shouldn't happen
+                    _currentStep = State(initialValue: .screenRecording)
+                }
+            case .firstTime:
+                // This case won't be reached due to the if condition
+                _currentStep = State(initialValue: .welcome)
+            }
+        } else {
+            // First-time mode: always start at welcome (stale step cleared in onAppear)
+            _currentStep = State(initialValue: .welcome)
+        }
     }
     
     var body: some View {
@@ -70,12 +104,18 @@ struct OnboardingView: View {
             Task {
                 // Always use synchronous check to avoid triggering permission prompts
                 viewModel.refreshPermissions()
-                
+
+                // Clear any stale persisted step from a previous onboarding session
+                if !mode.isRecoveryMode {
+                    UserDefaults.standard.removeObject(forKey: AppStorageKeys.onboardingCurrentStep)
+                }
+
                 // Start monitoring on permission screens
                 if currentStep == .screenRecording || currentStep == .microphone {
                     startPermissionMonitoring()
                 }
-                
+
+                // Auto-advance only in recovery mode (first-time is gated inside the function)
                 advanceBasedOnPermissions()
             }
         }
@@ -87,6 +127,14 @@ struct OnboardingView: View {
             // Stop monitoring when leaving permission screens
             if oldValue == .screenRecording || oldValue == .microphone {
                 stopPermissionMonitoring()
+            }
+
+            if oldValue == .screenRecording && newValue != .screenRecording {
+                screenRecordingRequested = false
+                // Only reset the confirmation flag if going backwards, not when advancing to microphone
+                if newValue.rawValue < oldValue.rawValue || newValue == .welcome {
+                    didConfirmSystemAudioThisSession = false
+                }
             }
             
             // Check permissions when switching to permission steps
@@ -104,6 +152,27 @@ struct OnboardingView: View {
             allowsMultipleSelection: false
         ) { result in
             handleFileSelection(result)
+        }
+        // Handle exit command (Cmd+W, Cmd+Q) in recovery mode
+        .onExitCommand {
+            if mode.isRecoveryMode {
+                showQuitAlert = true
+            }
+        }
+        // Alert shown when user tries to close recovery window
+        .alert("Permissions Required", isPresented: $showQuitAlert) {
+            Button("Continue Setup") { }
+            Button("Quit \(appName)", role: .destructive) {
+                Task {
+                    await DiagnosticLogger.shared.log(
+                        .permission,
+                        "User chose to quit during permission recovery"
+                    )
+                }
+                NSApplication.shared.terminate(nil)
+            }
+        } message: {
+            Text("\(appName) requires System Audio Recording and Microphone permissions to function. Please grant the permissions or quit the app.")
         }
     }
     
@@ -153,24 +222,25 @@ struct OnboardingView: View {
         .padding(.bottom, 24)
     }
     
-    // MARK: - Screen Recording Screen
+    // MARK: - System Audio Recording Screen
     
     @State private var screenRecordingRequested = false
+    @State private var didConfirmSystemAudioThisSession = false
     
     private var screenRecordingScreen: some View {
         VStack(spacing: 20) {
             Spacer()
             
-            Image(systemName: "rectangle.inset.filled.and.person.filled")
+            Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 60))
                 .foregroundStyle(Color.accentColor)
             
-            Text("Screen Recording Access")
+            Text("System Audio Recording")
                 .font(.system(size: 24, weight: .bold))
             
             Text(
                 """
-                Muesli needs Screen Recording permission to capture audio from meeting apps \
+                Muesli needs System Audio Recording permission to capture audio from meeting apps \
                 like Zoom, Teams, and Google Meet.
                 """
             )
@@ -181,10 +251,10 @@ struct OnboardingView: View {
             
             Spacer()
             
-            if viewModel.hasScreenRecordingPermission {
+            if isSystemAudioPermissionConfirmed {
                 // Permission granted
-                permissionStatusView(granted: true, label: "Screen Recording")
-            } else if screenRecordingRequested {
+                permissionStatusView(granted: true, label: "System Audio Recording")
+            } else if screenRecordingRequested || viewModel.permissionManager.awaitingScreenRecordingFromSettings {
                 // Permission was requested but not granted - show recovery options
                 VStack(spacing: 12) {
                     Text("Waiting for permission...")
@@ -204,27 +274,44 @@ struct OnboardingView: View {
                     
                     HoverableLink(title: "Check Again") {
                         Task {
-                            await DiagnosticLogger.shared.log(.onboarding, "Check Again tapped (screen recording)")
+                            await DiagnosticLogger.shared.log(.onboarding, "Check Again tapped (system audio)")
+                            // Re-probe with a live tap attempt rather than reading the cached
+                            // state — the cache is still false from the initial deny.
+                            _ = await viewModel.requestScreenRecordingPermission()
+                            viewModel.refreshPermissions()
                         }
-                        // Use synchronous check to avoid triggering prompts
-                        viewModel.refreshPermissions()
                     }
                 }
             } else {
                 // Initial state - request permission
-                Button("Grant Screen Recording Access") {
-                    Task {
-                        await DiagnosticLogger.shared.log(.onboarding, "Grant Screen Recording Access button tapped")
+                Button("Grant System Audio Access") {
+                    Task { @MainActor in
+                        await DiagnosticLogger.shared.log(.onboarding, "Grant System Audio Access button tapped")
+                        AppDelegate.shared?.bringOnboardingWindowToFront()
+                        NSApp.activate(ignoringOtherApps: true)
+                        if let keyWindow = NSApp.keyWindow {
+                            keyWindow.makeKeyAndOrderFront(nil)
+                            keyWindow.orderFrontRegardless()
+                        }
+                        let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+                        await DiagnosticLogger.shared.log(
+                            .onboarding,
+                            "Pre-probe focus: isActive=\(NSApp.isActive), policy=\(NSApp.activationPolicy()), hasKeyWindow=\(NSApp.keyWindow != nil), frontmost=\(frontmostBundleID)"
+                        )
                     }
-                    viewModel.requestScreenRecordingPermission()
                     screenRecordingRequested = true
-                    // Verify permission after request and auto-advance if granted
                     Task {
-                        await DiagnosticLogger.shared.log(.onboarding, "Calling verifyScreenRecordingAfterRequest()")
-                        let granted = await viewModel.verifyScreenRecordingAfterRequest()
-                        await DiagnosticLogger.shared.log(.onboarding, "verifyScreenRecordingAfterRequest() returned: \(granted)")
+                        await DiagnosticLogger.shared.log(.onboarding, "Calling requestScreenRecordingPermission()")
+                        let granted = await viewModel.requestScreenRecordingPermission()
+                        await DiagnosticLogger.shared.log(.onboarding, "requestScreenRecordingPermission() returned: \(granted)")
                         if granted {
+                            didConfirmSystemAudioThisSession = true
                             withAnimation { setStep(.microphone) }
+                        } else {
+                            await DiagnosticLogger.shared.log(
+                                .onboarding,
+                                "System audio permission not granted - keep waiting"
+                            )
                         }
                         AppDelegate.shared?.bringOnboardingWindowToFront()
                     }
@@ -232,7 +319,7 @@ struct OnboardingView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
                 
-                permissionStatusView(granted: false, label: "Screen Recording")
+                permissionStatusView(granted: false, label: "System Audio Recording")
             }
             
             Spacer()
@@ -244,7 +331,7 @@ struct OnboardingView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!viewModel.hasScreenRecordingPermission)
+            .disabled(!isSystemAudioPermissionConfirmed)
         }
         .padding(.horizontal, 60)
         .padding(.top, 40)
@@ -397,32 +484,64 @@ struct OnboardingView: View {
     
     // MARK: - Model Setup Screen
     
+    /// Check if any model is downloading or compiling or ready
+    private var isAnyModelBusyOrReady: Bool {
+        modelManager.isAnyModelBusy || modelManager.hasModel
+    }
+
     private var modelSetupScreen: some View {
         VStack(spacing: 12) {
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 44))
                 .foregroundStyle(Color.accentColor)
-            
+
             Text("Transcription Models")
                 .font(.system(size: 22, weight: .bold))
-            
+
             Text("Download one or more models for transcription....")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            
+
             // Model list
             modelListView
                 .padding(.top, 4)
-            
-            // Active model picker (only if models are downloaded)
+
+            // Compilation status message (shown when any model is compiling)
+            if modelManager.isAnyModelBusy && !modelManager.isAnyModelDownloading {
+                VStack(spacing: 8) {
+                    Text("Optimizing for your device...")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("This one-time setup may take a few minutes")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.top, 8)
+            }
+
+            // Background download message (shown when downloading and user can proceed)
+            if modelManager.isAnyModelDownloading && !modelManager.hasModel {
+                VStack(spacing: 4) {
+                    Text("Download will continue in background")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("You can start using the app now - transcription will be available once the model is ready")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 8)
+            }
+
+            // Active model picker (only if models are downloaded and no compilation error)
             if !modelManager.downloadedModels.isEmpty {
                 activeModelPicker
                     .padding(.top, 4)
             }
-            
+
             Spacer()
-            
+
             Button("Continue") {
                 withAnimation {
                     setStep(.llmSetup)
@@ -430,11 +549,18 @@ struct OnboardingView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!modelManager.hasModel)
+            // Enable Continue once user has initiated a download OR a model is ready
+            .disabled(!userHasInitiatedDownload && !modelManager.hasModel)
         }
         .padding(.horizontal, 40)
         .padding(.top, 24)
         .padding(.bottom, 8) // Reduced since progress indicator now has more bottom padding
+        .onAppear {
+            // If user already has models, mark as initiated
+            if modelManager.hasModel || modelManager.isAnyModelBusy {
+                userHasInitiatedDownload = true
+            }
+        }
     }
     
     // MARK: - LLM Setup Screen
@@ -546,11 +672,21 @@ struct OnboardingView: View {
             HStack(spacing: 6) {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
-                    .frame(width: 60)
+                    .frame(width: 50)
                 Text("\(Int(progress * 100))%")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(width: 35, alignment: .trailing)
+                    .frame(width: 30, alignment: .trailing)
+                // Cancel button
+                Button {
+                    llmManager.cancelDownload(model)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancel download")
             }
             
         case .loading:
@@ -631,41 +767,67 @@ struct OnboardingView: View {
     @ViewBuilder
     private func modelStatusView(for model: ModelManager.ModelSize) -> some View {
         let state = modelManager.downloadState(for: model)
-        
+
         switch state {
         case .idle, .checking:
             Button("Download") {
-                Task {
+                userHasInitiatedDownload = true
+                Task { @MainActor in
                     await modelManager.downloadModel(model)
                 }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            
+
         case .downloading(let progress):
             HStack(spacing: 6) {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
-                    .frame(width: 60)
+                    .frame(width: 50)
                 Text("\(Int(progress * 100))%")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(width: 35, alignment: .trailing)
+                    .frame(width: 30, alignment: .trailing)
+                // Cancel button
+                Button {
+                    modelManager.cancelDownload(model)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancel download")
             }
-            
+
+        case .compiling:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("Optimizing...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
         case .completed:
             HStack(spacing: 4) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                Text("Downloaded")
+                Text("Ready")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            
+
         case .failed(let error):
             Button("Retry") {
-                Task {
-                    await modelManager.downloadModel(model)
+                userHasInitiatedDownload = true
+                // If model is downloaded but compilation failed, retry compilation only
+                if modelManager.downloadedModels.contains(model) {
+                    modelManager.retryCompilation(model)
+                } else {
+                    Task { @MainActor in
+                        await modelManager.downloadModel(model)
+                    }
                 }
             }
             .buttonStyle(.bordered)
@@ -737,6 +899,19 @@ struct OnboardingView: View {
         viewModel.permissionManager.stopMonitoringPermissions()
         viewModel.permissionManager.permissionDidChange = nil
     }
+
+    private var isSystemAudioPermissionConfirmed: Bool {
+        if didConfirmSystemAudioThisSession {
+            return true
+        }
+
+        let preflightAllowsAutoAdvance = CGPreflightScreenCaptureAccess()
+        if !preflightAllowsAutoAdvance {
+            return false
+        }
+
+        return viewModel.hasScreenRecordingPermission
+    }
     
     // MARK: - File Selection
     
@@ -762,34 +937,76 @@ struct OnboardingView: View {
     }
     
     /// Advance to appropriate step based on current permissions
-    /// Skips past already-completed permission steps when user returns to the app
+    /// In first-time mode: no-op (user must click Continue on each screen)
+    /// In recovery mode: auto-advance when permissions are re-granted
     private func advanceBasedOnPermissions() {
-        // Determine the appropriate step based on current permissions
-        let targetStep: OnboardingStep
-        
-        if viewModel.hasScreenRecordingPermission && viewModel.hasMicrophonePermission {
-            // All permissions granted - go to model setup or complete
-            if !modelManager.hasModel {
-                targetStep = .modelSetup
-            } else if !llmManager.hasModel {
-                targetStep = .llmSetup
-            } else {
-                // All done - complete onboarding
-                completeOnboarding()
-                return
+        if currentStep == .welcome {
+            return
+        }
+
+        if viewModel.permissionManager.isSystemAudioProbeInFlight {
+            Task {
+                await DiagnosticLogger.shared.log(
+                    .onboarding,
+                    "Auto-advance deferred: system audio probe in flight"
+                )
             }
-        } else if viewModel.hasScreenRecordingPermission {
-            // Screen recording granted - skip to microphone
-            targetStep = .microphone
-        } else {
-            // No permissions yet - stay on current step (don't auto-advance from welcome)
+            return
+        }
+
+        Task {
+            await DiagnosticLogger.shared.log(
+                .onboarding,
+                """
+                Auto-advance check: systemAudioConfirmed=\(isSystemAudioPermissionConfirmed), \
+                mic=\(viewModel.hasMicrophonePermission), \
+                preflight=\(CGPreflightScreenCaptureAccess()), \
+                didConfirmThisSession=\(didConfirmSystemAudioThisSession)
+                """
+            )
+        }
+
+        // First-time onboarding: never auto-navigate (forward or backward).
+        // User must click Continue on each screen. UI updates (permission badges,
+        // Continue button enablement) are driven by refreshPermissions(), not this function.
+        if !mode.isRecoveryMode {
+            return
+        }
+
+        // --- Recovery mode only below this point ---
+
+        // Recovery mode: check if both permissions are now granted
+        if isSystemAudioPermissionConfirmed && viewModel.hasMicrophonePermission {
+            completeOnboardingForRecovery()
+            return
+        } else if isSystemAudioPermissionConfirmed && currentStep == .screenRecording {
+            // Screen recording granted, but mic still missing - advance to mic
+            setStep(.microphone)
+        }
+        // If still on mic step and mic not granted, stay there
+    }
+    
+    /// Complete onboarding after permission recovery
+    /// Verifies model exists before completing; redirects to model setup if missing
+    private func completeOnboardingForRecovery() {
+        // Verify model exists before completing
+        if !modelManager.hasModel {
+            // Edge case: models were deleted after initial onboarding
+            Task {
+                await DiagnosticLogger.shared.log(
+                    .onboarding,
+                    "Recovery: No model found, redirecting to model setup"
+                )
+            }
+            // In recovery mode, we need to show model setup
+            // This changes recovery to essentially require model setup completion
+            withAnimation { setStep(.modelSetup) }
             return
         }
         
-        // Only advance forward, never backward
-        if targetStep.rawValue > currentStep.rawValue {
-            setStep(targetStep)
-        }
+        // Close onboarding and show main window (don't call completeOnboarding()
+        // since hasCompletedOnboarding is already true)
+        AppDelegate.shared?.exitPermissionRecovery()
     }
     
     // MARK: - Complete Onboarding

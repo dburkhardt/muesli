@@ -43,3 +43,26 @@ docs/download-stats.json
 
 # Hidden scripts with credentials (never commit!)
 hidden_scripts/
+
+# Backup files
+*.bak
+
+# Build artifacts (precautionary)
+*.zip
+*.pkg
+
+# Agent-generated plan files (keep code_signing.md and todo.md)
+plans/*.plan.md
+
+# Cursor worktree config (machine-specific paths)
+.cursorworktrees.json
+
+# Claude local settings (per-developer)
+.claude/settings.local.json
+
+# Auto-generated build info (regenerated every build)
+Muesli/Utilities/BuildInfo.swift
+
+# WebRTC XCFramework (built locally or in CI)
+Muesli/Frameworks/webrtc_audio_processing.xcframework/
+Muesli/Frameworks/*.sha256

@@ -1,20 +1,8 @@
 import CoreMedia
 import Foundation
 
-// MARK: - AudioCaptureServiceProtocol
-
-/// Protocol for AudioCaptureService to enable mocking in tests
-protocol AudioCaptureServiceProtocol: Sendable {
-    var isRecording: Bool { get async }
-    
-    func setBufferHandler(_ handler: @escaping AudioBufferHandler) async
-    func setInterruptedHandler(_ handler: @escaping StreamInterruptedHandler) async
-    func setLevelHandler(_ handler: @escaping AudioLevelHandler) async
-    func setMicrophoneDevice(_ deviceID: String?) async
-    func startCapture() async throws
-    func startCapture(forBundleIdentifier bundleIdentifier: String) async throws
-    func stopCapture() async throws
-}
+// Note: AudioCaptureServiceProtocol is defined in AudioCaptureServiceProtocol.swift
+// The callback type aliases (AudioBufferHandler, etc.) are also defined there.
 
 // MARK: - TranscriptionServiceProtocol
 
@@ -41,7 +29,7 @@ protocol FileOutputServiceProtocol: Sendable {
     func setOutputDirectory(_ url: URL)
     func getOutputDirectory() -> URL
     func startWriting(segmentNumber: Int) throws -> URL
-    func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioCaptureService.AudioType)
+    func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioStreamType)
     func stopWriting() async throws -> URL
     func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL
     func saveTranscript(_ transcript: String, title: String, date: Date, to directory: URL) throws
@@ -66,15 +54,6 @@ protocol MeetingHistoryServiceProtocol {
     func loadOriginalTranscript(for meeting: MeetingHistoryItem) -> String?
 }
 
-// MARK: - MeetingAppDetectorProtocol
-
-/// Protocol for MeetingAppDetector to enable mocking in tests
-@MainActor
-protocol MeetingAppDetectorProtocol {
-    func detectMeetingApps() async -> [MeetingAppDetector.DetectedApp]
-    func refreshApps() async -> [MeetingAppDetector.DetectedApp]
-}
-
 // MARK: - PermissionManagerProtocol
 
 /// Protocol for PermissionManager to enable mocking in tests
@@ -86,7 +65,7 @@ protocol PermissionManagerProtocol {
     var hasAllPermissions: Bool { get }
     
     func checkScreenRecordingPermissionAsync() async -> Bool
-    func requestScreenRecordingPermission()
+    func requestScreenRecordingPermission() async -> Bool
     func openScreenRecordingSettings()
     func requestMicrophonePermission() async -> Bool
     func openMicrophoneSettings()
@@ -122,8 +101,11 @@ protocol ModelManagerProtocol: AnyObject {
     var activeModel: ModelManager.ModelSize? { get }
     var modelPath: URL? { get }
     var hasModel: Bool { get }
+    var isActiveModelReady: Bool { get }
+    var hasAnyReadyModel: Bool { get }
+    var firstReadyModel: ModelManager.ModelSize? { get }
     var modelDirectory: URL { get }
-    
+
     func pathForModel(_ model: ModelManager.ModelSize) -> URL?
     func isModelDownloaded(_ model: ModelManager.ModelSize) -> Bool
     func validateModel(_ model: ModelManager.ModelSize) -> Bool
@@ -136,6 +118,7 @@ protocol ModelManagerProtocol: AnyObject {
     func deleteModel(_ model: ModelManager.ModelSize) -> Bool
     func showModelsInFinder()
     func reset()
+    func retryCompilation(_ model: ModelManager.ModelSize)
 }
 
 // MARK: - LLMManagerProtocol
@@ -168,11 +151,21 @@ protocol LLMManagerProtocol: AnyObject {
 // MARK: - EchoCancellationServiceProtocol
 
 /// Protocol for EchoCancellationService to enable mocking in tests
+/// Uses sample-count synchronization instead of timestamps to avoid clock domain mismatch
 protocol EchoCancellationServiceProtocol: Sendable {
-    func storeSystemAudio(samples: [Float], timestamp: CMTime)
-    func processMicrophoneAudio(microphoneSamples: [Float], micTimestamp: CMTime) -> [Float]
+    func storeSystemAudio(samples: [Float])
+    func processMicrophoneAudio(microphoneSamples: [Float]) -> [Float]
     func reset()
+    func startDriftMonitoring()
 }
+
+extension EchoCancellationServiceProtocol {
+    /// Default no-op implementation for drift monitoring
+    func startDriftMonitoring() { /* default no-op */ }
+}
+
+// Note: TapAudioCaptureService now conforms to AudioCaptureServiceProtocol
+// defined in AudioCaptureServiceProtocol.swift - no separate protocol needed.
 
 // MARK: - ExportServiceProtocol
 

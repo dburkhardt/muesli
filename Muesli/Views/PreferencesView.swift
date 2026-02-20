@@ -233,6 +233,7 @@ struct GeneralPreferencesTab: View {
             }
             
             Section("Audio") {
+                #if DEBUG
                 Toggle(isOn: $prefs.isEchoCancellationEnabled) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Echo Cancellation")
@@ -242,6 +243,19 @@ struct GeneralPreferencesTab: View {
                     }
                 }
                 .toggleStyle(.switch)
+                #else
+                LabeledContent {
+                    Text("Automatic")
+                        .foregroundStyle(.secondary)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Echo Cancellation")
+                        Text("Managed by Muesli based on your audio device. Cannot be disabled.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                #endif
                 
                 LabeledContent("Audio Chunk Duration") {
                     Text(String(format: "%.1f seconds", prefs.audioChunkDuration))
