@@ -66,7 +66,12 @@ final class MicCaptureRing {
     
     /// Whether a discontinuity was detected since last reset
     private(set) var hasDiscontinuity: Bool = false
-    
+
+    private var callbackCount: Int = 0
+    private let warmupCallbackCount: Int = 10        // ~100ms before detection activates
+    private var debounceRemaining: Int = 0           // countdown after a detection fires
+    private let debounceDuration: Int = 5            // ~50ms suppression after a detection
+
     // MARK: - Overflow Tracking
     
     /// Number of times the buffer overflowed (capture grew too large)
@@ -113,12 +118,18 @@ final class MicCaptureRing {
         
         // Check for discontinuity using sample time (skip if invalid: sentinel -1)
         if sampleTime >= 0 {
-            if lastSampleTime > 0 {
+            callbackCount += 1
+            if debounceRemaining > 0 {
+                debounceRemaining -= 1
+            }
+            if lastSampleTime > 0 && callbackCount > warmupCallbackCount && debounceRemaining == 0 {
                 let deltaSamples = sampleTime - lastSampleTime
                 let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
+                let negativeTolerance = -Double(expectedSamplesPerCallback) / 2.0  // -5ms
 
-                if deltaSamples <= 0 || deltaSamples > threshold {
+                if deltaSamples < negativeTolerance || deltaSamples > threshold {
                     hasDiscontinuity = true
+                    debounceRemaining = debounceDuration
                 }
             }
             lastSampleTime = sampleTime + Float64(sampleCount)
@@ -314,6 +325,8 @@ final class MicCaptureRing {
         totalSamplesWritten = 0
         lastSampleTime = 0
         hasDiscontinuity = false
+        callbackCount = 0
+        debounceRemaining = 0
         overflowCount = 0
     }
     

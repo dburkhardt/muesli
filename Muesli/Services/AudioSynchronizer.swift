@@ -78,7 +78,7 @@ final class AudioSynchronizer {
     static let targetRenderLeadMs = 200
     
     /// Render lead band [150ms, 300ms]
-    static let minRenderLeadMs = 150
+    static let minRenderLeadMs = 100  // was 150; real-world lead is ~130ms
     static let maxRenderLeadMs = 300
     
     /// Max render buffer (600ms)
@@ -95,7 +95,18 @@ final class AudioSynchronizer {
     
     /// Minimum time without discontinuity for stable state (10 seconds)
     static let minNoDiscontinuitySeconds: TimeInterval = 10
-    
+
+    /// Debounce cooldown for repeated discontinuities (2 seconds)
+    static let discontinuityDebounceSeconds: TimeInterval = 2.0
+
+    // For testing only: allow overriding timing constants
+    struct TimingConfig {
+        var minNoDiscontinuitySeconds: TimeInterval = AudioSynchronizer.minNoDiscontinuitySeconds
+        var discontinuityDebounceSeconds: TimeInterval = AudioSynchronizer.discontinuityDebounceSeconds
+    }
+
+    private let timingConfig: TimingConfig
+
     // MARK: - Properties
     
     private let logger = Logger(subsystem: "com.muesli.app", category: "AudioSynchronizer")
@@ -142,17 +153,18 @@ final class AudioSynchronizer {
     
     // MARK: - Initialization
     
-    init() {
+    init(timingConfig: TimingConfig = TimingConfig()) {
+        self.timingConfig = timingConfig
         // Create ring buffers with plan-specified capacities
         renderRing = TapCaptureRing(capacityMs: Self.maxRenderBufferMs)
         captureRing = MicCaptureRing(capacityMs: Self.maxCaptureBufferMs)
         delayController = CoarseDelayController()
         driftTracker = DriftTracker()
-        
+
         // Pre-allocate output buffers (10ms at 48kHz)
         renderOutputBuffer = [Float](repeating: 0, count: Self.frameSizeSamples)
         captureOutputBuffer = [Float](repeating: 0, count: Self.frameSizeSamples)
-        
+
         logger.info("AudioSynchronizer initialized")
     }
     
@@ -256,6 +268,12 @@ final class AudioSynchronizer {
                 state = .stable
                 lastStableTime = Date()
                 delayController.unfreezeAdaptation()
+                let renderLeadSamples = renderRing.available - captureRing.available
+                logger.info("Synchronizer transitioned to stable from priming")
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples")
+                }
             } else {
                 // Continue priming - wait for render lead
                 return nil
@@ -269,6 +287,12 @@ final class AudioSynchronizer {
                 state = .stable
                 lastStableTime = Date()
                 delayController.unfreezeAdaptation()
+                let renderLeadSamples = renderRing.available - captureRing.available
+                logger.info("Synchronizer transitioned to stable from unstable")
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples")
+                }
             }
             fallthrough
             
@@ -395,18 +419,18 @@ final class AudioSynchronizer {
     func reset() {
         stateLock.lock()
         defer { stateLock.unlock() }
-        
+
         renderRing.reset()
         captureRing.reset()
         delayController.reset()
         driftTracker.reset()
-        
+
         state = .initializing
         lastStableTime = nil
         lastDiscontinuityTime = Date()
         outputSampleIndex = 0
         lastRenderHostTime = 0
-        
+
         stats.discontinuities += 1
 
         logger.info("Synchronizer reset")
@@ -415,6 +439,27 @@ final class AudioSynchronizer {
         Task {
             await DiagnosticLogger.shared.log(.aec,
                 "SYNC_RESET: discontinuities=\(logDiscontinuities)")
+        }
+    }
+
+    /// Reset the synchronizer for a brand-new recording session (no cooldown carry-over)
+    func resetForNewSession() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        renderRing.reset()
+        captureRing.reset()
+        delayController.reset()
+        driftTracker.reset()
+        state = .initializing
+        lastStableTime = nil
+        lastDiscontinuityTime = nil   // No cooldown for fresh session
+        outputSampleIndex = 0
+        lastRenderHostTime = 0
+        stats = SynchronizerStats()   // Fresh stats
+
+        logger.info("Synchronizer reset for new session")
+        Task {
+            await DiagnosticLogger.shared.log(.aec, "SYNC_RESET_NEW_SESSION")
         }
     }
     
@@ -440,7 +485,7 @@ final class AudioSynchronizer {
         // Check if enough time has passed without discontinuity
         var noRecentDiscontinuity = true
         if let lastDisc = lastDiscontinuityTime {
-            noRecentDiscontinuity = Date().timeIntervalSince(lastDisc) >= Self.minNoDiscontinuitySeconds / 2
+            noRecentDiscontinuity = Date().timeIntervalSince(lastDisc) >= timingConfig.minNoDiscontinuitySeconds / 2
         }
         
         return leadInBand && noRecentDiscontinuity
@@ -448,12 +493,19 @@ final class AudioSynchronizer {
     
     /// Handle discontinuity from either stream
     private func handleDiscontinuity(source: String) {
-        // Always refresh cooldown timer — repeated discontinuities must extend the
-        // cooldown window so canTransitionToStable() doesn't prematurely recover.
-        lastDiscontinuityTime = Date()
-
-        // Always count every discontinuity event for diagnostics
         stats.discontinuities += 1
+
+        let now = Date()
+        let shouldRefreshCooldown: Bool
+        if let lastDisc = lastDiscontinuityTime {
+            shouldRefreshCooldown = now.timeIntervalSince(lastDisc) >= timingConfig.discontinuityDebounceSeconds
+        } else {
+            shouldRefreshCooldown = true
+        }
+
+        if shouldRefreshCooldown {
+            lastDiscontinuityTime = now
+        }
 
         let isNewTransition = state != .unstable
         if isNewTransition {
@@ -464,19 +516,16 @@ final class AudioSynchronizer {
         if isNewTransition {
             logger.warning("Discontinuity detected from \(source)")
         } else {
-            logger.info("Repeated discontinuity from \(source) (cooldown extended)")
+            logger.info("Repeated discontinuity from \(source) (cooldown refreshed=\(shouldRefreshCooldown))")
         }
 
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "SYNC_DISCONTINUITY: source=\(source), total=\(logDiscontinuities), repeated=\(!isNewTransition)")
+                "SYNC_DISCONTINUITY: source=\(source), total=\(logDiscontinuities), repeated=\(!isNewTransition), cooldownRefreshed=\(shouldRefreshCooldown)")
         }
-        
-        // Clear discontinuity flags
+
         renderRing.clearDiscontinuity()
         captureRing.clearDiscontinuity()
-        
-        // Reset delay controller adaptation
         delayController.freezeAdaptation()
     }
     

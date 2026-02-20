@@ -292,6 +292,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         logger.info("Detected topology: \(String(describing: self.topologyMode))")
 
         // Configure synchronizer and AEC for topology
+        synchronizer.resetForNewSession()
+        aecProcessor.reset()
         synchronizer.configure(topologyMode: topologyMode)
         aecProcessor.configure(topology: topologyMode)
         resetAECRingsAndCounters()
@@ -330,10 +332,30 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
 
         // Start microphone capture
+        // Brief delay to let render ring accumulate lead before mic capture begins.
+        // Cancellation-safe: if cancelled during sleep, clean up all startup side effects.
+        do {
+            try await Task.sleep(for: .milliseconds(50))
+        } catch {
+            // Cancelled during priming — clean up tap and route listener before propagating
+            tapManager.stop()
+            if let token = routeChangeToken {
+                CoreAudioHelpers.removeRouteChangeListener(token)
+                routeChangeToken = nil
+            }
+            throw error
+        }
+
         do {
             try startMicrophoneCapture()
         } catch {
             logger.error("Failed to start microphone: \(error.localizedDescription)")
+            // Clean up tap and route listener so no partial-start state is left behind
+            tapManager.stop()
+            if let token = routeChangeToken {
+                CoreAudioHelpers.removeRouteChangeListener(token)
+                routeChangeToken = nil
+            }
             throw AudioCaptureError.microphoneStartFailed(error)
         }
 
@@ -374,9 +396,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         logger.info("Tap-based audio capture started")
 
         let logTopology = self.topologyMode
+        let logAECEnabled = isAECEnabled()
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "TAP_CAPTURE_START: topology=\(logTopology)")
+                "TAP_CAPTURE_START: topology=\(logTopology), aecEnabled=\(logAECEnabled)")
         }
     }
 

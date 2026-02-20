@@ -118,9 +118,17 @@ final class PreferencesManager {
     var isEchoCancellationEnabled: Bool {
         get { _isEchoCancellationEnabled }
         set {
+            let oldValue = _isEchoCancellationEnabled
             _isEchoCancellationEnabled = newValue
             echoCancellationLock.withLock { $0 = newValue }
             UserDefaults.standard.set(newValue, forKey: AppStorageKeys.echoCancellationEnabled)
+            if oldValue != newValue {
+                logger.info("Echo cancellation toggled: \(oldValue) -> \(newValue)")
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "AEC_TOGGLE: \(oldValue) -> \(newValue)")
+                }
+            }
         }
     }
     

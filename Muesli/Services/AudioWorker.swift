@@ -180,6 +180,8 @@ final class AudioWorker {
 
         workerThread = nil
 
+        let logAECEnabled = isAECEnabled()
+
         lock.lock()
         processedMicCallback = nil
         processedRenderCallback = nil
@@ -193,7 +195,7 @@ final class AudioWorker {
         Task {
             await DiagnosticLogger.shared.log(
                 .aec,
-                "AUDIO_WORKER_STOP: captureFrames=\(logCaptureFrames), renderFrames=\(logRenderFrames), missed=\(logMissed)"
+                "AUDIO_WORKER_STOP: captureFrames=\(logCaptureFrames), renderFrames=\(logRenderFrames), missed=\(logMissed), aecEnabled=\(logAECEnabled)"
             )
         }
     }

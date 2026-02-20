@@ -755,3 +755,241 @@ final class TapAudioCaptureServicePermissionTests: XCTestCase {
         try? await service.stopCapture()
     }
 }
+
+// MARK: - AEC Pipeline Regression Tests
+
+extension CoreAudioTapTests {
+
+    // MARK: - Ring Discontinuity Detection Tests
+
+    func testTapCaptureRingNoDiscontinuityOnValidGaps() {
+        let ring = TapCaptureRing(capacitySamples: 48000)
+        let samples = [Float](repeating: 0.1, count: 480)
+
+        // Push 20 callbacks with exact 480-sample gaps
+        for i in 0..<20 {
+            samples.withUnsafeBufferPointer { ptr in
+                ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: Float64(i * 480), hostTime: 0)
+            }
+        }
+
+        XCTAssertFalse(ring.hasDiscontinuity, "Valid 480-sample gaps should not trigger discontinuity")
+    }
+
+    func testTapCaptureRingNoDiscontinuityOnSlightlyNegativeDelta() {
+        let ring = TapCaptureRing(capacitySamples: 48000)
+        let samples = [Float](repeating: 0.1, count: 480)
+
+        // Push warmup callbacks
+        for i in 0..<15 {
+            samples.withUnsafeBufferPointer { ptr in
+                ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: Float64(i * 480), hostTime: 0)
+            }
+        }
+
+        // Push with -2 sample delta (within -240 tolerance)
+        let lastExpected = Float64(15 * 480)
+        samples.withUnsafeBufferPointer { ptr in
+            ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: lastExpected - 2, hostTime: 0)
+        }
+
+        XCTAssertFalse(ring.hasDiscontinuity, "-2 sample delta should not trigger discontinuity (tolerance is -240)")
+    }
+
+    func testTapCaptureRingDiscontinuityOnLargeGap() {
+        let ring = TapCaptureRing(capacitySamples: 96000)
+        let samples = [Float](repeating: 0.1, count: 480)
+
+        // Push warmup callbacks
+        for i in 0..<15 {
+            samples.withUnsafeBufferPointer { ptr in
+                ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: Float64(i * 480), hostTime: 0)
+            }
+        }
+        XCTAssertFalse(ring.hasDiscontinuity, "No discontinuity during normal operation")
+
+        // Push with 48000-sample gap (1 second) — should fire immediately
+        let nextTime = Float64(15 * 480) + 48000
+        samples.withUnsafeBufferPointer { ptr in
+            ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: nextTime, hostTime: 0)
+        }
+
+        XCTAssertTrue(ring.hasDiscontinuity, "48000-sample gap should trigger discontinuity")
+    }
+
+    func testTapCaptureRingWarmupSuppression() {
+        let ring = TapCaptureRing(capacitySamples: 48000)
+        let samples = [Float](repeating: 0.1, count: 480)
+
+        // Push with irregular gap during first 10 callbacks (warmup)
+        samples.withUnsafeBufferPointer { ptr in
+            ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: 0, hostTime: 0)
+        }
+
+        // Large gap during warmup — should be suppressed
+        samples.withUnsafeBufferPointer { ptr in
+            ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: 48000, hostTime: 0)
+        }
+
+        XCTAssertFalse(ring.hasDiscontinuity, "Irregular gaps during warmup should be suppressed")
+    }
+
+    func testTapCaptureRingDebounceFirstEventFires() {
+        let ring = TapCaptureRing(capacitySamples: 96000)
+        let samples = [Float](repeating: 0.1, count: 480)
+
+        // Push warmup callbacks (11 to pass warmup threshold of 10)
+        for i in 0..<11 {
+            samples.withUnsafeBufferPointer { ptr in
+                ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: Float64(i * 480), hostTime: 0)
+            }
+        }
+        XCTAssertFalse(ring.hasDiscontinuity, "No discontinuity after normal warmup")
+
+        // First genuine discontinuity fires immediately (debounceRemaining starts at 0)
+        let nextTime = Float64(11 * 480) + 48000
+        samples.withUnsafeBufferPointer { ptr in
+            ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: nextTime, hostTime: 0)
+        }
+
+        XCTAssertTrue(ring.hasDiscontinuity, "First discontinuity after warmup should fire immediately")
+    }
+
+    func testMicCaptureRingNoDiscontinuityOnSlightlyNegativeDelta() {
+        let ring = MicCaptureRing(capacitySamples: 48000)
+        let samples = [Float](repeating: 0.1, count: 480)
+
+        // Push warmup callbacks
+        for i in 0..<15 {
+            samples.withUnsafeBufferPointer { ptr in
+                ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: Float64(i * 480), hostTime: 0)
+            }
+        }
+
+        // Push with -2 sample delta (within tolerance)
+        let lastExpected = Float64(15 * 480)
+        samples.withUnsafeBufferPointer { ptr in
+            ring.push(samples: ptr.baseAddress!, count: 480, sampleTime: lastExpected - 2, hostTime: 0)
+        }
+
+        XCTAssertFalse(ring.hasDiscontinuity, "-2 sample delta should not trigger discontinuity in mic ring")
+    }
+
+    // MARK: - AudioSynchronizer Regression Tests
+
+    func testSynchronizerResetForNewSessionNoCooldown() {
+        let synchronizer = AudioSynchronizer()
+
+        // Simulate some state
+        var samples = [Float](repeating: 0.5, count: 480)
+        samples.withUnsafeBufferPointer { ptr in
+            synchronizer.pushRender(samples: ptr.baseAddress!, count: 480, sampleTime: 0, hostTime: 0)
+            synchronizer.pushCapture(samples: ptr.baseAddress!, count: 480, sampleTime: 0, hostTime: 0)
+        }
+
+        synchronizer.resetForNewSession()
+
+        XCTAssertEqual(synchronizer.state, .initializing)
+        let stats = synchronizer.getStats()
+        XCTAssertEqual(stats.discontinuities, 0, "Fresh session should have 0 discontinuities")
+        XCTAssertEqual(stats.framesProcessed, 0, "Fresh session should have 0 frames processed")
+    }
+
+    func testSynchronizerStableGateWithModerateRenderLead() {
+        // Use fast timing config so we don't need to wait real seconds
+        let config = AudioSynchronizer.TimingConfig(
+            minNoDiscontinuitySeconds: 0.0,  // No waiting
+            discontinuityDebounceSeconds: 0.0
+        )
+        let synchronizer = AudioSynchronizer(timingConfig: config)
+
+        let silence = [Float](repeating: 0, count: 480)
+
+        // Push render lead of ~130ms (6240 samples = 13 frames)
+        // This is between old threshold (150ms=7200) and new threshold (100ms=4800)
+        for i in 0..<13 {
+            silence.withUnsafeBufferPointer { ptr in
+                synchronizer.pushRender(samples: ptr.baseAddress!, count: 480, sampleTime: Float64(i * 480), hostTime: 0)
+            }
+        }
+
+        // Push one capture frame
+        silence.withUnsafeBufferPointer { ptr in
+            synchronizer.pushCapture(samples: ptr.baseAddress!, count: 480, sampleTime: 0, hostTime: 0)
+        }
+
+        // Try to get aligned frame — should transition through priming to stable
+        let frame = synchronizer.getAlignedFrame()
+
+        XCTAssertNotNil(frame, "Should produce aligned frame with 130ms render lead (>100ms threshold)")
+        XCTAssertEqual(synchronizer.state, .stable, "Should transition to stable with 130ms lead")
+    }
+
+    func testSynchronizerStableAfterDiscontinuityFlood() {
+        // Fast timing: 100ms debounce, 200ms recovery
+        let config = AudioSynchronizer.TimingConfig(
+            minNoDiscontinuitySeconds: 0.2,
+            discontinuityDebounceSeconds: 0.1
+        )
+        let synchronizer = AudioSynchronizer(timingConfig: config)
+
+        let silence = [Float](repeating: 0, count: 480)
+
+        // Helper to push a normal render frame
+        func pushRender(_ i: Int) {
+            silence.withUnsafeBufferPointer { ptr in
+                synchronizer.pushRender(samples: ptr.baseAddress!, count: 480,
+                                        sampleTime: Float64(i * 480), hostTime: 0)
+            }
+        }
+
+        // Warmup: push 15 normal render frames to clear ring debounce/warmup
+        for i in 0..<15 { pushRender(i) }
+        silence.withUnsafeBufferPointer { ptr in
+            synchronizer.pushCapture(samples: ptr.baseAddress!, count: 480, sampleTime: 0, hostTime: 0)
+        }
+
+        // Drive a flood of real discontinuities through pushRender (1-second gaps).
+        // The cooldown-debounce means only the first of each pair within 100ms refreshes
+        // lastDiscontinuityTime; subsequent rapid ones are suppressed.
+        // We send 10 discontinuous frames in rapid succession.
+        var baseSampleTime = Float64(15 * 480)
+        for _ in 0..<10 {
+            baseSampleTime += 48000  // 1-second jump each time
+            silence.withUnsafeBufferPointer { ptr in
+                synchronizer.pushRender(samples: ptr.baseAddress!, count: 480,
+                                        sampleTime: baseSampleTime, hostTime: 0)
+            }
+        }
+
+        // Synchronizer should be unstable now
+        // (state may be .unstable or still .initializing depending on prior transitions)
+
+        // Wait just past the recovery window (minNoDiscontinuitySeconds / 2 = 0.1s, so 0.15s is enough)
+        Thread.sleep(forTimeInterval: 0.25)
+
+        // Re-push enough stable render lead + capture to satisfy canTransitionToStable
+        let recoveryBase = Int(baseSampleTime / 480) + 1
+        for i in 0..<20 {
+            silence.withUnsafeBufferPointer { ptr in
+                synchronizer.pushRender(samples: ptr.baseAddress!, count: 480,
+                                        sampleTime: Float64((recoveryBase + i) * 480), hostTime: 0)
+            }
+        }
+        silence.withUnsafeBufferPointer { ptr in
+            synchronizer.pushCapture(samples: ptr.baseAddress!, count: 480,
+                                     sampleTime: Float64(recoveryBase * 480), hostTime: 0)
+        }
+
+        let frame = synchronizer.getAlignedFrame()
+        XCTAssertNotNil(frame, "Should recover to stable after discontinuity flood + wait")
+
+        // Also verify that total discontinuity count is bounded:
+        // 10 large-gap pushes, but the ring's debounce (5-callback window) means not all
+        // of them fire as ring-level discontinuities. The synchronizer discontinuity count
+        // should be well under 10.
+        let stats = synchronizer.getStats()
+        XCTAssertLessThan(stats.discontinuities, 10,
+            "Debounce should limit synchronizer discontinuity count during a rapid flood")
+    }
+}

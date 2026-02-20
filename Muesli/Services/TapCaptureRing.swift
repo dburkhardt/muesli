@@ -52,9 +52,9 @@ final class TapCaptureRing {
     
     /// Target render lead in samples (200ms at 48kHz)
     static let targetRenderLeadSamples: Int = 9600
-    
-    /// Allowed render lead band (150ms to 300ms at 48kHz)
-    static let minRenderLeadSamples: Int = 7200
+
+    /// Allowed render lead band (100ms to 300ms at 48kHz)
+    static let minRenderLeadSamples: Int = 4800
     static let maxRenderLeadSamples: Int = 14400
     
     // MARK: - Properties
@@ -96,7 +96,12 @@ final class TapCaptureRing {
     
     /// Whether a discontinuity was detected since last reset
     private(set) var hasDiscontinuity: Bool = false
-    
+
+    private var callbackCount: Int = 0
+    private let warmupCallbackCount: Int = 10        // ~100ms before detection activates
+    private var debounceRemaining: Int = 0           // countdown after a detection fires
+    private let debounceDuration: Int = 5            // ~50ms suppression after a detection
+
     // MARK: - Initialization
     
     /// Create a ring buffer with capacity in milliseconds
@@ -137,12 +142,18 @@ final class TapCaptureRing {
         
         // Check for discontinuity using sample time (skip if invalid: sentinel -1)
         if sampleTime >= 0 {
-            if lastSampleTime > 0 {
+            callbackCount += 1
+            if debounceRemaining > 0 {
+                debounceRemaining -= 1
+            }
+            if lastSampleTime > 0 && callbackCount > warmupCallbackCount && debounceRemaining == 0 {
                 let deltaSamples = sampleTime - lastSampleTime
                 let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
+                let negativeTolerance = -Double(expectedSamplesPerCallback) / 2.0  // -5ms
 
-                if deltaSamples <= 0 || deltaSamples > threshold {
+                if deltaSamples < negativeTolerance || deltaSamples > threshold {
                     hasDiscontinuity = true
+                    debounceRemaining = debounceDuration
                 }
             }
             lastSampleTime = sampleTime + Float64(sampleCount)
@@ -308,6 +319,8 @@ final class TapCaptureRing {
         totalSamplesWritten = 0
         lastSampleTime = 0
         hasDiscontinuity = false
+        callbackCount = 0
+        debounceRemaining = 0
     }
     
     /// Clear discontinuity flag
