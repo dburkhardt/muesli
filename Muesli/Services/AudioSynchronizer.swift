@@ -398,6 +398,14 @@ final class AudioSynchronizer {
         defer { stateLock.unlock() }
         return state == .stable
     }
+
+    /// Current coarse delay in milliseconds (render-to-capture).
+    /// Lightweight read — used by AudioWorker to pass delay to AEC3 via setStreamDelayMs.
+    var coarseDelayMs: Int {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return Int(Double(delayController.currentDelaySamples) / Double(Self.sampleRate) * 1000)
+    }
     
     /// Get current statistics
     func getStats() -> SynchronizerStats {

@@ -319,6 +319,13 @@ final class AudioWorker {
             let processStart = DispatchTime.now()
             let processedCapture: [Float]
             if aecEnabled {
+                // Set render-to-capture delay before each capture frame.
+                // AEC3 compiled with use_external_delay_estimator=true requires this call
+                // to know the acoustic echo path delay. Without it, AEC3 assumes delay=0
+                // and cannot converge — ERLE stays pinned at ~0 dB regardless of signal quality.
+                let delayMs = synchronizer.coarseDelayMs
+                aecProcessor.setStreamDelayMs(delayMs)
+
                 processedCapture = aecProcessor.processCaptureFrame(
                     captureFrameBuffer,
                     isStable: synchronizer.isStable

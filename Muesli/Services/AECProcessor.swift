@@ -298,6 +298,20 @@ final class AECProcessor {
         }
     }
     
+    /// Set the render-to-capture stream delay for AEC3's internal model.
+    /// Must be called once per 10ms block, before processCaptureFrame.
+    /// AEC3 compiled with use_external_delay_estimator=true requires this — without it,
+    /// it assumes delay=0 and cannot converge regardless of signal quality.
+    /// - Parameter delayMs: Coarse delay from AudioSynchronizer (render-lead based)
+    @discardableResult
+    func setStreamDelayMs(_ delayMs: Int) -> Bool {
+        guard delayMs >= 0 else { return false }
+        return stateLock.withLock { state -> Bool in
+            guard let bridge = state.bridge, bridge.isReady else { return false }
+            return bridge.setStreamDelayMs(Int32(delayMs))
+        }
+    }
+
     /// Reset AEC state
     func reset() {
         let statsSnapshot = stateLock.withLock { state -> AECStats in
