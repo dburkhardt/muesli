@@ -13,7 +13,10 @@
 #
 set -euo pipefail
 
+# Pin exact upstream commit for reproducible builds.
+# v2.1 tag resolves to this commit in freedesktop/webrtc-audio-processing.
 WEBRTC_VERSION="v2.1"
+WEBRTC_COMMIT="c5a2a02a196d1c9dbe5e28b393b5cf634a35e711"
 WEBRTC_REPO="https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing.git"
 BUILD_DIR="/tmp/webrtc-audio-processing-build"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,6 +27,7 @@ MACOS_MIN_VERSION="13.0"
 
 echo "=== WebRTC Audio Processing Build Script ==="
 echo "Version: $WEBRTC_VERSION"
+echo "Commit:  $WEBRTC_COMMIT"
 echo "Output:  $OUTPUT_DIR"
 echo ""
 
@@ -45,17 +49,27 @@ fi
 
 echo "All dependencies found."
 
-# 2. Clone if needed
-if [ ! -d "$BUILD_DIR" ]; then
-    echo ""
-    echo "Cloning webrtc-audio-processing $WEBRTC_VERSION..."
-    git clone --branch "$WEBRTC_VERSION" --depth 1 "$WEBRTC_REPO" "$BUILD_DIR"
-else
-    echo ""
-    echo "Using existing source at $BUILD_DIR"
-fi
+# 2. Clone pinned source commit (clean checkout every run)
+echo ""
+echo "Cloning webrtc-audio-processing $WEBRTC_VERSION at pinned commit..."
+rm -rf "$BUILD_DIR"
+git clone --branch "$WEBRTC_VERSION" --depth 1 "$WEBRTC_REPO" "$BUILD_DIR"
 
 cd "$BUILD_DIR"
+
+ACTUAL_COMMIT="$(git rev-parse HEAD)"
+if [ "$ACTUAL_COMMIT" != "$WEBRTC_COMMIT" ]; then
+    echo "ERROR: Expected commit $WEBRTC_COMMIT but got $ACTUAL_COMMIT"
+    exit 1
+fi
+echo "Using pinned commit: $ACTUAL_COMMIT"
+
+# Encourage reproducible archive metadata.
+export LC_ALL=C
+export ZERO_AR_DATE=1
+SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$WEBRTC_COMMIT")"
+export SOURCE_DATE_EPOCH
+echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
 
 # 2.1 Patch: force external delay estimator for AEC3
 # The public API doesn't expose EchoCanceller3Config, so we patch the
@@ -190,7 +204,13 @@ cp -R install_arm64/include/* universal/include/
 # Merge all .a files into a single archive for XCFramework
 echo ""
 echo "Merging libraries into single archive..."
-libtool -static -o universal/lib/libwebrtc-audio-all.a universal/lib/*.a
+STATIC_LIB_LIST="$BUILD_DIR/static-libs.txt"
+find universal/lib -maxdepth 1 -name "*.a" ! -name "libwebrtc-audio-all.a" -print | sort > "$STATIC_LIB_LIST"
+if [ ! -s "$STATIC_LIB_LIST" ]; then
+    echo "ERROR: No static libraries found to merge"
+    exit 1
+fi
+xargs libtool -static -o universal/lib/libwebrtc-audio-all.a < "$STATIC_LIB_LIST"
 
 echo ""
 echo "Creating XCFramework..."

@@ -26,6 +26,7 @@ on:
 
 permissions:
   contents: write  # Required for creating releases and pushing commits
+  actions: read  # Required for reading CI artifacts for reproducibility checks
   attestations: write  # Required for artifact attestations
   id-token: write  # Required for artifact attestations
 
@@ -89,7 +90,8 @@ jobs:
         uses: actions/cache@v5
         with:
           path: Muesli/Frameworks/webrtc_audio_processing.xcframework
-          key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.XCODE_VERSION }}-release-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
+          # Match CI cache key exactly so release reuses the same prebuilt WebRTC artifact.
+          key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.XCODE_VERSION }}-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
 
       - name: Install WebRTC Build Dependencies
         if: steps.cache-webrtc.outputs.cache-hit != 'true'
@@ -140,6 +142,98 @@ jobs:
           name: webrtc-fingerprint-release-${{ github.sha }}
           path: webrtc-fingerprint.json
           retention-days: 90
+
+      - name: Resolve expected CI WebRTC fingerprint
+        id: ci-webrtc-fingerprint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          REPO="${{ github.repository }}"
+          SHA="${{ github.sha }}"
+          ARTIFACT_NAME="webrtc-fingerprint-ci-${SHA}"
+          API="https://api.github.com/repos/${REPO}"
+
+          echo "Looking for CI fingerprint artifact '${ARTIFACT_NAME}' for commit ${SHA}"
+
+          ARTIFACT_ID=""
+          CI_RUN_ID=""
+
+          for attempt in $(seq 1 40); do
+            RUNS_JSON=$(curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=20")
+
+            CI_RUN_ID=$(echo "${RUNS_JSON}" | jq -r '.workflow_runs[] | select(.status=="completed" and .conclusion=="success") | .id' | head -n1)
+
+            if [ -n "${CI_RUN_ID}" ]; then
+              ARTIFACTS_JSON=$(curl -fsSL \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "${API}/actions/runs/${CI_RUN_ID}/artifacts?per_page=100")
+
+              ARTIFACT_ID=$(echo "${ARTIFACTS_JSON}" | jq -r --arg NAME "${ARTIFACT_NAME}" '.artifacts[] | select(.name==$NAME and .expired==false) | .id' | head -n1)
+              if [ -n "${ARTIFACT_ID}" ]; then
+                break
+              fi
+            fi
+
+            echo "CI fingerprint artifact not ready yet (attempt ${attempt}/40); retrying in 30s..."
+            sleep 30
+          done
+
+          if [ -z "${ARTIFACT_ID}" ] || [ -z "${CI_RUN_ID}" ]; then
+            echo "❌ Could not find CI fingerprint artifact '${ARTIFACT_NAME}' for commit ${SHA}."
+            echo "Expected a successful CI run on main to publish this artifact before release."
+            exit 1
+          fi
+
+          echo "Found artifact id ${ARTIFACT_ID} from CI run ${CI_RUN_ID}"
+
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -o ci-webrtc-fingerprint.zip \
+            "${API}/actions/artifacts/${ARTIFACT_ID}/zip"
+
+          rm -rf ci-webrtc-fingerprint
+          mkdir -p ci-webrtc-fingerprint
+          unzip -q ci-webrtc-fingerprint.zip -d ci-webrtc-fingerprint
+
+          EXPECTED_FINGERPRINT=$(jq -r '.fingerprint' ci-webrtc-fingerprint/webrtc-fingerprint-ci.json)
+          if [ -z "${EXPECTED_FINGERPRINT}" ] || [ "${EXPECTED_FINGERPRINT}" = "null" ]; then
+            echo "❌ CI artifact is missing a valid fingerprint value"
+            exit 1
+          fi
+
+          echo "fingerprint=${EXPECTED_FINGERPRINT}" >> "$GITHUB_OUTPUT"
+          echo "ci_run_id=${CI_RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "CI WebRTC fingerprint: ${EXPECTED_FINGERPRINT}"
+
+      - name: Verify release WebRTC fingerprint matches CI
+        run: |
+          set -euo pipefail
+          RELEASE_FINGERPRINT="${{ steps.webrtc-fingerprint.outputs.fingerprint }}"
+          CI_FINGERPRINT="${{ steps.ci-webrtc-fingerprint.outputs.fingerprint }}"
+          CI_RUN_ID="${{ steps.ci-webrtc-fingerprint.outputs.ci_run_id }}"
+
+          echo "Release WebRTC fingerprint: ${RELEASE_FINGERPRINT}"
+          echo "CI WebRTC fingerprint: ${CI_FINGERPRINT} (run ${CI_RUN_ID})"
+
+          if [ "${RELEASE_FINGERPRINT}" != "${CI_FINGERPRINT}" ]; then
+            echo "❌ WebRTC fingerprint mismatch between release and CI."
+            echo "This indicates non-reproducible AEC dependency output; aborting release."
+            exit 1
+          fi
+
+          echo "✅ Release WebRTC fingerprint matches CI"
+          echo "## WebRTC Reproducibility Gate" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- CI run: ${CI_RUN_ID}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Fingerprint: \`${RELEASE_FINGERPRINT}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Result: ✅ release matches CI output" >> "$GITHUB_STEP_SUMMARY"
       
       - name: Install create-dmg and fileicon
         run: |
