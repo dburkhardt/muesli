@@ -168,6 +168,9 @@ jobs:
 
   build-release:
     name: Build Release Configuration
+    # Only run on push to main or manual dispatch so the fingerprint artifact
+    # is keyed by the real commit SHA (not a PR merge-commit SHA).
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: macos-26
     timeout-minutes: 30
 

@@ -260,11 +260,8 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         for folderURL in contents {
             let folderName = folderURL.lastPathComponent
             
-            // Check if this folder matches our model
-            // Match by rawValue (e.g., "base" matches "openai_whisper-base")
-            // or by the full expected pattern
-            if folderName.contains(model.rawValue) || 
-               folderName == "openai_whisper-\(model.whisperKitName)" {
+            // Check if this folder matches our model without ambiguous substring matches.
+            if folderNameMatchesModel(folderName, model: model) {
                 // Verify it's actually a valid model directory
                 if FileManager.default.fileExists(atPath: folderURL.path) {
                     // Store this path for future use
@@ -277,6 +274,12 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         }
         
         return nil
+    }
+
+    /// Match a folder name to a model without ambiguous substring checks.
+    /// Example: "large-v3-v20240930" must NOT match "..._turbo".
+    private func folderNameMatchesModel(_ folderName: String, model: ModelSize) -> Bool {
+        folderName == "openai_whisper-\(model.whisperKitName)" || folderName.hasSuffix(model.rawValue)
     }
     
     // MARK: - Model Status
@@ -588,7 +591,7 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         // Find and remove the partial model folder
         for folderURL in contents {
             let folderName = folderURL.lastPathComponent
-            if folderName.contains(model.rawValue) || folderName == "openai_whisper-\(model.whisperKitName)" {
+            if folderNameMatchesModel(folderName, model: model) {
                 do {
                     try FileManager.default.removeItem(at: folderURL)
                     Self.logger.info("Cleaned up partial download at: \(folderURL.path)")
