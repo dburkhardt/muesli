@@ -166,9 +166,9 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "${API}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=20")
 
-            # Accept any completed CI run (success or failure) — the build-release job
-            # uploads the fingerprint artifact independently of test results.
-            CANDIDATE_RUN_IDS=$(echo "${RUNS_JSON}" | jq -r '.workflow_runs[] | select(.status=="completed") | .id')
+            # Accept CI runs that are still in progress as well as completed:
+            # build-release uploads the fingerprint artifact before the full test job finishes.
+            CANDIDATE_RUN_IDS=$(echo "${RUNS_JSON}" | jq -r '.workflow_runs[] | select(.status=="in_progress" or .status=="completed") | .id')
 
             for CI_RUN_ID in ${CANDIDATE_RUN_IDS}; do
               ARTIFACTS_JSON=$(curl -fsSL \
@@ -189,7 +189,7 @@ jobs:
 
           if [ -z "${ARTIFACT_ID}" ] || [ -z "${CI_RUN_ID}" ]; then
             echo "❌ Could not find CI fingerprint artifact '${ARTIFACT_NAME}' for commit ${SHA}."
-            echo "Expected a successful CI run on main to publish this artifact before release."
+            echo "Expected a CI build-release job for this commit to publish this artifact before release."
             exit 1
           fi
 
