@@ -14,52 +14,6 @@ Each item should include:
 
 ## In Progress
 
-### Onboarding - Background Model Downloads
-
-**[Enhancement]** [High] Add background downloading during onboarding
-
-Add a cancel button to the download step in the onboarding flow and enable background downloading as users proceed through the setup.
-
-**Requirements:**
-
-1. **Select background download for transcription model**
-   - User selects their preferred transcription model
-   - Download starts in the background
-   - User can proceed to next step without waiting
-
-2. **Select and download refinement models in background**
-   - User selects refinement model preferences
-   - All model downloads happen in the background
-   - User can complete onboarding while downloads continue
-
-3. **Main window download indicator**
-   - Show indicator in main window UI that transcription models are downloading
-   - Clearly communicate that transcription is unavailable until download completes
-   - Allow users to record meetings even while models download (reprocess later)
-   - Cancel button to abort downloads if needed
-
-**UX Flow:**
-
-```
-Onboarding Step: Transcription Model
-├── Select model (e.g., small, base, large)
-├── "Download in background" option/button
-└── Proceed to next step →
-
-Onboarding Step: Refinement Model
-├── Select refinement model preferences
-├── Downloads start in background
-└── Complete onboarding →
-
-Main Window (post-onboarding)
-├── Download progress indicator (if downloads in progress)
-├── "Transcription unavailable until download completes" message
-├── Record button still enabled (can reprocess later)
-└── Cancel download button
-```
-
----
-
 ### Website - Capture and Publish Screenshots
 
 **[Enhancement]** [High] Capture and publish app screenshots for website
@@ -214,18 +168,6 @@ Main Window (post-onboarding)
 - Effort: ~2-3 days
 - Rationale: Beta tester feedback that transcription quality lags behind Teams/Zoom/Granola
 
-**[Enhancement]** [High] Improve New Recording and Copy button UI
-- Description: Make primary actions more visually prominent and intuitive
-- Changes needed:
-  - New Recording button: Replace simple "+" icon with blue button containing "New +" text
-    - Style: Blue background (accent color), white text
-    - Makes primary action more obvious and discoverable
-  - Copy Transcript button: Simplify to just copy icon (standard document copy icon)
-    - Remove text label, just show icon like typical markdown file viewers
-    - More compact, cleaner appearance
-- Related: UnifiedHistoryView.swift, RecordingDetailView.swift, CompletedMeetingWindow.swift
-- Priority: High - affects primary user actions and first impressions
-
 **[Enhancement]** [Medium] Improve LLM model download progress bar accuracy
 - Description: The Llama 3.2 3B download progress jumps quickly from 0-85% then slows dramatically from 85-100%
 - Notes: Observed during onboarding flow. Progress reporting doesn't accurately reflect actual work.
@@ -256,17 +198,6 @@ Main Window (post-onboarding)
 
 ### Refactoring
 
-**[Refactor]** [Medium] Update agent instructions for test execution
-- Description: Clarify in AGENTS.md how agents should run tests, capture results, and extract information efficiently
-- Notes: Should cover:
-  - Running tests with output capture (tee vs direct output)
-  - Extracting specific test results (grep patterns for failures, specific tests)
-  - Best practices for test iteration (avoid re-running just to see different output)
-  - Understanding XCTest output format
-- Would improve agent efficiency and reduce unnecessary test runs
-- Related: AGENTS.md, MuesliTests/, test execution workflows
-- Status: Partial - commands/run_tests.md created
-
 **[Refactor]** [Low] Create commands/ directory with common agent commands
 - Description: Add commands/ directory containing commonly used command scripts for agents
 - Notes: Could include:
@@ -293,12 +224,6 @@ Main Window (post-onboarding)
 - Focus on edge cases and error paths that are easy to miss
 - Related: Testing infrastructure, CI/CD workflows
 
-**[Refactor]** [Low] Enforce SwiftLint in CI
-- Description: Fix all existing lint violations and remove continue-on-error from CI
-- Notes: Currently advisory only. Need baseline cleanup first before enforcing strict mode.
-- Related: .swiftlint.yml, .github/workflows/ci.yml
-- Status: Configuration complete in v0.1.2, enforcement pending
-
 **[Refactor]** [Low] Use GitHub milestones and project plans for release management
 - Description: Implement GitHub milestones and project plans to better organize and track release cycles
 - Notes: Would provide better visibility into what features/fixes are planned for each release version, integrate with PR workflow
@@ -321,6 +246,27 @@ Main Window (post-onboarding)
 ## Completed
 
 Archive completed items here with completion date.
+
+### v0.6.0 - 2026-02-20
+
+**[Enhancement]** Onboarding - Background Model Downloads
+- Completed: Downloads continue in background while user proceeds through onboarding; main window shows download progress indicator with cancel button
+- Files: DownloadIndicatorView.swift, OnboardingView.swift, MuesliViewModel.swift
+- Features: "Download will continue in background" messaging, Continue button enabled once download initiated, DownloadIndicatorView with per-model progress + cancel, CompactDownloadIndicator for constrained layouts
+- Branch: feat/audio-aec-pipeline
+
+**[Enhancement]** Improve New Recording and Copy button UI
+- Completed: New Recording button has "New +" text with accent color background; Copy Transcript button is icon-only (doc.on.doc)
+- Files: UnifiedHistoryView.swift, CopyTranscriptButton.swift
+- Branch: release/v0.1.2-polish
+
+**[Refactor]** Enforce SwiftLint in CI
+- Completed: `swiftlint lint --strict` runs on all changed Swift files as a required (non-advisory) CI check
+- Files: .github/workflows/ci.yml
+- Notes: Phase A rollout - strict on changed files only, not whole codebase
+
+**[Refactor]** Update agent instructions for test execution
+- Completed: Comprehensive `.cursor/commands/run_tests.md` and `spec/local_testing_workflow.md` document full test workflow, output capture patterns, result parsing, and best practices
 
 ### v0.1.2 - 2026-01-19
 
