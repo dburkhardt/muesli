@@ -188,6 +188,9 @@ CI builds (`ci.yml`) are intentionally **unsigned** for speed and fork compatibi
 
 **CI workflow details**:
 - `test` job: Builds + runs tests with coverage (single `xcodebuild test` invocation)
+- CI skips heaviest test classes (~400 tests) to keep runs under ~25 min; full suite runs locally
+- Skipped in CI: MuesliViewModelTests, TranscriptionServiceTests, FileOutputServiceTests, EchoCancellationServiceTests, CoreAudioTapTests, ModelManagerTests
+- Run full suite locally: `xcodebuild -project Muesli.xcodeproj -scheme Muesli test`
 - `lint` job: Runs SwiftLint (no build required)
 - `build-release` job: Verifies Release configuration compiles (unsigned)
 - All jobs have timeout guards (30 min for build jobs, 10 min for lint)
