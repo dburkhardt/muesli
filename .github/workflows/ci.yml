@@ -43,6 +43,9 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Download Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
       - name: Cache Swift Package Manager dependencies
         uses: actions/cache@v5
         with:
@@ -179,6 +182,9 @@ jobs:
 
       - name: Show Xcode version
         run: xcodebuild -version
+
+      - name: Download Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Cache Swift Package Manager dependencies
         uses: actions/cache@v5
