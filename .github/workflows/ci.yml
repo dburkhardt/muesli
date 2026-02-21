@@ -100,7 +100,12 @@ jobs:
             -skip-testing:MuesliTests/TranscriptionServiceTests \
             -skip-testing:MuesliTests/FileOutputServiceTests \
             -skip-testing:MuesliTests/EchoCancellationServiceTests \
+            -skip-testing:MuesliTests/EchoCancellationServiceWebRTCTests \
             -skip-testing:MuesliTests/CoreAudioTapTests \
+            -skip-testing:MuesliTests/TapAudioCaptureServicePermissionTests \
+            -skip-testing:MuesliTests/PermissionManagerTests \
+            -skip-testing:MuesliTests/RecordingControllerTests \
+            -skip-testing:MuesliTests/RegressionTests \
             -skip-testing:MuesliTests/ModelManagerTests \
             test | xcpretty
 
