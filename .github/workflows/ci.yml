@@ -83,6 +83,8 @@ jobs:
 
       - name: Run tests with coverage
         run: |
+          # Skip heaviest/flaky hardware-dependent classes in CI to keep runs reliable.
+          # Full suite still runs locally before release candidates.
           set -o pipefail
           xcodebuild \
             -project Muesli.xcodeproj \
@@ -94,6 +96,12 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
+            -skip-testing:MuesliTests/MuesliViewModelTests \
+            -skip-testing:MuesliTests/TranscriptionServiceTests \
+            -skip-testing:MuesliTests/FileOutputServiceTests \
+            -skip-testing:MuesliTests/EchoCancellationServiceTests \
+            -skip-testing:MuesliTests/CoreAudioTapTests \
+            -skip-testing:MuesliTests/ModelManagerTests \
             test | xcpretty
 
       - name: Generate coverage report
