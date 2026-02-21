@@ -16,7 +16,7 @@ set -euo pipefail
 # Pin exact upstream commit for reproducible builds.
 # v2.1 tag resolves to this commit in freedesktop/webrtc-audio-processing.
 WEBRTC_VERSION="v2.1"
-WEBRTC_COMMIT="c5a2a02a196d1c9dbe5e28b393b5cf634a35e711"
+WEBRTC_COMMIT="846fe90a289f58b7c9303a635142aa2c7caa93e5"
 WEBRTC_REPO="https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing.git"
 BUILD_DIR="/tmp/webrtc-audio-processing-build"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
