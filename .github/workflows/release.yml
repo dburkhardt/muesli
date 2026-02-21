@@ -166,9 +166,11 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "${API}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=20")
 
-            CI_RUN_ID=$(echo "${RUNS_JSON}" | jq -r '.workflow_runs[] | select(.status=="completed" and .conclusion=="success") | .id' | head -n1)
+            # Accept any completed CI run (success or failure) — the build-release job
+            # uploads the fingerprint artifact independently of test results.
+            CANDIDATE_RUN_IDS=$(echo "${RUNS_JSON}" | jq -r '.workflow_runs[] | select(.status=="completed") | .id')
 
-            if [ -n "${CI_RUN_ID}" ]; then
+            for CI_RUN_ID in ${CANDIDATE_RUN_IDS}; do
               ARTIFACTS_JSON=$(curl -fsSL \
                 -H "Authorization: Bearer ${GH_TOKEN}" \
                 -H "Accept: application/vnd.github+json" \
@@ -176,11 +178,12 @@ jobs:
 
               ARTIFACT_ID=$(echo "${ARTIFACTS_JSON}" | jq -r --arg NAME "${ARTIFACT_NAME}" '.artifacts[] | select(.name==$NAME and .expired==false) | .id' | head -n1)
               if [ -n "${ARTIFACT_ID}" ]; then
-                break
+                break 2
               fi
-            fi
+            done
 
             echo "CI fingerprint artifact not ready yet (attempt ${attempt}/40); retrying in 30s..."
+            CI_RUN_ID=""
             sleep 30
           done
 
