@@ -19,7 +19,7 @@ protocol TranscriptionServiceProtocol: Sendable {
     func setTranscriptionMode(_ mode: TranscriptionService.TranscriptionMode)
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler)
     func setDraftHandler(_ handler: @escaping TranscriptionDraftHandler)
-    func startTranscription(recordingStartTime: Date)
+    func startTranscription(recordingStartTime: Date, useLiveStabilizer: Bool)
     func stopTranscription() async
     func appendSystemAudio(_ samples: [Float])
     func appendMicrophoneAudio(_ samples: [Float])

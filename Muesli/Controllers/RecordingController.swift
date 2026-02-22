@@ -471,7 +471,10 @@ final class RecordingController {
                     )
                 }
             }
-            transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
+            transcriptionCoordinator.startTranscription(
+                recordingStartTime: session.recordingStartTime ?? Date(),
+                useLiveStabilizer: preferencesManager.isLiveStabilizerEnabled
+            )
             
         case .failed(let error):
             session.isModelLoading = false
@@ -1077,7 +1080,10 @@ final class RecordingController {
             session.resetTranscript()
             session.startDisplayTimer()
             
-            transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
+            transcriptionCoordinator.startTranscription(
+                recordingStartTime: session.recordingStartTime ?? Date(),
+                useLiveStabilizer: preferencesManager.isLiveStabilizerEnabled
+            )
         } catch let error as AudioCaptureError {
             if let session = activeSession {
                 handleCaptureError(error, for: session)

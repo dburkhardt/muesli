@@ -386,9 +386,12 @@ final class TranscriptionCoordinator {
     }
     
     /// Start transcription (must call prepareModel first)
-    func startTranscription(recordingStartTime: Date) {
+    /// - Parameters:
+    ///   - recordingStartTime: Start time for timestamp calculation
+    ///   - useLiveStabilizer: When true, enables live overlap dedup and draft tail (gated at runtime)
+    func startTranscription(recordingStartTime: Date, useLiveStabilizer: Bool = false) {
         guard isInitialized else { return }
-        transcriptionService.startTranscription(recordingStartTime: recordingStartTime)
+        transcriptionService.startTranscription(recordingStartTime: recordingStartTime, useLiveStabilizer: useLiveStabilizer)
     }
     
     /// Stop transcription and process remaining audio

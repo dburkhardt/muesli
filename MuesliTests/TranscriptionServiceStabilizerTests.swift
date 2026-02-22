@@ -16,10 +16,23 @@ final class TranscriptionServiceStabilizerTests: XCTestCase {
 
     // MARK: - Stabilizer Lifecycle
 
+    func testStabilizerNotCreatedWhenFlagOff() {
+        // useLiveStabilizer: false (default) => no stabilizer even in live mode
+        let service = TranscriptionService()
+        service.setTranscriptionMode(.live)
+        service.startTranscription(recordingStartTime: Date(), useLiveStabilizer: false)
+        let exp = expectation(description: "stopTranscription completes")
+        Task {
+            await service.stopTranscription()
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 5)
+    }
+
     func testStabilizerCreatedOnlyForLiveMode() {
         let service = TranscriptionService()
         service.setTranscriptionMode(.live)
-        service.startTranscription(recordingStartTime: Date())
+        service.startTranscription(recordingStartTime: Date(), useLiveStabilizer: true)
         let exp = expectation(description: "stopTranscription completes")
         Task {
             await service.stopTranscription()
@@ -31,7 +44,7 @@ final class TranscriptionServiceStabilizerTests: XCTestCase {
     func testStabilizerNotCreatedForPostProcessingMode() {
         let service = TranscriptionService()
         service.setTranscriptionMode(.postProcessing)
-        service.startTranscription(recordingStartTime: Date())
+        service.startTranscription(recordingStartTime: Date(), useLiveStabilizer: true)
         let exp = expectation(description: "stopTranscription completes")
         Task {
             await service.stopTranscription()
@@ -51,7 +64,7 @@ final class TranscriptionServiceStabilizerTests: XCTestCase {
             callCount.increment()
         }
 
-        service.startTranscription(recordingStartTime: Date())
+        service.startTranscription(recordingStartTime: Date(), useLiveStabilizer: true)
         await service.stopTranscription()
 
         // The key assertion is no crash; call count >= 0 is trivially true
@@ -64,11 +77,11 @@ final class TranscriptionServiceStabilizerTests: XCTestCase {
         let service = TranscriptionService()
         service.setTranscriptionMode(.live)
 
-        service.startTranscription(recordingStartTime: Date())
+        service.startTranscription(recordingStartTime: Date(), useLiveStabilizer: true)
         await service.stopTranscription()
 
         // Restarting should not retain stale stabilizer state
-        service.startTranscription(recordingStartTime: Date())
+        service.startTranscription(recordingStartTime: Date(), useLiveStabilizer: true)
         await service.stopTranscription()
     }
 
@@ -77,7 +90,7 @@ final class TranscriptionServiceStabilizerTests: XCTestCase {
     func testDraftHandlerCanBeSetAfterStartTranscription() {
         let service = TranscriptionService()
         service.setTranscriptionMode(.live)
-        service.startTranscription(recordingStartTime: Date())
+        service.startTranscription(recordingStartTime: Date(), useLiveStabilizer: true)
 
         service.setDraftHandler { _, _ in }
 

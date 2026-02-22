@@ -77,7 +77,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         draftHandler = handler
     }
     
-    func startTranscription(recordingStartTime: Date) {
+    func startTranscription(recordingStartTime: Date, useLiveStabilizer: Bool = false) {
         startTranscriptionCallCount += 1
         lastRecordingStartTime = recordingStartTime
         isTranscribing = true

@@ -184,8 +184,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     // MARK: - Recording Control
     
     /// Start transcription processing
-    func startTranscription(recordingStartTime: Date) {
-        if transcriptionMode == .live {
+    /// - Parameters:
+    ///   - recordingStartTime: Start time for timestamp calculation
+    ///   - useLiveStabilizer: When true and mode is live, enables overlap dedup and draft tail. Default-off for staged rollout.
+    func startTranscription(recordingStartTime: Date, useLiveStabilizer: Bool = false) {
+        if transcriptionMode == .live && useLiveStabilizer {
             liveStabilizer = LiveStabilizer()
         } else {
             liveStabilizer = nil
