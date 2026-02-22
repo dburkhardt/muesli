@@ -6,9 +6,9 @@
 //  macOS 26+ only. Captures default output mix excluding Muesli's own audio.
 //
 
-import Foundation
-import CoreAudio
 import AudioToolbox
+import CoreAudio
+import Foundation
 import os.log
 
 // MARK: - Tap Configuration
@@ -70,7 +70,6 @@ typealias TapAudioCallback = (
 /// Manages Core Audio taps for capturing system audio
 /// Thread-safe: uses internal synchronization for state management
 final class CoreAudioTapManager: @unchecked Sendable {
-    
     // MARK: - Properties
     
     private let logger = Logger(subsystem: "com.muesli.app", category: "CoreAudioTapManager")
@@ -185,7 +184,6 @@ final class CoreAudioTapManager: @unchecked Sendable {
             state = .running
             print("[TAP DEBUG] Tap started successfully, state=.running")
             logger.info("Tap started successfully")
-
         } catch {
             state = .failed(error.localizedDescription)
             print("[TAP DEBUG] ERROR: Failed to start tap: \(error)")
@@ -276,7 +274,7 @@ final class CoreAudioTapManager: @unchecked Sendable {
             &procID,
             aggregateDeviceID,
             DispatchQueue.global(qos: .userInteractive)
-        ) { [weak self] inNow, inInputData, inInputTime, outOutputData, inOutputTime in
+        ) { [weak self] _, inInputData, inInputTime, _, _ in
             guard let self = self else { return }
             self.handleIOProc(
                 inputData: inInputData,
@@ -450,7 +448,6 @@ final class CoreAudioTapManager: @unchecked Sendable {
         
         audioCallback = nil
     }
-    
 }
 
 // MARK: - Errors
