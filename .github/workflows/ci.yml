@@ -350,6 +350,10 @@ jobs:
 
   build-release:
     name: Build Release Configuration
+    # Intentionally runs on ALL events including pull_request (P1-4).
+    # Validates that the Release configuration compiles on PRs before merge.
+    # Fingerprint generation/upload is skipped on PRs via step-level guards
+    # (github.event_name != 'pull_request') to avoid merge-commit SHA issues.
     runs-on: macos-26
     timeout-minutes: 30
 
