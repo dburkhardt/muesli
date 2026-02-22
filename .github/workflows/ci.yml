@@ -88,6 +88,8 @@ jobs:
 
       - name: Run stable required tests with coverage
         run: |
+          # Skip only hardware-dependent tests that require TCC permissions.
+          # All pure-logic test classes now run in CI for coverage.
           set -o pipefail
           xcodebuild \
             -project Muesli.xcodeproj \
@@ -100,17 +102,8 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            -skip-testing:MuesliTests/MuesliViewModelTests \
-            -skip-testing:MuesliTests/TranscriptionServiceTests \
-            -skip-testing:MuesliTests/FileOutputServiceTests \
-            -skip-testing:MuesliTests/EchoCancellationServiceTests \
-            -skip-testing:MuesliTests/EchoCancellationServiceWebRTCTests \
-            -skip-testing:MuesliTests/CoreAudioTapTests \
+            -skip-testing:MuesliTests/CoreAudioTapHardwareTests \
             -skip-testing:MuesliTests/TapAudioCaptureServicePermissionTests \
-            -skip-testing:MuesliTests/PermissionManagerTests \
-            -skip-testing:MuesliTests/RecordingControllerTests \
-            -skip-testing:MuesliTests/RegressionTests \
-            -skip-testing:MuesliTests/ModelManagerTests \
             test | tee stable-test.log | xcpretty
 
       - name: Append failed stable tests to summary
@@ -243,17 +236,8 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            -only-testing:MuesliTests/MuesliViewModelTests \
-            -only-testing:MuesliTests/TranscriptionServiceTests \
-            -only-testing:MuesliTests/FileOutputServiceTests \
-            -only-testing:MuesliTests/EchoCancellationServiceTests \
-            -only-testing:MuesliTests/EchoCancellationServiceWebRTCTests \
-            -only-testing:MuesliTests/CoreAudioTapTests \
+            -only-testing:MuesliTests/CoreAudioTapHardwareTests \
             -only-testing:MuesliTests/TapAudioCaptureServicePermissionTests \
-            -only-testing:MuesliTests/PermissionManagerTests \
-            -only-testing:MuesliTests/RecordingControllerTests \
-            -only-testing:MuesliTests/RegressionTests \
-            -only-testing:MuesliTests/ModelManagerTests \
             test | tee quarantined-test.log | xcpretty
 
       - name: Append quarantined test failures to summary
