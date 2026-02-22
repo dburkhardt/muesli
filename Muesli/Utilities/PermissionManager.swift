@@ -169,11 +169,16 @@ final class PermissionManager: PermissionManagerProtocol {
             // Run a fresh tap probe — the cached audioCaptureGranted is still false from the
             // initial deny. Reading the cache here (refreshPermissions) would leave the user
             // permanently blocked even after granting in System Settings.
-            let probeResult = await triggerSystemAudioPermissionPrompt()
-            UserDefaults.standard.set(probeResult, forKey: systemAudioPermissionDefaultsKey)
-            audioCaptureGranted = probeResult
-            microphoneGranted = hasMicrophonePermission
-            permissionDidChange?(audioCaptureGranted, microphoneGranted)
+            if Self.isRunningTests {
+                _ = refreshPermissions()
+                permissionDidChange?(audioCaptureGranted, microphoneGranted)
+            } else {
+                let probeResult = await triggerSystemAudioPermissionPrompt()
+                UserDefaults.standard.set(probeResult, forKey: systemAudioPermissionDefaultsKey)
+                audioCaptureGranted = probeResult
+                microphoneGranted = hasMicrophonePermission
+                permissionDidChange?(audioCaptureGranted, microphoneGranted)
+            }
         } else if awaitingMicrophoneFromSettings {
             awaitingMicrophoneFromSettings = false
             _ = refreshPermissions()
@@ -210,6 +215,11 @@ final class PermissionManager: PermissionManagerProtocol {
 
     /// Verify screen recording permission after user clicks "Grant Permission"
     func verifyScreenRecordingAfterRequest() async -> Bool {
+        guard !Self.isRunningTests else {
+            // In test environment, always return false and update cache to match
+            audioCaptureGranted = false
+            return false
+        }
         // Re-check using cached tap-probe result (preflight can be true for screen recording only)
         return audioCaptureGranted
     }

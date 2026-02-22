@@ -552,7 +552,7 @@ final class ModelManagerTests: XCTestCase {
     /// Test that deleteModel clears activeModel if it's the deleted one
     func testDeleteModel_ClearsActiveModelIfDeleted() async {
         modelManager.downloadedModels.insert(.small)
-        modelManager.activeModel = .small
+        modelManager.setActiveModel(.small)
         
         _ = modelManager.deleteModel(.small)
         
