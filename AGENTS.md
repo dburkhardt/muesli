@@ -190,7 +190,7 @@ CI builds (`ci.yml`) are intentionally **unsigned** for speed and fork compatibi
 **CI workflow details**:
 - `test-required-stable` (required): main CI signal, runs coverage-enabled tests excluding quarantined classes
 - `test-quarantined` (informational): runs unstable/heavy classes and reports failures without blocking merges
-- `lint` (required): strict lint for changed `.swift` files; failures block required CI
+- `lint` (informational): strict lint for changed `.swift` files; violations reported but do not block merge
 - `build-release` (required): validates Release configuration on PRs and main
 - Run full suite locally: `xcodebuild -project Muesli.xcodeproj -scheme Muesli test`
 - Required test result bundles are uploaded as `.xcresult` artifacts for triage
