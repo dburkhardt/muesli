@@ -179,6 +179,19 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         return uid
     }
 
+    /// Pure selection logic: pick the device matching the system default UID,
+    /// falling back to the first device in the list.
+    static func selectDefaultDevice(
+        systemDefaultUID: String?,
+        devices: [MicrophoneDevice]
+    ) -> MicrophoneDevice? {
+        if let uid = systemDefaultUID,
+           let match = devices.first(where: { $0.id == uid }) {
+            return match
+        }
+        return devices.first
+    }
+
     // MARK: - Device Enumeration
 
     /// Refresh the list of available microphone devices
@@ -209,10 +222,7 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         // Get the true system default input device via Core Audio
         // (AVCaptureDevice.DiscoverySession ordering is arbitrary and unreliable)
         let systemDefaultUID = Self.getSystemDefaultInputUID()
-        let defaultDevice = captureDevices.first(where: { $0.uniqueID == systemDefaultUID })
-            ?? captureDevices.first
-        logger.info("System default input UID: \(systemDefaultUID ?? "unknown") → matched: \(defaultDevice?.localizedName ?? "none")")
-        
+
         for device in captureDevices {
             // Filter out virtual aggregate devices created by ScreenCaptureKit
             // These devices (like "CADefaultDeviceAggregate-XXXXX") don't deliver real audio
@@ -227,14 +237,16 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
                 continue
             }
             
-            let isDefault = device.uniqueID == defaultDevice?.uniqueID
-            let microphoneDevice = MicrophoneDevice(
-                id: device.uniqueID,
-                name: device.localizedName,
-                isDefault: isDefault
-            )
-            devices.append(microphoneDevice)
+            devices.append(MicrophoneDevice(id: device.uniqueID, name: device.localizedName))
         }
+
+        // Determine which device is the system default
+        if let chosen = Self.selectDefaultDevice(systemDefaultUID: systemDefaultUID, devices: devices),
+           let idx = devices.firstIndex(where: { $0.id == chosen.id }) {
+            devices[idx] = MicrophoneDevice(id: chosen.id, name: chosen.name, isDefault: true)
+        }
+        let matchedName = devices.first(where: { $0.isDefault })?.name ?? "none"
+        logger.info("System default input UID: \(systemDefaultUID ?? "unknown") → matched: \(matchedName)")
         
         // Sort: default first, then alphabetically
         devices.sort { device1, device2 in
@@ -298,23 +310,20 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
             position: .unspecified
         )
         
-        // Find the system default input device via Core Audio, filtering out
-        // aggregate and Continuity Camera devices that don't deliver real audio
+        // Filter out aggregate and Continuity Camera devices that don't deliver real audio
         let systemDefaultUID = Self.getSystemDefaultInputUID()
-        let eligibleDevices = discoverySession.devices.filter { device in
-            !device.uniqueID.contains("Aggregate") &&
-            !device.localizedName.contains("Aggregate") &&
-            !isContinuityCameraDevice(device)
+        let eligibleDevices = discoverySession.devices
+            .filter { device in
+                !device.uniqueID.contains("Aggregate") &&
+                !device.localizedName.contains("Aggregate") &&
+                !isContinuityCameraDevice(device)
+            }
+            .map { MicrophoneDevice(id: $0.uniqueID, name: $0.localizedName) }
+
+        guard let chosen = Self.selectDefaultDevice(systemDefaultUID: systemDefaultUID, devices: eligibleDevices) else {
+            return nil
         }
-        // Prefer the true system default; fall back to first eligible device
-        guard let defaultDevice = eligibleDevices.first(where: { $0.uniqueID == systemDefaultUID })
-                ?? eligibleDevices.first else { return nil }
-        
-        return MicrophoneDevice(
-            id: defaultDevice.uniqueID,
-            name: defaultDevice.localizedName,
-            isDefault: true
-        )
+        return MicrophoneDevice(id: chosen.id, name: chosen.name, isDefault: true)
     }
     
     /// Get device by ID

@@ -961,20 +961,25 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// Set microphone input device
     private func setMicrophoneInputDevice(engine: AVAudioEngine, deviceID: String) {
-        // Find device by UID
         let devices = CoreAudioHelpers.getAllDevices()
+        var found = false
         for device in devices {
             if let uid = try? CoreAudioHelpers.getDeviceUID(device), uid == deviceID {
+                found = true
                 do {
                     try engine.inputNode.auAudioUnit.setDeviceID(device)
                     logger.debug("Set microphone device: \(deviceID)")
                     return
                 } catch {
-                    logger.warning("Failed to set microphone device: \(error)")
+                    logger.warning("Failed to set microphone device \(deviceID): \(error)")
                 }
             }
         }
-        logger.warning("Microphone device UID not found in Core Audio devices: \(deviceID) — falling back to system default")
+        if !found {
+            logger.warning(
+                "Microphone device UID not found in Core Audio devices: \(deviceID) — engine will use its current input"
+            )
+        }
     }
 
     /// Set up route change listener

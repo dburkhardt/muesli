@@ -32,6 +32,7 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### February
 
+- [2026-02-22: Wrong Default Microphone Selection](2026-02-22_wrong-default-microphone.md) - Wrong mic auto-selected on systems with virtual audio drivers, causing empty microphone.caf recordings
 - [2026-02-18: Mid-Session Permission Recovery](2026-02-18_mid-session-permission-recovery.md) - Permission-denied errors during recording start silently failed with no UI feedback
 - [2026-02-17: Microphone Sample Rate Race Condition](2026-02-17_mic-sample-rate-race.md) - Cached micFormatDesc overwritten with wrong sample rate, causing sped-up microphone playback
 

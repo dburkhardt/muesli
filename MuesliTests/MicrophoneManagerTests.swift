@@ -333,4 +333,85 @@ final class MicrophoneManagerTests: XCTestCase {
         // Then: Should not crash
         XCTAssertEqual(microphoneManager.availableDevices.count, 0)
     }
+    
+    // MARK: - selectDefaultDevice Tests (pure function, no TCC required)
+    
+    func testSelectDefaultDevice_MatchesSystemDefaultUID() {
+        let devices = [
+            MicrophoneManager.MicrophoneDevice(id: "built-in", name: "MacBook Mic"),
+            MicrophoneManager.MicrophoneDevice(id: "usb-mic", name: "USB Microphone"),
+            MicrophoneManager.MicrophoneDevice(id: "bt-mic", name: "AirPods Pro")
+        ]
+        
+        let result = MicrophoneManager.selectDefaultDevice(
+            systemDefaultUID: "usb-mic",
+            devices: devices
+        )
+        
+        XCTAssertEqual(result?.id, "usb-mic")
+        XCTAssertEqual(result?.name, "USB Microphone")
+    }
+    
+    func testSelectDefaultDevice_FallsBackToFirst_WhenUIDNotFound() {
+        let devices = [
+            MicrophoneManager.MicrophoneDevice(id: "built-in", name: "MacBook Mic"),
+            MicrophoneManager.MicrophoneDevice(id: "usb-mic", name: "USB Microphone")
+        ]
+        
+        let result = MicrophoneManager.selectDefaultDevice(
+            systemDefaultUID: "nonexistent-device",
+            devices: devices
+        )
+        
+        XCTAssertEqual(result?.id, "built-in")
+    }
+    
+    func testSelectDefaultDevice_FallsBackToFirst_WhenUIDNil() {
+        let devices = [
+            MicrophoneManager.MicrophoneDevice(id: "built-in", name: "MacBook Mic"),
+            MicrophoneManager.MicrophoneDevice(id: "usb-mic", name: "USB Microphone")
+        ]
+        
+        let result = MicrophoneManager.selectDefaultDevice(
+            systemDefaultUID: nil,
+            devices: devices
+        )
+        
+        XCTAssertEqual(result?.id, "built-in")
+    }
+    
+    func testSelectDefaultDevice_ReturnsNil_WhenDevicesEmpty() {
+        let result = MicrophoneManager.selectDefaultDevice(
+            systemDefaultUID: "any-uid",
+            devices: []
+        )
+        
+        XCTAssertNil(result)
+    }
+    
+    func testSelectDefaultDevice_ReturnsNil_WhenBothEmpty() {
+        let result = MicrophoneManager.selectDefaultDevice(
+            systemDefaultUID: nil,
+            devices: []
+        )
+        
+        XCTAssertNil(result)
+    }
+    
+    func testSelectDefaultDevice_WorksWithPreFilteredDevices() {
+        // Aggregate and Continuity Camera devices should never appear in the
+        // input list — callers filter before calling selectDefaultDevice.
+        // Verify the function correctly selects from only eligible devices.
+        let eligibleDevices = [
+            MicrophoneManager.MicrophoneDevice(id: "built-in", name: "MacBook Mic"),
+            MicrophoneManager.MicrophoneDevice(id: "usb-mic", name: "USB Microphone")
+        ]
+        
+        let result = MicrophoneManager.selectDefaultDevice(
+            systemDefaultUID: "built-in",
+            devices: eligibleDevices
+        )
+        
+        XCTAssertEqual(result?.id, "built-in")
+    }
 }
