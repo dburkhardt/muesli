@@ -1717,4 +1717,3 @@ final class RegressionTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
     }
 }
-
