@@ -38,7 +38,7 @@ enum AudioConfiguration {
     
     /// Overlap samples between chunks
     static var overlapSamples: Int {
-        whisperSampleRate * Int(transcriptionOverlapDuration)
+        Int(Double(whisperSampleRate) * transcriptionOverlapDuration)
     }
     
     // MARK: - Buffer Management

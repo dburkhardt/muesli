@@ -14,7 +14,6 @@ import os.log
 /// Tracks clock drift between render (tap) and capture (mic) streams
 /// USB microphone and Bluetooth speakers may have different clock domains
 final class DriftTracker {
-    
     // MARK: - Configuration
     
     /// Measurement window in seconds
@@ -239,7 +238,6 @@ final class DriftTracker {
 /// Simple adaptive resampler for drift compensation
 /// Uses linear interpolation for low overhead
 struct AdaptiveResampler {
-    
     /// Resample audio buffer with given ratio
     /// - Parameters:
     ///   - input: Input samples

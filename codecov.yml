@@ -33,6 +33,7 @@ ignore:
   - "scripts/**/*"
   - "docs/**/*"
   - "assets/**/*"
+  - "Muesli/Views/**/*"
 
 # Comment configuration for PRs
 comment:

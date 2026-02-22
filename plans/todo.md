@@ -14,52 +14,6 @@ Each item should include:
 
 ## In Progress
 
-### Onboarding - Background Model Downloads
-
-**[Enhancement]** [High] Add background downloading during onboarding
-
-Add a cancel button to the download step in the onboarding flow and enable background downloading as users proceed through the setup.
-
-**Requirements:**
-
-1. **Select background download for transcription model**
-   - User selects their preferred transcription model
-   - Download starts in the background
-   - User can proceed to next step without waiting
-
-2. **Select and download refinement models in background**
-   - User selects refinement model preferences
-   - All model downloads happen in the background
-   - User can complete onboarding while downloads continue
-
-3. **Main window download indicator**
-   - Show indicator in main window UI that transcription models are downloading
-   - Clearly communicate that transcription is unavailable until download completes
-   - Allow users to record meetings even while models download (reprocess later)
-   - Cancel button to abort downloads if needed
-
-**UX Flow:**
-
-```
-Onboarding Step: Transcription Model
-├── Select model (e.g., small, base, large)
-├── "Download in background" option/button
-└── Proceed to next step →
-
-Onboarding Step: Refinement Model
-├── Select refinement model preferences
-├── Downloads start in background
-└── Complete onboarding →
-
-Main Window (post-onboarding)
-├── Download progress indicator (if downloads in progress)
-├── "Transcription unavailable until download completes" message
-├── Record button still enabled (can reprocess later)
-└── Cancel download button
-```
-
----
-
 ### Website - Capture and Publish Screenshots
 
 **[Enhancement]** [High] Capture and publish app screenshots for website
@@ -135,16 +89,19 @@ Main Window (post-onboarding)
 
 ### Enhancements
 
-**[Enhancement]** [High] Increase live transcription chunk size to 10-15 seconds
-- Description: Increase the default chunk size for live transcription from 5 seconds to 10-15 seconds to provide more context for Whisper
-- Notes: Whisper was trained on 30-second chunks; 5 seconds provides limited context and can cause issues at word boundaries
+**[Enhancement]** [High] Increase default transcription chunk size and raise the preference ceiling
+- Description: The default chunk size is 5s and the preference slider caps at 10s; both should be raised
+- Notes: Whisper was trained on 30-second chunks; 5 seconds provides limited context and causes word-boundary errors
+- Current state:
+  - Default: 5.0s (AudioConfiguration.swift + PreferencesManager fallback)
+  - Preference slider: 2–10s (PreferencesView.swift, clamped in PreferencesManager + TranscriptionService)
 - Changes needed:
-  - Update `AudioConfiguration.transcriptionChunkDuration` from 5.0 to 10.0-15.0
-  - Proportionally adjust `transcriptionOverlapDuration` (e.g., 3.0s for 10s chunks)
-  - May need to adjust buffer sizes in TranscriptionService
-- Tradeoffs: Increased latency before first output (10-15s vs 5s) but better accuracy
-- Related: AudioConfiguration.swift, TranscriptionService.swift
-- Effort: ~1 hour
+  - Raise `PreferencesManager` default from 5.0 to 10.0
+  - Update `AudioConfiguration.transcriptionChunkDuration` to 10.0 to match
+  - Raise slider upper bound from 10s to 15s in PreferencesView and clamp logic in PreferencesManager/TranscriptionService
+  - Proportionally adjust overlap (e.g., 3.0s for 10s chunks)
+- Tradeoffs: Increased latency before first output, but meaningfully better accuracy
+- Related: AudioConfiguration.swift, PreferencesManager.swift, PreferencesView.swift, TranscriptionService.swift
 - Rationale: Beta tester feedback on transcription quality, especially specialized terms
 
 **[Enhancement]** [High] Add context chaining for live transcription (condition on previous text)
@@ -159,22 +116,22 @@ Main Window (post-onboarding)
   - Handle speaker transitions (Me/Them) appropriately
 - Reference: OpenAI Whisper prompting guide recommends this for segment stitching
 - Related: TranscriptionService.swift (transcribeChunk method), WhisperKit DecodingOptions
-- Effort: ~2-3 hours
 - Rationale: Improve consistency in specialized vocabulary across transcript
 
-**[Enhancement]** [High] Add vocabulary prompting for specialized terms
-- Description: Allow users to specify common terms/proper nouns for better transcription accuracy
-- Notes: OpenAI's prompting guide shows vocabulary conditioning is highly effective for proper nouns
-- Implementation considerations (needs design):
-  - Tokenization lifecycle: when to tokenize (app launch vs recording start), where to cache
-  - Error handling for tokenization failures (WhisperKit tokenizer may be nil)
-  - User preference UI in Preferences > Transcription section
-  - Default vocabulary pre-populated with NVIDIA terms (NeMo RL, CUDA, TensorRT, H100, Blackwell, etc.)
-  - Token limit: WhisperKit allows ~224 tokens (~50-100 words)
-- API: `DecodingOptions.promptTokens` with glossary format ("Glossary: term1, term2, ...")
-- Related: TranscriptionService.swift, PreferencesManager.swift, WhisperKit DecodingOptions
-- Effort: ~3-4 hours (includes proper tokenization lifecycle design)
-- Rationale: Highest-impact transcription quality improvement per OpenAI documentation
+**[Enhancement]** [High] Add vocabulary prompting + inline transcript correction
+- Description: Two complementary features that close the vocabulary feedback loop
+- GitHub: https://github.com/dburkhardt/muesli/issues/16
+- Feature 1 — Preferences vocabulary manager:
+  - Preferences > Transcription > Vocabulary section with tag/comma-separated input
+  - Pre-populated with NVIDIA terms (NeMo RL, CUDA, TensorRT, H100, Blackwell, DGX, etc.)
+  - Token budget display (~224 tokens / ~50-100 words)
+  - Passed via `DecodingOptions.promptTokens` as glossary format at recording start
+- Feature 2 — Inline word correction in transcript:
+  - Click any word (or select a span) in the transcript view
+  - Popover with editable text field + "Add to Vocabulary" toggle (default on)
+  - Saves correction to transcript.md in place; immediately adds to vocabulary for current session
+  - Subtle hover state on words to signal they're clickable; edited words visually distinguished
+- Related: TranscriptionService.swift, PreferencesManager.swift, PreferencesView.swift, TranscriptBlockView.swift
 
 **[Enhancement]** [Medium] Implement VAD-based chunking for live transcription
 - Description: Use voice activity detection to find natural speech boundaries instead of fixed-interval chunking
@@ -189,7 +146,6 @@ Main Window (post-onboarding)
   - Fall back to time-based if no speech boundary found within max window
   - Consider WhisperKit's built-in `chunkingStrategy: .vad` option
 - Related: TranscriptionService.swift, AudioConfiguration.swift, WhisperKit ChunkingStrategy
-- Effort: ~4-6 hours
 - Reference: https://arxiv.org/html/2507.10860v1 (WhisperKit paper)
 
 **[Enhancement]** [Medium] Sliding window transcription with LLM stitching
@@ -211,20 +167,7 @@ Main Window (post-onboarding)
   - LLM latency for real-time stitching (~1-3s if local)
 - Prerequisites: Increase chunk size (above), Context chaining (above)
 - Related: TranscriptionService.swift, LLMStitchingService.swift (already exists)
-- Effort: ~2-3 days
 - Rationale: Beta tester feedback that transcription quality lags behind Teams/Zoom/Granola
-
-**[Enhancement]** [High] Improve New Recording and Copy button UI
-- Description: Make primary actions more visually prominent and intuitive
-- Changes needed:
-  - New Recording button: Replace simple "+" icon with blue button containing "New +" text
-    - Style: Blue background (accent color), white text
-    - Makes primary action more obvious and discoverable
-  - Copy Transcript button: Simplify to just copy icon (standard document copy icon)
-    - Remove text label, just show icon like typical markdown file viewers
-    - More compact, cleaner appearance
-- Related: UnifiedHistoryView.swift, RecordingDetailView.swift, CompletedMeetingWindow.swift
-- Priority: High - affects primary user actions and first impressions
 
 **[Enhancement]** [Medium] Improve LLM model download progress bar accuracy
 - Description: The Llama 3.2 3B download progress jumps quickly from 0-85% then slows dramatically from 85-100%
@@ -256,17 +199,6 @@ Main Window (post-onboarding)
 
 ### Refactoring
 
-**[Refactor]** [Medium] Update agent instructions for test execution
-- Description: Clarify in AGENTS.md how agents should run tests, capture results, and extract information efficiently
-- Notes: Should cover:
-  - Running tests with output capture (tee vs direct output)
-  - Extracting specific test results (grep patterns for failures, specific tests)
-  - Best practices for test iteration (avoid re-running just to see different output)
-  - Understanding XCTest output format
-- Would improve agent efficiency and reduce unnecessary test runs
-- Related: AGENTS.md, MuesliTests/, test execution workflows
-- Status: Partial - commands/run_tests.md created
-
 **[Refactor]** [Low] Create commands/ directory with common agent commands
 - Description: Add commands/ directory containing commonly used command scripts for agents
 - Notes: Could include:
@@ -293,12 +225,6 @@ Main Window (post-onboarding)
 - Focus on edge cases and error paths that are easy to miss
 - Related: Testing infrastructure, CI/CD workflows
 
-**[Refactor]** [Low] Enforce SwiftLint in CI
-- Description: Fix all existing lint violations and remove continue-on-error from CI
-- Notes: Currently advisory only. Need baseline cleanup first before enforcing strict mode.
-- Related: .swiftlint.yml, .github/workflows/ci.yml
-- Status: Configuration complete in v0.1.2, enforcement pending
-
 **[Refactor]** [Low] Use GitHub milestones and project plans for release management
 - Description: Implement GitHub milestones and project plans to better organize and track release cycles
 - Notes: Would provide better visibility into what features/fixes are planned for each release version, integrate with PR workflow
@@ -321,6 +247,27 @@ Main Window (post-onboarding)
 ## Completed
 
 Archive completed items here with completion date.
+
+### v0.6.0 - 2026-02-20
+
+**[Enhancement]** Onboarding - Background Model Downloads
+- Completed: Downloads continue in background while user proceeds through onboarding; main window shows download progress indicator with cancel button
+- Files: DownloadIndicatorView.swift, OnboardingView.swift, MuesliViewModel.swift
+- Features: "Download will continue in background" messaging, Continue button enabled once download initiated, DownloadIndicatorView with per-model progress + cancel, CompactDownloadIndicator for constrained layouts
+- Branch: feat/audio-aec-pipeline
+
+**[Enhancement]** Improve New Recording and Copy button UI
+- Completed: New Recording button has "New +" text with accent color background; Copy Transcript button is icon-only (doc.on.doc)
+- Files: UnifiedHistoryView.swift, CopyTranscriptButton.swift
+- Branch: release/v0.1.2-polish
+
+**[Refactor]** Enforce SwiftLint in CI
+- Completed: `swiftlint lint --strict` runs on all changed Swift files as a required (non-advisory) CI check
+- Files: .github/workflows/ci.yml
+- Notes: Phase A rollout - strict on changed files only, not whole codebase
+
+**[Refactor]** Update agent instructions for test execution
+- Completed: Comprehensive `.cursor/commands/run_tests.md` and `spec/local_testing_workflow.md` document full test workflow, output capture patterns, result parsing, and best practices
 
 ### v0.1.2 - 2026-01-19
 

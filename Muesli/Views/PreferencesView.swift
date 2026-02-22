@@ -227,7 +227,10 @@ struct GeneralPreferencesTab: View {
                     .frame(maxWidth: 250)
                 }
                 
-                Text("Live mode transcribes during recording. Post-processing waits until the recording ends for potentially better accuracy.")
+                Text(
+                    "Live mode transcribes during recording. " +
+                    "Post-processing waits until the recording ends for potentially better accuracy."
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -281,7 +284,10 @@ struct GeneralPreferencesTab: View {
                 Toggle(isOn: $prefs.isEchoCancellationEnabled) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Echo Cancellation")
-                        Text("Remove echo from microphone audio caused by speakers. Improves transcription quality and saved audio files.")
+                        Text(
+                            "Remove echo from microphone audio caused by speakers. " +
+                            "Improves transcription quality and saved audio files."
+                        )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -309,7 +315,11 @@ struct GeneralPreferencesTab: View {
                 
                 Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
                 
-                Text("Shorter chunks provide faster transcription but may reduce accuracy. Longer chunks improve accuracy but increase latency. Changes apply to new recordings only.")
+                Text(
+                    "Shorter chunks provide faster transcription but may reduce accuracy. " +
+                    "Longer chunks improve accuracy but increase latency. " +
+                    "Changes apply to new recordings only."
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

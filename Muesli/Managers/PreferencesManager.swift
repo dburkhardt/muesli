@@ -312,7 +312,7 @@ final class PreferencesManager {
         var description: String {
             switch self {
             case .unset: return "unset"
-            case .value(let b): return "\(b)"
+            case .value(let boolVal): return "\(boolVal)"
             }
         }
 
@@ -342,7 +342,7 @@ final class PreferencesManager {
         let savedValue: Bool
         switch storedPref {
         case .unset: savedValue = true
-        case .value(let b): savedValue = b
+        case .value(let boolVal): savedValue = boolVal
         }
 
         if isRelease {

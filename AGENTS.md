@@ -151,6 +151,7 @@ Muesli tracks code coverage to ensure comprehensive testing and guide developmen
 - **Overall project**: 70% minimum (baseline)
 - **New code (PR diff)**: 80% minimum (enforced in CI)
 - **Critical paths**: 90%+ target (audio, transcription, file I/O)
+- **Codecov denominator note**: `Muesli/Views/**/*` is excluded in `codecov.yml` to emphasize testable business logic; overall percentages reflect this adjusted denominator and may not map directly to prior historical runs.
 
 **Local Coverage Workflow**:
 ```bash
@@ -187,16 +188,18 @@ CI builds (`ci.yml`) are intentionally **unsigned** for speed and fork compatibi
 - Fork PRs can run CI without access to signing secrets
 
 **CI workflow details**:
-- `test` job: Builds + runs tests with coverage (single `xcodebuild test` invocation)
-- CI skips heaviest test classes (~400 tests) to keep runs under ~25 min; full suite runs locally
-- Skipped in CI: MuesliViewModelTests, TranscriptionServiceTests, FileOutputServiceTests, EchoCancellationServiceTests, CoreAudioTapTests, ModelManagerTests
+- `test-required-stable` (required): main CI signal, runs coverage-enabled tests excluding quarantined classes
+- `test-quarantined` (informational): runs unstable/heavy classes on releases (tag pushes), nightly schedule, and manual dispatch only — skipped on PRs and pushes to main
+- `lint` (informational): strict lint for changed `.swift` files; violations reported but do not block merge
+- `build-release` (required): validates Release configuration on PRs and main
 - Run full suite locally: `xcodebuild -project Muesli.xcodeproj -scheme Muesli test`
-- `lint` job: Runs SwiftLint (no build required)
-- `build-release` job: Verifies Release configuration compiles (unsigned)
-- All jobs have timeout guards (30 min for build jobs, 10 min for lint)
+- Required test result bundles are uploaded as `.xcresult` artifacts for triage
 - Concurrency controls auto-cancel stale runs on the same branch
 
-**Release workflow** (`release.yml`): Signs with Developer ID and notarizes via Apple. This is the only workflow that uses signing secrets.
+**Release workflow** (`release.yml`): Enforces explicit mode policy.
+- Tag push (`refs/tags/v*`): signed + notarized only (hard-fail on missing secrets/identity/notarization/stapling/validation failures)
+- `workflow_dispatch` with `skip_notarization=true`: unsigned debug prerelease only (`-unsigned` suffix)
+- `workflow_dispatch` with `skip_notarization=false`: signed path with same hard-fail requirements as tag pushes
 
 **Monitoring CI/Release workflows**: After pushing code or tags that trigger workflows, poll for completion using `watch-release.sh` or `gh run watch`:
 
@@ -399,13 +402,25 @@ This is useful for:
 - Creating builds from non-main branches
 - Re-running failed releases
 
+**Signed manual releases require a successful CI run** for the same commit SHA (non-PR event). The release workflow verifies the CI run completed with `conclusion: success` before accepting the WebRTC fingerprint. If the commit only has PR CI runs, signed manual release will fail because PR runs skip fingerprint generation (PR merge-commit SHAs differ from real commit SHAs). To do a signed manual release, ensure the commit was pushed to `main` or tagged first so CI produces the fingerprint artifact.
+
+### Manual docs/download update runbook
+
+`release.yml` no longer writes to `main` or edits website files. After a release is published, update docs manually:
+
+1. Update `docs/download.html` in a **separate docs PR** (preferred)
+2. Verify the DMG link matches the released version (for example, `Muesli-vX.Y.Z.dmg`)
+3. Verify SHA-256 checksum text matches the release asset checksum
+4. Preview page render (local preview or GitHub Pages result) and confirm the download button works
+5. Merge the docs PR and confirm the public page reflects the new release
+
 ### Release Artifacts
 
 Each release produces:
 - **DMG file**: `Muesli-vX.Y.Z.dmg` (uploaded to GitHub Release)
 - **SHA-256 checksum**: Included in release notes
 - **Release notes**: Auto-generated from git log or CHANGELOG.md
-- **Website update**: docs/download.html updated with new version
+- **Website docs follow-up**: `docs/download.html` updated manually via a separate docs PR
 
 ### Troubleshooting Releases
 
@@ -421,9 +436,9 @@ Each release produces:
 - Look for disk space issues in CI
 
 **Website not updated**:
-- Check git push permissions in workflow
+- Verify a docs PR was created and merged for `docs/download.html`
+- Confirm the DMG link and checksum text match the new release
 - Verify GitHub Pages is enabled (Settings → Pages → Source: main/docs)
-- Check for merge conflicts in docs/download.html
 
 **Release not appearing**:
 - Verify tag was pushed: `git ls-remote --tags origin`

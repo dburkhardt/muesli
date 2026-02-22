@@ -46,7 +46,6 @@ struct AECStats {
 /// - Freeze adaptation during instability
 /// - Default AEC off for headset mode
 final class AECProcessor {
-    
     // MARK: - Configuration
     
     /// Frame size (10ms at 48kHz)
@@ -497,8 +496,7 @@ final class AECProcessor {
             && stats.framesProcessed >= convergenceMinFrames
             && !stats.adaptationFrozen
             && stats.erleDb < erleThresholdDb
-            && renderRmsLinear > 0.001  // render has actual signal (not silence)
-        {
+            && renderRmsLinear > 0.001 { // render has actual signal (not silence)
             let nonConvergingMsg = "session=\(sessionID) AEC_NONCONVERGING: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
                 + " after \(stats.framesProcessed) frames"
                 + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"

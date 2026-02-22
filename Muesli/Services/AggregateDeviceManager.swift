@@ -7,9 +7,9 @@
 //  2. Aggregate device with tap in kAudioAggregateDeviceTapListKey
 //
 
-import Foundation
-import CoreAudio
 import AudioToolbox
+import CoreAudio
+import Foundation
 import os.log
 
 // MARK: - Aggregate Device Manager
@@ -19,7 +19,6 @@ import os.log
 /// 1. Create a process tap with CATapDescription
 /// 2. Create an aggregate device that includes the tap
 final class AggregateDeviceManager {
-
     // MARK: - Properties
 
     private let logger = Logger(subsystem: "com.muesli.app", category: "AggregateDeviceManager")
