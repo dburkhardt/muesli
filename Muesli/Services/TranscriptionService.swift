@@ -91,10 +91,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     private let minSamplesForProcessing: Int  // Minimum samples before processing
     private let overlapSamples: Int  // Samples to overlap between chunks
     
-    // Warmup configuration
-    private let warmupMinSamples: Int = AudioConfiguration.warmupMinSamples
-    private let warmupOverlapSamples: Int = AudioConfiguration.warmupOverlapSamples
-    private let warmupChunkCount: Int = AudioConfiguration.warmupChunkCount
+    // Warmup configuration: warmup is skipped when user chunk <= warmup duration
+    private let warmupMinSamples: Int
+    private let warmupOverlapSamples: Int
+    private let warmupChunkCount: Int
     
     // VAD configuration
     private let vadThreshold: Float = AudioConfiguration.vadThreshold
@@ -110,12 +110,23 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Calculate samples based on chunk duration
         minSamplesForProcessing = sampleRate * Int(self.chunkDuration)
         
-        // Calculate overlap samples maintaining the standard ratio (1.5s / 5.0s = 30%)
-        // This ensures consistent overlap behavior across different chunk durations
+        // Calculate overlap: maintain ~20% ratio, using lround to avoid Int truncation
+        // that would yield zero overlap for short durations (e.g. 3s * 0.2 = 0.6 → Int = 0)
         let overlapRatio = AudioConfiguration.transcriptionOverlapDuration /
             AudioConfiguration.transcriptionChunkDuration
         let overlapDuration = self.chunkDuration * overlapRatio
-        overlapSamples = sampleRate * Int(overlapDuration)
+        overlapSamples = Int(lround(overlapDuration)) * sampleRate
+        
+        // Skip warmup when user-configured chunk is already at or below warmup duration
+        if self.chunkDuration <= AudioConfiguration.warmupChunkDuration {
+            warmupMinSamples = minSamplesForProcessing
+            warmupOverlapSamples = overlapSamples
+            warmupChunkCount = 0
+        } else {
+            warmupMinSamples = AudioConfiguration.warmupMinSamples
+            warmupOverlapSamples = AudioConfiguration.warmupOverlapSamples
+            warmupChunkCount = AudioConfiguration.warmupChunkCount
+        }
     }
     
     // MARK: - Setup
@@ -271,7 +282,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                     sysChunk = Array(state.systemAudioBuffer[startIndex..<endIndex])
                     sysOffset = startIndex
                     sysCumulativeOffset = state.systemTotalSamplesReceived - state.systemAudioBuffer.count + startIndex
-                    // Keep overlap for next chunk; use the NEXT chunk's overlap size
+                    // Keep overlap for next chunk; use the NEXT chunk's overlap size.
+                    // Don't increment chunksProcessed here — wait until after VAD confirms
+                    // voice activity so silent chunks don't consume warmup.
                     let nextOverlap = (state.systemChunksProcessed + 1) < warmupChunkCount
                         ? warmupOverlapSamples : overlapSamples
                     let samplesToRemove = endIndex - nextOverlap
@@ -282,7 +295,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                         state.systemAudioBuffer.removeFirst(endIndex)
                         state.systemProcessedSamples = 0
                     }
-                    state.systemChunksProcessed += 1
                 }
             }
 
@@ -310,7 +322,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                         state.micAudioBuffer.removeFirst(endIndex)
                         state.micProcessedSamples = 0
                     }
-                    state.micChunksProcessed += 1
                 }
             }
 
@@ -329,8 +340,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         let systemContext = bufferState.withLock { $0.systemLastTranscriptSuffix }
         let micContext = bufferState.withLock { $0.micLastTranscriptSuffix }
 
-        // Process system audio ("Them") with VAD check
+        // Process system audio ("Them") with VAD check.
+        // Warmup counter is advanced here (not in the lock) so silent chunks don't consume warmup.
         if let chunk = chunkInfo.systemChunk, hasVoiceActivity(chunk) {
+            bufferState.withLock { $0.systemChunksProcessed += 1 }
             Task { await DiagnosticLogger.shared.log(.transcription,
                 "Live chunk: speaker=them, samples=\(chunk.count)") }
             if let resultText = await transcribeChunk(
@@ -347,6 +360,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
 
         // Process mic audio ("Me") with VAD check
         if let chunk = chunkInfo.micChunk, hasVoiceActivity(chunk) {
+            bufferState.withLock { $0.micChunksProcessed += 1 }
             Task { await DiagnosticLogger.shared.log(.transcription,
                 "Live chunk: speaker=me, samples=\(chunk.count)") }
             if let resultText = await transcribeChunk(
