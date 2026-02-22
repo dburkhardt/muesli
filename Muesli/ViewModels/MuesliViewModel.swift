@@ -645,8 +645,6 @@ final class MuesliViewModel {
             )
         }
         
-
-        
         // Note: Meeting history is already loaded by MeetingHistoryManager's init
         // No need to call loadMeetingHistory() here as historyManager handles it
     }

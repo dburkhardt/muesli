@@ -65,7 +65,6 @@ struct SynchronizerStats {
 /// Synchronizes render (tap) and capture (mic) audio streams
 /// Uses sample-index timeline (NOT timestamp-nearest matching)
 final class AudioSynchronizer {
-    
     // MARK: - Configuration
     
     /// Frame size in samples (10ms at 48kHz)

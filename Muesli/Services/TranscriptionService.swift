@@ -355,8 +355,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     private func processRemainingAudio() async {
         guard isInitialized, let whisperKit = whisperKit else { return }
 
-        let (remainingSystem, remainingMic, startTime, sysCumulativeOffset, micCumulativeOffset) = bufferState.withLock {
-            state -> ([Float], [Float], Date, Int, Int) in
+        struct RemainingAudio {
+            let system: [Float]; let mic: [Float]; let startTime: Date
+            let sysOffset: Int; let micOffset: Int
+        }
+        let extracted = bufferState.withLock { state -> RemainingAudio in
             let sys = state.systemAudioBuffer
             let mic = state.micAudioBuffer
             let time = state.recordingStartTime ?? Date()
@@ -365,8 +368,14 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             let micOffset = state.micTotalSamplesReceived - state.micAudioBuffer.count
             state.systemAudioBuffer.removeAll()
             state.micAudioBuffer.removeAll()
-            return (sys, mic, time, sysOffset, micOffset)
+            return RemainingAudio(system: sys, mic: mic, startTime: time, sysOffset: sysOffset, micOffset: micOffset)
         }
+
+        let remainingSystem = extracted.system
+        let remainingMic = extracted.mic
+        let startTime = extracted.startTime
+        let sysCumulativeOffset = extracted.sysOffset
+        let micCumulativeOffset = extracted.micOffset
         
         // Log remaining audio for debugging
         if !remainingSystem.isEmpty {
@@ -384,7 +393,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // This prevents short/noisy trailing audio from generating hallucinations
         if !remainingSystem.isEmpty && hasVoiceActivity(remainingSystem) {
             logger.info("Processing remaining system audio (passed VAD)")
-            await transcribeChunk(remainingSystem, speaker: .them, whisperKit: whisperKit, startTime: startTime, cumulativeSampleOffset: sysCumulativeOffset)
+            await transcribeChunk(
+                remainingSystem, speaker: .them, whisperKit: whisperKit,
+                startTime: startTime, cumulativeSampleOffset: sysCumulativeOffset
+            )
         } else if !remainingSystem.isEmpty {
             logger.info("Skipping remaining system audio (failed VAD)")
         }
@@ -392,7 +404,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Process remaining mic audio ONLY if it passes VAD check
         if !remainingMic.isEmpty && hasVoiceActivity(remainingMic) {
             logger.info("Processing remaining mic audio (passed VAD)")
-            await transcribeChunk(remainingMic, speaker: .me, whisperKit: whisperKit, startTime: startTime, cumulativeSampleOffset: micCumulativeOffset)
+            await transcribeChunk(
+                remainingMic, speaker: .me, whisperKit: whisperKit,
+                startTime: startTime, cumulativeSampleOffset: micCumulativeOffset
+            )
         } else if !remainingMic.isEmpty {
             logger.info("Skipping remaining mic audio (failed VAD)")
         }
@@ -614,7 +629,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Log dedup start
         Task { await DiagnosticLogger.shared.log(.transcription,
-            "Dedup started: chunks=\(chunks.count), speaker=\(speaker.rawValue), effectiveDuration=\(effectiveChunkDuration)s") }
+            "Dedup started: chunks=\(chunks.count), speaker=\(speaker.rawValue), " +
+            "effectiveDuration=\(effectiveChunkDuration)s") }
         
         for (index, chunk) in chunks.enumerated() {
             let options = buildDecodingOptions()
@@ -737,7 +753,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Log chunking parameters
         Task { await DiagnosticLogger.shared.log(.transcription,
-            "Chunking: samples=\(samples.count), chunkDuration=\(chunkDuration)s, overlap=\(overlap)s, stride=\(stride)") }
+            "Chunking: samples=\(samples.count), chunkDuration=\(chunkDuration)s, " +
+            "overlap=\(overlap)s, stride=\(stride)") }
         
         var chunks: [(samples: [Float], timestamp: TimeInterval)] = []
         var offset = 0

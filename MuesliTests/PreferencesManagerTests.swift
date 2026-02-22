@@ -495,12 +495,12 @@ final class PreferencesManagerTests: XCTestCase {
 
         let cases: [(SB, Bool, Bool, D, String)] = [
             // stored               isRelease  migDone  expected                                                                  label
-            (.unset,                true,      false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "unset×release"),
-            (.unset,                false,     false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "unset×debug"),
-            (.value(true),          true,      false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "true×release"),
-            (.value(true),          false,     false,   D(effectiveValue: true,  shouldWriteEnabled: false, shouldSetMigrationDone: false), "true×debug"),
-            (.value(false),         true,      false,   D(effectiveValue: true,  shouldWriteEnabled: true,  shouldSetMigrationDone: true),  "false×release"),
-            (.value(false),         false,     false,   D(effectiveValue: false, shouldWriteEnabled: false, shouldSetMigrationDone: false), "false×debug"),
+            (.unset, true, false, D(effectiveValue: true, shouldWriteEnabled: false, shouldSetMigrationDone: false), "unset×release"),
+            (.unset, false, false, D(effectiveValue: true, shouldWriteEnabled: false, shouldSetMigrationDone: false), "unset×debug"),
+            (.value(true), true, false, D(effectiveValue: true, shouldWriteEnabled: false, shouldSetMigrationDone: false), "true×release"),
+            (.value(true), false, false, D(effectiveValue: true, shouldWriteEnabled: false, shouldSetMigrationDone: false), "true×debug"),
+            (.value(false), true, false, D(effectiveValue: true, shouldWriteEnabled: true, shouldSetMigrationDone: true), "false×release"),
+            (.value(false), false, false, D(effectiveValue: false, shouldWriteEnabled: false, shouldSetMigrationDone: false), "false×debug")
         ]
 
         for (stored, isRelease, migDone, expected, label) in cases {

@@ -6,8 +6,8 @@
 //  Allows RecordingController to work with any AudioCaptureServiceProtocol implementation.
 //
 
-import Foundation
 import CoreMedia
+import Foundation
 
 // MARK: - Shared Capture Error Type
 
