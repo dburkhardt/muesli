@@ -411,7 +411,9 @@ final class TranscriptionCoordinator {
     }
     
     /// Set draft handler for receiving tentative tail text updates
-    func setDraftHandler(_ handler: @escaping TranscriptionService.DraftHandler) {
+    func setDraftHandler(
+        _ handler: @escaping @Sendable (String, TranscriptionService.TranscriptSegment.Speaker) -> Void
+    ) {
         transcriptionService.setDraftHandler(handler)
     }
     
