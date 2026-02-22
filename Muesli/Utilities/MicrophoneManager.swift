@@ -211,6 +211,7 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         let systemDefaultUID = Self.getSystemDefaultInputUID()
         let defaultDevice = captureDevices.first(where: { $0.uniqueID == systemDefaultUID })
             ?? captureDevices.first
+        logger.info("System default input UID: \(systemDefaultUID ?? "unknown") → matched: \(defaultDevice?.localizedName ?? "none")")
         
         for device in captureDevices {
             // Filter out virtual aggregate devices created by ScreenCaptureKit
