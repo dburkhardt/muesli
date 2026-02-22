@@ -168,26 +168,26 @@ final class PreferencesManager {
     
     // MARK: - Audio Chunk Duration
     
-    /// Audio chunk duration for transcription (2-10 seconds)
+    /// Audio chunk duration for transcription (2-30 seconds)
     var audioChunkDuration: TimeInterval {
         get {
             // Check if key exists to distinguish "not set" from "invalid value"
             guard let savedObject = UserDefaults.standard.object(forKey: AppStorageKeys.audioChunkDuration) as? Double
             else {
                 // Key not set, return default
-                return 5.0
+                return AudioConfiguration.transcriptionChunkDuration
             }
             
             // Key exists, validate range
-            if savedObject < 2.0 || savedObject > 10.0 {
+            if savedObject < 2.0 || savedObject > 30.0 {
                 // Invalid value, return default
-                return 5.0
+                return AudioConfiguration.transcriptionChunkDuration
             }
             return savedObject
         }
         set {
             // Clamp to valid range
-            let clamped = min(max(newValue, 2.0), 10.0)
+            let clamped = min(max(newValue, 2.0), 30.0)
             UserDefaults.standard.set(clamped, forKey: AppStorageKeys.audioChunkDuration)
             audioChunkDurationDidChange?(clamped)
         }

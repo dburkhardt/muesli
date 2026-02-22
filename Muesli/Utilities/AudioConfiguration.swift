@@ -19,11 +19,23 @@ enum AudioConfiguration {
     
     // MARK: - Transcription Timing
     
-    /// Duration of each transcription chunk for live recordings (seconds)
-    static let transcriptionChunkDuration: TimeInterval = 5.0
+    /// Duration of each transcription chunk for live recordings (seconds).
+    /// Whisper was trained on 30s windows; longer chunks improve accuracy.
+    /// 15s balances context quality with ~2-3s processing latency on M3.
+    static let transcriptionChunkDuration: TimeInterval = 15.0
     
     /// Overlap between transcription chunks for continuity (seconds)
-    static let transcriptionOverlapDuration: TimeInterval = 1.5
+    static let transcriptionOverlapDuration: TimeInterval = 3.0
+    
+    /// Duration of warmup chunks at the start of a recording (seconds).
+    /// Shorter than steady-state to get initial text on screen quickly.
+    static let warmupChunkDuration: TimeInterval = 5.0
+    
+    /// Number of warmup chunks per speaker before switching to full duration
+    static let warmupChunkCount: Int = 1
+    
+    /// Overlap for warmup chunks (seconds)
+    static let warmupOverlapDuration: TimeInterval = 1.5
     
     /// Post-processing chunk duration (30 seconds - Whisper's optimal training window)
     static let postProcessingChunkDuration: TimeInterval = 30.0
@@ -39,6 +51,16 @@ enum AudioConfiguration {
     /// Overlap samples between chunks
     static var overlapSamples: Int {
         Int(Double(whisperSampleRate) * transcriptionOverlapDuration)
+    }
+    
+    /// Minimum samples for warmup chunks
+    static var warmupMinSamples: Int {
+        whisperSampleRate * Int(warmupChunkDuration)
+    }
+    
+    /// Overlap samples for warmup chunks
+    static var warmupOverlapSamples: Int {
+        whisperSampleRate * Int(warmupOverlapDuration)
     }
     
     // MARK: - Buffer Management

@@ -73,6 +73,12 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Cumulative sample counters for audio-timeline timestamps
         var systemTotalSamplesReceived: Int = 0
         var micTotalSamplesReceived: Int = 0
+        // Warmup tracking: count chunks processed per speaker
+        var systemChunksProcessed: Int = 0
+        var micChunksProcessed: Int = 0
+        // Context chaining: last transcript suffix per speaker (~200 chars)
+        var systemLastTranscriptSuffix: String = ""
+        var micLastTranscriptSuffix: String = ""
     }
     private let bufferState = OSAllocatedUnfairLock(initialState: BufferState())
     
@@ -81,10 +87,14 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     // Configuration (using centralized AudioConfiguration)
     private let chunkDuration: TimeInterval
-    private let overlapDuration: TimeInterval = AudioConfiguration.transcriptionOverlapDuration
     private let sampleRate: Int = AudioConfiguration.whisperSampleRate
     private let minSamplesForProcessing: Int  // Minimum samples before processing
     private let overlapSamples: Int  // Samples to overlap between chunks
+    
+    // Warmup configuration: warmup is skipped when user chunk <= warmup duration
+    private let warmupMinSamples: Int
+    private let warmupOverlapSamples: Int
+    private let warmupChunkCount: Int
     
     // VAD configuration
     private let vadThreshold: Float = AudioConfiguration.vadThreshold
@@ -92,20 +102,31 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     // MARK: - Initialization
     
     /// Initialize transcription service with optional chunk duration
-    /// - Parameter chunkDuration: Duration of each transcription chunk (2-10 seconds), defaults to 5.0
+    /// - Parameter chunkDuration: Duration of each transcription chunk (2-30 seconds), defaults to 15.0
     init(chunkDuration: TimeInterval = AudioConfiguration.transcriptionChunkDuration) {
         // Clamp chunk duration to valid range
-        self.chunkDuration = min(max(chunkDuration, 2.0), 10.0)
+        self.chunkDuration = min(max(chunkDuration, 2.0), 30.0)
         
         // Calculate samples based on chunk duration
         minSamplesForProcessing = sampleRate * Int(self.chunkDuration)
         
-        // Calculate overlap samples maintaining the standard ratio (1.5s / 5.0s = 30%)
-        // This ensures consistent overlap behavior across different chunk durations
+        // Calculate overlap: maintain ~20% ratio, using lround to avoid Int truncation
+        // that would yield zero overlap for short durations (e.g. 3s * 0.2 = 0.6 → Int = 0)
         let overlapRatio = AudioConfiguration.transcriptionOverlapDuration /
             AudioConfiguration.transcriptionChunkDuration
         let overlapDuration = self.chunkDuration * overlapRatio
-        overlapSamples = sampleRate * Int(overlapDuration)
+        overlapSamples = Int(lround(overlapDuration)) * sampleRate
+        
+        // Skip warmup when user-configured chunk is already at or below warmup duration
+        if self.chunkDuration <= AudioConfiguration.warmupChunkDuration {
+            warmupMinSamples = minSamplesForProcessing
+            warmupOverlapSamples = overlapSamples
+            warmupChunkCount = 0
+        } else {
+            warmupMinSamples = AudioConfiguration.warmupMinSamples
+            warmupOverlapSamples = AudioConfiguration.warmupOverlapSamples
+            warmupChunkCount = AudioConfiguration.warmupChunkCount
+        }
     }
     
     // MARK: - Setup
@@ -162,6 +183,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             state.micProcessedSamples = 0
             state.systemTotalSamplesReceived = 0
             state.micTotalSamplesReceived = 0
+            state.systemChunksProcessed = 0
+            state.micChunksProcessed = 0
+            state.systemLastTranscriptSuffix = ""
+            state.micLastTranscriptSuffix = ""
             state.isProcessing = true
         }
         
@@ -232,7 +257,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Skip processing if in post-processing mode
         guard transcriptionMode == .live else { return }
         
-        // Get chunks to process with overlap
+        // Get chunks to process with overlap, using dynamic thresholds for warmup
         let chunkInfo: ChunkInfo = bufferState.withLock { state -> ChunkInfo in
             var sysChunk: [Float]?
             var micChunk: [Float]?
@@ -242,24 +267,30 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             var sysCumulativeOffset = 0
             var micCumulativeOffset = 0
 
+            // Dynamic thresholds: use smaller chunks during warmup for faster initial output
+            let sysWarmup = state.systemChunksProcessed < warmupChunkCount
+            let sysMinSamples = sysWarmup ? warmupMinSamples : minSamplesForProcessing
+            let sysOverlap = sysWarmup ? warmupOverlapSamples : overlapSamples
+
             // Extract system audio chunk with overlap
-            if state.systemAudioBuffer.count >= minSamplesForProcessing {
-                // For first chunk, start at 0. For subsequent chunks, include overlap
+            if state.systemAudioBuffer.count >= sysMinSamples {
                 let startIndex = state.systemProcessedSamples > 0 ?
-                    max(0, state.systemProcessedSamples - overlapSamples) : 0
-                let endIndex = startIndex + minSamplesForProcessing
+                    max(0, state.systemProcessedSamples - sysOverlap) : 0
+                let endIndex = startIndex + sysMinSamples
 
                 if endIndex <= state.systemAudioBuffer.count {
                     sysChunk = Array(state.systemAudioBuffer[startIndex..<endIndex])
                     sysOffset = startIndex
-                    // Compute cumulative offset: total received minus what remains in buffer after this chunk,
-                    // plus where we started reading within the buffer.
                     sysCumulativeOffset = state.systemTotalSamplesReceived - state.systemAudioBuffer.count + startIndex
-                    // Remove samples up to endIndex (but keep overlap for next chunk)
-                    let samplesToRemove = endIndex - overlapSamples
+                    // Keep overlap for next chunk; use the NEXT chunk's overlap size.
+                    // Don't increment chunksProcessed here — wait until after VAD confirms
+                    // voice activity so silent chunks don't consume warmup.
+                    let nextOverlap = (state.systemChunksProcessed + 1) < warmupChunkCount
+                        ? warmupOverlapSamples : overlapSamples
+                    let samplesToRemove = endIndex - nextOverlap
                     if samplesToRemove > 0 {
                         state.systemAudioBuffer.removeFirst(samplesToRemove)
-                        state.systemProcessedSamples = overlapSamples
+                        state.systemProcessedSamples = nextOverlap
                     } else {
                         state.systemAudioBuffer.removeFirst(endIndex)
                         state.systemProcessedSamples = 0
@@ -267,19 +298,26 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 }
             }
 
+            // Dynamic thresholds for mic
+            let micWarmup = state.micChunksProcessed < warmupChunkCount
+            let micMinSamples = micWarmup ? warmupMinSamples : minSamplesForProcessing
+            let micOverlap = micWarmup ? warmupOverlapSamples : overlapSamples
+
             // Extract mic audio chunk with overlap
-            if state.micAudioBuffer.count >= minSamplesForProcessing {
-                let startIndex = state.micProcessedSamples > 0 ? max(0, state.micProcessedSamples - overlapSamples) : 0
-                let endIndex = startIndex + minSamplesForProcessing
+            if state.micAudioBuffer.count >= micMinSamples {
+                let startIndex = state.micProcessedSamples > 0 ? max(0, state.micProcessedSamples - micOverlap) : 0
+                let endIndex = startIndex + micMinSamples
 
                 if endIndex <= state.micAudioBuffer.count {
                     micChunk = Array(state.micAudioBuffer[startIndex..<endIndex])
                     micOffset = startIndex
                     micCumulativeOffset = state.micTotalSamplesReceived - state.micAudioBuffer.count + startIndex
-                    let samplesToRemove = endIndex - overlapSamples
+                    let nextOverlap = (state.micChunksProcessed + 1) < warmupChunkCount
+                        ? warmupOverlapSamples : overlapSamples
+                    let samplesToRemove = endIndex - nextOverlap
                     if samplesToRemove > 0 {
                         state.micAudioBuffer.removeFirst(samplesToRemove)
-                        state.micProcessedSamples = overlapSamples
+                        state.micProcessedSamples = nextOverlap
                     } else {
                         state.micAudioBuffer.removeFirst(endIndex)
                         state.micProcessedSamples = 0
@@ -298,30 +336,43 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             )
         }
 
-        // Process system audio ("Them") with VAD check
+        // Read context for chaining before transcription
+        let systemContext = bufferState.withLock { $0.systemLastTranscriptSuffix }
+        let micContext = bufferState.withLock { $0.micLastTranscriptSuffix }
+
+        // Process system audio ("Them") with VAD check.
+        // Warmup counter is advanced here (not in the lock) so silent chunks don't consume warmup.
         if let chunk = chunkInfo.systemChunk, hasVoiceActivity(chunk) {
+            bufferState.withLock { $0.systemChunksProcessed += 1 }
             Task { await DiagnosticLogger.shared.log(.transcription,
                 "Live chunk: speaker=them, samples=\(chunk.count)") }
-            await transcribeChunk(
+            if let resultText = await transcribeChunk(
                 chunk,
                 speaker: .them,
                 whisperKit: whisperKit,
                 startTime: chunkInfo.startTime,
-                cumulativeSampleOffset: chunkInfo.systemCumulativeOffset
-            )
+                cumulativeSampleOffset: chunkInfo.systemCumulativeOffset,
+                previousText: systemContext.isEmpty ? nil : systemContext
+            ) {
+                bufferState.withLock { $0.systemLastTranscriptSuffix = String(resultText.suffix(200)) }
+            }
         }
 
         // Process mic audio ("Me") with VAD check
         if let chunk = chunkInfo.micChunk, hasVoiceActivity(chunk) {
+            bufferState.withLock { $0.micChunksProcessed += 1 }
             Task { await DiagnosticLogger.shared.log(.transcription,
                 "Live chunk: speaker=me, samples=\(chunk.count)") }
-            await transcribeChunk(
+            if let resultText = await transcribeChunk(
                 chunk,
                 speaker: .me,
                 whisperKit: whisperKit,
                 startTime: chunkInfo.startTime,
-                cumulativeSampleOffset: chunkInfo.micCumulativeOffset
-            )
+                cumulativeSampleOffset: chunkInfo.micCumulativeOffset,
+                previousText: micContext.isEmpty ? nil : micContext
+            ) {
+                bufferState.withLock { $0.micLastTranscriptSuffix = String(resultText.suffix(200)) }
+            }
         }
     }
     
@@ -331,17 +382,23 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         struct RemainingAudio {
             let system: [Float]; let mic: [Float]; let startTime: Date
             let sysOffset: Int; let micOffset: Int
+            let sysContext: String; let micContext: String
         }
         let extracted = bufferState.withLock { state -> RemainingAudio in
             let sys = state.systemAudioBuffer
             let mic = state.micAudioBuffer
             let time = state.recordingStartTime ?? Date()
-            // Cumulative offset for remaining audio: total received minus what's left in the buffer
             let sysOffset = state.systemTotalSamplesReceived - state.systemAudioBuffer.count
             let micOffset = state.micTotalSamplesReceived - state.micAudioBuffer.count
+            let sysCtx = state.systemLastTranscriptSuffix
+            let micCtx = state.micLastTranscriptSuffix
             state.systemAudioBuffer.removeAll()
             state.micAudioBuffer.removeAll()
-            return RemainingAudio(system: sys, mic: mic, startTime: time, sysOffset: sysOffset, micOffset: micOffset)
+            return RemainingAudio(
+                system: sys, mic: mic, startTime: time,
+                sysOffset: sysOffset, micOffset: micOffset,
+                sysContext: sysCtx, micContext: micCtx
+            )
         }
 
         let remainingSystem = extracted.system
@@ -349,6 +406,8 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         let startTime = extracted.startTime
         let sysCumulativeOffset = extracted.sysOffset
         let micCumulativeOffset = extracted.micOffset
+        let sysContext = extracted.sysContext
+        let micContext = extracted.micContext
         
         // Log remaining audio for debugging
         if !remainingSystem.isEmpty {
@@ -366,9 +425,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // This prevents short/noisy trailing audio from generating hallucinations
         if !remainingSystem.isEmpty && hasVoiceActivity(remainingSystem) {
             logger.info("Processing remaining system audio (passed VAD)")
-            await transcribeChunk(
+            _ = await transcribeChunk(
                 remainingSystem, speaker: .them, whisperKit: whisperKit,
-                startTime: startTime, cumulativeSampleOffset: sysCumulativeOffset
+                startTime: startTime, cumulativeSampleOffset: sysCumulativeOffset,
+                previousText: sysContext.isEmpty ? nil : sysContext
             )
         } else if !remainingSystem.isEmpty {
             logger.info("Skipping remaining system audio (failed VAD)")
@@ -377,9 +437,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Process remaining mic audio ONLY if it passes VAD check
         if !remainingMic.isEmpty && hasVoiceActivity(remainingMic) {
             logger.info("Processing remaining mic audio (passed VAD)")
-            await transcribeChunk(
+            _ = await transcribeChunk(
                 remainingMic, speaker: .me, whisperKit: whisperKit,
-                startTime: startTime, cumulativeSampleOffset: micCumulativeOffset
+                startTime: startTime, cumulativeSampleOffset: micCumulativeOffset,
+                previousText: micContext.isEmpty ? nil : micContext
             )
         } else if !remainingMic.isEmpty {
             logger.info("Skipping remaining mic audio (failed VAD)")
@@ -388,57 +449,82 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     // MARK: - Decoding Options
     
-    /// Build optimized DecodingOptions for transcription
-    /// Configures language, temperature fallback, and quality thresholds
-    private func buildDecodingOptions() -> DecodingOptions {
-        DecodingOptions(
-            language: "en",                          // Explicit English - no auto-detect overhead
-            temperature: 0.0,                        // Greedy decoding (default)
-            temperatureIncrementOnFallback: 0.2,     // Retry with higher temp on failures
-            temperatureFallbackCount: 3,             // Limit retries
+    /// Build optimized DecodingOptions for transcription.
+    /// When previousText is provided, encodes it as promptTokens to condition the decoder
+    /// on prior context (improves capitalization, proper nouns, cross-chunk continuity).
+    private func buildDecodingOptions(previousText: String? = nil) -> DecodingOptions {
+        var promptTokens: [Int]?
+        if let text = previousText, !text.isEmpty, let tokenizer = whisperKit?.tokenizer {
+            let encoded = tokenizer.encode(text: text)
+                .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+            if !encoded.isEmpty {
+                promptTokens = encoded
+                let tokenCount = encoded.count
+                Task { await DiagnosticLogger.shared.log(.transcription,
+                    "Context chaining: \(tokenCount) prompt tokens from \(text.count) chars") }
+            }
+        }
+        return DecodingOptions(
+            language: "en",
+            temperature: 0.0,
+            temperatureIncrementOnFallback: 0.2,
+            temperatureFallbackCount: 3,
             usePrefillPrompt: true,
             usePrefillCache: true,
-            suppressBlank: true,                     // Prevent "[BLANK_AUDIO]" hallucinations
-            compressionRatioThreshold: 1.8,          // Aggressively detect repetitive hallucinations
-            logProbThreshold: -0.7,                  // Reject low-confidence outputs more strictly
-            noSpeechThreshold: 0.5                   // More sensitive silence detection
+            promptTokens: promptTokens,
+            suppressBlank: true,
+            compressionRatioThreshold: 1.8,
+            logProbThreshold: -1.0,
+            firstTokenLogProbThreshold: -1.5,
+            noSpeechThreshold: 0.5
         )
     }
     
+    /// Transcribe an audio chunk and return the result text for context chaining.
+    /// If promptTokens cause an empty result (WhisperKit #372), retries without context.
+    @discardableResult
     private func transcribeChunk(
         _ samples: [Float],
         speaker: TranscriptSegment.Speaker,
         whisperKit: WhisperKit,
         startTime: Date,
-        cumulativeSampleOffset: Int = 0
-    ) async {
+        cumulativeSampleOffset: Int = 0,
+        previousText: String? = nil
+    ) async -> String? {
         do {
-            // Transcribe the audio chunk with optimized decoding options
-            let options = buildDecodingOptions()
-            let results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
+            var options = buildDecodingOptions(previousText: previousText)
+            var results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
+
+            // Retry without prompt tokens if we got an empty result with active context.
+            // WhisperKit issue #372: promptTokens can trigger false "no speech" detection.
+            if (results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                && previousText != nil {
+                Task { await DiagnosticLogger.shared.log(.transcription,
+                    "Context retry: empty result with promptTokens, retrying without context for \(speaker.rawValue)") }
+                options = buildDecodingOptions(previousText: nil)
+                results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
+            }
 
             guard let result = results.first,
                   !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
-                return
+                return nil
             }
 
-            // Use audio-timeline timestamp (cumulative samples / sample rate) instead of wall-clock.
-            // Wall-clock (Date().timeIntervalSince(startTime)) drifts by chunk accumulation + inference latency.
             let timestamp = Double(cumulativeSampleOffset) / Double(sampleRate)
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             
             let segment = TranscriptSegment(
-                text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                text: text,
                 timestamp: timestamp,
                 speaker: speaker
             )
             
-            // Notify handler
             transcriptHandler?(segment)
+            return text
         } catch {
             logger.error("Transcription error: \(error.localizedDescription)")
             
-            // Propagate warning to UI
             let details = """
                 Transcription chunk failed.
                 Error: \(error.localizedDescription)
@@ -448,6 +534,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 Transcription will continue with subsequent audio chunks.
                 """
             warningHandler?("Transcription error", details)
+            return nil
         }
     }
     
