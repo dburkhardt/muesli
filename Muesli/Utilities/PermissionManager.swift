@@ -169,14 +169,11 @@ final class PermissionManager: PermissionManagerProtocol {
             // Run a fresh tap probe — the cached audioCaptureGranted is still false from the
             // initial deny. Reading the cache here (refreshPermissions) would leave the user
             // permanently blocked even after granting in System Settings.
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let probeResult = await self.triggerSystemAudioPermissionPrompt()
-                UserDefaults.standard.set(probeResult, forKey: self.systemAudioPermissionDefaultsKey)
-                self.audioCaptureGranted = probeResult
-                self.microphoneGranted = self.hasMicrophonePermission
-                self.permissionDidChange?(self.audioCaptureGranted, self.microphoneGranted)
-            }
+            let probeResult = await triggerSystemAudioPermissionPrompt()
+            UserDefaults.standard.set(probeResult, forKey: systemAudioPermissionDefaultsKey)
+            audioCaptureGranted = probeResult
+            microphoneGranted = hasMicrophonePermission
+            permissionDidChange?(audioCaptureGranted, microphoneGranted)
         } else if awaitingMicrophoneFromSettings {
             awaitingMicrophoneFromSettings = false
             _ = refreshPermissions()

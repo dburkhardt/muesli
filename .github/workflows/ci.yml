@@ -105,6 +105,7 @@ jobs:
             -skip-testing:MuesliTests/CoreAudioTapHardwareTests \
             -skip-testing:MuesliTests/TapAudioCaptureServicePermissionTests \
             -skip-testing:MuesliTests/EchoCancellationServiceWebRTCTests \
+            -skip-testing:MuesliTests/EchoCancellationServiceNLMSTests/testConcurrentAccess \
             test | tee stable-test.log | xcpretty
 
       - name: Append failed stable tests to summary

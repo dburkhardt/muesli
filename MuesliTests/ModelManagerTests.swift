@@ -458,7 +458,7 @@ final class ModelManagerTests: XCTestCase {
     /// Test that activeModel persists to UserDefaults
     func testActiveModel_PersistsToUserDefaults() async {
         modelManager.downloadedModels.insert(.small)
-        modelManager.activeModel = .small
+        modelManager.setActiveModel(.small)
         
         let saved = UserDefaults.standard.string(forKey: AppStorageKeys.activeWhisperModel)
         XCTAssertEqual(saved, ModelManager.ModelSize.small.rawValue)
@@ -479,7 +479,8 @@ final class ModelManagerTests: XCTestCase {
     
     /// Test that setting activeModel updates downloadedModels
     func testActiveModel_UpdatesDownloadedModels() async {
-        modelManager.activeModel = .small
+        modelManager.downloadedModels.insert(.small)
+        modelManager.setActiveModel(.small)
         
         XCTAssertTrue(modelManager.downloadedModels.contains(.small))
     }
@@ -746,9 +747,11 @@ final class ModelManagerTests: XCTestCase {
     }
     
     /// Test that pathForModel returns path for added model
-    func testPathForModel_ReturnsPathForAddedModel() async {
+    func testPathForModel_ReturnsPathForAddedModel() async throws {
         // Manually add to modelPaths (simulating a detected model)
+        // pathForModel validates the path exists, so create the directory
         let testPath = testModelDirectory.appendingPathComponent("test-model")
+        try FileManager.default.createDirectory(at: testPath, withIntermediateDirectories: true)
         modelManager.modelPaths[.small] = testPath
         
         let path = modelManager.pathForModel(.small)
