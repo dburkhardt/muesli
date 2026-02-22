@@ -219,6 +219,30 @@ jobs:
             exit 1
           fi
 
+          echo "Waiting for CI run ${CI_RUN_ID} to complete..."
+          for wait in $(seq 1 80); do
+            RUN_STATUS=$(curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}/actions/runs/${CI_RUN_ID}" | jq -r '.status')
+            if [ "$RUN_STATUS" = "completed" ]; then
+              break
+            fi
+            echo "CI run still ${RUN_STATUS} (attempt ${wait}/80); waiting 30s..."
+            sleep 30
+          done
+
+          CI_CONCLUSION=$(curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${API}/actions/runs/${CI_RUN_ID}" | jq -r '.conclusion')
+
+          if [ "$CI_CONCLUSION" != "success" ]; then
+            echo "::error::CI run ${CI_RUN_ID} concluded with '${CI_CONCLUSION}', not 'success'. Refusing to release."
+            exit 1
+          fi
+          echo "✅ CI run ${CI_RUN_ID} completed successfully"
+
           curl -fsSL \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \

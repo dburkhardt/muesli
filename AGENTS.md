@@ -401,6 +401,8 @@ This is useful for:
 - Creating builds from non-main branches
 - Re-running failed releases
 
+**Signed manual releases require a successful CI run** for the same commit SHA (non-PR event). The release workflow verifies the CI run completed with `conclusion: success` before accepting the WebRTC fingerprint. If the commit only has PR CI runs, signed manual release will fail because PR runs skip fingerprint generation (PR merge-commit SHAs differ from real commit SHAs). To do a signed manual release, ensure the commit was pushed to `main` or tagged first so CI produces the fingerprint artifact.
+
 ### Manual docs/download update runbook
 
 `release.yml` no longer writes to `main` or edits website files. After a release is published, update docs manually:
