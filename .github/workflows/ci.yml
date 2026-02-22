@@ -132,7 +132,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Generate coverage report
-        if: always()
+        if: success()
         run: |
           COVERAGE_FILE="stable-tests.xcresult"
           if [ ! -d "$COVERAGE_FILE" ]; then
@@ -164,7 +164,7 @@ jobs:
           PYTHON_SCRIPT
 
       - name: Upload coverage to Codecov
-        if: always()
+        if: success()
         # codecov/codecov-action v5
         uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de
         with:

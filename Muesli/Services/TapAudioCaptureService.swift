@@ -55,7 +55,7 @@ final class AudioFrameMetadataRing {
         lock.lock()
         defer { lock.unlock() }
 
-        guard !isEmpty else { return nil }
+        guard count > 0 else { return nil }
 
         let metadata = (
             hostTime: hostTimes[readIndex],
