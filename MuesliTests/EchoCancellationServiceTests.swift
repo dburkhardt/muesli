@@ -6,7 +6,6 @@ import XCTest
 /// Tests for EchoCancellationServiceWebRTC
 /// Tests hybrid synchronization approach with coarse alignment in Swift, fine-grained in WebRTC
 final class EchoCancellationServiceWebRTCTests: XCTestCase {
-    
     var sut: EchoCancellationServiceWebRTC!
     
     override func setUp() {
@@ -241,7 +240,6 @@ final class EchoCancellationServiceWebRTCTests: XCTestCase {
 
 /// Tests for AudioRingBuffer
 final class AudioRingBufferTests: XCTestCase {
-    
     func testBasicPushAndPop() {
         var buffer = AudioRingBuffer(capacity: 100)
         let samples: [Float] = [1.0, 2.0, 3.0, 4.0, 5.0]

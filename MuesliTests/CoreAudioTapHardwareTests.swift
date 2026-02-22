@@ -6,12 +6,11 @@
 //  These are quarantined from CI and run locally only.
 //
 
-import XCTest
 import AudioToolbox
 @testable import Muesli
+import XCTest
 
 final class CoreAudioTapHardwareTests: XCTestCase {
-
     // MARK: - AggregateDeviceManager Integration Tests
 
     func testAggregateDeviceCreation() throws {
@@ -36,7 +35,7 @@ final class CoreAudioTapHardwareTests: XCTestCase {
         )
         let manager = AggregateDeviceManager()
 
-        let _ = try manager.createTapOnlyDevice(excludedProcessIDs: [], isExclusive: false)
+        _ = try manager.createTapOnlyDevice(excludedProcessIDs: [], isExclusive: false)
 
         let format = try manager.getTapFormat()
 
@@ -66,7 +65,7 @@ final class CoreAudioTapHardwareTests: XCTestCase {
                 sampleRate: 48000, channelCount: 2, frameQuantum: 480,
                 excludedProcessIDs: [], isExclusive: false
             ),
-            callback: { samples, frameCount, sampleTime, hostTime in
+            callback: { samples, frameCount, _, _ in
                 callbackCount += 1
                 if lastSamples.isEmpty && frameCount > 0 {
                     let count = min(Int(frameCount) * 2, 100)
@@ -98,7 +97,7 @@ final class CoreAudioTapHardwareTests: XCTestCase {
                 sampleRate: 48000, channelCount: 2, frameQuantum: 480,
                 excludedProcessIDs: [], isExclusive: false
             ),
-            callback: { samples, frameCount, sampleTime, hostTime in
+            callback: { samples, frameCount, _, _ in
                 totalCallbacks += 1
                 let count = Int(frameCount) * 2
                 for i in 0..<count {
@@ -139,7 +138,7 @@ final class CoreAudioTapHardwareTests: XCTestCase {
                 sampleRate: 48000, channelCount: 2, frameQuantum: 480,
                 excludedProcessIDs: [], isExclusive: false
             ),
-            callback: { samples, frameCount, sampleTime, hostTime in
+            callback: { samples, frameCount, _, _ in
                 if !formatChecked {
                     formatChecked = true
                     let count = min(Int(frameCount) * 2, 100)

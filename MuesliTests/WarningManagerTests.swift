@@ -4,7 +4,6 @@ import XCTest
 /// Tests for WarningManager
 @MainActor
 final class WarningManagerTests: XCTestCase {
-
     var manager: WarningManager!
 
     override func setUp() async throws {

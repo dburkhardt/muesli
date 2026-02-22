@@ -6,13 +6,12 @@
 //  Tests ring buffers, synchronizer, delay controller, and drift tracker.
 //
 
-import XCTest
 import AudioToolbox
-import os.lock
 @testable import Muesli
+import os.lock
+import XCTest
 
 final class CoreAudioTapTests: XCTestCase {
-
     // MARK: - TapCaptureRing Tests
     
     func testTapCaptureRingBasicPushPop() {
@@ -472,7 +471,6 @@ final class CoreAudioTapTests: XCTestCase {
 // MARK: - TapAudioCaptureService Permission Tests
 
 final class TapAudioCaptureServicePermissionTests: XCTestCase {
-
     func testStartCaptureAttempsTapEvenWhenCachedPermissionIsFalse() async throws {
         // Given: A service with cached permission check returning false
         let service = TapAudioCaptureService(checkPermission: { false })
@@ -527,7 +525,6 @@ final class TapAudioCaptureServicePermissionTests: XCTestCase {
 // MARK: - AEC Pipeline Regression Tests
 
 extension CoreAudioTapTests {
-
     // MARK: - Ring Discontinuity Detection Tests
 
     func testTapCaptureRingNoDiscontinuityOnValidGaps() {

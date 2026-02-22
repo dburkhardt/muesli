@@ -3,7 +3,6 @@ import XCTest
 
 /// Tests for MuesliError, RecordingError, and ServiceWarning types
 final class MuesliErrorTests: XCTestCase {
-
     // MARK: - Error Description Tests
 
     func testScreenRecordingDeniedDescription() {

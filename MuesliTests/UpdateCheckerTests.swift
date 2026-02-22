@@ -5,7 +5,6 @@ import XCTest
 /// Network-dependent tests are not included.
 @MainActor
 final class UpdateCheckerTests: XCTestCase {
-
     override func setUp() async throws {
         try await super.setUp()
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.lastUpdateCheckDate)

@@ -5,8 +5,8 @@
 //  Core Audio utility functions for tap management
 //
 
-import Foundation
 import CoreAudio
+import Foundation
 import os.log
 
 private let logger = Logger(subsystem: "com.dburkhardt.muesli", category: "CoreAudioHelpers")
@@ -33,7 +33,6 @@ enum CoreAudioError: Error {
 
 /// Core Audio utility functions
 struct CoreAudioHelpers {
-
     // MARK: - Device Discovery
 
     /// Get the default output device ID

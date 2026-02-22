@@ -6,10 +6,10 @@
 //  Orchestrates: TapManager -> Synchronizer -> AEC -> Worker -> Output
 //
 
-import Foundation
-import CoreMedia
-import AVFoundation
 import AudioToolbox
+import AVFoundation
+import CoreMedia
+import Foundation
 import os.lock
 import os.log
 import QuartzCore
@@ -55,7 +55,7 @@ final class AudioFrameMetadataRing {
         lock.lock()
         defer { lock.unlock() }
 
-        guard count > 0 else { return nil }
+        guard !isEmpty else { return nil }
 
         let metadata = (
             hostTime: hostTimes[readIndex],
@@ -82,7 +82,6 @@ final class AudioFrameMetadataRing {
 /// Provides synchronized, echo-cancelled audio for transcription
 ///
 actor TapAudioCaptureService: AudioCaptureServiceProtocol {
-
     // MARK: - Types
 
     /// Audio type identifier - uses shared AudioStreamType for compatibility

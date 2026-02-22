@@ -15,7 +15,6 @@ import os.log
 /// Controls coarse delay estimation for render-capture alignment
 /// Uses conservative hysteresis and slew limiting to prevent AEC instability
 final class CoarseDelayController {
-    
     // MARK: - Configuration (from plan)
     
     /// Hysteresis deadband in samples (15ms at 48kHz)

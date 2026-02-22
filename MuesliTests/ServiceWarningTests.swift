@@ -3,7 +3,6 @@ import XCTest
 
 /// Tests for ServiceWarning model
 final class ServiceWarningTests: XCTestCase {
-
     // MARK: - Initialization Tests
 
     func testDefaultInitialization() {

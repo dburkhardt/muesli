@@ -4,7 +4,6 @@ import XCTest
 /// Tests for RecordingSession state machine, timer, and transcript management
 @MainActor
 final class RecordingSessionTests: XCTestCase {
-
     // MARK: - Initialization Tests
 
     func testDefaultState() {

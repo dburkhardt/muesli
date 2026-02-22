@@ -25,7 +25,6 @@ enum AECImplementation: String, CaseIterable, Identifiable, Codable {
 
 /// Factory for creating the appropriate AEC service based on preferences
 enum EchoCancellationServiceFactory {
-    
     /// Create an echo cancellation service based on the specified implementation
     /// - Parameter implementation: The AEC implementation to use (default: .webrtc)
     /// - Returns: An instance conforming to EchoCancellationServiceProtocol
@@ -536,31 +535,31 @@ final class EchoCancellationServiceNLMS: @unchecked Sendable, EchoCancellationSe
     
     /// Struct to hold gap detection log info returned from lock
     private struct GapLogInfo: Sendable {
-        var largeGapWarning: Int64? = nil
-        var gapSamples: Int64? = nil
-        var gapMs: Double? = nil
+        var largeGapWarning: Int64?
+        var gapSamples: Int64?
+        var gapMs: Double?
         var isNegative: Bool = false
     }
     
     /// Struct to hold sync-related log messages returned from checkAndSynchronizeStreams
     private struct SyncLogInfo: Sendable {
-        var syncWarning: String? = nil
-        var offsetValidation: String? = nil
-        var offsetMsg: String? = nil
-        var stateMsg: String? = nil
-        var driftMsg: String? = nil
-        var timeoutMsg: String? = nil
+        var syncWarning: String?
+        var offsetValidation: String?
+        var offsetMsg: String?
+        var stateMsg: String?
+        var driftMsg: String?
+        var timeoutMsg: String?
     }
     
     /// Struct to hold processing-related log messages returned from processMicrophoneAudio lock
     private struct ProcessingLogInfo: Sendable {
-        var micGap: Int64? = nil
-        var offsetCheck: String? = nil
-        var indexDiag: String? = nil
-        var boundsError: String? = nil
-        var matchMsg: String? = nil
-        var lookupMsg: String? = nil
-        var bufferGapMsg: String? = nil
+        var micGap: Int64?
+        var offsetCheck: String?
+        var indexDiag: String?
+        var boundsError: String?
+        var matchMsg: String?
+        var lookupMsg: String?
+        var bufferGapMsg: String?
     }
     
     /// Store system audio as reference signal for echo cancellation
@@ -1029,7 +1028,6 @@ final class EchoCancellationServiceNLMS: @unchecked Sendable, EchoCancellationSe
         if !state.offsetCalculated &&
            state.systemAudioBufferTimes.count >= kBuffersToAverage &&
            state.microphoneBufferTimes.count >= kBuffersToAverage {
-            
             // Average the timestamps to reduce jitter (especially after sleep/wake)
             let avgSysTime = state.systemAudioBufferTimes.reduce(0, +) / Double(kBuffersToAverage)
             let avgMicTime = state.microphoneBufferTimes.reduce(0, +) / Double(kBuffersToAverage)
@@ -1159,8 +1157,7 @@ final class EchoCancellationServiceNLMS: @unchecked Sendable, EchoCancellationSe
         // Track match statistics (keeping per AGENTS.md)
         let matchFound = result != nil
         let logData: (shouldLog: Bool, hits: Int, total: Int, rate: Double) = Self.matchCounterLock.withLock { counters in
-            if matchFound { counters.hits += 1 }
-            else { counters.misses += 1 }
+            if matchFound { counters.hits += 1 } else { counters.misses += 1 }
             let total = counters.hits + counters.misses
             // Log every 100th call to avoid performance impact
             if total % 100 == 0 {

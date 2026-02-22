@@ -4,7 +4,6 @@ import XCTest
 /// Tests for MeetingHistoryItem and related types
 @MainActor
 final class MeetingHistoryItemTests: XCTestCase {
-
     // MARK: - Initialization Tests
 
     func testDefaultInitialization() {

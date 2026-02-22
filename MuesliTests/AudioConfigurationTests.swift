@@ -3,7 +3,6 @@ import XCTest
 
 /// Tests for AudioConfiguration constants and computed properties
 final class AudioConfigurationTests: XCTestCase {
-
     // MARK: - Sample Rate Tests
 
     func testWhisperSampleRate() {

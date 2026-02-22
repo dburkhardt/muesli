@@ -44,7 +44,6 @@ struct AudioPacket {
 /// Sample-index based: Each packet is tagged with its stream position,
 /// enabling precise pairing with capture packets.
 final class TapCaptureRing {
-    
     // MARK: - Configuration
     
     /// Default capacity: 600ms of audio at 48kHz (speakerphone mode max buffer)
