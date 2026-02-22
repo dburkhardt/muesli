@@ -1763,7 +1763,9 @@ execute_uninstall() {
 # ============================================================================
 
 main() {
-    clear
+    if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+        clear 2>/dev/null || true
+    fi
     
     print_header "MUESLI UNINSTALLER"
     
