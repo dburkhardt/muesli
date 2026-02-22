@@ -284,8 +284,10 @@ jobs:
           fi
 
           if [ "${{ steps.policy.outputs.mode }}" = "unsigned" ]; then
-            VERSION="${VERSION}-unsigned"
-            echo "Adding -unsigned suffix for unsigned dispatch build"
+            case "$VERSION" in
+              *-unsigned) ;; # already has suffix
+              *) VERSION="${VERSION}-unsigned" ;;
+            esac
           fi
 
           if [ "${{ steps.policy.outputs.mode }}" = "unsigned" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
