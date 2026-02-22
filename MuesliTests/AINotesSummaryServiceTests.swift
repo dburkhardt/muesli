@@ -26,7 +26,7 @@ final class AINotesSummaryServiceTests: XCTestCase {
     
     func testSummarize_ThrowsWhenModelSelectedButNotLoaded() async {
         let llmManager = LLMManager(skipHubAccess: true)
-        llmManager.activeModel = .qwen3_1_7b
+        llmManager.activeModel = .llama323B
         let service = AINotesSummaryService(llmManager: llmManager)
         
         do {
