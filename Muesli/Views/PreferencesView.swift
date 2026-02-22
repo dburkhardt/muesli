@@ -278,6 +278,16 @@ struct GeneralPreferencesTab: View {
                 )
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                
+                Toggle(isOn: $prefs.showContinuityCameraDevices) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show Continuity Camera Devices")
+                        Text("Show iPhone and iPad microphones connected via Continuity Camera in the device list.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
             }
         }
         .formStyle(.grouped)

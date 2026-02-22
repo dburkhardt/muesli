@@ -584,6 +584,10 @@ final class MuesliViewModel {
             )
         }
         
+        preferencesManager.showContinuityCameraDevicesDidChange = { [weak self] _ in
+            self?.microphoneManager.refreshDevices()
+        }
+        
         // Check initial permission status
         refreshPermissions()
         

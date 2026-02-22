@@ -67,6 +67,9 @@ enum AppStorageKeys {
     /// Audio chunk duration for transcription (2-10 seconds)
     static let audioChunkDuration = "audioChunkDuration"
     
+    /// Whether to show Continuity Camera (iPhone/iPad) microphones in the device list
+    static let showContinuityCameraDevices = "showContinuityCameraDevices"
+    
     // MARK: - Export
     
     /// Whether automatic export is enabled
