@@ -123,6 +123,7 @@ final class ExportServiceTests: XCTestCase {
         let metadata = try JSONDecoder().decode(MeetingMetadata.self, from: metadataData)
         XCTAssertEqual(metadata.title, "Team Standup")
         XCTAssertTrue(metadata.hasAudio)
+        XCTAssertFalse(metadata.hasAISummary)
     }
     
     func testExportMeetingWithoutAudio() async throws {
@@ -327,6 +328,28 @@ final class ExportServiceTests: XCTestCase {
         let metadataData = try Data(contentsOf: metadataURL)
         let metadata = try JSONDecoder().decode(MeetingMetadata.self, from: metadataData)
         XCTAssertTrue(metadata.isRefined)
+    }
+    
+    func testExportMeetingWithAISummary() async throws {
+        let meeting = try createTestMeeting(title: "AI Summary Meeting")
+        let summaryURL = meeting.directory.appendingPathComponent("ai_summary.md")
+        try "Summary content".write(to: summaryURL, atomically: true, encoding: .utf8)
+        meeting.hasAISummary = true
+        
+        try await exportService.exportMeeting(meeting)
+        
+        let meetingExportDir = exportService.exportDirectory
+            .appendingPathComponent("meetings")
+            .appendingPathComponent(meeting.directory.lastPathComponent)
+        let metadataURL = meetingExportDir.appendingPathComponent("metadata.json")
+        let exportedSummaryURL = meetingExportDir.appendingPathComponent("ai_summary.md")
+        
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportedSummaryURL.path))
+        
+        let metadataData = try Data(contentsOf: metadataURL)
+        let metadata = try JSONDecoder().decode(MeetingMetadata.self, from: metadataData)
+        XCTAssertTrue(metadata.hasAISummary)
+        XCTAssertEqual(metadata.files.aiSummary, "ai_summary.md")
     }
     
     func testExportMeetingWithMultipleSegments() async throws {
@@ -589,6 +612,7 @@ private struct ExportManifest: Codable {
         let hasMicrophone: Bool
         let duration: TimeInterval?
         let wordCount: Int?
+        let hasAISummary: Bool
         let isRefined: Bool
         let segmentCount: Int
     }
@@ -603,6 +627,7 @@ private struct MeetingMetadata: Codable {
     let wordCount: Int?
     let hasAudio: Bool
     let hasMicrophone: Bool
+    let hasAISummary: Bool
     let isRefined: Bool
     let segmentCount: Int
     let segments: [SegmentInfo]
@@ -616,6 +641,7 @@ private struct MeetingMetadata: Codable {
     
     struct FileReferences: Codable {
         let transcript: String
+        let aiSummary: String?
         let audio: String?
         let microphone: String?
     }

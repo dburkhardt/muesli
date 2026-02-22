@@ -49,6 +49,7 @@ protocol FileOutputServiceProtocol: Sendable {
 protocol MeetingHistoryServiceProtocol {
     func discoverMeetings() -> [MeetingHistoryItem]
     func loadTranscript(for meeting: MeetingHistoryItem) -> String?
+    func loadAISummary(for meeting: MeetingHistoryItem) -> String?
     func loadTranscriptBlocks(for meeting: MeetingHistoryItem) -> [TranscriptBlock]?
     func loadOriginalTranscriptBlocks(for meeting: MeetingHistoryItem) -> [TranscriptBlock]?
     func loadOriginalTranscript(for meeting: MeetingHistoryItem) -> String?

@@ -21,7 +21,6 @@ Think of it as a local, privacy-focused alternative to Granola—without cloud d
 - Auto-detection of meeting start/end (manual start via menu bar)
 - In-app note-taking (user can use Notes.app separately)
 - Speaker diarization (future enhancement)
-- LLM-powered summarization (done externally via Gemini/Claude)
 - Calendar integration
 - Cloud sync
 
@@ -746,6 +745,12 @@ The MLX packages (`MLXLLM`, `MLXLMCommon`) are used for on-device LLM transcript
 - When no transcription model is downloaded, users can record audio without transcription
 - Recording indicator shows "waveform.slash" icon to indicate transcription is unavailable
 - Audio files are saved normally and can be reprocessed later when a model is available
+
+**AI Notes (Local-Only)**:
+- AI notes are generated into `ai_summary.md` per meeting folder while `transcript.md` remains source of truth
+- Generation uses local `LLMManager.modelContainer` only (no network summarization calls)
+- Auto-generation runs only when `aiSummaryEnabled` and `aiSummaryAutoGenerate` are enabled
+- Generation failures are non-fatal and never block recording completion, navigation, or export flows
 
 ---
 

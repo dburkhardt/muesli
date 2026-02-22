@@ -67,6 +67,7 @@ final class ExportService: ExportServiceProtocol {
         
         // Copy transcript.md
         try copyTranscript(from: meeting.directory, to: meetingExportDir)
+        try copyAISummaryIfPresent(from: meeting.directory, to: meetingExportDir)
         
         // Generate metadata.json
         try generateMetadataFile(for: meeting, at: meetingExportDir)
@@ -136,6 +137,7 @@ final class ExportService: ExportServiceProtocol {
                     hasMicrophone: meeting.hasMicrophone,
                     duration: meeting.duration,
                     wordCount: meeting.wordCount,
+                    hasAISummary: meeting.hasAISummary,
                     isRefined: meeting.isRefined,
                     segmentCount: meeting.segmentCount
                 )
@@ -207,6 +209,21 @@ final class ExportService: ExportServiceProtocol {
         try fileManager.copyItem(at: sourceTranscript, to: destTranscript)
     }
     
+    /// Copy ai_summary.md from recording directory to export directory when available
+    private func copyAISummaryIfPresent(from sourceDir: URL, to destDir: URL) throws {
+        let sourceSummary = sourceDir.appendingPathComponent("ai_summary.md")
+        let destSummary = destDir.appendingPathComponent("ai_summary.md")
+        
+        if fileManager.fileExists(atPath: destSummary.path) {
+            try fileManager.removeItem(at: destSummary)
+        }
+        
+        guard fileManager.fileExists(atPath: sourceSummary.path) else {
+            return
+        }
+        try fileManager.copyItem(at: sourceSummary, to: destSummary)
+    }
+    
     /// Generate metadata.json for a meeting
     private func generateMetadataFile(for meeting: MeetingHistoryItem, at exportDir: URL) throws {
         let metadataPath = exportDir.appendingPathComponent("metadata.json")
@@ -225,6 +242,7 @@ final class ExportService: ExportServiceProtocol {
             wordCount: meeting.wordCount,
             hasAudio: meeting.hasAudio,
             hasMicrophone: meeting.hasMicrophone,
+            hasAISummary: meeting.hasAISummary,
             isRefined: meeting.isRefined,
             segmentCount: meeting.segmentCount,
             segments: meeting.transcriptSegments.map { segment in
@@ -236,6 +254,7 @@ final class ExportService: ExportServiceProtocol {
             },
             files: MeetingMetadata.FileReferences(
                 transcript: "transcript.md",
+                aiSummary: meeting.hasAISummary ? "ai_summary.md" : nil,
                 audio: audioPath,
                 microphone: micPath
             )
@@ -266,6 +285,7 @@ private struct ExportManifest: Codable {
         let hasMicrophone: Bool
         let duration: TimeInterval?
         let wordCount: Int?
+        let hasAISummary: Bool
         let isRefined: Bool
         let segmentCount: Int
     }
@@ -280,6 +300,7 @@ private struct MeetingMetadata: Codable {
     let wordCount: Int?
     let hasAudio: Bool
     let hasMicrophone: Bool
+    let hasAISummary: Bool
     let isRefined: Bool
     let segmentCount: Int
     let segments: [SegmentInfo]
@@ -293,6 +314,7 @@ private struct MeetingMetadata: Codable {
     
     struct FileReferences: Codable {
         let transcript: String
+        let aiSummary: String?
         let audio: String?
         let microphone: String?
     }

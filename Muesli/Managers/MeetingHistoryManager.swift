@@ -246,6 +246,27 @@ final class MeetingHistoryManager {
         meeting.isLoadingTranscript = false
     }
     
+    /// Load AI summary for a meeting (lazy-load, async to prevent UI blocking)
+    func loadAISummary(for meeting: MeetingHistoryItem) async {
+        guard meeting.hasAISummary else { return }
+        guard meeting.aiSummary == nil && !meeting.isLoadingAISummary else { return }
+        
+        meeting.isLoadingAISummary = true
+        let summaryURL = meeting.directory.appendingPathComponent("ai_summary.md")
+        
+        let summary = await Task.detached(priority: .utility) {
+            guard let content = try? String(contentsOf: summaryURL, encoding: .utf8) else {
+                return nil as String?
+            }
+            let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }.value
+        
+        meeting.aiSummary = summary
+        meeting.hasAISummary = summary != nil
+        meeting.isLoadingAISummary = false
+    }
+    
     // MARK: - Meeting Deletion
     
     /// Request deletion of selected meetings (shows confirmation)

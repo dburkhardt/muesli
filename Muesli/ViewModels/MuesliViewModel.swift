@@ -25,6 +25,9 @@ final class MuesliViewModel {
     /// Refinement coordinator (injected, source of truth for refinement state)
     let refinementCoordinator: RefinementCoordinator
     
+    /// AI notes coordinator (injected, source of truth for AI summary state)
+    let aiNotesCoordinator: AINotesCoordinator
+    
     // MARK: - Permissions
     
     var hasScreenRecordingPermission: Bool = false
@@ -402,6 +405,21 @@ final class MuesliViewModel {
         }
     }
     
+    /// Whether AI summary generation is enabled in preferences
+    var aiSummaryEnabled: Bool {
+        preferencesManager.aiSummaryEnabled
+    }
+    
+    /// Whether AI summary auto-generation is enabled in preferences
+    var aiSummaryAutoGenerate: Bool {
+        preferencesManager.aiSummaryAutoGenerate
+    }
+    
+    /// Prompt used for AI summary generation
+    var aiSummaryPrompt: String {
+        preferencesManager.aiSummaryPrompt
+    }
+    
     /// Set launch at login
     func setLaunchAtLogin(_ enabled: Bool) {
         preferencesManager.setLaunchAtLogin(enabled)
@@ -452,6 +470,7 @@ final class MuesliViewModel {
         preferencesManager: PreferencesManager = PreferencesManager(),
         historyManager: MeetingHistoryManager? = nil,
         refinementCoordinator: RefinementCoordinator? = nil,
+        aiNotesCoordinator: AINotesCoordinator? = nil,
         audioCaptureService: (any AudioCaptureServiceProtocol)? = nil,
         fileOutputService: FileOutputService? = nil,
         transcriptionService: TranscriptionService? = nil,
@@ -514,6 +533,10 @@ final class MuesliViewModel {
             llmManager: self.llmManager,
             fileOutputService: self.fileOutputService
         )
+        self.aiNotesCoordinator = aiNotesCoordinator ?? AINotesCoordinator(
+            llmManager: self.llmManager,
+            refinementCoordinator: self.refinementCoordinator
+        )
         
         // Create recording controller (owns all recording lifecycle logic)
         self.recordingController = RecordingController(
@@ -530,18 +553,10 @@ final class MuesliViewModel {
         // NOTE: Must be set AFTER recordingController is initialized
         self.transcriptionCoordinator.onMeetingUpdated = { [weak self] meeting in
             guard let self = self else { return }
-            guard self.exportEnabled else { return }
             
             Task { @MainActor in
-                do {
-                    try await self.exportService.exportMeeting(meeting)
-                    // Also update manifest
-                    let allMeetings = self.meetingHistory
-                    try self.exportService.generateManifest(for: allMeetings)
-                    self.logger.info("Re-exported updated meeting: \(meeting.title)")
-                } catch {
-                    self.logger.error("Failed to re-export meeting: \(error.localizedDescription)")
-                }
+                await self.reexportMeetingIfEnabled(meeting, reason: "updated")
+                self.maybeAutoGenerateAISummary(for: meeting)
             }
         }
         
@@ -549,18 +564,10 @@ final class MuesliViewModel {
         // NOTE: Must be set AFTER recordingController is initialized
         self.refinementCoordinator.onMeetingUpdated = { [weak self] meeting in
             guard let self = self else { return }
-            guard self.exportEnabled else { return }
             
             Task { @MainActor in
-                do {
-                    try await self.exportService.exportMeeting(meeting)
-                    // Also update manifest
-                    let allMeetings = self.meetingHistory
-                    try self.exportService.generateManifest(for: allMeetings)
-                    self.logger.info("Re-exported refined meeting: \(meeting.title)")
-                } catch {
-                    self.logger.error("Failed to re-export meeting: \(error.localizedDescription)")
-                }
+                await self.reexportMeetingIfEnabled(meeting, reason: "refined")
+                self.maybeAutoGenerateAISummary(for: meeting)
             }
         }
         
@@ -568,6 +575,17 @@ final class MuesliViewModel {
         self.refinementCoordinator.onWarning = { [weak self] message, details, canRetry in
             guard let self = self else { return }
             self.warningManager.addWarning(.llmRefinement, message: message, details: details, canRetry: canRetry)
+        }
+        
+        self.aiNotesCoordinator.onMeetingUpdated = { [weak self] meeting in
+            guard let self = self else { return }
+            Task { @MainActor in
+                await self.reexportMeetingIfEnabled(meeting, reason: "ai-summary")
+            }
+        }
+        self.aiNotesCoordinator.onWarning = { [weak self] message, details, canRetry in
+            guard let self = self else { return }
+            self.warningManager.addWarning(.aiNotes, message: message, details: details, canRetry: canRetry)
         }
         
         // Set up callback for chunk duration changes
@@ -620,6 +638,7 @@ final class MuesliViewModel {
                let newMeeting = self.meetingHistory.first(where: { $0.directory == directory }) {
                 self.selectedMeeting = newMeeting
                 self.isSplitViewVisible = true
+                self.maybeAutoGenerateAISummary(for: newMeeting)
             } else if self.selectedMeeting == nil {
                 // Fallback: if no meeting found and nothing selected, hide split view
                 self.isSplitViewVisible = false
@@ -828,6 +847,11 @@ final class MuesliViewModel {
         await historyManager.loadTranscript(for: meeting)
     }
     
+    /// Load AI summary for a meeting (delegates to historyManager)
+    func loadAISummary(for meeting: MeetingHistoryItem) async {
+        await historyManager.loadAISummary(for: meeting)
+    }
+    
     // MARK: - Meeting Selection (delegating to MeetingHistoryManager)
     
     /// Toggle selection of a meeting (delegates to historyManager)
@@ -882,6 +906,44 @@ final class MuesliViewModel {
     /// Check if refinement is available (delegates to refinementCoordinator)
     var canRefineTranscripts: Bool {
         refinementCoordinator.canRefineTranscripts
+    }
+    
+    /// Check if AI summaries are currently available
+    var canGenerateAISummaries: Bool {
+        aiSummaryEnabled && aiNotesCoordinator.canGenerateSummaries
+    }
+    
+    func isGeneratingAISummary(for meeting: MeetingHistoryItem) -> Bool {
+        aiNotesCoordinator.isGeneratingSummary(for: meeting)
+    }
+    
+    func generateAISummary(for meeting: MeetingHistoryItem, force: Bool = false) {
+        if meeting.transcript == nil {
+            Task { @MainActor in
+                await self.loadTranscript(for: meeting)
+                self.aiNotesCoordinator.generateSummary(
+                    for: meeting,
+                    prompt: self.aiSummaryPrompt,
+                    force: force
+                )
+            }
+            return
+        }
+        aiNotesCoordinator.generateSummary(for: meeting, prompt: aiSummaryPrompt, force: force)
+    }
+    
+    func toggleMeetingContentMode(for meeting: MeetingHistoryItem) {
+        let nextMode: MeetingHistoryItem.ContentViewMode = meeting.contentViewMode == .transcript ? .aiSummary : .transcript
+        if nextMode == .aiSummary && meeting.aiSummary == nil && meeting.hasAISummary {
+            Task { @MainActor in
+                await loadAISummary(for: meeting)
+            }
+        }
+        aiNotesCoordinator.setContentMode(nextMode, for: meeting)
+    }
+    
+    func isShowingAISummary(for meeting: MeetingHistoryItem) -> Bool {
+        meeting.contentViewMode == .aiSummary
     }
     
     /// Start refining a meeting's transcript (delegates to refinementCoordinator)
@@ -1082,5 +1144,22 @@ final class MuesliViewModel {
         
         let transcriptURL = directory.appendingPathComponent("transcript.md")
         try markdown.write(to: transcriptURL, atomically: true, encoding: .utf8)
+    }
+    
+    private func maybeAutoGenerateAISummary(for meeting: MeetingHistoryItem) {
+        guard aiSummaryEnabled && aiSummaryAutoGenerate else { return }
+        generateAISummary(for: meeting, force: false)
+    }
+    
+    private func reexportMeetingIfEnabled(_ meeting: MeetingHistoryItem, reason: String) async {
+        guard exportEnabled else { return }
+        do {
+            try await exportService.exportMeeting(meeting)
+            let allMeetings = meetingHistory
+            try exportService.generateManifest(for: allMeetings)
+            logger.info("Re-exported \(reason) meeting: \(meeting.title)")
+        } catch {
+            logger.error("Failed to re-export \(reason) meeting: \(error.localizedDescription)")
+        }
     }
 }

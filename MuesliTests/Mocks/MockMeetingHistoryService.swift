@@ -15,6 +15,9 @@ final class MockMeetingHistoryService: MeetingHistoryServiceProtocol {
     /// Transcript blocks keyed by meeting ID
     var mockTranscriptBlocks: [UUID: [TranscriptBlock]] = [:]
     
+    /// AI summary text keyed by meeting ID
+    var mockAISummaries: [UUID: String] = [:]
+    
     /// Original transcripts keyed by meeting ID
     var mockOriginalTranscripts: [UUID: String] = [:]
     
@@ -26,6 +29,7 @@ final class MockMeetingHistoryService: MeetingHistoryServiceProtocol {
     var discoverMeetingsCallCount: Int = 0
     var loadTranscriptCallCount: Int = 0
     var loadTranscriptBlocksCallCount: Int = 0
+    var loadAISummaryCallCount: Int = 0
     var loadOriginalTranscriptCallCount: Int = 0
     var loadOriginalTranscriptBlocksCallCount: Int = 0
     
@@ -39,6 +43,11 @@ final class MockMeetingHistoryService: MeetingHistoryServiceProtocol {
     func loadTranscript(for meeting: MeetingHistoryItem) -> String? {
         loadTranscriptCallCount += 1
         return mockTranscripts[meeting.id]
+    }
+    
+    func loadAISummary(for meeting: MeetingHistoryItem) -> String? {
+        loadAISummaryCallCount += 1
+        return mockAISummaries[meeting.id]
     }
     
     func loadTranscriptBlocks(for meeting: MeetingHistoryItem) -> [TranscriptBlock]? {
@@ -99,11 +108,13 @@ final class MockMeetingHistoryService: MeetingHistoryServiceProtocol {
         mockMeetings = []
         mockTranscripts = [:]
         mockTranscriptBlocks = [:]
+        mockAISummaries = [:]
         mockOriginalTranscripts = [:]
         mockOriginalTranscriptBlocks = [:]
         discoverMeetingsCallCount = 0
         loadTranscriptCallCount = 0
         loadTranscriptBlocksCallCount = 0
+        loadAISummaryCallCount = 0
         loadOriginalTranscriptCallCount = 0
         loadOriginalTranscriptBlocksCallCount = 0
     }

@@ -52,6 +52,7 @@
 		A1000087241D1A1D00000023 /* LLMManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000086241D1A1D00000023 /* LLMManager.swift */; };
 		A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000088241D1A1D00000024 /* TranscriptBlockView.swift */; };
 		A1000090241D1A1D00000025 /* TranscriptRefinementService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */; };
+		F2000011241D1A1D0000A011 /* AINotesSummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000001241D1A1D0000A001 /* AINotesSummaryService.swift */; };
 		A1000090241D1A1D00000030 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = A1000091241D1A1D00000030 /* MLXLLM */; };
 		A1000092241D1A1D00000026 /* RefineTranscriptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */; };
 		A1000093241D1A1D00000031 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = A1000094241D1A1D00000031 /* MLXLMCommon */; };
@@ -76,12 +77,15 @@
 		B1000027241D1A1D00000044 /* PermissionManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000028241D1A1D00000044 /* PermissionManagerTests.swift */; };
 		B1000029241D1A1D00000045 /* MicrophoneManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000030241D1A1D00000045 /* MicrophoneManagerTests.swift */; };
 		B1000031241D1A1D00000046 /* MeetingHistoryServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000032241D1A1D00000046 /* MeetingHistoryServiceTests.swift */; };
+		F2000013241D1A1D0000A013 /* AINotesSummaryServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000003241D1A1D0000A003 /* AINotesSummaryServiceTests.swift */; };
+		F2000014241D1A1D0000A014 /* AINotesCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000004241D1A1D0000A004 /* AINotesCoordinatorTests.swift */; };
 		MM00001241D1A1D00000051 /* ModelManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MM00002241D1A1D00000051 /* ModelManagerTests.swift */; };
 		B9B34DC6BB1FC3C4008155BC /* AudioTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11744CAB97AEED154448FD67 /* AudioTypes.swift */; };
 		'BI00001241D1A1D00000103' = {isa = PBXBuildFile; fileRef = BI00002241D1A1D00000103; };
 		C1000001241D1A1D00000050 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000002241D1A1D00000050 /* PreferencesManager.swift */; };
 		C1000003241D1A1D00000051 /* MeetingHistoryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */; };
 		C1000005241D1A1D00000052 /* RefinementCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000006241D1A1D00000052 /* RefinementCoordinator.swift */; };
+		F2000012241D1A1D0000A012 /* AINotesCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000002241D1A1D0000A002 /* AINotesCoordinator.swift */; };
 		C1000007241D1A1D00000053 /* TranscriptionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000008241D1A1D00000053 /* TranscriptionCoordinator.swift */; };
 		C5EC4FA3BB35A1EEB4E7C343 /* AudioWorker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C604C85A259F08FD026A962 /* AudioWorker.swift */; };
 		'CT00001241D1A1D00000013' = {isa = PBXBuildFile; fileRef = CT00002241D1A1D00000013; };
@@ -170,6 +174,7 @@
 		A1000086241D1A1D00000023 /* LLMManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMManager.swift; sourceTree = "<group>"; };
 		A1000088241D1A1D00000024 /* TranscriptBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptBlockView.swift; sourceTree = "<group>"; };
 		A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRefinementService.swift; sourceTree = "<group>"; };
+		F2000001241D1A1D0000A001 /* AINotesSummaryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AINotesSummaryService.swift; sourceTree = "<group>"; };
 		A1000093241D1A1D00000026 /* RefineTranscriptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefineTranscriptSheet.swift; sourceTree = "<group>"; };
 		A1000095241D1A1D00000027 /* ResumeControlPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResumeControlPane.swift; sourceTree = "<group>"; };
 		A1000097241D1A1D00000028 /* EchoCancellationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoCancellationService.swift; sourceTree = "<group>"; };
@@ -193,11 +198,14 @@
 		B1000028241D1A1D00000044 /* PermissionManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManagerTests.swift; sourceTree = "<group>"; };
 		B1000030241D1A1D00000045 /* MicrophoneManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophoneManagerTests.swift; sourceTree = "<group>"; };
 		B1000032241D1A1D00000046 /* MeetingHistoryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryServiceTests.swift; sourceTree = "<group>"; };
+		F2000003241D1A1D0000A003 /* AINotesSummaryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AINotesSummaryServiceTests.swift; sourceTree = "<group>"; };
+		F2000004241D1A1D0000A004 /* AINotesCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AINotesCoordinatorTests.swift; sourceTree = "<group>"; };
 		MM00002241D1A1D00000051 /* ModelManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManagerTests.swift; sourceTree = "<group>"; };
 		'BI00002241D1A1D00000103' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildInfo.swift; sourceTree = "<group>"; };
 		C1000002241D1A1D00000050 /* PreferencesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManager.swift; sourceTree = "<group>"; };
 		C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryManager.swift; sourceTree = "<group>"; };
 		C1000006241D1A1D00000052 /* RefinementCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementCoordinator.swift; sourceTree = "<group>"; };
+		F2000002241D1A1D0000A002 /* AINotesCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AINotesCoordinator.swift; sourceTree = "<group>"; };
 		C1000008241D1A1D00000053 /* TranscriptionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionCoordinator.swift; sourceTree = "<group>"; };
 		'CT00002241D1A1D00000013' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyTranscriptButton.swift; sourceTree = "<group>"; };
 		D1000002241D1A1D00000060 /* ServiceProtocols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceProtocols.swift; sourceTree = "<group>"; };
@@ -360,6 +368,7 @@
 				A1000082241D1A1D00000021 /* TranscriptProcessor.swift */,
 				A1000084241D1A1D00000022 /* LLMStitchingService.swift */,
 				A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */,
+				F2000001241D1A1D0000A001 /* AINotesSummaryService.swift */,
 				A1000097241D1A1D00000028 /* EchoCancellationService.swift */,
 				WR00004241D1A1D00000203,
 				WR00006241D1A1D00000205,
@@ -424,6 +433,8 @@
 				B1000028241D1A1D00000044 /* PermissionManagerTests.swift */,
 				B1000030241D1A1D00000045 /* MicrophoneManagerTests.swift */,
 				B1000032241D1A1D00000046 /* MeetingHistoryServiceTests.swift */,
+				F2000003241D1A1D0000A003 /* AINotesSummaryServiceTests.swift */,
+				F2000004241D1A1D0000A004 /* AINotesCoordinatorTests.swift */,
 				MM00002241D1A1D00000051 /* ModelManagerTests.swift */,
 				EC00002241D1A1D00000047,
 				CA00002241D1A1D00000048,
@@ -466,6 +477,7 @@
 				C1000002241D1A1D00000050 /* PreferencesManager.swift */,
 				C1000004241D1A1D00000051 /* MeetingHistoryManager.swift */,
 				C1000006241D1A1D00000052 /* RefinementCoordinator.swift */,
+				F2000002241D1A1D0000A002 /* AINotesCoordinator.swift */,
 				C1000008241D1A1D00000053 /* TranscriptionCoordinator.swift */,
 				WM00002241D1A1D00000055,
 			);
@@ -695,6 +707,7 @@
 				A1000087241D1A1D00000023 /* LLMManager.swift in Sources */,
 				A1000089241D1A1D00000024 /* TranscriptBlockView.swift in Sources */,
 				A1000090241D1A1D00000025 /* TranscriptRefinementService.swift in Sources */,
+				F2000011241D1A1D0000A011 /* AINotesSummaryService.swift in Sources */,
 				A1000096241D1A1D00000028 /* EchoCancellationService.swift in Sources */,
 				WR00003241D1A1D00000202,
 				WR00005241D1A1D00000204,
@@ -707,6 +720,7 @@
 				WM00001241D1A1D00000055,
 				WB00001241D1A1D00000056,
 				C1000005241D1A1D00000052 /* RefinementCoordinator.swift in Sources */,
+				F2000012241D1A1D0000A012 /* AINotesCoordinator.swift in Sources */,
 				C1000007241D1A1D00000053 /* TranscriptionCoordinator.swift in Sources */,
 				D1000001241D1A1D00000060 /* ServiceProtocols.swift in Sources */,
 				E1000001241D1A1D00000070 /* RecordingController.swift in Sources */,
@@ -755,6 +769,8 @@
 				B1000027241D1A1D00000044 /* PermissionManagerTests.swift in Sources */,
 				B1000029241D1A1D00000045 /* MicrophoneManagerTests.swift in Sources */,
 				B1000031241D1A1D00000046 /* MeetingHistoryServiceTests.swift in Sources */,
+				F2000013241D1A1D0000A013 /* AINotesSummaryServiceTests.swift in Sources */,
+				F2000014241D1A1D0000A014 /* AINotesCoordinatorTests.swift in Sources */,
 				MM00001241D1A1D00000051 /* ModelManagerTests.swift in Sources */,
 				EC00001241D1A1D00000047,
 				CA00001241D1A1D00000048,

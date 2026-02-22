@@ -35,6 +35,64 @@ struct ResumeControlPane: View {
     
     var body: some View {
         HStack(spacing: 12) {
+            // Transcript / AI notes mode controls
+            if meeting.hasAISummary || viewModel.canGenerateAISummaries {
+                Button {
+                    if !viewModel.isShowingAISummary(for: meeting) {
+                        viewModel.toggleMeetingContentMode(for: meeting)
+                    }
+                } label: {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(
+                            viewModel.isShowingAISummary(for: meeting) ? Color.secondary : Color.primary.opacity(0.8)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Show transcript")
+                .accessibilityLabel("Show transcript")
+                
+                Button {
+                    if viewModel.isShowingAISummary(for: meeting) {
+                        return
+                    }
+                    if meeting.hasAISummary {
+                        viewModel.toggleMeetingContentMode(for: meeting)
+                    } else {
+                        viewModel.generateAISummary(for: meeting)
+                    }
+                } label: {
+                    Image(systemName: "sparkles.rectangle.stack")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(
+                            viewModel.isShowingAISummary(for: meeting) ? Color.purple.opacity(0.8) : Color.purple.opacity(0.65)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Show AI notes")
+                .accessibilityLabel("Show AI notes")
+                
+                if viewModel.isGeneratingAISummary(for: meeting) || meeting.isLoadingAISummary {
+                    ProgressView()
+                        .scaleEffect(0.65)
+                        .help(viewModel.isGeneratingAISummary(for: meeting) ? "Generating AI notes..." : "Loading AI notes...")
+                } else if viewModel.canGenerateAISummaries {
+                    Button {
+                        viewModel.generateAISummary(for: meeting, force: meeting.hasAISummary)
+                    } label: {
+                        Image(systemName: meeting.hasAISummary ? "arrow.clockwise" : "sparkles")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(Color.purple.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .help(meeting.hasAISummary ? "Regenerate AI notes" : "Generate AI notes")
+                    .accessibilityLabel(meeting.hasAISummary ? "Regenerate AI notes" : "Generate AI notes")
+                }
+                
+                Divider()
+                    .frame(height: 20)
+            }
+            
             // Show refinement controls based on state
             if isRefiningOrPending {
                 // Currently refining - show loading indicator

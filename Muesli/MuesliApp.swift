@@ -40,6 +40,10 @@ struct MuesliApp: App {
         
         // Create refinement coordinator with shared LLMManager
         let coordinator = RefinementCoordinator(llmManager: llmManager, fileOutputService: fileOutputService)
+        let aiCoordinator = AINotesCoordinator(
+            llmManager: llmManager,
+            refinementCoordinator: coordinator
+        )
 
         // Create ViewModel with injected managers and services
         // Pass the shared llmManager to ensure state synchronization
@@ -47,6 +51,7 @@ struct MuesliApp: App {
             preferencesManager: prefs,
             historyManager: historyManager,
             refinementCoordinator: coordinator,
+            aiNotesCoordinator: aiCoordinator,
             fileOutputService: fileOutputService,
             permissionManager: permManager,
             llmManager: llmManager

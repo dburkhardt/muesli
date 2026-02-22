@@ -37,6 +37,9 @@ final class PreferencesManagerTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.echoCancellationEnabled)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.audioChunkDuration)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.aiSummaryEnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.aiSummaryAutoGenerate)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.aiSummaryPrompt)
         UserDefaults.standard.removeObject(forKey: PreferencesManager.migrationCheckedKey)
     }
     
@@ -390,6 +393,36 @@ final class PreferencesManagerTests: XCTestCase {
         preferencesManager.audioChunkDuration = 15.0 // Over max
         
         await fulfillment(of: [expectation], timeout: 1.0)
+    }
+    
+    // MARK: - AI Summary Settings Tests
+    
+    func testAISummaryEnabled_DefaultsToTrue() async {
+        XCTAssertTrue(preferencesManager.aiSummaryEnabled)
+    }
+    
+    func testAISummaryAutoGenerate_DefaultsToTrue() async {
+        XCTAssertTrue(preferencesManager.aiSummaryAutoGenerate)
+    }
+    
+    func testAISummaryPrompt_DefaultsToBuiltInPrompt() async {
+        XCTAssertEqual(preferencesManager.aiSummaryPrompt, PreferencesManager.defaultAISummaryPrompt)
+    }
+    
+    func testAISummaryPrompt_NormalizesEmptyToDefault() async {
+        preferencesManager.aiSummaryPrompt = "   "
+        XCTAssertEqual(preferencesManager.aiSummaryPrompt, PreferencesManager.defaultAISummaryPrompt)
+    }
+    
+    func testAISummaryPrompt_TrimmedBeforePersisting() async {
+        preferencesManager.aiSummaryPrompt = "  Custom prompt  "
+        XCTAssertEqual(preferencesManager.aiSummaryPrompt, "Custom prompt")
+    }
+    
+    func testResetAISummaryPromptToDefault() async {
+        preferencesManager.aiSummaryPrompt = "Custom prompt"
+        preferencesManager.resetAISummaryPromptToDefault()
+        XCTAssertEqual(preferencesManager.aiSummaryPrompt, PreferencesManager.defaultAISummaryPrompt)
     }
     
     // MARK: - Storage Migration Tests

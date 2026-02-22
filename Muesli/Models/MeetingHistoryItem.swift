@@ -30,6 +30,11 @@ struct TranscriptSegment: Identifiable, Codable, Equatable {
 @Observable
 @MainActor
 final class MeetingHistoryItem: Identifiable, Hashable {
+    enum ContentViewMode: String, Codable {
+        case transcript
+        case aiSummary
+    }
+    
     let id: UUID
     var title: String
     let date: Date
@@ -37,6 +42,10 @@ final class MeetingHistoryItem: Identifiable, Hashable {
     var transcript: String?
     var transcriptBlocks: [TranscriptBlock]?  // Block-based transcript (if available)
     var isLoadingTranscript: Bool = false  // Whether transcript is currently being loaded
+    var aiSummary: String?
+    var hasAISummary: Bool = false
+    var isLoadingAISummary: Bool = false
+    var contentViewMode: ContentViewMode = .transcript
     
     // Reprocessing state (for re-transcribing with different models)
     var isReprocessing: Bool = false  // Whether this meeting is currently being reprocessed
@@ -75,6 +84,9 @@ final class MeetingHistoryItem: Identifiable, Hashable {
         directory: URL,
         transcript: String? = nil,
         transcriptBlocks: [TranscriptBlock]? = nil,
+        aiSummary: String? = nil,
+        hasAISummary: Bool = false,
+        contentViewMode: ContentViewMode = .transcript,
         originalTranscript: String? = nil,
         originalTranscriptBlocks: [TranscriptBlock]? = nil,
         isRefined: Bool = false,
@@ -91,6 +103,9 @@ final class MeetingHistoryItem: Identifiable, Hashable {
         self.directory = directory
         self.transcript = transcript
         self.transcriptBlocks = transcriptBlocks
+        self.aiSummary = aiSummary
+        self.hasAISummary = hasAISummary
+        self.contentViewMode = contentViewMode
         self.originalTranscript = originalTranscript
         self.originalTranscriptBlocks = originalTranscriptBlocks
         self.isRefined = isRefined

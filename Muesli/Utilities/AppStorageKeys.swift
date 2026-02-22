@@ -75,6 +75,17 @@ enum AppStorageKeys {
     /// Custom export directory (if not using default)
     static let exportDirectory = "exportDirectory"
     
+    // MARK: - AI Summary
+    
+    /// Whether AI summary features are enabled
+    static let aiSummaryEnabled = "aiSummaryEnabled"
+    
+    /// Whether AI summaries should be generated automatically
+    static let aiSummaryAutoGenerate = "aiSummaryAutoGenerate"
+    
+    /// User-customized prompt template for AI summaries
+    static let aiSummaryPrompt = "aiSummaryPrompt"
+    
     // MARK: - WhisperKit Models
     
     /// Active WhisperKit model identifier

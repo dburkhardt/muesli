@@ -231,9 +231,75 @@ final class PreferencesManager {
         return appSupport.appendingPathComponent("Muesli/Exports")
     }
     
+    /// Built-in AI summary instruction used when no custom prompt is saved.
+    static let defaultAISummaryPrompt = """
+    Summarize the meeting transcript into concise AI notes for quick review.
+    
+    Include:
+    - Key discussion points
+    - Decisions made
+    - Action items with owners if explicitly stated
+    - Open questions or follow-ups
+    
+    Be factual and avoid adding details not present in the transcript.
+    """
+    
     /// Reset export directory to default
     func resetExportDirectory() {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.exportDirectory)
+    }
+    
+    // MARK: - AI Summary Settings
+    
+    /// Whether AI summary features are enabled
+    var aiSummaryEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.aiSummaryEnabled) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.aiSummaryEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.aiSummaryEnabled)
+        }
+    }
+    
+    /// Whether summaries should be auto-generated for newly updated meetings
+    var aiSummaryAutoGenerate: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.aiSummaryAutoGenerate) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.aiSummaryAutoGenerate)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.aiSummaryAutoGenerate)
+        }
+    }
+    
+    /// Custom prompt used for generating AI summaries
+    var aiSummaryPrompt: String {
+        get {
+            let saved = UserDefaults.standard.string(forKey: AppStorageKeys.aiSummaryPrompt)
+            return Self.normalizeAISummaryPrompt(saved)
+        }
+        set {
+            UserDefaults.standard.set(
+                Self.normalizeAISummaryPrompt(newValue),
+                forKey: AppStorageKeys.aiSummaryPrompt
+            )
+        }
+    }
+    
+    /// Normalize prompt values from UI input and persisted defaults.
+    static func normalizeAISummaryPrompt(_ prompt: String?) -> String {
+        let trimmed = (prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultAISummaryPrompt : trimmed
+    }
+    
+    /// Restore built-in prompt for AI summary generation.
+    func resetAISummaryPromptToDefault() {
+        UserDefaults.standard.set(Self.defaultAISummaryPrompt, forKey: AppStorageKeys.aiSummaryPrompt)
     }
     
     // MARK: - AEC Startup Policy

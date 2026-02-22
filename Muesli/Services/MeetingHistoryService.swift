@@ -114,6 +114,8 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
         // Check if this meeting has been refined (original transcript exists)
         let originalTranscriptURL = directory.appendingPathComponent("transcript.original.md")
         let isRefined = fileManager.fileExists(atPath: originalTranscriptURL.path)
+        let aiSummaryURL = directory.appendingPathComponent("ai_summary.md")
+        let hasAISummary = fileManager.fileExists(atPath: aiSummaryURL.path)
         
         return MeetingHistoryItem(
             id: id,
@@ -121,6 +123,9 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
             date: transcriptDate,
             directory: directory,
             transcript: nil, // Lazy-loaded
+            aiSummary: nil, // Lazy-loaded
+            hasAISummary: hasAISummary,
+            contentViewMode: .transcript,
             originalTranscript: nil, // Will be lazy-loaded if isRefined
             originalTranscriptBlocks: nil, // Will be lazy-loaded if isRefined
             isRefined: isRefined,
@@ -262,6 +267,25 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
         
         let transcript = transcriptLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return transcript.isEmpty ? nil : transcript
+    }
+    
+    /// Load AI summary content for a meeting
+    /// - Parameter meeting: The meeting to load summary for
+    /// - Returns: Summary text, or nil if not found
+    func loadAISummary(for meeting: MeetingHistoryItem) -> String? {
+        loadAISummary(at: meeting.directory)
+    }
+    
+    /// Load AI summary content for a meeting directory
+    /// - Parameter directory: The meeting directory
+    /// - Returns: Summary text, or nil if missing/empty
+    func loadAISummary(at directory: URL) -> String? {
+        let summaryURL = directory.appendingPathComponent("ai_summary.md")
+        guard let content = try? String(contentsOf: summaryURL, encoding: .utf8) else {
+            return nil
+        }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
     
     /// Parse transcript blocks from markdown content

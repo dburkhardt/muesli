@@ -108,9 +108,11 @@ func resetExportDirectory()
 └── meetings/                   # Per-meeting exports
     ├── 2026-01-15_14-30_[UUID]/
     │   ├── transcript.md       # Human-readable transcript
+    │   ├── ai_summary.md       # Optional AI notes summary
     │   └── metadata.json       # Machine-readable metadata
     ├── 2026-01-16_09-00_[UUID]/
     │   ├── transcript.md
+    │   ├── ai_summary.md       # Optional
     │   └── metadata.json
     └── ...
 ```
@@ -145,6 +147,7 @@ format=markdown+json
       "hasMicrophone": true,
       "duration": 2847.5,
       "wordCount": 1240,
+      "hasAISummary": false,
       "isRefined": false,
       "segmentCount": 1
     }
@@ -165,6 +168,7 @@ format=markdown+json
   - `hasMicrophone`: Whether microphone audio was captured
   - `duration`: Meeting duration in seconds (null if unavailable)
   - `wordCount`: Transcript word count (null if unavailable)
+  - `hasAISummary`: Whether `ai_summary.md` exists for the meeting
   - `isRefined`: Whether transcript has been refined by LLM
   - `segmentCount`: Number of recording segments (1 = continuous, 2+ = resumed)
 
@@ -182,6 +186,7 @@ format=markdown+json
   "wordCount": 1240,
   "hasAudio": true,
   "hasMicrophone": true,
+  "hasAISummary": false,
   "isRefined": false,
   "segmentCount": 1,
   "segments": [
@@ -193,6 +198,7 @@ format=markdown+json
   ],
   "files": {
     "transcript": "transcript.md",
+    "aiSummary": null,
     "audio": "../../Recordings/2026-01-15_14-30_550e8400-e29b-41d4-a716-446655440000/audio.caf",
     "microphone": "../../Recordings/2026-01-15_14-30_550e8400-e29b-41d4-a716-446655440000/microphone.caf"
   }
@@ -207,6 +213,7 @@ format=markdown+json
 - `wordCount`: Transcript word count (null if unavailable)
 - `hasAudio`: Whether system audio was captured
 - `hasMicrophone`: Whether microphone audio was captured
+- `hasAISummary`: Whether AI notes are available
 - `isRefined`: Whether transcript has been refined by LLM
 - `segmentCount`: Number of recording segments
 - `segments[]`: Array of segment metadata
@@ -215,6 +222,7 @@ format=markdown+json
   - `isRefined`: Whether this segment has been refined
 - `files`: File references (relative paths)
   - `transcript`: Path to transcript.md (relative to metadata.json)
+  - `aiSummary`: Optional path to ai_summary.md (null if absent)
   - `audio`: Path to system audio file (null if not captured)
   - `microphone`: Path to microphone audio file (null if not captured)
 
@@ -501,6 +509,7 @@ for meeting in manifest.meetings {
 3. **Incremental Updates**: Use `manifest.generatedAt` to detect changes
 4. **File Watching**: Use `FSEvents` or `FileManager` to watch for new exports
 5. **Error Handling**: Handle missing files gracefully (user may delete exports)
+6. **Additive Schema Tolerance**: Treat unknown metadata fields as optional; `version=1.0` remains compatible with additive fields
 
 ### Use Cases
 

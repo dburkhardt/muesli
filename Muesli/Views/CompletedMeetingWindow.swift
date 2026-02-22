@@ -118,11 +118,18 @@ struct CompletedMeetingWindow: View {
     // MARK: - Copy Transcript Button
     
     private var copyTranscriptButton: some View {
-        CopyTranscriptButton(getBlocks: { getTranscriptBlocks() })
+        CopyTranscriptButton(
+            getBlocks: { getTranscriptBlocks() },
+            getText: { getCopyableText() }
+        )
     }
     
     /// Get transcript blocks from the meeting
     private func getTranscriptBlocks() -> [TranscriptBlock]? {
+        if meeting.contentViewMode == .aiSummary {
+            return nil
+        }
+        
         // Try segments first (preferred)
         if !meeting.transcriptSegments.isEmpty {
             var allBlocks: [TranscriptBlock] = []
@@ -143,6 +150,13 @@ struct CompletedMeetingWindow: View {
         }
         
         return nil
+    }
+    
+    private func getCopyableText() -> String? {
+        if meeting.contentViewMode == .aiSummary {
+            return meeting.aiSummary
+        }
+        return meeting.transcript
     }
     
     // MARK: - Metadata Row
@@ -212,8 +226,47 @@ struct CompletedMeetingWindow: View {
     
     @ViewBuilder
     private var transcriptView: some View {
-        // Transcript - prefer segments, then blocks, then plain text
-        if !meeting.transcriptSegments.isEmpty {
+        if meeting.contentViewMode == .aiSummary {
+            if meeting.isLoadingAISummary {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Loading AI notes...")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let summary = meeting.aiSummary, !summary.isEmpty {
+                Text(summary)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if meeting.hasAISummary {
+                Text("AI notes are available but not loaded yet.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onAppear {
+                        Task {
+                            await viewModel.loadAISummary(for: meeting)
+                        }
+                    }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("No AI notes generated yet.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                    if viewModel.canGenerateAISummaries {
+                        Button("Generate AI Notes") {
+                            viewModel.generateAISummary(for: meeting)
+                        }
+                        .buttonStyle(.link)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if !meeting.transcriptSegments.isEmpty {
             // Segment-based display with markers
             LazyVStack(spacing: 8) {
                 ForEach(meeting.transcriptSegments.sorted(by: { $0.segmentNumber < $1.segmentNumber })) { segment in

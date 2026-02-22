@@ -19,6 +19,7 @@ struct ServiceWarning: Identifiable, Equatable {
         case fileOutput = "File Output"
         case export = "Export"
         case llmRefinement = "LLM Refinement"
+        case aiNotes = "AI Notes"
         case modelLoading = "Model Loading"
         
         /// SF Symbol name for the category
@@ -36,6 +37,8 @@ struct ServiceWarning: Identifiable, Equatable {
                 return "square.and.arrow.up.trianglebadge.exclamationmark"
             case .llmRefinement:
                 return "sparkles"
+            case .aiNotes:
+                return "note.text.badge.plus"
             case .modelLoading:
                 return "cpu"
             }

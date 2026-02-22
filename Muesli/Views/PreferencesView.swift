@@ -232,6 +232,50 @@ struct GeneralPreferencesTab: View {
                     .foregroundStyle(.secondary)
             }
             
+            Section("AI Notes") {
+                Toggle(isOn: $prefs.aiSummaryEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Enable AI Notes")
+                        Text("Allow local AI summary generation for completed meetings.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                Toggle(isOn: $prefs.aiSummaryAutoGenerate) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Auto-generate AI Notes")
+                        Text("Generate summaries automatically after new recordings or transcript updates.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                .disabled(!prefs.aiSummaryEnabled)
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Summary Prompt")
+                        .font(.subheadline.weight(.medium))
+                    TextEditor(text: $prefs.aiSummaryPrompt)
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(minHeight: 110)
+                        .padding(6)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                        }
+                        .disabled(!prefs.aiSummaryEnabled)
+                    
+                    Button("Restore Default Prompt") {
+                        preferencesManager.resetAISummaryPromptToDefault()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    .disabled(!prefs.aiSummaryEnabled)
+                }
+            }
+            
             Section("Audio") {
                 #if DEBUG
                 Toggle(isOn: $prefs.isEchoCancellationEnabled) {

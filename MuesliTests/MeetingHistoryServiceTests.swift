@@ -265,6 +265,25 @@ final class MeetingHistoryServiceTests: XCTestCase {
         XCTAssertTrue(meeting.isRefined)
     }
     
+    func testParseMeeting_DetectsAISummary() throws {
+        let meetingDir = testDirectory.appendingPathComponent("2024-01-15_14-30_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: meetingDir, withIntermediateDirectories: true)
+        try "# Meeting\n\n## Transcript\n\nContent".write(
+            to: meetingDir.appendingPathComponent("transcript.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "Summary".write(
+            to: meetingDir.appendingPathComponent("ai_summary.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        
+        let meetings = service.discoverMeetings()
+        let meeting = try XCTUnwrap(meetings.first)
+        XCTAssertTrue(meeting.hasAISummary)
+    }
+    
     func testParseMeeting_ExtractsUUIDFromFolderName() throws {
         // Given: Meeting with UUID in folder name
         let uuid = UUID()
@@ -345,6 +364,25 @@ final class MeetingHistoryServiceTests: XCTestCase {
         // Then: Should load correct content
         XCTAssertNotNil(transcript)
         XCTAssertTrue(transcript!.contains("Test content"))
+    }
+    
+    func testLoadAISummary_WithValidSummary_ReturnsContent() throws {
+        let meetingDir = testDirectory.appendingPathComponent("2024-01-15_14-30_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: meetingDir, withIntermediateDirectories: true)
+        try "Summary text".write(
+            to: meetingDir.appendingPathComponent("ai_summary.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        
+        let summary = service.loadAISummary(at: meetingDir)
+        XCTAssertEqual(summary, "Summary text")
+    }
+    
+    func testLoadAISummary_MissingFile_ReturnsNil() {
+        let meetingDir = testDirectory.appendingPathComponent("2024-01-15_14-30_\(UUID().uuidString)")
+        let summary = service.loadAISummary(at: meetingDir)
+        XCTAssertNil(summary)
     }
     
     // MARK: - Original Transcript Tests
