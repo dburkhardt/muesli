@@ -333,7 +333,7 @@ jobs:
           while IFS= read -r file; do
             [ -z "$file" ] && continue
             echo "Linting $file"
-            swiftlint lint --strict --path "$file"
+            swiftlint lint --strict "$file"
           done <<< "${{ steps.changed.outputs.files }}"
 
   build-release:
