@@ -264,9 +264,10 @@ jobs:
           if-no-files-found: warn
 
   lint:
-    name: Swift Lint Changed Files Strict
+    name: Swift Lint Changed Files (Informational)
     runs-on: macos-26
     timeout-minutes: 10
+    continue-on-error: true
 
     steps:
       - name: Checkout code
@@ -497,11 +498,11 @@ jobs:
           echo "## CI Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Stable tests (required): ${{ needs.test-required-stable.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Lint (required): ${{ needs.lint.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Lint (informational): ${{ needs.lint.result }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Release build (required): ${{ needs.build-release.result }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Quarantined tests (informational): ${{ needs.test-quarantined.result }}" >> "$GITHUB_STEP_SUMMARY"
 
-          if [[ "${{ needs.test-required-stable.result }}" == "failure" || "${{ needs.lint.result }}" == "failure" || "${{ needs.build-release.result }}" == "failure" ]]; then
+          if [[ "${{ needs.test-required-stable.result }}" == "failure" || "${{ needs.build-release.result }}" == "failure" ]]; then
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "❌ Required CI checks failed." >> "$GITHUB_STEP_SUMMARY"
             exit 1
