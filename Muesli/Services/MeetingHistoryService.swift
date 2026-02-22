@@ -62,9 +62,7 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
     /// - Parameter directory: The directory URL containing the meeting files
     /// - Returns: MeetingHistoryItem if valid, nil otherwise
     private func parseMeeting(from directory: URL) -> MeetingHistoryItem? {
-        // Check for transcript.md file
-        let transcriptURL = directory.appendingPathComponent("transcript.md")
-        guard fileManager.fileExists(atPath: transcriptURL.path) else {
+        guard let transcriptURL = preferredTranscriptURL(in: directory) else {
             return nil
         }
         
@@ -239,7 +237,9 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
     /// - Parameter directory: The meeting directory
     /// - Returns: Transcript text, or nil if not found
     func loadTranscript(at directory: URL) -> String? {
-        let transcriptURL = directory.appendingPathComponent("transcript.md")
+        guard let transcriptURL = preferredTranscriptURL(in: directory) else {
+            return nil
+        }
         
         guard let content = try? String(contentsOf: transcriptURL, encoding: .utf8) else {
             return nil
@@ -371,6 +371,20 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
         return blocks.isEmpty ? nil : blocks
     }
     
+    private func preferredTranscriptURL(in directory: URL) -> URL? {
+        let primary = directory.appendingPathComponent("transcript.md")
+        if fileManager.fileExists(atPath: primary.path) {
+            return primary
+        }
+        
+        let live = directory.appendingPathComponent("transcript.live.md")
+        if fileManager.fileExists(atPath: live.path) {
+            return live
+        }
+        
+        return nil
+    }
+    
     /// Load original transcript blocks (if refinement was applied)
     /// - Parameter meeting: The meeting to load original transcript blocks for
     /// - Returns: Array of original transcript blocks, or nil if not found
@@ -436,7 +450,9 @@ final class MeetingHistoryService: MeetingHistoryServiceProtocol {
     /// - Parameter directory: The meeting directory
     /// - Returns: Array of transcript blocks, or nil if not found or legacy format
     func loadTranscriptBlocks(at directory: URL) -> [TranscriptBlock]? {
-        let transcriptURL = directory.appendingPathComponent("transcript.md")
+        guard let transcriptURL = preferredTranscriptURL(in: directory) else {
+            return nil
+        }
         
         guard let content = try? String(contentsOf: transcriptURL, encoding: .utf8) else {
             return nil

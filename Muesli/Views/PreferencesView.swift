@@ -235,6 +235,50 @@ struct GeneralPreferencesTab: View {
                     .foregroundStyle(.secondary)
             }
             
+            Section("Transcription Quality") {
+                Toggle(isOn: $prefs.isLiveStabilizerEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Live transcript stabilization")
+                        Text("Suppress duplicate overlap text and show a tentative draft tail during recording.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                Toggle(isOn: $prefs.isSecondPassASREnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Finalize transcript after recording")
+                        Text("Runs a second-pass ASR over saved audio for higher quality final transcript.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                Toggle(isOn: $prefs.isAutoRefineEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Auto-refine with AI (experimental)")
+                        Text("Applies constrained LLM cleanup after second-pass ASR.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                LabeledContent("Second-pass model") {
+                    Picker(selection: $prefs.secondPassModelPreference) {
+                        Text("Best available").tag(PreferencesManager.SecondPassModelPreference.bestAvailable)
+                        Text("Same as live model").tag(PreferencesManager.SecondPassModelPreference.sameAsLive)
+                        Text("Best available (no downgrade)").tag(PreferencesManager.SecondPassModelPreference.bestAvailableNoDowngrade)
+                        Text("Specific model").tag(PreferencesManager.SecondPassModelPreference.specific)
+                    } label: {
+                        EmptyView()
+                    }
+                    .frame(maxWidth: 280)
+                }
+            }
+            
             Section("Audio") {
                 #if DEBUG
                 Toggle(isOn: $prefs.isEchoCancellationEnabled) {

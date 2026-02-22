@@ -43,6 +43,9 @@ enum AudioConfiguration {
     /// Post-processing overlap (5 seconds - prevents word cutoffs at boundaries)
     static let postProcessingOverlapDuration: TimeInterval = 5.0
     
+    /// Skip second-pass for very short recordings where overhead outweighs gains
+    static let secondPassMinDurationSeconds: TimeInterval = 30.0
+    
     /// Minimum samples needed before processing (chunk duration at whisper sample rate)
     static var minSamplesForProcessing: Int {
         whisperSampleRate * Int(transcriptionChunkDuration)
@@ -86,6 +89,23 @@ enum AudioConfiguration {
     
     /// RMS threshold for voice activity detection (-40dB equivalent)
     static let vadThreshold: Float = 0.01
+    
+    // MARK: - Live Stabilizer
+    
+    /// Consecutive matching hypotheses required before commit
+    static let stabilizerAgreementWindow: Int = 2
+    
+    /// Timing slack for overlap boundary calculations
+    static let stabilizerJitterMs: Int = 250
+    
+    /// Similarity threshold for overlap matching
+    static let stabilizerSimilarityThreshold: Double = 0.70
+    
+    /// Maximum number of tokens retained for draft tail
+    static let stabilizerMaxDraftTokens: Int = 40
+    
+    /// Maximum draft UI emit frequency (4Hz)
+    static let stabilizerDraftEmitIntervalMs: Int = 250
     
     // MARK: - Audio Level Updates
     

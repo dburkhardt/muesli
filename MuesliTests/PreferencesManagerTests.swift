@@ -37,6 +37,11 @@ final class PreferencesManagerTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.echoCancellationEnabled)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.audioChunkDuration)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassASREnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.autoRefineEnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassModelPreference)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassSpecificModel)
         UserDefaults.standard.removeObject(forKey: PreferencesManager.migrationCheckedKey)
     }
     
@@ -230,6 +235,34 @@ final class PreferencesManagerTests: XCTestCase {
         let newManager = PreferencesManager()
         
         XCTAssertEqual(newManager.transcriptionMode, .live)
+    }
+    
+    // MARK: - Transcription Quality Pipeline Tests
+    
+    func testLiveStabilizer_DefaultsToDisabled() async {
+        XCTAssertFalse(preferencesManager.isLiveStabilizerEnabled)
+    }
+    
+    func testSecondPassASR_DefaultsToDisabled() async {
+        XCTAssertFalse(preferencesManager.isSecondPassASREnabled)
+    }
+    
+    func testAutoRefine_DefaultsToDisabled() async {
+        XCTAssertFalse(preferencesManager.isAutoRefineEnabled)
+    }
+    
+    func testSecondPassModelPreference_DefaultsToBestAvailable() async {
+        XCTAssertEqual(preferencesManager.secondPassModelPreference, .bestAvailable)
+    }
+    
+    func testSecondPassModelPreference_CanPersistSpecificModel() async {
+        preferencesManager.secondPassModelPreference = .specific
+        preferencesManager.secondPassSpecificModelRawValue = ModelManager.ModelSize.medium.rawValue
+        
+        let newManager = PreferencesManager()
+        
+        XCTAssertEqual(newManager.secondPassModelPreference, .specific)
+        XCTAssertEqual(newManager.secondPassSpecificModelRawValue, ModelManager.ModelSize.medium.rawValue)
     }
     
     // MARK: - Echo Cancellation Tests

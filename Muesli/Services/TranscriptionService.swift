@@ -35,6 +35,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     /// Callback for new transcript segments
     typealias TranscriptHandler = @Sendable (TranscriptSegment) -> Void
     
+    /// Callback for live draft tail updates
+    typealias DraftHandler = @Sendable (String, TranscriptSegment.Speaker) -> Void
+    
     /// Callback for transcription warnings (message, details)
     typealias TranscriptionWarningHandler = @Sendable (String, String) -> Void
     
@@ -56,7 +59,9 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     private var whisperKit: WhisperKit?
     private var isInitialized = false
     private var transcriptHandler: TranscriptHandler?
+    private var draftHandler: DraftHandler?
     private var warningHandler: TranscriptionWarningHandler?
+    private var liveStabilizer: LiveStabilizer?
     
     /// Current transcription mode
     var transcriptionMode: TranscriptionMode = .live
@@ -166,6 +171,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         transcriptHandler = handler
     }
     
+    /// Set the handler for live draft text updates
+    func setDraftHandler(_ handler: @escaping TranscriptionDraftHandler) {
+        draftHandler = handler
+    }
+    
     /// Set the handler for transcription warnings
     func setWarningHandler(_ handler: @escaping TranscriptionWarningHandler) {
         warningHandler = handler
@@ -175,6 +185,12 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Start transcription processing
     func startTranscription(recordingStartTime: Date) {
+        if transcriptionMode == .live {
+            liveStabilizer = LiveStabilizer()
+        } else {
+            liveStabilizer = nil
+        }
+
         bufferState.withLock { state in
             state.recordingStartTime = recordingStartTime
             state.systemAudioBuffer.removeAll()
@@ -212,6 +228,17 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Process any remaining audio
         await processRemainingAudio()
+        
+        if let stabilizer = liveStabilizer {
+            let output = await stabilizer.flushAll()
+            for segment in output.committedSegments {
+                transcriptHandler?(segment)
+            }
+            if let draft = output.draftUpdate {
+                draftHandler?(draft.text, draft.speaker)
+            }
+        }
+        liveStabilizer = nil
     }
     
     // MARK: - Audio Input
@@ -520,7 +547,17 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 speaker: speaker
             )
             
-            transcriptHandler?(segment)
+            if let stabilizer = liveStabilizer, transcriptionMode == .live {
+                let output = await stabilizer.ingest(segment)
+                for committed in output.committedSegments {
+                    transcriptHandler?(committed)
+                }
+                if let draft = output.draftUpdate {
+                    draftHandler?(draft.text, draft.speaker)
+                }
+            } else {
+                transcriptHandler?(segment)
+            }
             return text
         } catch {
             logger.error("Transcription error: \(error.localizedDescription)")

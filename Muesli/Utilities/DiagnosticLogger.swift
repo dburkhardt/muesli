@@ -18,6 +18,7 @@ actor DiagnosticLogger {
         case app = "APP"
         case transcription = "TRANSCRIPTION"  // Debug category for transcription issues
         case aec = "AEC"  // Echo cancellation diagnostics
+        case stabilizer = "STABILIZER"  // Live stabilizer and second-pass metrics
     }
     
     /// Maximum log file size (10MB)
