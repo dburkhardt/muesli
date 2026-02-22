@@ -314,7 +314,6 @@ final class RecordingController {
         fileService.appendAudioBuffer(buffer, type: .system)
     }
     
-
     /// Process microphone audio buffer — file output only
     /// Transcription is now handled by the AEC-processed audio callback from TapAudioCaptureService
     private static nonisolated func handleMicrophoneAudioBuffer(

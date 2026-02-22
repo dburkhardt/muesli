@@ -20,6 +20,9 @@ Pods/
 # Carthage (if used)
 Carthage/Build/
 
+# Node artifacts (not used by this repo)
+package-lock.json
+
 # Cursor/IDE (but keep commands tracked)
 .cursor/*
 !.cursor/commands/

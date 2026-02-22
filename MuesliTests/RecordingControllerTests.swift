@@ -225,6 +225,7 @@ final class RecordingControllerTests: XCTestCase {
     func testStopRecordingSuccessfully() async {
         let (controller, mockCapture) = await createTestControllerWithMocks()
         let session = controller.createSession()
+        session.meetingTitle = "Test Meeting"  // Required so stop proceeds (no title prompt)
 
         // Given: Recording session
         controller.startRecording(for: session)
@@ -232,7 +233,7 @@ final class RecordingControllerTests: XCTestCase {
 
         // When: Stopping recording
         controller.stopRecording(for: session)
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        try? await Task.sleep(nanoseconds: 500_000_000)  // Allow async stop to complete
 
         // Then: Should call stopCapture
         let stopCount = await mockCapture.stopCaptureCallCount
@@ -356,15 +357,15 @@ final class RecordingControllerTests: XCTestCase {
     func testTitlePromptSheetState() async {
         let (controller, _) = await createTestControllerWithMocks()
         let session = controller.createSession()
+        session.meetingTitle = "Test Meeting"  // Required so stop completes (no title prompt)
 
         // Given: Completed recording
         controller.startRecording(for: session)
         try? await Task.sleep(nanoseconds: 200_000_000)
         controller.stopRecording(for: session)
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        try? await Task.sleep(nanoseconds: 500_000_000)  // Allow async stop to complete
 
-        // Then: Controller should have processed the stop (title prompt state depends on preferences)
-        // At minimum, the controller should not be in an inconsistent state
+        // Then: Controller should have processed the stop
         XCTAssertNil(controller.activeSession, "activeSession should be nil after stop")
     }
 

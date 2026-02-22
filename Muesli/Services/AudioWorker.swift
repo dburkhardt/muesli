@@ -43,7 +43,6 @@ struct AudioWorkerStats {
 
 /// High-priority audio worker for non-RT processing.
 final class AudioWorker {
-
     // MARK: - Configuration
 
     /// Worker loop interval (5ms)

@@ -6,10 +6,10 @@
 //  Orchestrates: TapManager -> Synchronizer -> AEC -> Worker -> Output
 //
 
-import Foundation
-import CoreMedia
-import AVFoundation
 import AudioToolbox
+import AVFoundation
+import CoreMedia
+import Foundation
 import os.lock
 import os.log
 import QuartzCore
@@ -82,7 +82,6 @@ final class AudioFrameMetadataRing {
 /// Provides synchronized, echo-cancelled audio for transcription
 ///
 actor TapAudioCaptureService: AudioCaptureServiceProtocol {
-
     // MARK: - Types
 
     /// Audio type identifier - uses shared AudioStreamType for compatibility
@@ -975,6 +974,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 }
             }
         }
+        logger.warning("Microphone device UID not found in Core Audio devices: \(deviceID) — falling back to system default")
     }
 
     /// Set up route change listener

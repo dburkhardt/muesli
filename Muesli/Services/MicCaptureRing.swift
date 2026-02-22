@@ -21,7 +21,6 @@ import os.lock
 /// Sample-index based: Each packet is tagged with its stream position,
 /// enabling precise pairing with render packets.
 final class MicCaptureRing {
-    
     // MARK: - Configuration
     
     /// Default capacity: 250ms of audio at 48kHz (capture max per plan)

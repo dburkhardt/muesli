@@ -17,7 +17,6 @@ import QuartzCore
 /// by starting system audio capture before AVAudioEngine in TapAudioCaptureService.
 /// This allows WebRTC's internal delay estimation to work correctly.
 final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellationServiceProtocol {
-    
     // MARK: - Configuration
     
     private let sampleRate: Int = 48000
@@ -332,7 +331,6 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
             if !state.offsetCalculated &&
                state.systemBufferTimes.count >= SyncState.kBuffersToAverage &&
                state.micBufferTimes.count >= SyncState.kBuffersToAverage {
-                
                 let avgSysTime = state.systemBufferTimes.reduce(0, +) / Double(SyncState.kBuffersToAverage)
                 let avgMicTime = state.micBufferTimes.reduce(0, +) / Double(SyncState.kBuffersToAverage)
                 let timingOffsetSeconds = avgSysTime - avgMicTime

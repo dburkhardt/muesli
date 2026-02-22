@@ -167,8 +167,20 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         refreshDevices()
     }
     
+    // MARK: - System Default Device
+
+    /// Query Core Audio for the system default input device UID.
+    /// Returns nil if the query fails (e.g., no input devices present).
+    private static func getSystemDefaultInputUID() -> String? {
+        guard let deviceID = try? CoreAudioHelpers.getDefaultInputDevice(),
+              let uid = try? CoreAudioHelpers.getDeviceUID(deviceID) else {
+            return nil
+        }
+        return uid
+    }
+
     // MARK: - Device Enumeration
-    
+
     /// Refresh the list of available microphone devices
     ///
     /// ⚠️ WARNING: Only call this after microphone permission has been granted.
@@ -182,20 +194,24 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
             availableDevices = []
             return
         }
-        
+
         var devices: [MicrophoneDevice] = []
-        
+
         // Use AVCaptureDevice to enumerate audio input devices (works on macOS)
         let discoverySession = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone],
             mediaType: .audio,
             position: .unspecified
         )
-        
+
         let captureDevices = discoverySession.devices
-        
-        // Get system default (first device is typically the default)
-        let defaultDevice = captureDevices.first
+
+        // Get the true system default input device via Core Audio
+        // (AVCaptureDevice.DiscoverySession ordering is arbitrary and unreliable)
+        let systemDefaultUID = Self.getSystemDefaultInputUID()
+        let defaultDevice = captureDevices.first(where: { $0.uniqueID == systemDefaultUID })
+            ?? captureDevices.first
+        logger.info("System default input UID: \(systemDefaultUID ?? "unknown") → matched: \(defaultDevice?.localizedName ?? "none")")
         
         for device in captureDevices {
             // Filter out virtual aggregate devices created by ScreenCaptureKit
@@ -282,14 +298,17 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
             position: .unspecified
         )
         
-        // Find the first REAL microphone device (not an aggregate device or Continuity Camera)
-        // Aggregate devices are created by ScreenCaptureKit and don't deliver real audio
-        // Continuity Camera devices are iPhone/iPad microphones that should not be used
-        guard let defaultDevice = discoverySession.devices.first(where: { device in
-            !device.uniqueID.contains("Aggregate") && 
+        // Find the system default input device via Core Audio, filtering out
+        // aggregate and Continuity Camera devices that don't deliver real audio
+        let systemDefaultUID = Self.getSystemDefaultInputUID()
+        let eligibleDevices = discoverySession.devices.filter { device in
+            !device.uniqueID.contains("Aggregate") &&
             !device.localizedName.contains("Aggregate") &&
             !isContinuityCameraDevice(device)
-        }) else { return nil }
+        }
+        // Prefer the true system default; fall back to first eligible device
+        guard let defaultDevice = eligibleDevices.first(where: { $0.uniqueID == systemDefaultUID })
+                ?? eligibleDevices.first else { return nil }
         
         return MicrophoneDevice(
             id: defaultDevice.uniqueID,

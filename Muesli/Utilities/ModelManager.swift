@@ -796,6 +796,10 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
             downloadedModels.remove(model)
             modelPaths.removeValue(forKey: model)
             downloadStates[model] = .idle
+            if activeModel == model {
+                activeModel = nil
+                UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
+            }
             saveDownloadedModels()
             saveModelPaths()
             return true

@@ -64,7 +64,7 @@ enum AppStorageKeys {
     /// AEC delay mode: how stream delay is computed for echo cancellation
     static let aecDelayMode = "aecDelayMode"
     
-    /// Audio chunk duration for transcription (2-10 seconds)
+    /// Audio chunk duration for transcription (2-30 seconds)
     static let audioChunkDuration = "audioChunkDuration"
     
     /// Enable overlap dedup stabilization in live transcription path
