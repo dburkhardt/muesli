@@ -269,11 +269,11 @@ struct GeneralPreferencesTab: View {
                         .foregroundStyle(.secondary)
                 }
                 
-                Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
+                Slider(value: $prefs.audioChunkDuration, in: 2.0...30.0, step: 0.5)
                 
                 Text(
                     "Shorter chunks provide faster transcription but may reduce accuracy. " +
-                    "Longer chunks improve accuracy but increase latency. " +
+                    "Longer chunks (15-30s) significantly improve accuracy by giving Whisper more context. " +
                     "Changes apply to new recordings only."
                 )
                     .font(.caption)
