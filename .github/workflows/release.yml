@@ -195,7 +195,7 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "${API}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=20")
 
-            CANDIDATE_RUN_IDS=$(echo "${RUNS_JSON}" | jq -r '.workflow_runs[] | select(.status=="in_progress" or .status=="completed") | .id')
+            CANDIDATE_RUN_IDS=$(echo "${RUNS_JSON}" | jq -r '.workflow_runs[] | select(.status=="queued" or .status=="in_progress" or .status=="completed") | .id')
 
             for CI_RUN_ID in ${CANDIDATE_RUN_IDS}; do
               ARTIFACTS_JSON=$(curl -fsSL \
