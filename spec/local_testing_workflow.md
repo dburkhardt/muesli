@@ -8,6 +8,8 @@
 
 ## Quick Reference
 
+> **CI runs a subset**: GitHub Actions skips ~400 tests (MuesliViewModelTests, TranscriptionServiceTests, FileOutputServiceTests, EchoCancellationServiceTests, CoreAudioTapTests, ModelManagerTests) to keep CI under ~25 min. Run the full suite locally before release.
+
 ```bash
 # Run all tests included in the shared scheme (currently MuesliTests only)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
