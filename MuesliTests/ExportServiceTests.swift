@@ -506,7 +506,6 @@ final class ExportServiceTests: XCTestCase {
 
 @MainActor
 final class PreferencesManagerExportTests: XCTestCase {
-    
     override func tearDown() {
         // Clean up UserDefaults
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.exportEnabled)

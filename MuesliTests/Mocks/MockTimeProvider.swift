@@ -1,5 +1,5 @@
-@testable import Muesli
 import Foundation
+@testable import Muesli
 
 /// Mock time provider for deterministic testing of time-dependent code.
 /// Allows tests to control time progression without using Thread.sleep().
