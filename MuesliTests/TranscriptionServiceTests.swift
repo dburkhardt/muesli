@@ -53,14 +53,14 @@ final class TranscriptionServiceTests: XCTestCase {
     }
     
     func testServiceInitializationWithMaximumChunkDuration() {
-        // Given: Maximum valid chunk duration (10 seconds)
-        let chunkDuration: TimeInterval = 10.0
+        // Given: Maximum valid chunk duration (30 seconds)
+        let chunkDuration: TimeInterval = 30.0
         
         // When: Initializing service
         let service = TranscriptionService(chunkDuration: chunkDuration)
         
         // Then: Service should accept maximum duration
-        XCTAssertNotNil(service, "Service should accept 10-second chunks")
+        XCTAssertNotNil(service, "Service should accept 30-second chunks")
     }
     
     func testServiceInitializationClampsTooSmallChunkDuration() {
@@ -71,18 +71,17 @@ final class TranscriptionServiceTests: XCTestCase {
         let service = TranscriptionService(chunkDuration: chunkDuration)
         
         // Then: Service should clamp to minimum (2 seconds)
-        // Note: Clamping happens internally, service still created successfully
         XCTAssertNotNil(service, "Service should clamp too-small duration")
     }
     
     func testServiceInitializationClampsTooLargeChunkDuration() {
-        // Given: Chunk duration above maximum (15 seconds)
-        let chunkDuration: TimeInterval = 15.0
+        // Given: Chunk duration above maximum (35 seconds)
+        let chunkDuration: TimeInterval = 35.0
         
         // When: Initializing service
         let service = TranscriptionService(chunkDuration: chunkDuration)
         
-        // Then: Service should clamp to maximum (10 seconds)
+        // Then: Service should clamp to maximum (30 seconds)
         XCTAssertNotNil(service, "Service should clamp too-large duration")
     }
     
@@ -1053,10 +1052,10 @@ final class TranscriptionServiceTests: XCTestCase {
     }
     
     func testCustomChunkDurationMaximum() {
-        // Given: Chunk duration above maximum (15 seconds)
-        let service = TranscriptionService(chunkDuration: 15.0)
+        // Given: Chunk duration above maximum (35 seconds)
+        let service = TranscriptionService(chunkDuration: 35.0)
         
-        // Then: Should clamp to maximum (10 seconds)
+        // Then: Should clamp to maximum (30 seconds)
         XCTAssertNotNil(service)
     }
     
