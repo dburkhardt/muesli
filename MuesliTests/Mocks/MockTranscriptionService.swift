@@ -43,7 +43,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     // MARK: - Handlers
     
     private var transcriptHandler: TranscriptionService.TranscriptHandler?
-    private var draftHandler: (@Sendable (String, TranscriptionService.TranscriptSegment.Speaker) -> Void)?
+    private var draftHandler: TranscriptionDraftHandler?
     
     // MARK: - TranscriptionServiceProtocol
     
@@ -72,9 +72,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         transcriptHandler = handler
     }
     
-    func setDraftHandler(
-        _ handler: @escaping @Sendable (String, TranscriptionService.TranscriptSegment.Speaker) -> Void
-    ) {
+    func setDraftHandler(_ handler: @escaping TranscriptionDraftHandler) {
         setDraftHandlerCallCount += 1
         draftHandler = handler
     }
