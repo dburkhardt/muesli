@@ -89,16 +89,19 @@ Each item should include:
 
 ### Enhancements
 
-**[Enhancement]** [High] Increase live transcription chunk size to 10-15 seconds
-- Description: Increase the default chunk size for live transcription from 5 seconds to 10-15 seconds to provide more context for Whisper
-- Notes: Whisper was trained on 30-second chunks; 5 seconds provides limited context and can cause issues at word boundaries
+**[Enhancement]** [High] Increase default transcription chunk size and raise the preference ceiling
+- Description: The default chunk size is 5s and the preference slider caps at 10s; both should be raised
+- Notes: Whisper was trained on 30-second chunks; 5 seconds provides limited context and causes word-boundary errors
+- Current state:
+  - Default: 5.0s (AudioConfiguration.swift + PreferencesManager fallback)
+  - Preference slider: 2–10s (PreferencesView.swift, clamped in PreferencesManager + TranscriptionService)
 - Changes needed:
-  - Update `AudioConfiguration.transcriptionChunkDuration` from 5.0 to 10.0-15.0
-  - Proportionally adjust `transcriptionOverlapDuration` (e.g., 3.0s for 10s chunks)
-  - May need to adjust buffer sizes in TranscriptionService
-- Tradeoffs: Increased latency before first output (10-15s vs 5s) but better accuracy
-- Related: AudioConfiguration.swift, TranscriptionService.swift
-- Effort: ~1 hour
+  - Raise `PreferencesManager` default from 5.0 to 10.0
+  - Update `AudioConfiguration.transcriptionChunkDuration` to 10.0 to match
+  - Raise slider upper bound from 10s to 15s in PreferencesView and clamp logic in PreferencesManager/TranscriptionService
+  - Proportionally adjust overlap (e.g., 3.0s for 10s chunks)
+- Tradeoffs: Increased latency before first output, but meaningfully better accuracy
+- Related: AudioConfiguration.swift, PreferencesManager.swift, PreferencesView.swift, TranscriptionService.swift
 - Rationale: Beta tester feedback on transcription quality, especially specialized terms
 
 **[Enhancement]** [High] Add context chaining for live transcription (condition on previous text)
@@ -113,22 +116,22 @@ Each item should include:
   - Handle speaker transitions (Me/Them) appropriately
 - Reference: OpenAI Whisper prompting guide recommends this for segment stitching
 - Related: TranscriptionService.swift (transcribeChunk method), WhisperKit DecodingOptions
-- Effort: ~2-3 hours
 - Rationale: Improve consistency in specialized vocabulary across transcript
 
-**[Enhancement]** [High] Add vocabulary prompting for specialized terms
-- Description: Allow users to specify common terms/proper nouns for better transcription accuracy
-- Notes: OpenAI's prompting guide shows vocabulary conditioning is highly effective for proper nouns
-- Implementation considerations (needs design):
-  - Tokenization lifecycle: when to tokenize (app launch vs recording start), where to cache
-  - Error handling for tokenization failures (WhisperKit tokenizer may be nil)
-  - User preference UI in Preferences > Transcription section
-  - Default vocabulary pre-populated with NVIDIA terms (NeMo RL, CUDA, TensorRT, H100, Blackwell, etc.)
-  - Token limit: WhisperKit allows ~224 tokens (~50-100 words)
-- API: `DecodingOptions.promptTokens` with glossary format ("Glossary: term1, term2, ...")
-- Related: TranscriptionService.swift, PreferencesManager.swift, WhisperKit DecodingOptions
-- Effort: ~3-4 hours (includes proper tokenization lifecycle design)
-- Rationale: Highest-impact transcription quality improvement per OpenAI documentation
+**[Enhancement]** [High] Add vocabulary prompting + inline transcript correction
+- Description: Two complementary features that close the vocabulary feedback loop
+- GitHub: https://github.com/dburkhardt/muesli/issues/16
+- Feature 1 — Preferences vocabulary manager:
+  - Preferences > Transcription > Vocabulary section with tag/comma-separated input
+  - Pre-populated with NVIDIA terms (NeMo RL, CUDA, TensorRT, H100, Blackwell, DGX, etc.)
+  - Token budget display (~224 tokens / ~50-100 words)
+  - Passed via `DecodingOptions.promptTokens` as glossary format at recording start
+- Feature 2 — Inline word correction in transcript:
+  - Click any word (or select a span) in the transcript view
+  - Popover with editable text field + "Add to Vocabulary" toggle (default on)
+  - Saves correction to transcript.md in place; immediately adds to vocabulary for current session
+  - Subtle hover state on words to signal they're clickable; edited words visually distinguished
+- Related: TranscriptionService.swift, PreferencesManager.swift, PreferencesView.swift, TranscriptBlockView.swift
 
 **[Enhancement]** [Medium] Implement VAD-based chunking for live transcription
 - Description: Use voice activity detection to find natural speech boundaries instead of fixed-interval chunking
@@ -143,7 +146,6 @@ Each item should include:
   - Fall back to time-based if no speech boundary found within max window
   - Consider WhisperKit's built-in `chunkingStrategy: .vad` option
 - Related: TranscriptionService.swift, AudioConfiguration.swift, WhisperKit ChunkingStrategy
-- Effort: ~4-6 hours
 - Reference: https://arxiv.org/html/2507.10860v1 (WhisperKit paper)
 
 **[Enhancement]** [Medium] Sliding window transcription with LLM stitching
@@ -165,7 +167,6 @@ Each item should include:
   - LLM latency for real-time stitching (~1-3s if local)
 - Prerequisites: Increase chunk size (above), Context chaining (above)
 - Related: TranscriptionService.swift, LLMStitchingService.swift (already exists)
-- Effort: ~2-3 days
 - Rationale: Beta tester feedback that transcription quality lags behind Teams/Zoom/Granola
 
 **[Enhancement]** [Medium] Improve LLM model download progress bar accuracy
