@@ -2,11 +2,12 @@
 
 # Uninstall script for Muesli
 # Completely removes all traces of Muesli from the system
-# Usage: ./scripts/uninstall.sh [--dry-run] [--yes]
+# Usage: ./scripts/uninstall.sh [--dry-run] [--yes] [--zap]
 #
 # Options:
 #   --dry-run    Preview what would be deleted without making changes
-#   --yes        Non-interactive mode: delete everything without prompts
+#   --yes        Non-interactive mode: remove binaries, caches, and build artifacts
+#   --zap        With --yes: also delete recordings and Application Support (models, prefs)
 
 set -e
 
@@ -20,6 +21,7 @@ NC='\033[0m' # No Color
 # CLI options
 DRY_RUN=false
 AUTO_YES=false
+ZAP=false
 LOG_FILE="/tmp/muesli-uninstall-$(date +%Y%m%d-%H%M%S).log"
 
 # Parse arguments
@@ -33,12 +35,17 @@ while [[ $# -gt 0 ]]; do
             AUTO_YES=true
             shift
             ;;
+        --zap)
+            ZAP=true
+            shift
+            ;;
         --help|-h)
-            echo "Usage: ./scripts/uninstall.sh [--dry-run] [--yes]"
+            echo "Usage: ./scripts/uninstall.sh [--dry-run] [--yes] [--zap]"
             echo ""
             echo "Options:"
             echo "  --dry-run    Preview what would be deleted without making changes"
-            echo "  --yes, -y    Non-interactive mode: delete everything without prompts"
+            echo "  --yes, -y    Non-interactive: remove binaries, caches, and build artifacts"
+            echo "  --zap        With --yes: also delete recordings and Application Support"
             echo "  --help       Show this help message"
             exit 0
             ;;
@@ -559,10 +566,14 @@ prompt_recording_action() {
         return
     fi
 
-    # Auto-yes: delete all recordings
     if [ "$AUTO_YES" = true ]; then
-        RECORDING_ACTION="delete"
-        print_info "Auto-selecting: delete all recordings"
+        if [ "$ZAP" = true ]; then
+            RECORDING_ACTION="delete"
+            print_info "Auto-selecting: delete all recordings (--zap)"
+        else
+            RECORDING_ACTION="keep"
+            print_info "Keeping recordings (use --zap to delete)"
+        fi
         return
     fi
 
@@ -646,11 +657,15 @@ prompt_app_support_action() {
         return
     fi
 
-    # Auto-yes: delete everything
     if [ "$AUTO_YES" = true ]; then
-        APP_SUPPORT_ACTION="delete"
-        KEEP_MODELS=false
-        print_info "Auto-selecting: delete all Application Support files"
+        if [ "$ZAP" = true ]; then
+            APP_SUPPORT_ACTION="delete"
+            KEEP_MODELS=false
+            print_info "Auto-selecting: delete all Application Support files (--zap)"
+        else
+            APP_SUPPORT_ACTION="keep"
+            print_info "Keeping Application Support data (use --zap to delete)"
+        fi
         return
     fi
 
