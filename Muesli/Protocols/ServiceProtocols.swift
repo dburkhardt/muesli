@@ -13,6 +13,7 @@ protocol TranscriptionServiceProtocol: Sendable {
     func initialize(modelPath: URL) async throws
     func setTranscriptionMode(_ mode: TranscriptionService.TranscriptionMode)
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler)
+    func setDraftHandler(_ handler: @escaping TranscriptionService.DraftHandler)
     func startTranscription(recordingStartTime: Date)
     func stopTranscription() async
     func appendSystemAudio(_ samples: [Float])

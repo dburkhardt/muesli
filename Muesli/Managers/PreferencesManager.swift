@@ -102,6 +102,78 @@ final class PreferencesManager {
         case postProcessing
     }
     
+    // MARK: - Transcription Quality Pipeline
+    
+    enum SecondPassModelPreference: String, CaseIterable {
+        case bestAvailable
+        case sameAsLive
+        case bestAvailableNoDowngrade
+        case specific
+    }
+    
+    /// Toggle for deterministic live overlap deduplication.
+    /// Default false for staged rollout safety.
+    var isLiveStabilizerEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.liveStabilizerEnabled) == nil {
+                return false
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.liveStabilizerEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.liveStabilizerEnabled)
+        }
+    }
+    
+    /// Toggle for post-stop second-pass final transcription.
+    /// Default false for staged rollout safety.
+    var isSecondPassASREnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.secondPassASREnabled) == nil {
+                return false
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.secondPassASREnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.secondPassASREnabled)
+        }
+    }
+    
+    /// Toggle for optional automatic LLM cleanup after ASR finalization.
+    var isAutoRefineEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.autoRefineEnabled) == nil {
+                return false
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.autoRefineEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.autoRefineEnabled)
+        }
+    }
+    
+    /// Strategy for picking the second-pass model.
+    var secondPassModelPreference: SecondPassModelPreference {
+        get {
+            let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassModelPreference)
+                ?? SecondPassModelPreference.bestAvailable.rawValue
+            return SecondPassModelPreference(rawValue: raw) ?? .bestAvailable
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: AppStorageKeys.secondPassModelPreference)
+        }
+    }
+    
+    /// Explicit model raw value used when secondPassModelPreference == .specific.
+    var secondPassSpecificModelRawValue: String? {
+        get {
+            UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.secondPassSpecificModel)
+        }
+    }
+    
     // MARK: - Echo Cancellation
     
     /// Thread-safe storage for echo cancellation state (for synchronous access from audio callbacks)

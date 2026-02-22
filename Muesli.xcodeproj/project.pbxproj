@@ -98,6 +98,12 @@
 		'EC00001241D1A1D00000047' = {isa = PBXBuildFile; fileRef = EC00002241D1A1D00000047; };
 		'TPT0001241D1A1D00000049' = {isa = PBXBuildFile; fileRef = TPT0002241D1A1D00000049; };
 		F1000001241D1A1D00000080 /* AudioConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000002241D1A1D00000080 /* AudioConfiguration.swift */; };
+		LS00001241D1A1D00000060 /* LiveStabilizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = LS00002241D1A1D00000060 /* LiveStabilizer.swift */; };
+		DTV0001241D1A1D00000061 /* DraftTranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTV0002241D1A1D00000061 /* DraftTranscriptView.swift */; };
+		LST0001241D1A1D00000062 /* LiveStabilizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LST0002241D1A1D00000062 /* LiveStabilizerTests.swift */; };
+		TRS0001241D1A1D00000063 /* GuardrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRS0002241D1A1D00000063 /* GuardrailTests.swift */; };
+		TSS0001241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSS0002241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift */; };
+		SRT0001241D1A1D00000065 /* StabilizerRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRT0002241D1A1D00000065 /* StabilizerRegressionTests.swift */; };
 		'HL00001241D1A1D00000102' = {isa = PBXBuildFile; fileRef = HL00002241D1A1D00000102; };
 		'LF00001241D1A1D00000096A' = {isa = PBXBuildFile; fileRef = LF00002241D1A1D00000096A; };
 		'MTP0001241D1A1D00000106' = {isa = PBXBuildFile; fileRef = MTP0002241D1A1D00000106; };
@@ -216,6 +222,12 @@
 		ECBD460EA8184AA5AD56F062 /* DriftTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DriftTracker.swift; path = Muesli/Services/DriftTracker.swift; sourceTree = SOURCE_ROOT; };
 		EEC343E8BB800227C09D8F26 /* TapCaptureRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TapCaptureRing.swift; path = Muesli/Services/TapCaptureRing.swift; sourceTree = SOURCE_ROOT; };
 		F1000002241D1A1D00000080 /* AudioConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioConfiguration.swift; sourceTree = "<group>"; };
+		LS00002241D1A1D00000060 /* LiveStabilizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStabilizer.swift; sourceTree = "<group>"; };
+		DTV0002241D1A1D00000061 /* DraftTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftTranscriptView.swift; sourceTree = "<group>"; };
+		LST0002241D1A1D00000062 /* LiveStabilizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStabilizerTests.swift; sourceTree = "<group>"; };
+		TRS0002241D1A1D00000063 /* GuardrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuardrailTests.swift; sourceTree = "<group>"; };
+		TSS0002241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionServiceStabilizerTests.swift; sourceTree = "<group>"; };
+		SRT0002241D1A1D00000065 /* StabilizerRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilizerRegressionTests.swift; sourceTree = "<group>"; };
 		'HL00002241D1A1D00000102' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverableLink.swift; sourceTree = "<group>"; };
 		'LF00002241D1A1D00000096A' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoggerFactory.swift; sourceTree = "<group>"; };
 		'MTP0002241D1A1D00000106' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTimeProvider.swift; sourceTree = "<group>"; };
@@ -361,6 +373,7 @@
 				A1000084241D1A1D00000022 /* LLMStitchingService.swift */,
 				A1000091241D1A1D00000025 /* TranscriptRefinementService.swift */,
 				A1000097241D1A1D00000028 /* EchoCancellationService.swift */,
+				LS00002241D1A1D00000060 /* LiveStabilizer.swift */,
 				WR00004241D1A1D00000203,
 				WR00006241D1A1D00000205,
 				WR00009241D1A1D00000208,
@@ -409,6 +422,7 @@
 				US00002241D1A1D00000098,
 				UH00002241D1A1D00000097A,
 				WB00002241D1A1D00000056,
+				DTV0002241D1A1D00000061 /* DraftTranscriptView.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -431,6 +445,10 @@
 				TPT0002241D1A1D00000049,
 				B100001D241D1A1D00000040 /* Protocols */,
 				B100001E241D1A1D00000040 /* Mocks */,
+				LST0002241D1A1D00000062 /* LiveStabilizerTests.swift */,
+				TRS0002241D1A1D00000063 /* GuardrailTests.swift */,
+				TSS0002241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift */,
+				SRT0002241D1A1D00000065 /* StabilizerRegressionTests.swift */,
 			);
 			path = MuesliTests;
 			sourceTree = "<group>";
@@ -709,6 +727,8 @@
 				C1000005241D1A1D00000052 /* RefinementCoordinator.swift in Sources */,
 				C1000007241D1A1D00000053 /* TranscriptionCoordinator.swift in Sources */,
 				D1000001241D1A1D00000060 /* ServiceProtocols.swift in Sources */,
+				LS00001241D1A1D00000060 /* LiveStabilizer.swift in Sources */,
+				DTV0001241D1A1D00000061 /* DraftTranscriptView.swift in Sources */,
 				E1000001241D1A1D00000070 /* RecordingController.swift in Sources */,
 				E1000003241D1A1D00000071 /* AppStorageKeys.swift in Sources */,
 				E1000005241D1A1D00000072 /* MuesliError.swift in Sources */,
@@ -760,6 +780,10 @@
 				CA00001241D1A1D00000048,
 				RT00001241D1A1D00000050,
 				TPT0001241D1A1D00000049,
+				LST0001241D1A1D00000062 /* LiveStabilizerTests.swift in Sources */,
+				TSS0001241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift in Sources */,
+				SRT0001241D1A1D00000065 /* StabilizerRegressionTests.swift in Sources */,
+				TRS0001241D1A1D00000063 /* TranscriptRefinementServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
