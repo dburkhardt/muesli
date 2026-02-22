@@ -13,6 +13,9 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
 
+# Note: permissions controls GITHUB_TOKEN scopes only. Artifact upload/download
+# uses a separate ACTIONS_RUNTIME_TOKEN injected by the runner; it does not
+# require actions:write or any other GITHUB_TOKEN scope.
 permissions:
   contents: read
 
