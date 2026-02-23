@@ -406,6 +406,52 @@ final class RegressionTests: XCTestCase {
         
         XCTAssertTrue(true, "User's selected microphone device is respected")
     }
+
+    /// Regression test: startMicrophoneCapture attempts selected/fallback mic routing.
+    /// Bug: A previous refactor removed the call to setMicrophoneInputDevice(...),
+    /// causing capture to always use macOS default input and ignore user selection.
+    func testStartMicrophoneCaptureCallsSetMicrophoneInputDevice() throws {
+        let source = try tapAudioCaptureServiceSource()
+        let pattern = #"let deviceWasSet = setMicrophoneInputDevice\(\s*engine: engine,\s*deviceUID: selectedMicrophoneDeviceID,\s*fallbackDeviceID: preAggregateDefaultInputDeviceID\s*\)"#
+
+        XCTAssertNotNil(
+            source.range(of: pattern, options: .regularExpression),
+            "startMicrophoneCapture must call setMicrophoneInputDevice with selected and fallback IDs"
+        )
+        XCTAssertTrue(
+            source.contains("explicitlySet: \\(deviceWasSet)"),
+            "Diagnostic log should include explicitlySet status for device-routing troubleshooting"
+        )
+    }
+
+    /// Regression test: invalid format guard checks raw inputFormat before coercion.
+    /// Bug: Guarding on fallback-coerced values made the validation ineffective.
+    func testStartMicrophoneCaptureGuardsRawInputFormatBeforeDerivedValues() throws {
+        let source = try tapAudioCaptureServiceSource()
+        let guardSnippet = "guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else"
+
+        guard let guardRange = source.range(of: guardSnippet) else {
+            XCTFail("Missing raw input format guard in startMicrophoneCapture")
+            return
+        }
+
+        guard let sampleRateRange = source.range(of: "let hardwareSampleRate = inputFormat.sampleRate"),
+              let channelsRange = source.range(of: "let hardwareChannels = inputFormat.channelCount") else {
+            XCTFail("Expected derived sample-rate/channel assignments were not found")
+            return
+        }
+
+        XCTAssertLessThan(
+            source.distance(from: source.startIndex, to: guardRange.lowerBound),
+            source.distance(from: source.startIndex, to: sampleRateRange.lowerBound),
+            "Raw format guard must execute before deriving hardwareSampleRate"
+        )
+        XCTAssertLessThan(
+            source.distance(from: source.startIndex, to: guardRange.lowerBound),
+            source.distance(from: source.startIndex, to: channelsRange.lowerBound),
+            "Raw format guard must execute before deriving hardwareChannels"
+        )
+    }
     
     /// Regression test: Mic audio RMS should be measurable (not all zeros)
     /// Bug: Logs showed mic audio RMS was consistently 0.0 with all-zero samples.
@@ -420,6 +466,13 @@ final class RegressionTests: XCTestCase {
         // The AVAudioEngine fix ensures we get actual audio data.
         
         XCTAssertTrue(true, "Mic audio should have non-zero RMS when user speaks")
+    }
+
+    private func tapAudioCaptureServiceSource() throws -> String {
+        let testsFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
+        let serviceURL = repoRoot.appendingPathComponent("Muesli/Services/TapAudioCaptureService.swift")
+        return try String(contentsOf: serviceURL, encoding: .utf8)
     }
     
     // MARK: - Window Management Regression Tests (Bug Fix: Jan 15, 2026)

@@ -822,6 +822,7 @@ struct RecordingDetailView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toolbarVisibility(.hidden, for: .windowToolbar)
     }
     
     // MARK: - Audio-Only Mode Banner

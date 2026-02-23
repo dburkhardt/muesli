@@ -901,18 +901,18 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
 
         let inputFormat = inputNode.inputFormat(forBus: 0)
-        let hardwareSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
-        let hardwareChannels = inputFormat.channelCount > 0 ? inputFormat.channelCount : 1
 
-        // Validate the format before installTap — invalid formats (0 channels, 0 Hz)
-        // cause an uncaught NSException.
-        guard hardwareSampleRate > 0, hardwareChannels > 0 else {
+        // Validate raw format values before any fallback coercion.
+        // installTap can throw an uncaught NSException when format values are invalid.
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             logger.error("MIC_ENGINE: invalid input format — sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
             throw AudioCaptureError.microphoneStartFailed(
                 NSError(domain: "TapAudioCapture", code: -3,
                         userInfo: [NSLocalizedDescriptionKey: "Microphone input format is invalid"]))
         }
 
+        let hardwareSampleRate = inputFormat.sampleRate
+        let hardwareChannels = inputFormat.channelCount
         microphoneSampleRate = hardwareSampleRate
 
         // Use nil format (device's native output format) to avoid format mismatches
