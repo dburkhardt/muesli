@@ -883,23 +883,26 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
 
-        // ALWAYS explicitly set the mic device — never let AVAudioEngine pick
-        // its default, which may be the tap aggregate device after aggregate creation.
+        // Try to set the requested mic device. If it fails, let the engine use
+        // whatever macOS provides as default — this may be the aggregate device
+        // (which delivers system audio), but at least the pipeline won't be silent.
         let deviceWasSet = setMicrophoneInputDevice(
             engine: engine,
             deviceUID: selectedMicrophoneDeviceID,
             fallbackDeviceID: preAggregateDefaultInputDeviceID
         )
 
+        // Log the engine's actual input device for diagnostics
+        let actualDeviceID = engine.inputNode.auAudioUnit.deviceID
+        let actualUID = (try? CoreAudioHelpers.getDeviceUID(actualDeviceID)) ?? "unknown"
         if !deviceWasSet {
-            logger.error("Could not set any mic device — aborting mic capture")
-            throw AudioCaptureError.microphoneStartFailed(
-                NSError(domain: "TapAudioCapture", code: -2,
-                        userInfo: [NSLocalizedDescriptionKey: "No valid microphone device available"])
-            )
+            logger.warning("MIC_DEVICE_SET: using engine default — \(actualUID) (AudioDeviceID: \(actualDeviceID))")
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_DEVICE_FALLBACK_DEFAULT: uid=\(actualUID), audioDeviceID=\(actualDeviceID)")
+            }
         }
 
-        // Query format AFTER device is set so it reflects the correct hardware.
         let inputFormat = inputNode.inputFormat(forBus: 0)
         let hardwareSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
         let tapSampleRate = 48000.0

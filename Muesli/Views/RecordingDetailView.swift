@@ -111,8 +111,6 @@ struct RecordingDetailView: View {
                 // Header with title and recording indicator
                 headerView(session: session)
                 
-                Divider()
-                
                 // Transcript content - different view for resumed vs new recordings
                 if let parentMeeting = session.parentMeeting {
                     resumedRecordingContentView(session: session, meeting: parentMeeting)
@@ -647,8 +645,6 @@ struct RecordingDetailView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
-                
-                Divider()
                 
                 // Content
                 ScrollView {

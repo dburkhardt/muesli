@@ -10,10 +10,11 @@ struct MeetingHistorySidebar: View {
         @Bindable var history = historyManager
         
         VStack(spacing: 0) {
-            // Header
-            headerView
+            // New recording button (top-level)
+            newButtonView
             
-            Divider()
+            // "Meetings" section label
+            meetingsLabel
             
             // Content
             if historyManager.groupedHistory.isEmpty && viewModel.activeRecordingSession == nil {
@@ -57,20 +58,12 @@ struct MeetingHistorySidebar: View {
         }
     }
     
-    // MARK: - Header
+    // MARK: - New Button
     
-    private var headerView: some View {
+    private var newButtonView: some View {
         HStack {
-            Text("Meetings")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-            
-            Spacer()
-            
             Button(
                 action: {
-                    // Quick start: immediately begin recording all system audio
                     viewModel.quickStartRecording()
                 },
                 label: {
@@ -97,9 +90,26 @@ struct MeetingHistorySidebar: View {
             )
             .buttonStyle(.plain)
             .disabled(!viewModel.canStartRecording)
+            
+            Spacer()
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.top, 10)
+        .padding(.bottom, 4)
+    }
+    
+    // MARK: - Meetings Label
+    
+    private var meetingsLabel: some View {
+        HStack {
+            Text("Meetings")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.primary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
     
     // MARK: - Empty State
@@ -150,8 +160,6 @@ struct MeetingHistorySidebar: View {
                             .padding(.bottom, 4)
                     }
                     
-                    Divider()
-                        .padding(.vertical, 8)
                 }
                 
                 // Historical meetings grouped by date

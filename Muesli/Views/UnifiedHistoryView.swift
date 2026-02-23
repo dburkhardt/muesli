@@ -24,10 +24,11 @@ struct UnifiedHistoryView: View {
                     )
                 }
                 
-                // Header with title and start button
-                headerView
+                // New recording button (top-level)
+                newButtonView
                 
-                Divider()
+                // "Meetings" section label
+                meetingsLabel
                 
                 // Meeting list
                 if historyManager.groupedHistory.isEmpty {
@@ -76,19 +77,12 @@ struct UnifiedHistoryView: View {
         }
     }
     
-    // MARK: - Header
+    // MARK: - New Button
     
-    private var headerView: some View {
+    private var newButtonView: some View {
         HStack {
-            Text("Meetings")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(.primary)
-            
-            Spacer()
-            
             Button(
                 action: {
-                    // Quick start: immediately begin recording all system audio
                     viewModel.quickStartRecording()
                 },
                 label: {
@@ -115,9 +109,26 @@ struct UnifiedHistoryView: View {
             )
             .buttonStyle(.plain)
             .disabled(!viewModel.canStartRecording)
+            
+            Spacer()
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 4)
+    }
+    
+    // MARK: - Meetings Label
+    
+    private var meetingsLabel: some View {
+        HStack {
+            Text("Meetings")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(.primary)
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
     }
     
     // MARK: - Empty State

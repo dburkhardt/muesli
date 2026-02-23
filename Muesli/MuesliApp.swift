@@ -112,7 +112,7 @@ struct MuesliApp: App {
         .windowResizability(.contentSize)
 
         // Main window - SINGLE window for recordings (not WindowGroup)
-        Window(Self.appDisplayName, id: "main") {
+        Window("", id: "main") {
             MainWindowView(viewModel: viewModel)
                 .environment(viewModel)
                 .environment(meetingHistoryManager)
@@ -372,11 +372,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Find and hide the main window that SwiftUI auto-creates
         for window in NSApplication.shared.windows {
             if let identifier = window.identifier?.rawValue, identifier == "main" {
-                window.orderOut(nil)
-                break
-            }
-            // Also check window title as fallback (SwiftUI may set this from the scene title)
-            if window.title == MuesliApp.appDisplayName {
                 window.orderOut(nil)
                 break
             }
