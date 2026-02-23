@@ -881,26 +881,24 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Start microphone capture using AVAudioEngine
     private func startMicrophoneCapture() throws {
         let engine = AVAudioEngine()
+
+        // DO NOT call setDeviceID on the engine's input node.
+        // On macOS, calling setDeviceID (both auAudioUnit.setDeviceID and
+        // AudioUnitSetProperty/kAudioOutputUnitProperty_CurrentDevice) causes
+        // the AVAudioEngine audio graph to stall after a few seconds, producing
+        // silence. Instead, let AVAudioEngine use whatever macOS reports as the
+        // default input device.
+        //
+        // The pre-aggregate default snapshot ensures the correct device is the
+        // system default BEFORE the aggregate is created. After aggregate creation,
+        // the private aggregate should not become the default.
         let inputNode = engine.inputNode
-
-        // Try to set the requested mic device. If it fails, let the engine use
-        // whatever macOS provides as default — this may be the aggregate device
-        // (which delivers system audio), but at least the pipeline won't be silent.
-        let deviceWasSet = setMicrophoneInputDevice(
-            engine: engine,
-            deviceUID: selectedMicrophoneDeviceID,
-            fallbackDeviceID: preAggregateDefaultInputDeviceID
-        )
-
-        // Log the engine's actual input device for diagnostics
-        let actualDeviceID = engine.inputNode.auAudioUnit.deviceID
+        let actualDeviceID = inputNode.auAudioUnit.deviceID
         let actualUID = (try? CoreAudioHelpers.getDeviceUID(actualDeviceID)) ?? "unknown"
-        if !deviceWasSet {
-            logger.warning("MIC_DEVICE_SET: using engine default — \(actualUID) (AudioDeviceID: \(actualDeviceID))")
-            Task {
-                await DiagnosticLogger.shared.log(.aec,
-                    "MIC_DEVICE_FALLBACK_DEFAULT: uid=\(actualUID), audioDeviceID=\(actualDeviceID)")
-            }
+        logger.info("MIC_ENGINE_DEFAULT: \(actualUID) (AudioDeviceID: \(actualDeviceID))")
+        Task {
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_ENGINE_DEFAULT: uid=\(actualUID), audioDeviceID=\(actualDeviceID)")
         }
 
         let inputFormat = inputNode.inputFormat(forBus: 0)
