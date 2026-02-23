@@ -880,19 +880,24 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// Start microphone capture using AVAudioEngine
     private func startMicrophoneCapture() throws {
-        // DO NOT call setDeviceID or AudioUnitSetProperty on the engine's input node.
-        // Both APIs corrupt AVAudioEngine's internal graph, causing installTap to throw
-        // an uncaught NSException (SIGABRT). Let AVAudioEngine use whatever macOS reports
-        // as the system default input device.
         let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
 
+        // Set the user-selected mic (or pre-aggregate default) BEFORE reading
+        // the input format — the format depends on which device is active.
+        // Uses low-level AudioUnitSetProperty which is safe before installTap.
+        let deviceWasSet = setMicrophoneInputDevice(
+            engine: engine,
+            deviceUID: selectedMicrophoneDeviceID,
+            fallbackDeviceID: preAggregateDefaultInputDeviceID
+        )
+
+        let inputNode = engine.inputNode
         let actualDeviceID = inputNode.auAudioUnit.deviceID
         let actualUID = (try? CoreAudioHelpers.getDeviceUID(actualDeviceID)) ?? "unknown"
-        logger.info("MIC_ENGINE_DEVICE: \(actualUID) (AudioDeviceID: \(actualDeviceID))")
+        logger.info("MIC_ENGINE_DEVICE: \(actualUID) (AudioDeviceID: \(actualDeviceID), explicitlySet: \(deviceWasSet))")
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_ENGINE_DEVICE: uid=\(actualUID), audioDeviceID=\(actualDeviceID)")
+                "MIC_ENGINE_DEVICE: uid=\(actualUID), audioDeviceID=\(actualDeviceID), explicitlySet=\(deviceWasSet)")
         }
 
         let inputFormat = inputNode.inputFormat(forBus: 0)
