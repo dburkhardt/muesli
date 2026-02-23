@@ -252,11 +252,13 @@ git push origin vX.Y.Z
 Release candidates are cut from `develop`. Use RCs to test builds before promoting to stable:
 
 ```bash
-# 1. On develop, ensure Version.xcconfig is set to X.Y.Z-rc.N (e.g., 0.6.2-rc.1)
+# 1. On develop, update Version.xcconfig to X.Y.Z-rc.N (e.g., 0.6.2-rc.1)
 git checkout develop && git pull
-grep MARKETING_VERSION Version.xcconfig  # Should show 0.6.2-rc.1
+# Edit Version.xcconfig: MARKETING_VERSION = 0.6.2-rc.1
+git add Version.xcconfig && git commit -m "chore: Bump version to 0.6.2-rc.1"
+git push origin develop
 
-# 2. Tag the RC from develop
+# 2. Tag the RC from develop (MUST match Version.xcconfig)
 git tag v0.6.2-rc.1
 
 # 3. Push the tag (triggers release workflow, creates pre-release)
@@ -264,6 +266,8 @@ git push origin v0.6.2-rc.1
 
 # 4. If issues found, fix on develop, bump to -rc.2, then:
 # Edit Version.xcconfig: 0.6.2-rc.2, commit, push
+git add Version.xcconfig && git commit -m "chore: Bump version to 0.6.2-rc.2"
+git push origin develop
 git tag v0.6.2-rc.2
 git push origin v0.6.2-rc.2
 ```
@@ -273,13 +277,15 @@ git push origin v0.6.2-rc.2
 After the PR is merged to main:
 
 ```bash
-# 1. Verify Version.xcconfig on main has the correct version
+# 1. On main, update Version.xcconfig to X.Y.Z (remove -rc.N suffix)
 git checkout main && git pull
-grep MARKETING_VERSION Version.xcconfig
+# Edit Version.xcconfig: MARKETING_VERSION = X.Y.Z
+git add Version.xcconfig && git commit -m "chore: Bump version to X.Y.Z"
+git push origin main
 
-# 2. Tag the stable release
-git tag v0.6.0
-git push origin v0.6.0
+# 2. Tag the stable release (MUST match Version.xcconfig)
+git tag vX.Y.Z
+git push origin vX.Y.Z
 
 # 3. Watch the release build
 ./scripts/watch-release.sh
@@ -297,9 +303,10 @@ grep MARKETING_VERSION Version.xcconfig  # e.g., 0.5.2
 **"Create an RC from develop"**:
 ```bash
 git checkout develop && git pull
-# Verify Version.xcconfig matches intended version (e.g., 0.6.2-rc.1)
-grep MARKETING_VERSION Version.xcconfig
-# If not, bump it first (commit before tagging!)
+# Edit Version.xcconfig to X.Y.Z-rc.N, commit, push (MUST happen before tagging!)
+# e.g. MARKETING_VERSION = 0.6.2-rc.1
+git add Version.xcconfig && git commit -m "chore: Bump version to X.Y.Z-rc.N"
+git push origin develop
 git tag vX.Y.Z-rc.N
 git push origin vX.Y.Z-rc.N
 ```

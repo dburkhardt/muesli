@@ -438,13 +438,15 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     // MARK: - Compile Stamp Helpers
 
     /// Build the compile stamp string for a model.
-    /// Format: "<modelRawValue>|<folderPath>|<folderModTime>|<appVersion>"
+    /// Format: "<modelRawValue>|<folderPath>|<folderModTime>"
+    /// Note: app version is intentionally excluded — model files on disk are the
+    /// only thing that determines whether recompilation is needed. Including the
+    /// app version caused unnecessary multi-minute recompilations on every update.
     private func buildCompileStamp(for model: ModelSize) -> String? {
         guard let folderURL = pathForModel(model) else { return nil }
         let attrs = try? FileManager.default.attributesOfItem(atPath: folderURL.path)
         let modTime = (attrs?[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0
-        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-        return "\(model.rawValue)|\(folderURL.path)|\(modTime)|\(appVersion)"
+        return "\(model.rawValue)|\(folderURL.path)|\(modTime)"
     }
 
     /// Returns true if the persisted compile stamp for `model` matches the current stamp.

@@ -6,6 +6,7 @@ updates:
   # GitHub Actions - Keep workflow dependencies up to date
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "develop"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -32,6 +33,7 @@ updates:
   # Swift Package Manager dependencies
   - package-ecosystem: "swift"
     directory: "/"
+    target-branch: "develop"
     schedule:
       interval: "weekly"
       day: "monday"

@@ -96,7 +96,7 @@ For testing or special cases:
 1. Go to GitHub → Actions → Release workflow
 2. Click "Run workflow"
 3. Enter version number (e.g., `0.2.0` without the `v` prefix)
-4. Select branch (usually `main`)
+4. Select branch (`main` for stable releases, `develop` for release candidates)
 5. Click "Run workflow"
 
 ### Workflow Steps
@@ -183,7 +183,7 @@ gh release delete v0.1.0-test --yes  # Delete release
 1. Go to GitHub → Actions → Release workflow
 2. Click "Run workflow"
 3. Enter a test version like `0.1.0-test`
-4. Select the branch to test from (usually `main` or a feature branch)
+4. Select the branch to test from (`main` for stable, `develop` for RCs, or a feature branch)
 5. Monitor the workflow run
 6. Verify the release is created correctly
 7. Delete the test release when done
@@ -322,7 +322,7 @@ Follow [Semantic Versioning](https://semver.org/):
 2. **Use conventional commits**: Format commits as `feat:`, `fix:`, `docs:` etc. for better changelogs
 3. **Use pre-release versions for testing**: Append `-alpha`, `-beta`, or `-test`
 4. **Review Dependabot PRs**: Keep actions and dependencies up to date
-5. **Tag from main**: Always create releases from the main branch
+5. **Tag from the correct branch**: Stable releases tag from `main`; release candidates tag from `develop`
 6. **One release at a time**: Wait for workflow to complete before creating another
 7. **Verify installations**: Download and test the DMG on a clean machine
 8. **Verify attestations**: Use `gh attestation verify` to check build provenance
