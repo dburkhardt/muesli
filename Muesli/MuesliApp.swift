@@ -119,7 +119,7 @@ struct MuesliApp: App {
                 .environment(permissionManager)
                 .environment(refinementCoordinator)
         }
-        .defaultSize(width: 420, height: 600)
+        .defaultSize(width: 900, height: 650)
         .windowResizability(.contentSize)
 
         // Preferences window - accessible via Cmd+,

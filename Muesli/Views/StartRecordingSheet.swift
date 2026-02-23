@@ -77,9 +77,6 @@ struct StartRecordingSheet: View {
         // Start recording (this will set activeSession internally)
         viewModel.startRecording(for: session)
         
-        // Transition to split view
-        viewModel.isSplitViewVisible = true
-        
         // Dismiss sheet
         isPresented = false
         isStarting = false

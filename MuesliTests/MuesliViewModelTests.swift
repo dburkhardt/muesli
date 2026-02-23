@@ -605,12 +605,6 @@ final class MuesliViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.showRefineSheet)
     }
     
-    func testIsSplitViewVisibleInitiallyFalse() async {
-        let viewModel = MuesliViewModel(skipInitialLoad: true)
-        
-        XCTAssertFalse(viewModel.isSplitViewVisible)
-    }
-    
     // MARK: - Transcript Refinement State Tests
     
     func testShowOriginalTranscriptToggle() async {

@@ -39,7 +39,6 @@
 		A100005E241D1A1D00000008 /* MainWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100005F241D1A1D00000008 /* MainWindowView.swift */; };
 		A1000060241D1A1D00000008 /* MeetingHistoryItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000061241D1A1D00000008 /* MeetingHistoryItem.swift */; };
 		A1000062241D1A1D00000008 /* StartRecordingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000063241D1A1D00000008 /* StartRecordingSheet.swift */; };
-		A1000064241D1A1D00000008 /* UnifiedHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000065241D1A1D00000008 /* UnifiedHistoryView.swift */; };
 		A1000066241D1A1D00000008 /* MeetingHistorySidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000067241D1A1D00000008 /* MeetingHistorySidebar.swift */; };
 		A1000068241D1A1D00000008 /* RecordingDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000069241D1A1D00000008 /* RecordingDetailView.swift */; };
 		A100006A241D1A1D00000008 /* MeetingHistoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100006B241D1A1D00000008 /* MeetingHistoryService.swift */; };
@@ -163,7 +162,6 @@
 		A100005F241D1A1D00000008 /* MainWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowView.swift; sourceTree = "<group>"; };
 		A1000061241D1A1D00000008 /* MeetingHistoryItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryItem.swift; sourceTree = "<group>"; };
 		A1000063241D1A1D00000008 /* StartRecordingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartRecordingSheet.swift; sourceTree = "<group>"; };
-		A1000065241D1A1D00000008 /* UnifiedHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedHistoryView.swift; sourceTree = "<group>"; };
 		A1000067241D1A1D00000008 /* MeetingHistorySidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistorySidebar.swift; sourceTree = "<group>"; };
 		A1000069241D1A1D00000008 /* RecordingDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingDetailView.swift; sourceTree = "<group>"; };
 		A100006B241D1A1D00000008 /* MeetingHistoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryService.swift; sourceTree = "<group>"; };
@@ -348,7 +346,6 @@
 				A100005F241D1A1D00000008 /* MainWindowView.swift */,
 				A100005D241D1A1D00000008 /* CompletedMeetingWindow.swift */,
 				A1000063241D1A1D00000008 /* StartRecordingSheet.swift */,
-				A1000065241D1A1D00000008 /* UnifiedHistoryView.swift */,
 				A1000067241D1A1D00000008 /* MeetingHistorySidebar.swift */,
 				A1000069241D1A1D00000008 /* RecordingDetailView.swift */,
 				A1000035241D1A1D00000004 /* OnboardingView.swift */,
@@ -698,7 +695,6 @@
 				A100005E241D1A1D00000008 /* MainWindowView.swift in Sources */,
 				A1000060241D1A1D00000008 /* MeetingHistoryItem.swift in Sources */,
 				A1000062241D1A1D00000008 /* StartRecordingSheet.swift in Sources */,
-				A1000064241D1A1D00000008 /* UnifiedHistoryView.swift in Sources */,
 				A1000066241D1A1D00000008 /* MeetingHistorySidebar.swift in Sources */,
 				A1000068241D1A1D00000008 /* RecordingDetailView.swift in Sources */,
 				A100006A241D1A1D00000008 /* MeetingHistoryService.swift in Sources */,

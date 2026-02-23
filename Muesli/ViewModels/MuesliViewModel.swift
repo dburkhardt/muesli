@@ -261,9 +261,6 @@ final class MuesliViewModel {
         set { historyManager.deletionError = newValue }
     }
     
-    /// Whether the split view (sidebar + detail) should be visible
-    var isSplitViewVisible: Bool = false
-    
     /// Whether to show the start recording sheet
     var showStartRecordingSheet: Bool = false
     
@@ -623,10 +620,6 @@ final class MuesliViewModel {
             if let directory = outputDirectory,
                let newMeeting = self.meetingHistory.first(where: { $0.directory == directory }) {
                 self.selectedMeeting = newMeeting
-                self.isSplitViewVisible = true
-            } else if self.selectedMeeting == nil {
-                // Fallback: if no meeting found and nothing selected, hide split view
-                self.isSplitViewVisible = false
             }
         }
         
@@ -638,10 +631,6 @@ final class MuesliViewModel {
             self?.selectedMeeting = meeting
         }
         
-        self.recordingController.onSplitViewVisibilityChanged = { [weak self] visible in
-            self?.isSplitViewVisible = visible
-        }
-
         self.recordingController.onPermissionRecoveryNeeded = { missingScreen, missingMic in
             AppDelegate.shared?.requestPermissionRecovery(
                 missingScreen: missingScreen,
@@ -751,7 +740,6 @@ final class MuesliViewModel {
         }
         
         recordingController.quickStartRecording()
-        isSplitViewVisible = true
     }
     
     /// Start recording for a session

@@ -89,9 +89,6 @@ final class RecordingController {
     /// Called when the selected meeting should change
     var onSelectedMeetingChanged: ((MeetingHistoryItem?) -> Void)?
     
-    /// Called when split view visibility should change
-    var onSplitViewVisibilityChanged: ((Bool) -> Void)?
-
     /// Called when a permission error is detected during recording start.
     /// Parameters: (missingScreen: Bool, missingMic: Bool)
     var onPermissionRecoveryNeeded: ((Bool, Bool) -> Void)?
@@ -1037,7 +1034,6 @@ final class RecordingController {
             
             // Notify ViewModel that session started
             onSessionStarted?(session)
-            onSplitViewVisibilityChanged?(true)
             
         transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
             Task { @MainActor in

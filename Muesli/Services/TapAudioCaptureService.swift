@@ -880,36 +880,38 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// Start microphone capture using AVAudioEngine
     private func startMicrophoneCapture() throws {
+        // DO NOT call setDeviceID or AudioUnitSetProperty on the engine's input node.
+        // Both APIs corrupt AVAudioEngine's internal graph, causing installTap to throw
+        // an uncaught NSException (SIGABRT). Let AVAudioEngine use whatever macOS reports
+        // as the system default input device.
         let engine = AVAudioEngine()
-
-        // Try to set the user-selected mic (or pre-aggregate default).
-        // If this fails, the engine uses whatever macOS provides as default.
-        let deviceWasSet = setMicrophoneInputDevice(
-            engine: engine,
-            deviceUID: selectedMicrophoneDeviceID,
-            fallbackDeviceID: preAggregateDefaultInputDeviceID
-        )
-
         let inputNode = engine.inputNode
+
         let actualDeviceID = inputNode.auAudioUnit.deviceID
         let actualUID = (try? CoreAudioHelpers.getDeviceUID(actualDeviceID)) ?? "unknown"
-        logger.info("MIC_ENGINE_DEVICE: \(actualUID) (AudioDeviceID: \(actualDeviceID), explicitlySet: \(deviceWasSet))")
+        logger.info("MIC_ENGINE_DEVICE: \(actualUID) (AudioDeviceID: \(actualDeviceID))")
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_ENGINE_DEVICE: uid=\(actualUID), audioDeviceID=\(actualDeviceID), explicitlySet=\(deviceWasSet)")
+                "MIC_ENGINE_DEVICE: uid=\(actualUID), audioDeviceID=\(actualDeviceID)")
         }
 
         let inputFormat = inputNode.inputFormat(forBus: 0)
         let hardwareSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
         let hardwareChannels = inputFormat.channelCount > 0 ? inputFormat.channelCount : 1
 
-        // Use the device's native output format for the tap (pass nil).
-        // Requesting a different sample rate (e.g., 48kHz from a 16kHz device)
-        // causes AVAudioEngine to deliver zero frames on some devices (C920 webcam).
-        // By tapping in the native format, we get reliable buffer delivery and
-        // handle resampling ourselves in handleMicrophoneBuffer.
+        // Validate the format before installTap — invalid formats (0 channels, 0 Hz)
+        // cause an uncaught NSException.
+        guard hardwareSampleRate > 0, hardwareChannels > 0 else {
+            logger.error("MIC_ENGINE: invalid input format — sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
+            throw AudioCaptureError.microphoneStartFailed(
+                NSError(domain: "TapAudioCapture", code: -3,
+                        userInfo: [NSLocalizedDescriptionKey: "Microphone input format is invalid"]))
+        }
+
         microphoneSampleRate = hardwareSampleRate
 
+        // Use nil format (device's native output format) to avoid format mismatches
+        // that cause zero-frame delivery or crashes.
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
             self?.handleMicrophoneBuffer(buffer, time: time)
         }
@@ -1063,6 +1065,12 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                                 "MIC_DEVICE_SET: uid=\(deviceUID), audioDeviceID=\(device), step=requested")
                         }
                         return true
+                    } else {
+                        logger.warning("MIC_DEVICE_SELECT: found \(deviceUID) (AudioDeviceID: \(device)) but setDeviceOnInputNode failed — falling back")
+                        Task {
+                            await DiagnosticLogger.shared.log(.aec,
+                                "MIC_DEVICE_SET_FAILED: uid=\(deviceUID), audioDeviceID=\(device)")
+                        }
                     }
                 }
                 if !found {

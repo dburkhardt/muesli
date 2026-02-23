@@ -463,7 +463,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history and release notes.
 
 ### App Structure
 - `MuesliApp` — MenuBarExtra + single main Window
-- **Single-window model**: Shows `UnifiedHistoryView` (idle) or split view (recording/viewing)
+- **Single-window model**: Always shows `NavigationSplitView` with sidebar + detail pane
 - **Contextual sizing**: compact for list, adjusts for split view
 
 ### State Management (Delegation Pattern)
