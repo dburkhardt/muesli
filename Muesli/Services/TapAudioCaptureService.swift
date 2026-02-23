@@ -901,33 +901,26 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         let inputFormat = inputNode.inputFormat(forBus: 0)
         let hardwareSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
-        let tapSampleRate = 48000.0
-        microphoneSampleRate = tapSampleRate
+        let hardwareChannels = inputFormat.channelCount > 0 ? inputFormat.channelCount : 1
 
-        // Use the device's actual channel count to avoid installTap crashes.
-        // Some devices (e.g., the aggregate tap device) are stereo; forcing mono
-        // on a stereo-only device throws an uncaught NSException.
-        let tapChannels: AVAudioChannelCount = inputFormat.channelCount > 0 ? min(inputFormat.channelCount, 2) : 1
-        guard let tapFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: tapSampleRate,
-            channels: tapChannels,
-            interleaved: false
-        ) else {
-            throw AudioCaptureError.microphoneStartFailed(NSError(domain: "TapAudioCapture", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create tap format"]))
-        }
+        // Use the device's native output format for the tap (pass nil).
+        // Requesting a different sample rate (e.g., 48kHz from a 16kHz device)
+        // causes AVAudioEngine to deliver zero frames on some devices (C920 webcam).
+        // By tapping in the native format, we get reliable buffer delivery and
+        // handle resampling ourselves in handleMicrophoneBuffer.
+        microphoneSampleRate = hardwareSampleRate
 
-        inputNode.installTap(onBus: 0, bufferSize: 480, format: tapFormat) { [weak self] buffer, time in
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
             self?.handleMicrophoneBuffer(buffer, time: time)
         }
 
         try engine.start()
         microphoneEngine = engine
 
-        logger.info("Microphone capture started at \(tapSampleRate)Hz, channels=\(tapChannels)")
+        logger.info("Microphone capture started at native \(hardwareSampleRate)Hz, \(hardwareChannels)ch")
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_SAMPLE_RATE: hardware=\(hardwareSampleRate)Hz, tap=\(tapSampleRate)Hz, channels=\(tapChannels)")
+                "MIC_SAMPLE_RATE: hardware=\(hardwareSampleRate)Hz, channels=\(hardwareChannels), tapFormat=native")
         }
     }
 
