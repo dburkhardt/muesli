@@ -247,23 +247,25 @@ git push origin <branch>
 git push origin vX.Y.Z
 ```
 
-### RC Workflow (from feature branches)
+### RC Workflow (from develop)
 
-Use release candidates to test builds before merging to main:
+Release candidates are cut from `develop`. Use RCs to test builds before promoting to stable:
 
 ```bash
-# 1. Ensure Version.xcconfig is already set to the target version (e.g., 0.6.0)
-grep MARKETING_VERSION Version.xcconfig  # Should show 0.6.0
+# 1. On develop, ensure Version.xcconfig is set to X.Y.Z-rc.N (e.g., 0.6.2-rc.1)
+git checkout develop && git pull
+grep MARKETING_VERSION Version.xcconfig  # Should show 0.6.2-rc.1
 
-# 2. Tag the RC
-git tag v0.6.0-rc.1
+# 2. Tag the RC from develop
+git tag v0.6.2-rc.1
 
 # 3. Push the tag (triggers release workflow, creates pre-release)
-git push origin v0.6.0-rc.1
+git push origin v0.6.2-rc.1
 
-# 4. If issues found, fix on branch, then:
-git tag v0.6.0-rc.2
-git push origin v0.6.0-rc.2
+# 4. If issues found, fix on develop, bump to -rc.2, then:
+# Edit Version.xcconfig: 0.6.2-rc.2, commit, push
+git tag v0.6.2-rc.2
+git push origin v0.6.2-rc.2
 ```
 
 ### Stable Release Workflow (from main)
@@ -292,9 +294,10 @@ grep MARKETING_VERSION Version.xcconfig  # e.g., 0.5.2
 # Edit to 0.5.3, commit, tag, push (follow procedure above)
 ```
 
-**"Create an RC from this branch"**:
+**"Create an RC from develop"**:
 ```bash
-# Verify Version.xcconfig matches intended version
+git checkout develop && git pull
+# Verify Version.xcconfig matches intended version (e.g., 0.6.2-rc.1)
 grep MARKETING_VERSION Version.xcconfig
 # If not, bump it first (commit before tagging!)
 git tag vX.Y.Z-rc.N
@@ -621,9 +624,10 @@ The debug logs capture:
 
 This builds a searchable knowledge base that helps future debugging sessions.
 
-## Git Workflow (GitHub Flow)
+## Git Workflow (Modified Git Flow)
 
-Simple, agent-friendly branching. All work happens in feature branches merged to `main` via PRs.
+- **main**: Production. Stable releases only. Tag `vX.Y.Z` from `main` after RC validation.
+- **develop**: Integration. Feature branches merge here. Cut `vX.Y.Z-rc.N` from `develop` for testing.
 
 **For comprehensive workflow documentation**: See [`spec/git_workflow.md`](spec/git_workflow.md)
 
