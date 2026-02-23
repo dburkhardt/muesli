@@ -21,7 +21,7 @@ struct PreferencesView: View {
                     Label("Output", systemImage: "folder")
                 }
             
-            GeneralPreferencesTab()
+            GeneralPreferencesTab(viewModel: viewModel)
                 .tabItem {
                     Label("General", systemImage: "gearshape")
                 }
@@ -198,6 +198,68 @@ struct OutputPreferencesTab: View {
 /// Now uses PreferencesManager via environment
 struct GeneralPreferencesTab: View {
     @Environment(PreferencesManager.self) private var preferencesManager
+    var viewModel: MuesliViewModel?
+    
+    init(viewModel: MuesliViewModel? = nil) {
+        self.viewModel = viewModel
+    }
+    
+    /// Models available for specific second-pass selection (downloaded and ready)
+    private var availableSecondPassModels: [ModelManager.ModelSize] {
+        guard let modelManager = viewModel?.modelManager else { return ModelManager.ModelSize.allCases }
+        return ModelManager.ModelSize.allCases.filter { model in
+            modelManager.downloadState(for: model) == .completed
+                && modelManager.pathForModel(model) != nil
+                && modelManager.validateModel(model)
+        }
+    }
+    
+    /// Validation message when specific model is unset or invalid
+    private var specificModelValidationMessage: String {
+        guard preferencesManager.secondPassModelPreference == .specific else { return "" }
+        guard let raw = preferencesManager.secondPassSpecificModelRawValue, !raw.isEmpty else {
+            return "Select a model above. Second-pass will fall back to best available until set."
+        }
+        guard let model = ModelManager.ModelSize(rawValue: raw) else {
+            return "Invalid model selection. Will fall back to best available."
+        }
+        guard let modelManager = viewModel?.modelManager else { return "" }
+        if modelManager.downloadState(for: model) != .completed {
+            return "Selected model is not ready. Will fall back to best available."
+        }
+        if !modelManager.validateModel(model) {
+            return "Selected model is unavailable. Will fall back to best available."
+        }
+        return ""
+    }
+    
+    @ViewBuilder
+    private var specificModelPicker: some View {
+        let binding = Binding(
+            get: {
+                let raw = preferencesManager.secondPassSpecificModelRawValue
+                let available = availableSecondPassModels
+                if let raw = raw, available.contains(where: { $0.rawValue == raw }) {
+                    return raw
+                }
+                return available.first?.rawValue ?? ""
+            },
+            set: { preferencesManager.secondPassSpecificModelRawValue = $0.isEmpty ? nil : $0 }
+        )
+        Picker(selection: binding) {
+            if availableSecondPassModels.isEmpty {
+                Text("No models ready").tag("")
+            } else {
+                Text("— Select model —").tag("")
+                ForEach(availableSecondPassModels) { model in
+                    Text(model.displayName).tag(model.rawValue)
+                }
+            }
+        } label: {
+            EmptyView()
+        }
+        .frame(maxWidth: 280)
+    }
     
     var body: some View {
         @Bindable var prefs = preferencesManager
@@ -276,6 +338,17 @@ struct GeneralPreferencesTab: View {
                         EmptyView()
                     }
                     .frame(maxWidth: 280)
+                }
+                
+                if prefs.secondPassModelPreference == .specific {
+                    LabeledContent("Specific model") {
+                        specificModelPicker
+                    }
+                    if !specificModelValidationMessage.isEmpty {
+                        Text(specificModelValidationMessage)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
             

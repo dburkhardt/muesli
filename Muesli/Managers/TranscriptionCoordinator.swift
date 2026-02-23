@@ -579,14 +579,23 @@ final class TranscriptionCoordinator {
         preference: PreferencesManager.SecondPassModelPreference,
         liveModel: ModelManager.ModelSize? = nil
     ) async throws -> [TranscriptBlock] {
-        guard let selectedModel = resolveSecondPassModel(
+        let (selectedModel, usedFallback, fallbackReason) = resolveSecondPassModelWithFallback(
             preference: preference,
             liveModel: liveModel
-        ) else {
+        )
+        guard let selectedModel else {
             throw NSError(
                 domain: "TranscriptionCoordinator",
                 code: 31,
                 userInfo: [NSLocalizedDescriptionKey: "No qualifying model available for second-pass ASR"]
+            )
+        }
+        if usedFallback, let reason = fallbackReason {
+            onWarning?(
+                .transcription,
+                "Second-pass model fallback",
+                reason,
+                false
             )
         }
         
@@ -644,10 +653,12 @@ final class TranscriptionCoordinator {
         return processor.blocks
     }
 
-    private func resolveSecondPassModel(
+    /// Resolves second-pass model with defensive fallback when .specific is misconfigured.
+    /// Returns (model, usedFallback, fallbackReason). When usedFallback is true, caller should show onWarning.
+    private func resolveSecondPassModelWithFallback(
         preference: PreferencesManager.SecondPassModelPreference,
         liveModel: ModelManager.ModelSize?
-    ) -> ModelManager.ModelSize? {
+    ) -> (ModelManager.ModelSize?, Bool, String?) {
         let effectiveLiveModel = liveModel ?? modelManager.activeModel
 
         func isReady(_ model: ModelManager.ModelSize) -> Bool {
@@ -661,25 +672,53 @@ final class TranscriptionCoordinator {
         
         switch preference {
         case .bestAvailable:
-            return bestAvailable
+            return (bestAvailable, false, nil)
         case .sameAsLive:
-            guard let effectiveLiveModel, isReady(effectiveLiveModel) else { return nil }
-            return effectiveLiveModel
+            guard let effectiveLiveModel, isReady(effectiveLiveModel) else { return (nil, false, nil) }
+            return (effectiveLiveModel, false, nil)
         case .bestAvailableNoDowngrade:
-            guard let effectiveLiveModel else { return bestAvailable }
-            guard let candidate = bestAvailable else { return nil }
+            guard let effectiveLiveModel else { return (bestAvailable, false, nil) }
+            guard let candidate = bestAvailable else { return (nil, false, nil) }
             let rank: [ModelManager.ModelSize: Int] = [.large: 0, .largeTurbo: 1, .medium: 2, .small: 3]
             guard let liveRank = rank[effectiveLiveModel], let candidateRank = rank[candidate], candidateRank <= liveRank else {
-                return nil
+                return (nil, false, nil)
             }
-            return candidate
+            return (candidate, false, nil)
         case .specific:
-            guard let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel),
-                  let model = ModelManager.ModelSize(rawValue: raw),
-                  isReady(model) else {
-                return nil
+            let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel)
+            if raw == nil || raw?.isEmpty == true {
+                if let fallback = bestAvailable {
+                    return (fallback, true, "Specific model not selected. Using \(fallback.displayName) instead.")
+                }
+                return (nil, false, nil)
             }
-            return model
+            guard let model = ModelManager.ModelSize(rawValue: raw!) else {
+                if let fallback = bestAvailable {
+                    return (fallback, true, "Invalid specific model '\(raw!)'. Using \(fallback.displayName) instead.")
+                }
+                return (nil, false, nil)
+            }
+            if !isReady(model) {
+                let reason: String
+                let state = modelManager.downloadState(for: model)
+                let isStillLoading: Bool
+                switch state {
+                case .downloading, .compiling: isStillLoading = true
+                default: isStillLoading = false
+                }
+                if isStillLoading {
+                    reason = "Specific model \(model.displayName) is still loading. Using best available instead."
+                } else if !modelManager.validateModel(model) {
+                    reason = "Specific model \(model.displayName) is unavailable. Using best available instead."
+                } else {
+                    reason = "Specific model \(model.displayName) is not ready. Using best available instead."
+                }
+                if let fallback = bestAvailable {
+                    return (fallback, true, reason)
+                }
+                return (nil, false, nil)
+            }
+            return (model, false, nil)
         }
     }
 

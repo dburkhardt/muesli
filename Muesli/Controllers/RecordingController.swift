@@ -45,6 +45,7 @@ final class RecordingController {
     var pendingStopSession: RecordingSession?
     
     /// Background second-pass finalization task for the latest completed session.
+    /// nonisolated(unsafe) so deinit can cancel without MainActor
     nonisolated(unsafe) private var secondPassFinalizationTask: Task<Void, Never>?
     
     // MARK: - Audio Level Throttling
