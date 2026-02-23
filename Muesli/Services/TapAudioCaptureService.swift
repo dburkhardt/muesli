@@ -990,6 +990,13 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
     }
 
+    /// Returns true if the UID belongs to a Muesli tap aggregate device (current or stale).
+    private func isMuesliAggregateUID(_ uid: String) -> Bool {
+        if uid.hasPrefix("com.muesli.tap") { return true }
+        if let currentUID = tapManager.aggregateDeviceUID, uid == currentUID { return true }
+        return false
+    }
+
     /// Set microphone input device with strict two-step fallback.
     /// Returns true only when a device was explicitly set AND verified.
     /// Never accepts the engine's unverified default (which may be the tap aggregate).
@@ -998,30 +1005,45 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         deviceUID: String?,
         fallbackDeviceID: AudioDeviceID?
     ) -> Bool {
-        let muesliAggregateUID = tapManager.aggregateDeviceUID
-
         // Step 1: Try to find and set the requested device by UID
         if let deviceUID {
-            let allDevices = CoreAudioHelpers.getAllDevices()
-            for device in allDevices {
-                guard let uid = try? CoreAudioHelpers.getDeviceUID(device) else { continue }
-                guard uid == deviceUID else { continue }
-
-                if let muesliUID = muesliAggregateUID, uid == muesliUID {
-                    logger.warning("Requested UID \(deviceUID) is the Muesli aggregate — skipping")
-                    break
+            // Reject Muesli aggregate UIDs (current session or stale from previous sessions)
+            if isMuesliAggregateUID(deviceUID) {
+                logger.warning("MIC_DEVICE_SELECT: requested UID is a Muesli aggregate (\(deviceUID)) — skipping to fallback")
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "MIC_DEVICE_REJECT: uid=\(deviceUID), reason=muesli_aggregate")
                 }
+            } else {
+                let allDevices = CoreAudioHelpers.getAllDevices()
+                var found = false
+                for device in allDevices {
+                    guard let uid = try? CoreAudioHelpers.getDeviceUID(device) else { continue }
+                    guard uid == deviceUID else { continue }
+                    found = true
 
-                do {
-                    try engine.inputNode.auAudioUnit.setDeviceID(device)
-                    let actualID = engine.inputNode.auAudioUnit.deviceID
-                    if actualID == device {
-                        logger.info("Mic device set: \(deviceUID) (AudioDeviceID: \(device))")
-                        return true
+                    do {
+                        try engine.inputNode.auAudioUnit.setDeviceID(device)
+                        let actualID = engine.inputNode.auAudioUnit.deviceID
+                        if actualID == device {
+                            logger.info("MIC_DEVICE_SET: \(deviceUID) (AudioDeviceID: \(device))")
+                            Task {
+                                await DiagnosticLogger.shared.log(.aec,
+                                    "MIC_DEVICE_SET: uid=\(deviceUID), audioDeviceID=\(device), step=requested")
+                            }
+                            return true
+                        }
+                        logger.warning("MIC_DEVICE_SET: readback mismatch for \(deviceUID): expected \(device), got \(actualID)")
+                    } catch {
+                        logger.warning("MIC_DEVICE_SET: setDeviceID threw for \(deviceUID): \(error)")
                     }
-                    logger.warning("setDeviceID readback mismatch: expected \(device), got \(actualID)")
-                } catch {
-                    logger.warning("setDeviceID threw for \(deviceUID): \(error)")
+                }
+                if !found {
+                    logger.warning("MIC_DEVICE_SELECT: requested UID \(deviceUID) not found in Core Audio device list")
+                    Task {
+                        await DiagnosticLogger.shared.log(.aec,
+                            "MIC_DEVICE_NOT_FOUND: uid=\(deviceUID)")
+                    }
                 }
             }
         }
@@ -1029,19 +1051,23 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         // Step 2: Fall back to pre-aggregate default AudioDeviceID
         if let fallbackID = fallbackDeviceID, fallbackID != kAudioObjectUnknown {
             let fallbackUID = try? CoreAudioHelpers.getDeviceUID(fallbackID)
-            if let muesliUID = muesliAggregateUID, fallbackUID == muesliUID {
-                logger.warning("Pre-aggregate fallback IS the Muesli aggregate — skipping")
+            if let fallbackUID, isMuesliAggregateUID(fallbackUID) {
+                logger.warning("MIC_DEVICE_SELECT: pre-aggregate fallback IS a Muesli aggregate — skipping")
             } else {
                 do {
                     try engine.inputNode.auAudioUnit.setDeviceID(fallbackID)
                     let actualID = engine.inputNode.auAudioUnit.deviceID
                     if actualID == fallbackID {
-                        logger.info("Mic device set to pre-aggregate default: \(fallbackUID ?? "?") (AudioDeviceID: \(fallbackID))")
+                        logger.info("MIC_DEVICE_SET: pre-aggregate default \(fallbackUID ?? "?") (AudioDeviceID: \(fallbackID))")
+                        Task {
+                            await DiagnosticLogger.shared.log(.aec,
+                                "MIC_DEVICE_SET: uid=\(fallbackUID ?? "?"), audioDeviceID=\(fallbackID), step=fallback")
+                        }
                         return true
                     }
-                    logger.warning("Fallback setDeviceID readback mismatch: expected \(fallbackID), got \(actualID)")
+                    logger.warning("MIC_DEVICE_SET: fallback readback mismatch: expected \(fallbackID), got \(actualID)")
                 } catch {
-                    logger.warning("Fallback setDeviceID threw: \(error)")
+                    logger.warning("MIC_DEVICE_SET: fallback setDeviceID threw: \(error)")
                 }
             }
         }
@@ -1049,7 +1075,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         // Both steps failed — do NOT accept the engine's unverified default.
         let currentDeviceID = engine.inputNode.auAudioUnit.deviceID
         let currentUID = (try? CoreAudioHelpers.getDeviceUID(currentDeviceID)) ?? "unknown"
-        logger.error("Could not explicitly set any mic device. Engine default is AudioDeviceID \(currentDeviceID) (\(currentUID))")
+        logger.error("MIC_DEVICE_SET: FAILED — no valid device. Engine default is AudioDeviceID \(currentDeviceID) (\(currentUID))")
+        Task {
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_DEVICE_FAILED: engineDefault=\(currentUID) (AudioDeviceID: \(currentDeviceID))")
+        }
         return false
     }
 
