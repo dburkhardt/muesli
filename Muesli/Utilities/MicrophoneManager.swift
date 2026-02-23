@@ -219,11 +219,13 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
             forKey: AppStorageKeys.showContinuityCameraDevices
         )
         for device in captureDevices {
-            // Filter out virtual aggregate devices created by ScreenCaptureKit
-            // These devices (like "CADefaultDeviceAggregate-XXXXX") don't deliver real audio
-            // and cause the microphone to fail on first recording
-            if device.uniqueID.contains("Aggregate") || device.localizedName.contains("Aggregate") {
-                logger.debug("Skipping aggregate device: \(device.localizedName) (\(device.uniqueID))")
+            let uid = device.uniqueID.lowercased()
+            let name = device.localizedName.lowercased()
+
+            // Filter out virtual aggregate devices (system-created and Muesli's own tap device)
+            if uid.contains("aggregate") || name.contains("aggregate")
+                || uid.hasPrefix("com.muesli.tap") || name.contains("muesli tap") {
+                logger.debug("Skipping aggregate/tap device: \(device.localizedName) (\(device.uniqueID))")
                 continue
             }
 
