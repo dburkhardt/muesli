@@ -974,7 +974,6 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 }
             }
         }
-        logger.warning("Microphone device UID not found in Core Audio devices: \(deviceID) — falling back to system default")
     }
 
     /// Set up route change listener

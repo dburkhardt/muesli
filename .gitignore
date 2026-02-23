@@ -69,4 +69,3 @@ Muesli/Utilities/BuildInfo.swift
 # WebRTC XCFramework (built locally or in CI)
 Muesli/Frameworks/webrtc_audio_processing.xcframework/
 Muesli/Frameworks/*.sha256
-.derivedData/

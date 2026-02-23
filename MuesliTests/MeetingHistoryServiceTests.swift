@@ -130,30 +130,6 @@ final class MeetingHistoryServiceTests: XCTestCase {
         XCTAssertEqual(meetings.count, 1)
     }
     
-    func testDiscoverMeetings_AcceptsTranscriptLiveFallback() throws {
-        let meetingDir = testDirectory.appendingPathComponent("2024-01-18_14-30_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: meetingDir, withIntermediateDirectories: true)
-        let content = """
-        # Live Snapshot
-        2024-01-18 14:30
-        
-        ## Transcript
-        
-        **Me** _[0:05]_
-        
-        Hello from live file.
-        """
-        try content.write(
-            to: meetingDir.appendingPathComponent("transcript.live.md"),
-            atomically: true,
-            encoding: .utf8
-        )
-        
-        let meetings = service.discoverMeetings()
-        XCTAssertEqual(meetings.count, 1)
-        XCTAssertEqual(meetings.first?.title, "Live Snapshot")
-    }
-    
     func testDiscoverMeetings_SkipsHiddenFiles() throws {
         // Given: Hidden directory (starts with .)
         let hiddenDir = testDirectory.appendingPathComponent(".hidden_\(UUID().uuidString)")
@@ -582,24 +558,6 @@ final class MeetingHistoryServiceTests: XCTestCase {
         XCTAssertEqual(meetings.first?.title, "Meeting")
     }
     
-    func testDiscoverMeetings_PrefersTranscriptMdOverLiveMd() throws {
-        let meetingDir = testDirectory.appendingPathComponent("2024-02-01_10-00_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: meetingDir, withIntermediateDirectories: true)
-        try "# Second Pass Version\n\n## Transcript\n\nFinal text.".write(
-            to: meetingDir.appendingPathComponent("transcript.md"),
-            atomically: true, encoding: .utf8
-        )
-        try "# Live Snapshot Version\n\n## Transcript\n\nPreliminary text.".write(
-            to: meetingDir.appendingPathComponent("transcript.live.md"),
-            atomically: true, encoding: .utf8
-        )
-
-        let meetings = service.discoverMeetings()
-        XCTAssertEqual(meetings.count, 1)
-        XCTAssertEqual(meetings.first?.title, "Second Pass Version",
-                       "transcript.md should be preferred over transcript.live.md when both exist")
-    }
-
     func testDiscoverMeetings_WithMalformedFolderName_StillDiscoversMeeting() throws {
         // Given: Folder with non-standard name
         let meetingDir = testDirectory.appendingPathComponent("malformed-folder-name")

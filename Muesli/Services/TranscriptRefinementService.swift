@@ -27,9 +27,6 @@ final class TranscriptRefinementService {
     /// Used for speaker-threaded batch processing
     private let maxBatchCharacters: Int = 4000
     
-    /// Reject refinements that rewrite too much text.
-    private let maxWordEditRatio: Double = 0.30
-    
     // MARK: - Initialization
     
     init(llmManager: LLMManager) {
@@ -188,10 +185,6 @@ final class TranscriptRefinementService {
         
         // If LLM returned empty or suspiciously short result, return original
         if cleaned.isEmpty || cleaned.count < text.count / 4 {
-            return text
-        }
-        
-        guard passesGuardrails(original: text, candidate: cleaned) else {
             return text
         }
         
@@ -438,57 +431,5 @@ final class TranscriptRefinementService {
             // Fallback: return entire text as single sentence
             return [text.trimmingCharacters(in: .whitespacesAndNewlines)]
         }
-    }
-}
-
-extension TranscriptRefinementService {
-    func passesGuardrails(original: String, candidate: String) -> Bool {
-        let originalWords = original.split(whereSeparator: \.isWhitespace).map(String.init)
-        let candidateWords = candidate.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard !originalWords.isEmpty else { return true }
-        
-        let distance = wordLevenshteinDistance(originalWords, candidateWords)
-        let ratio = Double(distance) / Double(max(originalWords.count, candidateWords.count))
-        guard ratio <= maxWordEditRatio else { return false }
-        
-        // Keep speaker labels/timestamps intact when present in text-level transcripts.
-        let requiredTokens = extractRequiredStructureTokens(from: original)
-        return requiredTokens.allSatisfy { candidate.contains($0) }
-    }
-    
-    func extractRequiredStructureTokens(from text: String) -> [String] {
-        var tokens: [String] = []
-        let speakerTokens = ["**Me**", "**Them**", "**ME**", "**THEM**"]
-        tokens.append(contentsOf: speakerTokens.filter { text.contains($0) })
-        
-        let pattern = #"\[[0-9]{1,2}:[0-9]{2}\]"#
-        if let regex = try? NSRegularExpression(pattern: pattern) {
-            let ns = text as NSString
-            let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
-            for match in matches {
-                tokens.append(ns.substring(with: match.range))
-            }
-        }
-        return Array(Set(tokens))
-    }
-    
-    func wordLevenshteinDistance(_ lhs: [String], _ rhs: [String]) -> Int {
-        if lhs.isEmpty { return rhs.count }
-        if rhs.isEmpty { return lhs.count }
-        
-        var previous = Array(0...rhs.count)
-        for (i, lword) in lhs.enumerated() {
-            var current = [i + 1] + Array(repeating: 0, count: rhs.count)
-            for (j, rword) in rhs.enumerated() {
-                let substitutionCost = lword == rword ? 0 : 1
-                current[j + 1] = min(
-                    previous[j + 1] + 1,
-                    current[j] + 1,
-                    previous[j] + substitutionCost
-                )
-            }
-            previous = current
-        }
-        return previous[rhs.count]
     }
 }

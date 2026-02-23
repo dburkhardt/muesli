@@ -117,13 +117,6 @@ final class RecordingSession: Identifiable {
     /// Merged transcript blocks for display (speaker-grouped, filtered)
     var transcriptBlocks: [TranscriptBlock] = []
     
-    /// Tentative, not-yet-committed live transcript tail
-    var liveDraftText: String?
-    var liveDraftSpeaker: TranscriptBlock.Speaker?
-    
-    /// True while second-pass ASR is replacing transcript output.
-    var isFinalizingTranscript: Bool = false
-    
     /// Processor for converting raw segments into blocks
     private let transcriptProcessor = TranscriptProcessor()
     
@@ -267,19 +260,6 @@ final class RecordingSession: Identifiable {
     func finalizeTranscript() {
         transcriptProcessor.finalize()
         transcriptBlocks = transcriptProcessor.blocks
-        liveDraftText = nil
-        liveDraftSpeaker = nil
-    }
-    
-    func updateLiveDraft(_ text: String, speaker: TranscriptBlock.Speaker) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            liveDraftText = nil
-            liveDraftSpeaker = nil
-            return
-        }
-        liveDraftText = trimmed
-        liveDraftSpeaker = speaker
     }
     
     /// Get formatted transcript text for file output (merged block format)
@@ -293,9 +273,6 @@ final class RecordingSession: Identifiable {
     func resetTranscript() {
         transcriptText = ""
         transcriptBlocks = []
-        liveDraftText = nil
-        liveDraftSpeaker = nil
-        isFinalizingTranscript = false
         transcriptProcessor.reset()
     }
     

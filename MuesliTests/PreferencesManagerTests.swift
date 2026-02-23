@@ -37,11 +37,6 @@ final class PreferencesManagerTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.echoCancellationEnabled)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.audioChunkDuration)
-        UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled)
-        UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassASREnabled)
-        UserDefaults.standard.removeObject(forKey: AppStorageKeys.autoRefineEnabled)
-        UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassModelPreference)
-        UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassSpecificModel)
         UserDefaults.standard.removeObject(forKey: PreferencesManager.migrationCheckedKey)
     }
     
@@ -237,34 +232,6 @@ final class PreferencesManagerTests: XCTestCase {
         XCTAssertEqual(newManager.transcriptionMode, .live)
     }
     
-    // MARK: - Transcription Quality Pipeline Tests
-    
-    func testLiveStabilizer_DefaultsToDisabled() async {
-        XCTAssertFalse(preferencesManager.isLiveStabilizerEnabled)
-    }
-    
-    func testSecondPassASR_DefaultsToDisabled() async {
-        XCTAssertFalse(preferencesManager.isSecondPassASREnabled)
-    }
-    
-    func testAutoRefine_DefaultsToDisabled() async {
-        XCTAssertFalse(preferencesManager.isAutoRefineEnabled)
-    }
-    
-    func testSecondPassModelPreference_DefaultsToBestAvailable() async {
-        XCTAssertEqual(preferencesManager.secondPassModelPreference, .bestAvailable)
-    }
-    
-    func testSecondPassModelPreference_CanPersistSpecificModel() async {
-        preferencesManager.secondPassModelPreference = .specific
-        preferencesManager.secondPassSpecificModelRawValue = ModelManager.ModelSize.medium.rawValue
-        
-        let newManager = PreferencesManager()
-        
-        XCTAssertEqual(newManager.secondPassModelPreference, .specific)
-        XCTAssertEqual(newManager.secondPassSpecificModelRawValue, ModelManager.ModelSize.medium.rawValue)
-    }
-    
     // MARK: - Echo Cancellation Tests
     
     /// Test that echo cancellation defaults to true (AEC is always-on by policy)
@@ -345,9 +312,9 @@ final class PreferencesManagerTests: XCTestCase {
     
     // MARK: - Audio Chunk Duration Tests
     
-    /// Test that audioChunkDuration defaults to AudioConfiguration.transcriptionChunkDuration
-    func testAudioChunkDuration_DefaultsToConfiguredDuration() async {
-        XCTAssertEqual(preferencesManager.audioChunkDuration, AudioConfiguration.transcriptionChunkDuration, accuracy: 0.01)
+    /// Test that audioChunkDuration defaults to 5.0 seconds
+    func testAudioChunkDuration_DefaultsToFiveSeconds() async {
+        XCTAssertEqual(preferencesManager.audioChunkDuration, 5.0, accuracy: 0.01)
     }
     
     /// Test that audioChunkDuration can be set to valid value
@@ -364,11 +331,11 @@ final class PreferencesManagerTests: XCTestCase {
         XCTAssertEqual(preferencesManager.audioChunkDuration, 2.0, accuracy: 0.01)
     }
     
-    /// Test that audioChunkDuration clamps value above maximum (30.0)
+    /// Test that audioChunkDuration clamps value above maximum (10.0)
     func testAudioChunkDuration_ClampsAboveMaximum() async {
-        preferencesManager.audioChunkDuration = 35.0
+        preferencesManager.audioChunkDuration = 15.0
         
-        XCTAssertEqual(preferencesManager.audioChunkDuration, 30.0, accuracy: 0.01)
+        XCTAssertEqual(preferencesManager.audioChunkDuration, 10.0, accuracy: 0.01)
     }
     
     /// Test that audioChunkDuration persists to UserDefaults
@@ -404,11 +371,11 @@ final class PreferencesManagerTests: XCTestCase {
     
     /// Test that audioChunkDuration returns default for invalid saved value
     func testAudioChunkDuration_ReturnsDefaultForInvalidSavedValue() async {
-        UserDefaults.standard.set(50.0, forKey: AppStorageKeys.audioChunkDuration)
+        UserDefaults.standard.set(20.0, forKey: AppStorageKeys.audioChunkDuration)
         
         let newManager = PreferencesManager()
         
-        XCTAssertEqual(newManager.audioChunkDuration, AudioConfiguration.transcriptionChunkDuration, accuracy: 0.01)
+        XCTAssertEqual(newManager.audioChunkDuration, 5.0, accuracy: 0.01)
     }
     
     /// Test that audioChunkDuration callback receives clamped value
@@ -416,11 +383,11 @@ final class PreferencesManagerTests: XCTestCase {
         let expectation = XCTestExpectation(description: "Callback receives clamped value")
         
         preferencesManager.audioChunkDurationDidChange = { duration in
-            XCTAssertEqual(duration, 30.0, accuracy: 0.01)
+            XCTAssertEqual(duration, 10.0, accuracy: 0.01)
             expectation.fulfill()
         }
         
-        preferencesManager.audioChunkDuration = 35.0 // Over max
+        preferencesManager.audioChunkDuration = 15.0 // Over max
         
         await fulfillment(of: [expectation], timeout: 1.0)
     }

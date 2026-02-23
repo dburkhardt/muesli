@@ -235,50 +235,6 @@ struct GeneralPreferencesTab: View {
                     .foregroundStyle(.secondary)
             }
             
-            Section("Transcription Quality") {
-                Toggle(isOn: $prefs.isLiveStabilizerEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Live transcript stabilization")
-                        Text("Suppress duplicate overlap text and show a tentative draft tail during recording.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .toggleStyle(.switch)
-                
-                Toggle(isOn: $prefs.isSecondPassASREnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Finalize transcript after recording")
-                        Text("Runs a second-pass ASR over saved audio for higher quality final transcript.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .toggleStyle(.switch)
-                
-                Toggle(isOn: $prefs.isAutoRefineEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Auto-refine with AI (experimental)")
-                        Text("Applies constrained LLM cleanup after second-pass ASR.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .toggleStyle(.switch)
-                
-                LabeledContent("Second-pass model") {
-                    Picker(selection: $prefs.secondPassModelPreference) {
-                        Text("Best available").tag(PreferencesManager.SecondPassModelPreference.bestAvailable)
-                        Text("Same as live model").tag(PreferencesManager.SecondPassModelPreference.sameAsLive)
-                        Text("Best available (no downgrade)").tag(PreferencesManager.SecondPassModelPreference.bestAvailableNoDowngrade)
-                        Text("Specific model").tag(PreferencesManager.SecondPassModelPreference.specific)
-                    } label: {
-                        EmptyView()
-                    }
-                    .frame(maxWidth: 280)
-                }
-            }
-            
             Section("Audio") {
                 #if DEBUG
                 Toggle(isOn: $prefs.isEchoCancellationEnabled) {
@@ -313,11 +269,11 @@ struct GeneralPreferencesTab: View {
                         .foregroundStyle(.secondary)
                 }
                 
-                Slider(value: $prefs.audioChunkDuration, in: 2.0...30.0, step: 0.5)
+                Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
                 
                 Text(
                     "Shorter chunks provide faster transcription but may reduce accuracy. " +
-                    "Longer chunks (15-30s) significantly improve accuracy by giving Whisper more context. " +
+                    "Longer chunks improve accuracy but increase latency. " +
                     "Changes apply to new recordings only."
                 )
                     .font(.caption)

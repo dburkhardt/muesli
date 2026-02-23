@@ -36,14 +36,12 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     var appendMicrophoneAudioCallCount: Int = 0
     var postProcessingCallCount: Int = 0
     var setTranscriptHandlerCallCount: Int = 0
-    var setDraftHandlerCallCount: Int = 0
     var lastModelPath: URL?
     var lastRecordingStartTime: Date?
     
     // MARK: - Handlers
     
     private var transcriptHandler: TranscriptionService.TranscriptHandler?
-    private var draftHandler: TranscriptionDraftHandler?
     
     // MARK: - TranscriptionServiceProtocol
     
@@ -70,11 +68,6 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler) {
         setTranscriptHandlerCallCount += 1
         transcriptHandler = handler
-    }
-    
-    func setDraftHandler(_ handler: @escaping TranscriptionDraftHandler) {
-        setDraftHandlerCallCount += 1
-        draftHandler = handler
     }
     
     func startTranscription(recordingStartTime: Date) {
@@ -126,11 +119,6 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         let segment = TranscriptionService.TranscriptSegment(text: text, timestamp: timestamp, speaker: speaker)
         transcriptHandler?(segment)
     }
-
-    /// Simulate a live draft update (as if the stabilizer emitted one)
-    func simulateDraft(text: String, speaker: TranscriptionService.TranscriptSegment.Speaker) {
-        draftHandler?(text, speaker)
-    }
     
     /// Reset all state for next test
     func reset() {
@@ -150,7 +138,5 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         lastModelPath = nil
         lastRecordingStartTime = nil
         transcriptHandler = nil
-        draftHandler = nil
-        setDraftHandlerCallCount = 0
     }
 }
