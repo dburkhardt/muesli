@@ -212,6 +212,55 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         formatDescriptionsInitialized = true
     }
 
+    // MARK: - Agent Debug Instrumentation
+
+    private static let agentDebugLogPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug-fb7b8d.log"
+    private static let agentDebugSessionID = "fb7b8d"
+
+    private func writeAgentDebugLog(
+        runId: String = "mic-start-crash-review",
+        hypothesisId: String,
+        location: String,
+        message: String,
+        data: [String: Any] = [:]
+    ) {
+        var payload: [String: Any] = [
+            "sessionId": Self.agentDebugSessionID,
+            "id": "log_\(UUID().uuidString)",
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+            "location": location,
+            "message": message,
+            "data": data,
+            "runId": runId,
+            "hypothesisId": hypothesisId
+        ]
+
+        if payload["data"] == nil { payload["data"] = [:] }
+        guard JSONSerialization.isValidJSONObject(payload),
+              let lineData = try? JSONSerialization.data(withJSONObject: payload),
+              var line = String(data: lineData, encoding: .utf8) else {
+            return
+        }
+
+        line.append("\n")
+        let url = URL(fileURLWithPath: Self.agentDebugLogPath)
+
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        do {
+            try handle.seekToEnd()
+            if let bytes = line.data(using: .utf8) {
+                try handle.write(contentsOf: bytes)
+            }
+        } catch {
+            // Best-effort debug logging only.
+        }
+    }
+
     // MARK: - Public API
 
     /// Set the microphone device to use
@@ -351,6 +400,18 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         if let devID = preAggregateDefaultInputDeviceID {
             let uid = (try? CoreAudioHelpers.getDeviceUID(devID)) ?? "unknown"
             logger.info("Pre-aggregate default input: \(uid) (AudioDeviceID: \(devID))")
+            // #region agent log
+            writeAgentDebugLog(
+                hypothesisId: "H1",
+                location: "TapAudioCaptureService.startCapture:preAggregateSnapshot",
+                message: "Captured pre-aggregate default input",
+                data: [
+                    "selectedMicrophoneDeviceID": selectedMicrophoneDeviceID ?? "nil",
+                    "preAggregateDefaultAudioDeviceID": Int(devID),
+                    "preAggregateDefaultUID": uid
+                ]
+            )
+            // #endregion
         }
 
         // Start the tap for system audio
@@ -402,6 +463,17 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             try startMicrophoneCapture()
         } catch {
             logger.error("Failed to start microphone: \(error.localizedDescription)")
+            // #region agent log
+            writeAgentDebugLog(
+                hypothesisId: "H5",
+                location: "TapAudioCaptureService.startCapture:micStartCatch",
+                message: "Microphone start failed and was wrapped as AudioCaptureError",
+                data: [
+                    "errorType": String(describing: type(of: error)),
+                    "errorDescription": error.localizedDescription
+                ]
+            )
+            // #endregion
             // Clean up tap and route listener so no partial-start state is left behind
             tapManager.stop()
             if let token = routeChangeToken {
@@ -881,6 +953,17 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Start microphone capture using AVAudioEngine
     private func startMicrophoneCapture() throws {
         let engine = AVAudioEngine()
+        // #region agent log
+        writeAgentDebugLog(
+            hypothesisId: "H2",
+            location: "TapAudioCaptureService.startMicrophoneCapture:entry",
+            message: "Entering startMicrophoneCapture",
+            data: [
+                "selectedMicrophoneDeviceID": selectedMicrophoneDeviceID ?? "nil",
+                "hasPreAggregateFallback": preAggregateDefaultInputDeviceID != nil
+            ]
+        )
+        // #endregion
 
         // Set the user-selected mic (or pre-aggregate default) BEFORE reading
         // the input format — the format depends on which device is active.
@@ -895,6 +978,18 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let actualDeviceID = inputNode.auAudioUnit.deviceID
         let actualUID = (try? CoreAudioHelpers.getDeviceUID(actualDeviceID)) ?? "unknown"
         logger.info("MIC_ENGINE_DEVICE: \(actualUID) (AudioDeviceID: \(actualDeviceID), explicitlySet: \(deviceWasSet))")
+        // #region agent log
+        writeAgentDebugLog(
+            hypothesisId: "H2",
+            location: "TapAudioCaptureService.startMicrophoneCapture:deviceResolved",
+            message: "Resolved microphone engine input device",
+            data: [
+                "deviceWasSet": deviceWasSet,
+                "actualAudioDeviceID": Int(actualDeviceID),
+                "actualUID": actualUID
+            ]
+        )
+        // #endregion
         Task {
             await DiagnosticLogger.shared.log(.aec,
                 "MIC_ENGINE_DEVICE: uid=\(actualUID), audioDeviceID=\(actualDeviceID), explicitlySet=\(deviceWasSet)")
@@ -906,6 +1001,17 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         // installTap can throw an uncaught NSException when format values are invalid.
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             logger.error("MIC_ENGINE: invalid input format — sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
+            // #region agent log
+            writeAgentDebugLog(
+                hypothesisId: "H3",
+                location: "TapAudioCaptureService.startMicrophoneCapture:invalidFormatGuard",
+                message: "Input format validation failed before installTap",
+                data: [
+                    "sampleRate": inputFormat.sampleRate,
+                    "channelCount": Int(inputFormat.channelCount)
+                ]
+            )
+            // #endregion
             throw AudioCaptureError.microphoneStartFailed(
                 NSError(domain: "TapAudioCapture", code: -3,
                         userInfo: [NSLocalizedDescriptionKey: "Microphone input format is invalid"]))
@@ -914,6 +1020,18 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let hardwareSampleRate = inputFormat.sampleRate
         let hardwareChannels = inputFormat.channelCount
         microphoneSampleRate = hardwareSampleRate
+        // #region agent log
+        writeAgentDebugLog(
+            hypothesisId: "H3",
+            location: "TapAudioCaptureService.startMicrophoneCapture:beforeInstallTap",
+            message: "Installing input tap with native format",
+            data: [
+                "sampleRate": hardwareSampleRate,
+                "channelCount": Int(hardwareChannels),
+                "bufferSize": 4096
+            ]
+        )
+        // #endregion
 
         // Use nil format (device's native output format) to avoid format mismatches
         // that cause zero-frame delivery or crashes.
@@ -1017,6 +1135,17 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         if status != noErr {
             logger.warning("MIC_DEVICE_SET: AudioUnitSetProperty failed with status \(status)")
+            // #region agent log
+            writeAgentDebugLog(
+                hypothesisId: "H4",
+                location: "TapAudioCaptureService.setDeviceOnInputNode:setPropertyFailed",
+                message: "AudioUnitSetProperty failed when selecting mic device",
+                data: [
+                    "requestedAudioDeviceID": Int(deviceID),
+                    "status": Int(status)
+                ]
+            )
+            // #endregion
             return false
         }
 
@@ -1033,6 +1162,17 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         if readbackID != deviceID {
             logger.warning("MIC_DEVICE_SET: readback mismatch — set \(deviceID), got \(readbackID)")
+            // #region agent log
+            writeAgentDebugLog(
+                hypothesisId: "H4",
+                location: "TapAudioCaptureService.setDeviceOnInputNode:readbackMismatch",
+                message: "AudioUnit device readback mismatch after set",
+                data: [
+                    "requestedAudioDeviceID": Int(deviceID),
+                    "readbackAudioDeviceID": Int(readbackID)
+                ]
+            )
+            // #endregion
             return false
         }
 
