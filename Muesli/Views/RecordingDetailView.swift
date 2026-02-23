@@ -85,6 +85,26 @@ struct RecordingDetailView: View {
         }
     }
     
+    // MARK: - Shared Helpers
+
+    @ViewBuilder
+    private func draftAndFinalizingOverlay(session: RecordingSession) -> some View {
+        if let draftText = session.liveDraftText {
+            DraftTranscriptView(text: draftText, speaker: session.liveDraftSpeaker)
+                .id("liveDraft")
+        }
+        if session.isFinalizingTranscript {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("Finalizing transcript...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
     // MARK: - Active Recording View
     
     private func activeRecordingView(session: RecordingSession) -> some View {
@@ -239,21 +259,7 @@ struct RecordingDetailView: View {
                         }
                     }
                     
-                    if let draftText = session.liveDraftText {
-                        DraftTranscriptView(text: draftText, speaker: session.liveDraftSpeaker)
-                            .id("liveDraft")
-                    }
-                    
-                    if session.isFinalizingTranscript {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Finalizing transcript...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    draftAndFinalizingOverlay(session: session)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
@@ -532,21 +538,7 @@ struct RecordingDetailView: View {
                                 .id(block.id)
                         }
                         
-                        if let draftText = session.liveDraftText {
-                            DraftTranscriptView(text: draftText, speaker: session.liveDraftSpeaker)
-                                .id("liveDraft")
-                        }
-                        
-                        if session.isFinalizingTranscript {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                                Text("Finalizing transcript...")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 8)
-                        }
+                        draftAndFinalizingOverlay(session: session)
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 16)

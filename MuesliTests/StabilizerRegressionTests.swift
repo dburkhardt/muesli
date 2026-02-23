@@ -11,7 +11,7 @@ final class StabilizerRegressionTests: XCTestCase {
         let stabilizer = LiveStabilizer(agreementWindow: 2, draftEmitIntervalMs: 0)
         let flush = await stabilizer.flushAll()
         XCTAssertTrue(flush.committedSegments.isEmpty, "R001: empty flush should have no committed segments")
-        XCTAssertNil(flush.draftUpdate, "R001: empty flush should have no draft update")
+        XCTAssertTrue(flush.draftUpdates.isEmpty, "R001: empty flush should have no draft updates")
     }
 
     // MARK: - R002: Single-word segment does not duplicate
@@ -36,7 +36,7 @@ final class StabilizerRegressionTests: XCTestCase {
         let seg = TranscriptionService.TranscriptSegment(text: "\t  \n", timestamp: 0, speaker: .them)
         let out = await stabilizer.ingest(seg)
         XCTAssertTrue(out.committedSegments.isEmpty, "R003: whitespace segment must emit no committed segments")
-        XCTAssertNil(out.draftUpdate, "R003: whitespace segment must emit no draft update")
+        XCTAssertTrue(out.draftUpdates.isEmpty, "R003: whitespace segment must emit no draft updates")
     }
 
     // MARK: - R004: Speaker state is fully isolated
@@ -128,7 +128,7 @@ final class StabilizerRegressionTests: XCTestCase {
         for i in 0..<5 {
             let seg = TranscriptionService.TranscriptSegment(text: "draft word \(i)", timestamp: TimeInterval(i), speaker: .me)
             let out = await stabilizer.ingest(seg)
-            if out.draftUpdate != nil { draftCount += 1 }
+            if !out.draftUpdates.isEmpty { draftCount += 1 }
         }
         // With a 1-second throttle and near-zero elapsed time, at most 1 draft should be emitted
         XCTAssertLessThanOrEqual(draftCount, 1, "R009: draft throttle must prevent burst emissions")

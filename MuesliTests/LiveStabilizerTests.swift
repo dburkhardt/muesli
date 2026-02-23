@@ -45,7 +45,7 @@ final class LiveStabilizerTests: XCTestCase {
         let flush = await stabilizer.flushAll()
 
         XCTAssertEqual(output.committedSegments.count, 0)
-        XCTAssertNil(output.draftUpdate)
+        XCTAssertTrue(output.draftUpdates.isEmpty)
         XCTAssertEqual(flush.committedSegments.count, 0)
     }
 
@@ -87,7 +87,7 @@ final class LiveStabilizerTests: XCTestCase {
         }
 
         let flush = await stabilizer.flushAll()
-        XCTAssertGreaterThan(flush.committedSegments.count + (flush.draftUpdate != nil ? 1 : 0), 0,
+        XCTAssertGreaterThan(flush.committedSegments.count + flush.draftUpdates.count, 0,
                              "Should have produced at least some output from concurrent ingestion")
     }
 

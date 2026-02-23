@@ -1,5 +1,17 @@
 import Foundation
+import os.lock
 import os.log
+
+/// Thread-safe accumulator for transcript segments collected from @Sendable handlers.
+private final class SegmentAccumulator: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock(initialState: [TranscriptionService.TranscriptSegment]())
+    func append(_ segment: TranscriptionService.TranscriptSegment) {
+        lock.withLock { $0.append(segment) }
+    }
+    var segments: [TranscriptionService.TranscriptSegment] {
+        lock.withLock { $0 }
+    }
+}
 
 /// Coordinates transcription model lifecycle and audio buffering
 /// Decouples transcription from recording - recording can start immediately,
@@ -639,9 +651,9 @@ final class TranscriptionCoordinator {
             )
         }
         
-        nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
+        let accumulator = SegmentAccumulator()
         tempService.setTranscriptHandler { segment in
-            segments.append(segment)
+            accumulator.append(segment)
         }
         
         for pair in segmentsToProcess {
@@ -653,6 +665,7 @@ final class TranscriptionCoordinator {
             )
         }
         
+        let segments = accumulator.segments
         let processor = TranscriptProcessor()
         for segment in segments.sorted(by: { $0.timestamp < $1.timestamp }) {
             processor.processSegment(segment)
@@ -682,6 +695,7 @@ final class TranscriptionCoordinator {
         }
         
         let ranked: [ModelManager.ModelSize] = [.large, .largeTurbo, .medium, .small]
+        let rank = Dictionary(uniqueKeysWithValues: ranked.enumerated().map { ($0.element, $0.offset) })
         let bestAvailable = ranked.first(where: isReady)
         
         switch preference {
@@ -693,7 +707,6 @@ final class TranscriptionCoordinator {
         case .bestAvailableNoDowngrade:
             guard let effectiveLiveModel else { return (bestAvailable, false, nil) }
             guard let candidate = bestAvailable else { return (nil, false, nil) }
-            let rank: [ModelManager.ModelSize: Int] = [.large: 0, .largeTurbo: 1, .medium: 2, .small: 3]
             guard let liveRank = rank[effectiveLiveModel], let candidateRank = rank[candidate], candidateRank <= liveRank else {
                 return (nil, false, nil)
             }
@@ -835,10 +848,9 @@ final class TranscriptionCoordinator {
         Task { await DiagnosticLogger.shared.log(.transcription,
             "Audio files: system=\(systemExists), mic=\(micExists)") }
         
-        // Transcribe - use nonisolated(unsafe) since we're on MainActor and handler runs synchronously
-        nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
+        let accumulator = SegmentAccumulator()
         tempService.setTranscriptHandler { segment in
-            segments.append(segment)
+            accumulator.append(segment)
         }
         
         try await tempService.transcribePostProcessing(
@@ -846,6 +858,8 @@ final class TranscriptionCoordinator {
             micAudioURL: micExists ? micAudioURL : nil,
             startTime: meeting.date
         )
+        
+        let segments = accumulator.segments
         
         // Log reprocess completion
         Task { await DiagnosticLogger.shared.log(.transcription,

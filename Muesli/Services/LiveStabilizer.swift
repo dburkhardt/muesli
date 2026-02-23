@@ -10,7 +10,7 @@ actor LiveStabilizer {
 
     struct Output: Sendable {
         let committedSegments: [TranscriptionService.TranscriptSegment]
-        let draftUpdate: DraftUpdate?
+        let draftUpdates: [DraftUpdate]
     }
 
     private struct Hypothesis: Sendable {
@@ -31,6 +31,7 @@ actor LiveStabilizer {
     private var stateBySpeaker: [TranscriptionService.TranscriptSegment.Speaker: SpeakerState] = [:]
 
     private let agreementWindow: Int
+    private let chunkDuration: TimeInterval
     private let overlapDuration: TimeInterval
     private let jitterMargin: TimeInterval
     private let maxDraftTokens: Int
@@ -39,6 +40,7 @@ actor LiveStabilizer {
 
     init(
         agreementWindow: Int = AudioConfiguration.stabilizerAgreementWindow,
+        chunkDuration: TimeInterval = AudioConfiguration.transcriptionChunkDuration,
         overlapDuration: TimeInterval = AudioConfiguration.transcriptionOverlapDuration,
         jitterMs: Int = AudioConfiguration.stabilizerJitterMs,
         maxDraftTokens: Int = AudioConfiguration.stabilizerMaxDraftTokens,
@@ -46,6 +48,7 @@ actor LiveStabilizer {
         draftEmitIntervalMs: Int = AudioConfiguration.stabilizerDraftEmitIntervalMs
     ) {
         self.agreementWindow = max(1, agreementWindow)
+        self.chunkDuration = chunkDuration
         self.overlapDuration = overlapDuration
         self.jitterMargin = Double(max(0, jitterMs)) / 1000.0
         self.maxDraftTokens = max(1, maxDraftTokens)
@@ -57,7 +60,7 @@ actor LiveStabilizer {
         var speakerState = stateBySpeaker[segment.speaker] ?? SpeakerState()
         let rawWords = tokenize(segment.text)
         guard !rawWords.isEmpty else {
-            return Output(committedSegments: [], draftUpdate: nil)
+            return Output(committedSegments: [], draftUpdates: [])
         }
 
         let contextWords = Array((speakerState.committedTail + (speakerState.pending.last?.words ?? [])).suffix(64))
@@ -67,11 +70,11 @@ actor LiveStabilizer {
         }
         guard !dedupedWords.isEmpty else {
             stateBySpeaker[segment.speaker] = speakerState
-            return Output(committedSegments: [], draftUpdate: nil)
+            return Output(committedSegments: [], draftUpdates: [])
         }
 
         speakerState.pending.append(Hypothesis(words: dedupedWords, timestamp: segment.timestamp))
-        let commitBefore = segment.timestamp + AudioConfiguration.transcriptionChunkDuration - overlapDuration - jitterMargin
+        let commitBefore = segment.timestamp + chunkDuration - overlapDuration - jitterMargin
 
         var committedSegments: [TranscriptionService.TranscriptSegment] = []
         while speakerState.pending.count >= agreementWindow,
@@ -100,30 +103,33 @@ actor LiveStabilizer {
 
         let draftWords = speakerState.pending.flatMap(\.words)
         let draftText = draftWords.suffix(maxDraftTokens).joined(separator: " ")
-        let shouldEmitDraft = shouldEmitDraft(now: Date(), draftText: draftText, speakerState: speakerState)
-        let draftUpdate: DraftUpdate?
-        if shouldEmitDraft {
+        let shouldEmit = shouldEmitDraft(now: Date(), draftText: draftText, speakerState: speakerState)
+        var draftUpdates: [DraftUpdate] = []
+        if shouldEmit {
             if speakerState.lastDraftText != draftText {
                 speakerState.draftRewrites += 1
             }
             speakerState.lastDraftText = draftText
             speakerState.lastDraftEmitAt = Date()
-            draftUpdate = DraftUpdate(text: draftText, speaker: segment.speaker)
-        } else {
-            draftUpdate = nil
+            draftUpdates.append(DraftUpdate(text: draftText, speaker: segment.speaker))
         }
 
         stateBySpeaker[segment.speaker] = speakerState
-        await DiagnosticLogger.shared.log(
-            .stabilizer,
-            "committed=\(speakerState.committedCount) draftRewrites=\(speakerState.draftRewrites) duplicateDrops=\(speakerState.duplicateDrops)"
-        )
-        return Output(committedSegments: committedSegments, draftUpdate: draftUpdate)
+        let committedCount = speakerState.committedCount
+        let draftRewrites = speakerState.draftRewrites
+        let duplicateDrops = speakerState.duplicateDrops
+        Task.detached(priority: .utility) {
+            await DiagnosticLogger.shared.log(
+                .stabilizer,
+                "committed=\(committedCount) draftRewrites=\(draftRewrites) duplicateDrops=\(duplicateDrops)"
+            )
+        }
+        return Output(committedSegments: committedSegments, draftUpdates: draftUpdates)
     }
 
     func flushAll() async -> Output {
         var committedSegments: [TranscriptionService.TranscriptSegment] = []
-        var finalDraft: DraftUpdate?
+        var draftUpdates: [DraftUpdate] = []
 
         for (speaker, var speakerState) in stateBySpeaker {
             while let head = speakerState.pending.first {
@@ -149,15 +155,20 @@ actor LiveStabilizer {
 
             speakerState.lastDraftText = ""
             speakerState.lastDraftEmitAt = Date()
-            finalDraft = DraftUpdate(text: "", speaker: speaker)
+            draftUpdates.append(DraftUpdate(text: "", speaker: speaker))
             stateBySpeaker[speaker] = speakerState
-            await DiagnosticLogger.shared.log(
-                .stabilizer,
-                "committed=\(speakerState.committedCount) draftRewrites=\(speakerState.draftRewrites) duplicateDrops=\(speakerState.duplicateDrops)"
-            )
+            let committedCount = speakerState.committedCount
+            let draftRewrites = speakerState.draftRewrites
+            let duplicateDrops = speakerState.duplicateDrops
+            Task.detached(priority: .utility) {
+                await DiagnosticLogger.shared.log(
+                    .stabilizer,
+                    "committed=\(committedCount) draftRewrites=\(draftRewrites) duplicateDrops=\(duplicateDrops)"
+                )
+            }
         }
 
-        return Output(committedSegments: committedSegments.sorted { $0.timestamp < $1.timestamp }, draftUpdate: finalDraft)
+        return Output(committedSegments: committedSegments.sorted { $0.timestamp < $1.timestamp }, draftUpdates: draftUpdates)
     }
 
     private func shouldEmitDraft(now: Date, draftText: String, speakerState: SpeakerState) -> Bool {
@@ -179,9 +190,9 @@ private func dropOverlapPrefix(incoming: [String], context: [String], similarity
     var bestOverlap = 0
 
     for overlap in stride(from: maxOverlap, through: 1, by: -1) {
-        let contextSlice = Array(context.suffix(overlap)).map { $0.lowercased() }
-        let incomingSlice = Array(incoming.prefix(overlap)).map { $0.lowercased() }
-        let similarity = levenshteinSimilarity(contextSlice.joined(separator: " "), incomingSlice.joined(separator: " "))
+        let contextSlice = Array(context.suffix(overlap))
+        let incomingSlice = Array(incoming.prefix(overlap))
+        let similarity = wordSimilarity(contextSlice, incomingSlice)
         if similarity >= similarityThreshold {
             bestOverlap = overlap
             break
@@ -192,26 +203,26 @@ private func dropOverlapPrefix(incoming: [String], context: [String], similarity
     return Array(incoming.dropFirst(bestOverlap))
 }
 
-private func levenshteinSimilarity(_ lhs: String, _ rhs: String) -> Double {
-    let distance = levenshteinDistance(Array(lhs), Array(rhs))
+private func wordSimilarity(_ lhs: [String], _ rhs: [String]) -> Double {
+    let distance = wordLevenshteinDistance(lhs, rhs)
     let maxLen = max(lhs.count, rhs.count)
     guard maxLen > 0 else { return 1.0 }
     return 1.0 - Double(distance) / Double(maxLen)
 }
 
-private func levenshteinDistance(_ lhs: [Character], _ rhs: [Character]) -> Int {
+private func wordLevenshteinDistance(_ lhs: [String], _ rhs: [String]) -> Int {
     if lhs.isEmpty { return rhs.count }
     if rhs.isEmpty { return lhs.count }
 
     var previous = Array(0...rhs.count)
-    for (i, lch) in lhs.enumerated() {
+    for (i, lWord) in lhs.enumerated() {
         var current = [i + 1] + Array(repeating: 0, count: rhs.count)
-        for (j, rch) in rhs.enumerated() {
-            let substitutionCost = lch == rch ? 0 : 1
+        for (j, rWord) in rhs.enumerated() {
+            let substitutionCost = lWord.caseInsensitiveCompare(rWord) == .orderedSame ? 0 : 1
             current[j + 1] = min(
-                previous[j + 1] + 1,      // deletion
-                current[j] + 1,            // insertion
-                previous[j] + substitutionCost // substitution
+                previous[j + 1] + 1,
+                current[j] + 1,
+                previous[j] + substitutionCost
             )
         }
         previous = current
