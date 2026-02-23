@@ -882,38 +882,36 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     private func startMicrophoneCapture() throws {
         let engine = AVAudioEngine()
 
-        // DO NOT call setDeviceID on the engine's input node.
-        // On macOS, calling setDeviceID (both auAudioUnit.setDeviceID and
-        // AudioUnitSetProperty/kAudioOutputUnitProperty_CurrentDevice) causes
-        // the AVAudioEngine audio graph to stall after a few seconds, producing
-        // silence. Instead, let AVAudioEngine use whatever macOS reports as the
-        // default input device.
-        //
-        // The pre-aggregate default snapshot ensures the correct device is the
-        // system default BEFORE the aggregate is created. After aggregate creation,
-        // the private aggregate should not become the default.
+        // Try to set the user-selected mic (or pre-aggregate default).
+        // If this fails, the engine uses whatever macOS provides as default.
+        let deviceWasSet = setMicrophoneInputDevice(
+            engine: engine,
+            deviceUID: selectedMicrophoneDeviceID,
+            fallbackDeviceID: preAggregateDefaultInputDeviceID
+        )
+
         let inputNode = engine.inputNode
         let actualDeviceID = inputNode.auAudioUnit.deviceID
         let actualUID = (try? CoreAudioHelpers.getDeviceUID(actualDeviceID)) ?? "unknown"
-        logger.info("MIC_ENGINE_DEFAULT: \(actualUID) (AudioDeviceID: \(actualDeviceID))")
+        logger.info("MIC_ENGINE_DEVICE: \(actualUID) (AudioDeviceID: \(actualDeviceID), explicitlySet: \(deviceWasSet))")
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_ENGINE_DEFAULT: uid=\(actualUID), audioDeviceID=\(actualDeviceID)")
+                "MIC_ENGINE_DEVICE: uid=\(actualUID), audioDeviceID=\(actualDeviceID), explicitlySet=\(deviceWasSet)")
         }
 
         let inputFormat = inputNode.inputFormat(forBus: 0)
         let hardwareSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
         let tapSampleRate = 48000.0
         microphoneSampleRate = tapSampleRate
-        // Note: microphoneSampleRate is actor-isolated. The nonisolated handleMicrophoneBuffer
-        // callback does not read it directly — it dispatches to deliverRawMicAudio via Task,
-        // which runs on the actor and reads microphoneSampleRate safely.
 
-        // Install tap
+        // Use the device's actual channel count to avoid installTap crashes.
+        // Some devices (e.g., the aggregate tap device) are stereo; forcing mono
+        // on a stereo-only device throws an uncaught NSException.
+        let tapChannels: AVAudioChannelCount = inputFormat.channelCount > 0 ? min(inputFormat.channelCount, 2) : 1
         guard let tapFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: tapSampleRate,
-            channels: 1,
+            channels: tapChannels,
             interleaved: false
         ) else {
             throw AudioCaptureError.microphoneStartFailed(NSError(domain: "TapAudioCapture", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create tap format"]))
@@ -926,10 +924,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         try engine.start()
         microphoneEngine = engine
 
-        logger.info("Microphone capture started at \(tapSampleRate)Hz")
+        logger.info("Microphone capture started at \(tapSampleRate)Hz, channels=\(tapChannels)")
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_SAMPLE_RATE: hardware=\(hardwareSampleRate)Hz, tap=\(tapSampleRate)Hz")
+                "MIC_SAMPLE_RATE: hardware=\(hardwareSampleRate)Hz, tap=\(tapSampleRate)Hz, channels=\(tapChannels)")
         }
     }
 
