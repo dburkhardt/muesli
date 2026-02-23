@@ -125,6 +125,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Selected microphone device ID
     private var selectedMicrophoneDeviceID: String?
 
+    /// Snapshot of the real system default input device, captured BEFORE the
+    /// aggregate device is created. Used as a fallback when setting the mic device
+    /// on AVAudioEngine to avoid latching onto the aggregate. Session-scoped.
+    private var preAggregateDefaultInputDeviceID: AudioDeviceID?
+
     /// Microphone sample rate (detected at start)
     private var microphoneSampleRate: Double = 48000
 
@@ -215,6 +220,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         
         guard isRecording else { return }
         
+        // Re-snapshot the current default input. The aggregate is already running,
+        // so the current default reflects real hardware (user may have plugged in
+        // a new device since recording started).
+        preAggregateDefaultInputDeviceID = try? CoreAudioHelpers.getDefaultInputDevice()
+
         logger.info("Switching microphone device during tap capture: \(deviceID ?? "system default")")
         stopMicrophoneCapture()
         synchronizer.reset()
@@ -332,6 +342,15 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 routeChangeToken = nil
             }
             throw error
+        }
+
+        // Snapshot the real system default input BEFORE creating the aggregate device.
+        // After aggregate creation, macOS may transiently report the aggregate as the
+        // default input, which would cause AVAudioEngine to latch onto it.
+        preAggregateDefaultInputDeviceID = try? CoreAudioHelpers.getDefaultInputDevice()
+        if let devID = preAggregateDefaultInputDeviceID {
+            let uid = (try? CoreAudioHelpers.getDeviceUID(devID)) ?? "unknown"
+            logger.info("Pre-aggregate default input: \(uid) (AudioDeviceID: \(devID))")
         }
 
         // Start the tap for system audio
@@ -484,6 +503,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         synchronizer.reset()
         aecProcessor.reset()
         resetAECRingsAndCounters()
+        preAggregateDefaultInputDeviceID = nil
 
         isRecording = false
         logger.info("Tap-based audio capture stopped")
@@ -863,12 +883,23 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
 
-        // Set device if specified
-        if let deviceID = selectedMicrophoneDeviceID {
-            setMicrophoneInputDevice(engine: engine, deviceID: deviceID)
+        // ALWAYS explicitly set the mic device — never let AVAudioEngine pick
+        // its default, which may be the tap aggregate device after aggregate creation.
+        let deviceWasSet = setMicrophoneInputDevice(
+            engine: engine,
+            deviceUID: selectedMicrophoneDeviceID,
+            fallbackDeviceID: preAggregateDefaultInputDeviceID
+        )
+
+        if !deviceWasSet {
+            logger.error("Could not set any mic device — aborting mic capture")
+            throw AudioCaptureError.microphoneStartFailed(
+                NSError(domain: "TapAudioCapture", code: -2,
+                        userInfo: [NSLocalizedDescriptionKey: "No valid microphone device available"])
+            )
         }
 
-        // Force 48kHz mono for AEC invariants.
+        // Query format AFTER device is set so it reflects the correct hardware.
         let inputFormat = inputNode.inputFormat(forBus: 0)
         let hardwareSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
         let tapSampleRate = 48000.0
@@ -959,22 +990,67 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
     }
 
-    /// Set microphone input device
-    private func setMicrophoneInputDevice(engine: AVAudioEngine, deviceID: String) {
-        // Find device by UID
-        let devices = CoreAudioHelpers.getAllDevices()
-        for device in devices {
-            if let uid = try? CoreAudioHelpers.getDeviceUID(device), uid == deviceID {
+    /// Set microphone input device with strict two-step fallback.
+    /// Returns true only when a device was explicitly set AND verified.
+    /// Never accepts the engine's unverified default (which may be the tap aggregate).
+    private func setMicrophoneInputDevice(
+        engine: AVAudioEngine,
+        deviceUID: String?,
+        fallbackDeviceID: AudioDeviceID?
+    ) -> Bool {
+        let muesliAggregateUID = tapManager.aggregateDeviceUID
+
+        // Step 1: Try to find and set the requested device by UID
+        if let deviceUID {
+            let allDevices = CoreAudioHelpers.getAllDevices()
+            for device in allDevices {
+                guard let uid = try? CoreAudioHelpers.getDeviceUID(device) else { continue }
+                guard uid == deviceUID else { continue }
+
+                if let muesliUID = muesliAggregateUID, uid == muesliUID {
+                    logger.warning("Requested UID \(deviceUID) is the Muesli aggregate — skipping")
+                    break
+                }
+
                 do {
                     try engine.inputNode.auAudioUnit.setDeviceID(device)
-                    logger.debug("Set microphone device: \(deviceID)")
-                    return
+                    let actualID = engine.inputNode.auAudioUnit.deviceID
+                    if actualID == device {
+                        logger.info("Mic device set: \(deviceUID) (AudioDeviceID: \(device))")
+                        return true
+                    }
+                    logger.warning("setDeviceID readback mismatch: expected \(device), got \(actualID)")
                 } catch {
-                    logger.warning("Failed to set microphone device: \(error)")
+                    logger.warning("setDeviceID threw for \(deviceUID): \(error)")
                 }
             }
         }
-        logger.warning("Microphone device UID not found in Core Audio devices: \(deviceID) — falling back to system default")
+
+        // Step 2: Fall back to pre-aggregate default AudioDeviceID
+        if let fallbackID = fallbackDeviceID, fallbackID != kAudioObjectUnknown {
+            let fallbackUID = try? CoreAudioHelpers.getDeviceUID(fallbackID)
+            if let muesliUID = muesliAggregateUID, fallbackUID == muesliUID {
+                logger.warning("Pre-aggregate fallback IS the Muesli aggregate — skipping")
+            } else {
+                do {
+                    try engine.inputNode.auAudioUnit.setDeviceID(fallbackID)
+                    let actualID = engine.inputNode.auAudioUnit.deviceID
+                    if actualID == fallbackID {
+                        logger.info("Mic device set to pre-aggregate default: \(fallbackUID ?? "?") (AudioDeviceID: \(fallbackID))")
+                        return true
+                    }
+                    logger.warning("Fallback setDeviceID readback mismatch: expected \(fallbackID), got \(actualID)")
+                } catch {
+                    logger.warning("Fallback setDeviceID threw: \(error)")
+                }
+            }
+        }
+
+        // Both steps failed — do NOT accept the engine's unverified default.
+        let currentDeviceID = engine.inputNode.auAudioUnit.deviceID
+        let currentUID = (try? CoreAudioHelpers.getDeviceUID(currentDeviceID)) ?? "unknown"
+        logger.error("Could not explicitly set any mic device. Engine default is AudioDeviceID \(currentDeviceID) (\(currentUID))")
+        return false
     }
 
     /// Set up route change listener

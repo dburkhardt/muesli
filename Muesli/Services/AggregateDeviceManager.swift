@@ -41,6 +41,11 @@ final class AggregateDeviceManager {
     var deviceID: AudioDeviceID {
         return aggregateDeviceID
     }
+
+    /// The aggregate device UID string, or nil if no device has been created.
+    var currentAggregateUID: String? {
+        hasDevice ? aggregateUID : nil
+    }
     
     /// The tap object ID (for direct IOProc if needed)
     var tapID: AudioObjectID {
