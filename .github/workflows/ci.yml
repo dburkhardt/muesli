@@ -126,7 +126,7 @@ jobs:
       - name: Upload stable test result bundle
         if: always()
         # actions/upload-artifact v4
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: stable-tests-xcresult-${{ github.sha }}
           path: stable-tests.xcresult
@@ -263,7 +263,7 @@ jobs:
       - name: Upload quarantined test result bundle
         if: always()
         # actions/upload-artifact v4
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: quarantined-tests-xcresult-${{ github.sha }}
           path: quarantined-tests.xcresult
@@ -424,7 +424,7 @@ jobs:
       - name: Upload WebRTC fingerprint artifact
         if: github.event_name != 'pull_request' && steps.webrtc-fingerprint-release.outputs.fingerprint != 'none'
         # actions/upload-artifact v4
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: webrtc-fingerprint-ci-${{ github.sha }}
           path: webrtc-fingerprint-ci.json
