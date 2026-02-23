@@ -688,17 +688,20 @@ final class RecordingController {
             let hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
                                 FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
             
+            var didLaunchSecondPass = false
             if preferencesManager.isSecondPassASREnabled,
                hasAudioFiles,
                (session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0) >= AudioConfiguration.secondPassMinDurationSeconds {
                 launchSecondPassFinalization(for: session, directory: directory)
+                didLaunchSecondPass = true
             }
             
             // Check if we have audio but no transcript (model wasn't ready during recording)
-            // If so, auto-trigger reprocessing once the model becomes ready
+            // If so, auto-trigger reprocessing once the model becomes ready.
+            // Skip when second-pass was already launched to avoid duplicate processing.
             let hasEmptyTranscript = session.transcriptBlocks.isEmpty
             
-            if hasAudioFiles && hasEmptyTranscript {
+            if hasAudioFiles && hasEmptyTranscript && !didLaunchSecondPass {
                 if let meeting = createMeetingHistoryItem(from: directory) {
                     logger.info("Recording has audio but empty transcript, auto-triggering reprocessing")
                     transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)
@@ -755,7 +758,9 @@ final class RecordingController {
                 let blocks = try await self.transcriptionCoordinator.runSecondPassASR(
                     in: directory,
                     recordingStartTime: meetingDate,
-                    preference: self.preferencesManager.secondPassModelPreference
+                    preference: self.preferencesManager.secondPassModelPreference,
+                    liveModel: self.transcriptionCoordinator.liveSessionModel,
+                    specificModelRawValue: self.preferencesManager.secondPassSpecificModelRawValue
                 )
                 try Task.checkCancellation()
                 

@@ -897,4 +897,208 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertEqual(mockTranscriptionService.startTranscriptionCallCount, 0)
     }
     */
+    
+    // MARK: - Second-Pass Model Resolution (.specific fallback paths)
+    
+    @MainActor
+    func testSpecificFallback_EmptyRawValue_FallsBackWithWarning() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.small)
+        
+        let result = sut.resolveSecondPassModelWithFallback(
+            preference: .specific,
+            liveModel: nil,
+            specificModelRawValue: nil
+        )
+        
+        XCTAssertEqual(result.model, .small, "Should fall back to best available")
+        XCTAssertTrue(result.usedFallback, "Should indicate fallback was used")
+        XCTAssertNotNil(result.fallbackReason)
+        XCTAssertTrue(result.fallbackReason?.contains("not selected") == true)
+    }
+    
+    @MainActor
+    func testSpecificFallback_EmptyString_FallsBackWithWarning() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.small)
+        
+        let result = sut.resolveSecondPassModelWithFallback(
+            preference: .specific,
+            liveModel: nil,
+            specificModelRawValue: ""
+        )
+        
+        XCTAssertEqual(result.model, .small)
+        XCTAssertTrue(result.usedFallback)
+        XCTAssertTrue(result.fallbackReason?.contains("not selected") == true)
+    }
+    
+    @MainActor
+    func testSpecificFallback_InvalidRawValue_FallsBackWithWarning() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.small)
+        
+        let result = sut.resolveSecondPassModelWithFallback(
+            preference: .specific,
+            liveModel: nil,
+            specificModelRawValue: "nonexistent_model"
+        )
+        
+        XCTAssertEqual(result.model, .small, "Should fall back to best available")
+        XCTAssertTrue(result.usedFallback)
+        XCTAssertTrue(result.fallbackReason?.contains("Invalid") == true)
+        XCTAssertTrue(result.fallbackReason?.contains("nonexistent_model") == true)
+    }
+    
+    @MainActor
+    func testSpecificFallback_ModelNotReady_FallsBackWithReason() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.small)
+        // large is known but still downloading
+        mockModelManager.downloadStates[.large] = .downloading(progress: 0.5)
+        
+        let result = sut.resolveSecondPassModelWithFallback(
+            preference: .specific,
+            liveModel: nil,
+            specificModelRawValue: ModelManager.ModelSize.large.rawValue
+        )
+        
+        XCTAssertEqual(result.model, .small, "Should fall back to best available")
+        XCTAssertTrue(result.usedFallback)
+        XCTAssertTrue(result.fallbackReason?.contains("still loading") == true)
+    }
+    
+    @MainActor
+    func testSpecificFallback_ValidAndReady_NoFallback() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.medium)
+        
+        let result = sut.resolveSecondPassModelWithFallback(
+            preference: .specific,
+            liveModel: nil,
+            specificModelRawValue: ModelManager.ModelSize.medium.rawValue
+        )
+        
+        XCTAssertEqual(result.model, .medium, "Should use specified model")
+        XCTAssertFalse(result.usedFallback, "Should not indicate fallback")
+        XCTAssertNil(result.fallbackReason)
+    }
+    
+    // MARK: - sameAsLive with Session Fallback
+    
+    @MainActor
+    func testLiveSessionModel_SetOnPrepareWithFallback() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // large is active but busy compiling
+        mockModelManager.downloadedModels.insert(.large)
+        mockModelManager.downloadStates[.large] = .compiling
+        mockModelManager.activeModel = .large
+        mockModelManager.mockModelPaths[.large] = mockModelManager.modelDirectory.appendingPathComponent("large")
+        
+        // small is ready
+        mockModelManager.addDownloadedModel(.small, setActive: false)
+        
+        _ = await sut.prepareModel()
+        
+        XCTAssertEqual(sut.liveSessionModel, .small,
+                       "liveSessionModel should reflect the fallback model actually used, not the preferred model")
+    }
+    
+    @MainActor
+    func testLiveSessionModel_SetOnPrepareWithoutFallback() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.medium)
+        
+        _ = await sut.prepareModel()
+        
+        XCTAssertEqual(sut.liveSessionModel, .medium,
+                       "liveSessionModel should match activeModel when no fallback occurs")
+    }
+    
+    @MainActor
+    func testLiveSessionModel_ClearedOnReset() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.small)
+        _ = await sut.prepareModel()
+        XCTAssertNotNil(sut.liveSessionModel)
+        
+        sut.resetForNewRecording()
+        
+        XCTAssertNil(sut.liveSessionModel, "liveSessionModel should be cleared on reset")
+    }
+    
+    @MainActor
+    func testSameAsLive_UsesSessionFallbackModel() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // small is ready and was used for live (simulated via liveModel param)
+        mockModelManager.addDownloadedModel(.small)
+        // large is the preferred/active model but was busy during live
+        mockModelManager.downloadedModels.insert(.large)
+        mockModelManager.downloadStates[.large] = .completed
+        mockModelManager.mockModelPaths[.large] = mockModelManager.modelDirectory.appendingPathComponent("large")
+        mockModelManager.activeModel = .large
+        
+        let result = sut.resolveSecondPassModelWithFallback(
+            preference: .sameAsLive,
+            liveModel: .small
+        )
+        
+        XCTAssertEqual(result.model, .small,
+                       "sameAsLive should use liveModel (.small), not activeModel (.large)")
+        XCTAssertFalse(result.usedFallback)
+    }
 }

@@ -26,6 +26,12 @@ protocol TranscriptionServiceProtocol: Sendable {
     func transcribePostProcessing(systemAudioURL: URL?, micAudioURL: URL?, startTime: Date) async throws
 }
 
+extension TranscriptionServiceProtocol {
+    func startTranscription(recordingStartTime: Date) {
+        startTranscription(recordingStartTime: recordingStartTime, useLiveStabilizer: false)
+    }
+}
+
 // MARK: - FileOutputServiceProtocol
 
 /// Protocol for FileOutputService to enable mocking in tests

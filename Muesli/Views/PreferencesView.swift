@@ -242,7 +242,7 @@ struct GeneralPreferencesTab: View {
                 if let raw = raw, available.contains(where: { $0.rawValue == raw }) {
                     return raw
                 }
-                return available.first?.rawValue ?? ""
+                return ""
             },
             set: { preferencesManager.secondPassSpecificModelRawValue = $0.isEmpty ? nil : $0 }
         )

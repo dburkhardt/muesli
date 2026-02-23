@@ -59,6 +59,11 @@ final class TranscriptionCoordinator {
     
     // MARK: - State
     
+    /// The model actually used for the current live transcription session.
+    /// May differ from `modelManager.activeModel` when the preferred model was
+    /// busy (compiling/downloading) and a ready fallback was substituted.
+    private(set) var liveSessionModel: ModelManager.ModelSize?
+    
     /// Current model state
     /// Uses didSet to automatically flush buffered audio when state becomes ready
     var modelState: ModelState = .notAvailable {
@@ -207,6 +212,7 @@ final class TranscriptionCoordinator {
     /// Reset per-recording state so new sessions can retry model loading
     func resetForNewRecording() {
         retriesRemaining = maxModelRetries
+        liveSessionModel = nil
         if case .failed = modelState {
             modelState = .notAvailable
         }
@@ -288,6 +294,7 @@ final class TranscriptionCoordinator {
         
         // If already initialized, return ready
         if isInitialized {
+            liveSessionModel = modelToUse
             modelState = .ready
             // Flush any buffered audio in case we resumed
             processBufferedAudio()
@@ -339,6 +346,7 @@ final class TranscriptionCoordinator {
         do {
             try await transcriptionService.initialize(modelPath: modelPath)
             isInitialized = true
+            liveSessionModel = modelToUse
             modelState = .ready
             
             // Clean up slow-load detection (model loaded successfully)
@@ -402,6 +410,10 @@ final class TranscriptionCoordinator {
         // Clear handler to break retain cycle
         transcriptionService.setTranscriptHandler { _ in }
         transcriptionService.setDraftHandler { _, _ in }
+        
+        // Note: liveSessionModel is intentionally NOT cleared here so that
+        // second-pass finalization (which runs after stop) can read it.
+        // It is cleared in resetForNewRecording() instead.
     }
     
     deinit {
@@ -577,11 +589,13 @@ final class TranscriptionCoordinator {
         in directory: URL,
         recordingStartTime: Date,
         preference: PreferencesManager.SecondPassModelPreference,
-        liveModel: ModelManager.ModelSize? = nil
+        liveModel: ModelManager.ModelSize? = nil,
+        specificModelRawValue: String? = nil
     ) async throws -> [TranscriptBlock] {
         let (selectedModel, usedFallback, fallbackReason) = resolveSecondPassModelWithFallback(
             preference: preference,
-            liveModel: liveModel
+            liveModel: liveModel,
+            specificModelRawValue: specificModelRawValue
         )
         guard let selectedModel else {
             throw NSError(
@@ -654,11 +668,11 @@ final class TranscriptionCoordinator {
     }
 
     /// Resolves second-pass model with defensive fallback when .specific is misconfigured.
-    /// Returns (model, usedFallback, fallbackReason). When usedFallback is true, caller should show onWarning.
-    private func resolveSecondPassModelWithFallback(
+    func resolveSecondPassModelWithFallback(
         preference: PreferencesManager.SecondPassModelPreference,
-        liveModel: ModelManager.ModelSize?
-    ) -> (ModelManager.ModelSize?, Bool, String?) {
+        liveModel: ModelManager.ModelSize?,
+        specificModelRawValue: String? = nil
+    ) -> (model: ModelManager.ModelSize?, usedFallback: Bool, fallbackReason: String?) {
         let effectiveLiveModel = liveModel ?? modelManager.activeModel
 
         func isReady(_ model: ModelManager.ModelSize) -> Bool {
@@ -685,16 +699,15 @@ final class TranscriptionCoordinator {
             }
             return (candidate, false, nil)
         case .specific:
-            let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel)
-            if raw == nil || raw?.isEmpty == true {
+            guard let raw = specificModelRawValue, !raw.isEmpty else {
                 if let fallback = bestAvailable {
                     return (fallback, true, "Specific model not selected. Using \(fallback.displayName) instead.")
                 }
                 return (nil, false, nil)
             }
-            guard let model = ModelManager.ModelSize(rawValue: raw!) else {
+            guard let model = ModelManager.ModelSize(rawValue: raw) else {
                 if let fallback = bestAvailable {
-                    return (fallback, true, "Invalid specific model '\(raw!)'. Using \(fallback.displayName) instead.")
+                    return (fallback, true, "Invalid specific model '\(raw)'. Using \(fallback.displayName) instead.")
                 }
                 return (nil, false, nil)
             }
