@@ -24,7 +24,6 @@ struct MeetingHistorySidebar: View {
             }
         }
         .frame(minWidth: 200, idealWidth: 250)
-        .background(.background)
         .onDeleteCommand {
             // Handle Delete key
             historyManager.requestDeleteSelectedMeetings()
@@ -311,9 +310,10 @@ struct MeetingSidebarItemView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
-            isSelected ? Color.accentColor.opacity(0.15) :
-                (isHovered ? Color.secondary.opacity(0.05) : Color.clear)
+            isSelected ? AnyShapeStyle(.selection) :
+                (isHovered ? AnyShapeStyle(Color.secondary.opacity(0.1)) : AnyShapeStyle(.clear))
         )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering
