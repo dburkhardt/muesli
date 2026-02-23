@@ -180,7 +180,22 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     func setWarningHandler(_ handler: @escaping TranscriptionWarningHandler) {
         warningHandler = handler
     }
-    
+
+    #if DEBUG
+    /// Test-only: inject a segment into the stabilizer path (when stabilizer is enabled).
+    /// Used for integration tests. No-op if stabilizer is nil.
+    func _testingInjectSegment(_ segment: TranscriptSegment) async {
+        guard let stabilizer = liveStabilizer, transcriptionMode == .live else { return }
+        let output = await stabilizer.ingest(segment)
+        for committed in output.committedSegments {
+            transcriptHandler?(committed)
+        }
+        for draft in output.draftUpdates {
+            draftHandler?(draft.text, draft.speaker)
+        }
+    }
+    #endif
+
     // MARK: - Recording Control
     
     /// Start transcription processing
@@ -237,7 +252,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             for segment in output.committedSegments {
                 transcriptHandler?(segment)
             }
-            if let draft = output.draftUpdate {
+            for draft in output.draftUpdates {
                 draftHandler?(draft.text, draft.speaker)
             }
         }
@@ -555,7 +570,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 for committed in output.committedSegments {
                     transcriptHandler?(committed)
                 }
-                if let draft = output.draftUpdate {
+                for draft in output.draftUpdates {
                     draftHandler?(draft.text, draft.speaker)
                 }
             } else {
@@ -1249,7 +1264,8 @@ extension TranscriptionService {
             return inputBuffer
         }
         
-        guard status == .haveData, let outputChannelData = outputBuffer.floatChannelData else {
+        let isValidStatus = (status == .haveData || status == .inputRanDry)
+        guard isValidStatus, let outputChannelData = outputBuffer.floatChannelData else {
             return fallbackResample(
                 samples: samples,
                 sourceSampleRate: sourceSampleRate,

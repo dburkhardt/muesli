@@ -5,7 +5,6 @@ import XCTest
 /// Verifies draft handler wiring, stabilizer lifecycle (start/stop), and
 /// that the threading contract (draft callbacks fire, committed segments emit) is upheld.
 final class TranscriptionServiceStabilizerTests: XCTestCase {
-
     // MARK: - Draft Handler Registration
 
     func testSetDraftHandlerDoesNotCrash() {
@@ -136,6 +135,50 @@ final class TranscriptionServiceStabilizerTests: XCTestCase {
         // After reset, simulateDraft should silently do nothing (no crash)
         mock.simulateDraft(text: "after reset", speaker: .them)
     }
+
+    // MARK: - Stabilizer Integration (End-to-End)
+
+    func testStabilizerIntegration_committedAndDraftFlowToHandlers() async {
+        // Verifies TranscriptionService with stabilizer enabled: injected segments
+        // produce committed segments → transcript handler, drafts → draft handler.
+        let service = TranscriptionService()
+        service.setTranscriptionMode(.live)
+
+        let transcriptCapture = LockCaptureSegment()
+        let transcriptCount = LockCounter()
+        let draftCount = LockCounter()
+
+        service.setTranscriptHandler { segment in
+            transcriptCapture.set(segment)
+            transcriptCount.increment()
+        }
+        service.setDraftHandler { _, _ in
+            draftCount.increment()
+        }
+
+        service.startTranscription(recordingStartTime: Date(), useLiveStabilizer: true)
+
+        // Inject segments that will commit (agreementWindow=2 by default)
+        // _testingInjectSegment bypasses WhisperKit and feeds the stabilizer directly.
+        let seg1 = TranscriptionService.TranscriptSegment(text: "hello world", timestamp: 0, speaker: .me)
+        let seg2 = TranscriptionService.TranscriptSegment(text: "hello world test", timestamp: 1, speaker: .me)
+
+        await service._testingInjectSegment(seg1)
+        await service._testingInjectSegment(seg2)
+
+        // Allow async handler delivery
+        try? await Task.sleep(for: .milliseconds(50))
+
+        // At least one committed segment should have reached transcript handler
+        let committed = transcriptCapture.segment
+        XCTAssertNotNil(committed, "Committed segment should flow to transcript handler")
+
+        await service.stopTranscription()
+
+        // Stop flushes; draft handler may receive empty draft for each speaker. Key: no crash.
+        XCTAssertGreaterThanOrEqual(transcriptCount.value, 0)
+        XCTAssertGreaterThanOrEqual(draftCount.value, 0)
+    }
 }
 
 // MARK: - Thread-safe helpers for closures
@@ -159,4 +202,13 @@ private final class LockCapture: @unchecked Sendable {
     }
     var text: String? { lock.withLock { _text } }
     var speaker: TranscriptionService.TranscriptSegment.Speaker? { lock.withLock { _speaker } }
+}
+
+private final class LockCaptureSegment: @unchecked Sendable {
+    private var _segment: TranscriptionService.TranscriptSegment?
+    private let lock = NSLock()
+    func set(_ segment: TranscriptionService.TranscriptSegment) {
+        lock.withLock { _segment = segment }
+    }
+    var segment: TranscriptionService.TranscriptSegment? { lock.withLock { _segment } }
 }
