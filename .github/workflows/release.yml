@@ -195,7 +195,7 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "${API}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=20")
 
-            CANDIDATE_RUN_IDS=$(echo "${RUNS_JSON}" | jq -r '.workflow_runs[] | select(.status=="queued" or .status=="in_progress" or .status=="completed") | .id')
+            CANDIDATE_RUN_IDS=$(echo "${RUNS_JSON}" | jq -r --arg SHA "${SHA}" '.workflow_runs[] | select(.head_sha==$SHA and .event != "pull_request" and (.status=="queued" or .status=="in_progress" or .status=="completed")) | .id')
 
             for CI_RUN_ID in ${CANDIDATE_RUN_IDS}; do
               ARTIFACTS_JSON=$(curl -fsSL \
@@ -221,21 +221,41 @@ jobs:
 
           echo "Waiting for CI run ${CI_RUN_ID} to complete..."
           for wait in $(seq 1 80); do
-            RUN_STATUS=$(curl -fsSL \
+            CI_RUN_JSON=$(curl -fsSL \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
-              "${API}/actions/runs/${CI_RUN_ID}" | jq -r '.status')
-            if [ "$RUN_STATUS" = "completed" ]; then
-              break
+              "${API}/actions/runs/${CI_RUN_ID}")
+            RUN_STATUS=$(echo "${CI_RUN_JSON}" | jq -r '.status')
+            RUN_CONCLUSION=$(echo "${CI_RUN_JSON}" | jq -r '.conclusion')
+
+            if [ "$RUN_STATUS" != "completed" ]; then
+              echo "CI run still ${RUN_STATUS} (attempt ${wait}/80); waiting 30s..."
+              sleep 30
+              continue
             fi
-            echo "CI run still ${RUN_STATUS} (attempt ${wait}/80); waiting 30s..."
-            sleep 30
+
+            if [ "$RUN_CONCLUSION" = "null" ] || [ -z "$RUN_CONCLUSION" ]; then
+              echo "CI run completed but conclusion not yet available (attempt ${wait}/80); waiting 30s..."
+              sleep 30
+              continue
+            fi
+
+            break
           done
+
+          if [ "$RUN_STATUS" != "completed" ]; then
+            echo "::error::CI run ${CI_RUN_ID} did not complete within expected timeout."
+            exit 1
+          fi
 
           CI_CONCLUSION=$(curl -fsSL \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "${API}/actions/runs/${CI_RUN_ID}" | jq -r '.conclusion')
+          if [ -z "${CI_CONCLUSION}" ] || [ "${CI_CONCLUSION}" = "null" ]; then
+            echo "::error::CI run ${CI_RUN_ID} concluded with null; release gate timed out waiting for final result."
+            exit 1
+          fi
 
           if [ "$CI_CONCLUSION" != "success" ]; then
             echo "::error::CI run ${CI_RUN_ID} concluded with '${CI_CONCLUSION}', not 'success'. Refusing to release."
