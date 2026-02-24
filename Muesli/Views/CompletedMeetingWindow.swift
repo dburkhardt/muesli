@@ -75,40 +75,6 @@ struct CompletedMeetingWindow: View {
             // Copy transcript button
             copyTranscriptButton
             
-            // Reprocess button with model picker
-            if !viewModel.modelManager.downloadedModels.isEmpty {
-                Menu {
-                    ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
-                        Button("Reprocess with \(model.displayName)") {
-                            viewModel.reprocessTranscript(for: meeting, using: model)
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        if meeting.isReprocessing {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                                .frame(width: 12, height: 12)
-                            Text("Reprocessing...")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 12))
-                            Text("Reprocess")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                    }
-                    .foregroundStyle(.blue)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .disabled(meeting.isReprocessing)
-                .help("Re-transcribe this recording with a different model")
-            }
-            
             CompletedIndicator()
         }
         .padding(.horizontal, 20)
@@ -157,37 +123,46 @@ struct CompletedMeetingWindow: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
             
-        Button(
-            action: {
-                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
-            },
-            label: {
-                Text("Open in Finder")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.blue)
-                    .underline()
-            }
-        )
-        .buttonStyle(.plain)
-            
-            Text("·")
-                .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
-            
-        Button(
-            action: {
-                historyManager.requestDeleteMeeting(meeting)
-            },
-            label: {
-                Text("Delete Recording")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.red)
-                    .underline()
-            }
-        )
-        .buttonStyle(.plain)
+            meetingActionsMenu
         }
         .padding(.bottom, 8)
+    }
+    
+    /// Hamburger menu for completed-meeting actions.
+    private var meetingActionsMenu: some View {
+        Menu {
+            Button("Open in Finder") {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
+            }
+            
+            Button("Delete Recording", role: .destructive) {
+                historyManager.requestDeleteMeeting(meeting)
+            }
+            
+            Menu("Reprocess") {
+                ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
+                    Button("With \(model.displayName)") {
+                        viewModel.reprocessTranscript(for: meeting, using: model)
+                    }
+                }
+            }
+            .disabled(meeting.isReprocessing || viewModel.modelManager.downloadedModelsOrdered.isEmpty)
+        } label: {
+            HStack(spacing: 6) {
+                if meeting.isReprocessing {
+                    ProgressView()
+                        .scaleEffect(0.65)
+                        .frame(width: 10, height: 10)
+                }
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Actions")
+                    .font(.system(size: 12))
+            }
+            .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .help("Recording actions")
     }
     
     // MARK: - Recording Start Time

@@ -63,6 +63,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     private var warningHandler: TranscriptionWarningHandler?
     private var liveStabilizer: LiveStabilizer?
     
+    private var isLiveStabilizerEnabled: Bool {
+        if UserDefaults.standard.object(forKey: AppStorageKeys.liveStabilizerEnabled) == nil {
+            return false
+        }
+        return UserDefaults.standard.bool(forKey: AppStorageKeys.liveStabilizerEnabled)
+    }
+    
     /// Current transcription mode
     var transcriptionMode: TranscriptionMode = .live
     
@@ -185,7 +192,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Start transcription processing
     func startTranscription(recordingStartTime: Date) {
-        if transcriptionMode == .live {
+        if transcriptionMode == .live && isLiveStabilizerEnabled {
             liveStabilizer = LiveStabilizer()
         } else {
             liveStabilizer = nil
@@ -273,7 +280,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 guard isStillProcessing else { break }
                 
                 await self.processBuffers()
-                try? await Task.sleep(nanoseconds: 500_000_000)  // Check every 0.5s
+                try? await Task.sleep(nanoseconds: 200_000_000)  // Check every 0.2s for faster first-token latency
             }
         }
     }

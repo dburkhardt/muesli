@@ -29,13 +29,13 @@ enum AudioConfiguration {
     
     /// Duration of warmup chunks at the start of a recording (seconds).
     /// Shorter than steady-state to get initial text on screen quickly.
-    static let warmupChunkDuration: TimeInterval = 5.0
+    static let warmupChunkDuration: TimeInterval = 3.0
     
     /// Number of warmup chunks per speaker before switching to full duration
     static let warmupChunkCount: Int = 1
     
     /// Overlap for warmup chunks (seconds)
-    static let warmupOverlapDuration: TimeInterval = 1.5
+    static let warmupOverlapDuration: TimeInterval = 1.0
     
     /// Post-processing chunk duration (30 seconds - Whisper's optimal training window)
     static let postProcessingChunkDuration: TimeInterval = 30.0

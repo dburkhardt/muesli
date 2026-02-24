@@ -228,8 +228,8 @@ struct GeneralPreferencesTab: View {
                 }
                 
                 Text(
-                    "Live mode transcribes during recording. " +
-                    "Post-processing waits until the recording ends for potentially better accuracy."
+                    "Live mode transcribes during recording and uses compute while the meeting is active. " +
+                    "Post-processing defers transcription until after recording stops, which saves compute during the meeting."
                 )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -250,6 +250,16 @@ struct GeneralPreferencesTab: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Finalize transcript after recording")
                         Text("Runs a second-pass ASR over saved audio for higher quality final transcript.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                Toggle(isOn: $prefs.isAutoReprocessAfterMeetingEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Reprocess after every meeting")
+                        Text("Automatically reprocesses completed meetings using your selected reprocess model.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

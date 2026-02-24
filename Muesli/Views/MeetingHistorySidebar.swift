@@ -10,9 +10,6 @@ struct MeetingHistorySidebar: View {
         @Bindable var history = historyManager
         
         VStack(spacing: 0) {
-            // New recording button (top-level)
-            newButtonView
-            
             // "Meetings" section label
             meetingsLabel
             
@@ -57,46 +54,6 @@ struct MeetingHistorySidebar: View {
         }
     }
     
-    // MARK: - New Button
-    
-    private var newButtonView: some View {
-        HStack {
-            Button(
-                action: {
-                    viewModel.quickStartRecording()
-                },
-                label: {
-                    HStack(spacing: 4) {
-                        if !viewModel.modelManager.hasAnyReadyModel && viewModel.activeSession == nil {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .scaleEffect(0.7)
-                            Text("Preparing...")
-                                .font(.system(size: 13, weight: .medium))
-                        } else {
-                            Text("New")
-                                .font(.system(size: 13, weight: .medium))
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.accentColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-            )
-            .buttonStyle(.plain)
-            .disabled(!viewModel.canStartRecording)
-            
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 4)
-    }
-    
     // MARK: - Meetings Label
     
     private var meetingsLabel: some View {
@@ -107,7 +64,7 @@ struct MeetingHistorySidebar: View {
             Spacer()
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .padding(.top, 12)
         .padding(.bottom, 4)
     }
     

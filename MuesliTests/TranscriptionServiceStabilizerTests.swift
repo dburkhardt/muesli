@@ -5,6 +5,15 @@ import XCTest
 /// Verifies draft handler wiring, stabilizer lifecycle (start/stop), and
 /// that the threading contract (draft callbacks fire, committed segments emit) is upheld.
 final class TranscriptionServiceStabilizerTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled)
+    }
+    
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled)
+        super.tearDown()
+    }
 
     // MARK: - Draft Handler Registration
 
@@ -16,10 +25,26 @@ final class TranscriptionServiceStabilizerTests: XCTestCase {
 
     // MARK: - Stabilizer Lifecycle
 
-    func testStabilizerCreatedOnlyForLiveMode() {
+    func testStabilizerCreatedWhenLiveModeAndPreferenceEnabled() {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.liveStabilizerEnabled)
         let service = TranscriptionService()
         service.setTranscriptionMode(.live)
         service.startTranscription(recordingStartTime: Date())
+        XCTAssertTrue(hasLiveStabilizer(service))
+        let exp = expectation(description: "stopTranscription completes")
+        Task {
+            await service.stopTranscription()
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 5)
+    }
+
+    func testStabilizerNotCreatedWhenPreferenceDisabled() {
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.liveStabilizerEnabled)
+        let service = TranscriptionService()
+        service.setTranscriptionMode(.live)
+        service.startTranscription(recordingStartTime: Date())
+        XCTAssertFalse(hasLiveStabilizer(service))
         let exp = expectation(description: "stopTranscription completes")
         Task {
             await service.stopTranscription()
@@ -29,9 +54,11 @@ final class TranscriptionServiceStabilizerTests: XCTestCase {
     }
 
     func testStabilizerNotCreatedForPostProcessingMode() {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.liveStabilizerEnabled)
         let service = TranscriptionService()
         service.setTranscriptionMode(.postProcessing)
         service.startTranscription(recordingStartTime: Date())
+        XCTAssertFalse(hasLiveStabilizer(service))
         let exp = expectation(description: "stopTranscription completes")
         Task {
             await service.stopTranscription()
@@ -146,4 +173,16 @@ private final class LockCapture: @unchecked Sendable {
     }
     var text: String? { lock.withLock { _text } }
     var speaker: TranscriptionService.TranscriptSegment.Speaker? { lock.withLock { _speaker } }
+}
+
+private func hasLiveStabilizer(_ service: TranscriptionService) -> Bool {
+    let mirror = Mirror(reflecting: service)
+    guard let child = mirror.children.first(where: { $0.label == "liveStabilizer" }) else {
+        return false
+    }
+    let valueMirror = Mirror(reflecting: child.value)
+    if valueMirror.displayStyle == .optional {
+        return !valueMirror.children.isEmpty
+    }
+    return true
 }

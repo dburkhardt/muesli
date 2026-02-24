@@ -364,9 +364,6 @@ final class RecordingController {
             }
         }
         
-        // Ensure live transcription mode
-        transcriptionCoordinator.setTranscriptionMode(.live)
-        
         // Start recording
         startRecording(for: session)
     }
@@ -398,7 +395,6 @@ final class RecordingController {
     private func startRecordingAsync(for session: RecordingSession) async {
         // Clear any previous warnings at start of new recording
         warningManager.clearAll()
-
         do {
             // Start file output FIRST
             session.outputDirectory = try fileOutputService.startWriting()
@@ -441,7 +437,6 @@ final class RecordingController {
         
         transcriptionCoordinator.resetForNewRecording()
         let modelState = await transcriptionCoordinator.prepareModel()
-        
         switch modelState {
         case .notAvailable:
             session.isModelLoading = false
@@ -687,13 +682,15 @@ final class RecordingController {
                 launchSecondPassFinalization(for: session, directory: directory)
             }
             
-            // Check if we have audio but no transcript (model wasn't ready during recording)
-            // If so, auto-trigger reprocessing once the model becomes ready
+            // Auto-reprocess completed meetings when enabled.
+            // Also preserve historical behavior of forcing reprocess for empty transcripts.
             let hasEmptyTranscript = session.transcriptBlocks.isEmpty
+            let shouldAutoReprocess = preferencesManager.isAutoReprocessAfterMeetingEnabled || hasEmptyTranscript
             
-            if hasAudioFiles && hasEmptyTranscript {
+            if hasAudioFiles && shouldAutoReprocess {
                 if let meeting = createMeetingHistoryItem(from: directory) {
-                    logger.info("Recording has audio but empty transcript, auto-triggering reprocessing")
+                    let triggerReason = hasEmptyTranscript ? "empty transcript" : "preference enabled"
+                    logger.info("Auto-triggering reprocessing (\(triggerReason))")
                     transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)
                 }
             }

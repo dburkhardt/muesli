@@ -152,6 +152,20 @@ final class PreferencesManager {
         }
     }
     
+    /// Toggle for automatic post-meeting reprocessing.
+    /// Default true so completed meetings are reprocessed unless user opts out.
+    var isAutoReprocessAfterMeetingEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.autoReprocessAfterMeetingEnabled) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.autoReprocessAfterMeetingEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.autoReprocessAfterMeetingEnabled)
+        }
+    }
+    
     /// Strategy for picking the second-pass model.
     var secondPassModelPreference: SecondPassModelPreference {
         get {

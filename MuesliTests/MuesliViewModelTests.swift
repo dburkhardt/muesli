@@ -699,6 +699,22 @@ final class MuesliViewModelTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: "transcriptionMode")
     }
     
+    func testQuickStartRecordingRespectsSavedPostProcessingMode() async {
+        UserDefaults.standard.set("postProcessing", forKey: "transcriptionMode")
+        let viewModel = MuesliViewModel(skipInitialLoad: true)
+        
+        XCTAssertEqual(viewModel.transcriptionMode, .postProcessing)
+        viewModel.quickStartRecording()
+        
+        XCTAssertEqual(
+            viewModel.transcriptionMode,
+            .postProcessing,
+            "Quick Start should not override the user's saved transcription mode"
+        )
+        
+        UserDefaults.standard.removeObject(forKey: "transcriptionMode")
+    }
+    
     // MARK: - Refinement Availability Tests
     
     func testCanRefineTranscriptsRequiresBothConditions() async {

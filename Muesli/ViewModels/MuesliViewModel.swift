@@ -724,9 +724,6 @@ final class MuesliViewModel {
     
     /// Quick start recording with all system audio (no app selection needed)
     func quickStartRecording() {
-        // Ensure live transcription mode before starting
-        transcriptionMode = .live
-        
         // Clear selection before recording
         selectedMeeting = nil
         selectedMeetingIDs.removeAll()

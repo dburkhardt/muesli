@@ -11,6 +11,33 @@ struct MainWindowView: View {
         } detail: {
             RecordingDetailView(viewModel: viewModel)
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: {
+                    viewModel.quickStartRecording()
+                }) {
+                    HStack(spacing: 4) {
+                        if !viewModel.modelManager.hasAnyReadyModel && viewModel.activeSession == nil {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.7)
+                            Text("Preparing...")
+                        } else {
+                            Text("New")
+                            Image(systemName: "plus")
+                        }
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canStartRecording)
+                .help("Start New Recording")
+            }
+        }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .frame(minWidth: 900, minHeight: 650)
         .sheet(isPresented: Binding(
             get: { viewModel.showStartRecordingSheet },

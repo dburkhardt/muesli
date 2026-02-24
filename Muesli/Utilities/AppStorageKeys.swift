@@ -79,6 +79,9 @@ enum AppStorageKeys {
     /// Enable automatic LLM refinement after second-pass ASR
     static let autoRefineEnabled = "autoRefineEnabled"
     
+    /// Enable automatic reprocessing after recording completion
+    static let autoReprocessAfterMeetingEnabled = "autoReprocessAfterMeetingEnabled"
+    
     /// Second-pass model preference strategy
     static let secondPassModelPreference = "secondPassModelPreference"
     
