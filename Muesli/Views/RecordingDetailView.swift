@@ -88,42 +88,59 @@ struct RecordingDetailView: View {
     // MARK: - Active Recording View
     
     private func activeRecordingView(session: RecordingSession) -> some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                // Warning banners (if any active warnings)
-                if viewModel.warningManager.hasActiveWarnings {
-                    WarningBannerStack(
-                        warnings: viewModel.warningManager.activeWarnings,
-                        onDismiss: { id in
-                            viewModel.warningManager.dismissWarning(id)
-                        },
-                        onCopy: { id in
-                            viewModel.warningManager.copyWarningDetails(id)
-                        }
-                    )
+        ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .bottom) {
+                VStack(spacing: 0) {
+                    // Warning banners (if any active warnings)
+                    if viewModel.warningManager.hasActiveWarnings {
+                        WarningBannerStack(
+                            warnings: viewModel.warningManager.activeWarnings,
+                            onDismiss: { id in
+                                viewModel.warningManager.dismissWarning(id)
+                            },
+                            onCopy: { id in
+                                viewModel.warningManager.copyWarningDetails(id)
+                            }
+                        )
+                    }
+                    
+                    // Audio-only mode banner (shown when model is downloading or compiling)
+                    if session.isRecordingOnly && viewModel.isAnyModelBusy {
+                        audioOnlyBanner
+                    }
+                    
+                    // Header with title and recording indicator
+                    headerView(session: session)
+                    
+                    // Transcript content - different view for resumed vs new recordings
+                    if let parentMeeting = session.parentMeeting {
+                        resumedRecordingContentView(session: session, meeting: parentMeeting)
+                    } else {
+                        recordingContentView(session: session)
+                    }
                 }
                 
-                // Audio-only mode banner (shown when model is downloading or compiling)
-                if session.isRecordingOnly && viewModel.isAnyModelBusy {
-                    audioOnlyBanner
-                }
-                
-                // Header with title and recording indicator
-                headerView(session: session)
-                
-                // Transcript content - different view for resumed vs new recordings
-                if let parentMeeting = session.parentMeeting {
-                    resumedRecordingContentView(session: session, meeting: parentMeeting)
-                } else {
-                    recordingContentView(session: session)
-                }
+                // Floating control bar at bottom
+                floatingControlBar(session: session)
+                    .padding(.bottom, 16)
             }
             
-            // Floating control bar at bottom
-            floatingControlBar(session: session)
-                .padding(.bottom, 16)
+            // Refinement indicator for a previous meeting refining in the background
+            if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+               let startTime = viewModel.refinementCoordinator.refinementStartTime,
+               viewModel.refinementCoordinator.isRefining {
+                FloatingRefinementIndicator(
+                    meetingTitle: refinedMeeting.title,
+                    startTime: startTime,
+                    onTap: {
+                        historyManager.selectMeeting(refinedMeeting)
+                    }
+                )
+                .padding(.trailing, 16)
+                .padding(.bottom, 80)
+                .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
+            }
         }
-
     }
     
     // MARK: - Resumed Recording Content View
@@ -763,26 +780,42 @@ struct RecordingDetailView: View {
     // MARK: - Empty Detail View
     
     private var emptyDetailView: some View {
-        VStack(spacing: 16) {
-            Spacer()
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 16) {
+                Spacer()
+                
+                Image(systemName: "doc.text")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.tertiary)
+                
+                Text("Select a meeting")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                
+                Text("Choose a meeting from the sidebar to view its transcript")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 300)
+                
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             
-            Image(systemName: "doc.text")
-                .font(.system(size: 48))
-                .foregroundStyle(.tertiary)
-            
-            Text("Select a meeting")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-            
-            Text("Choose a meeting from the sidebar to view its transcript")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
-            
-            Spacer()
+            if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+               let startTime = viewModel.refinementCoordinator.refinementStartTime,
+               viewModel.refinementCoordinator.isRefining {
+                FloatingRefinementIndicator(
+                    meetingTitle: refinedMeeting.title,
+                    startTime: startTime,
+                    onTap: {
+                        historyManager.selectMeeting(refinedMeeting)
+                    }
+                )
+                .padding(16)
+                .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     // MARK: - Audio-Only Mode Banner
@@ -874,11 +907,9 @@ struct RecordingDetailView: View {
                 }
             }
             .foregroundStyle(.secondary)
-            .padding(8)
-            .background(Color.secondary.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .help("More actions")
     }
     

@@ -145,11 +145,9 @@ struct CompletedMeetingWindow: View {
                 }
             }
             .foregroundStyle(.secondary)
-            .padding(8)
-            .background(Color.secondary.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .help("More actions")
     }
     

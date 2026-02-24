@@ -33,20 +33,11 @@ struct CopyTranscriptButton: View {
                 }
             }
         } label: {
-            Group {
-                if showConfirmation {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12))
-                } else {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 12))
-                }
-            }
-            .foregroundStyle(.blue)
-            .padding(8)
-            .background(Color.blue.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            Image(systemName: showConfirmation ? "checkmark" : "doc.on.doc")
+                .foregroundStyle(showConfirmation ? .green : .secondary)
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .disabled(getBlocks() == nil)
         .help(helpText)
     }
