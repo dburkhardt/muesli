@@ -107,14 +107,19 @@ final class AudioWorker {
     private var renderSilenceFrozen: Bool = false
     /// Render silence threshold (linear RMS).
     private static let renderSilenceThreshold: Float = 0.001
-    /// Frames of silence before freezing AEC (5 seconds at 10ms/frame = 500 frames).
-    private static let renderSilenceFreezeFrames: Int64 = 500
-    /// Milestone for TAP_RENDER_SILENT log at 30s.
-    private static let renderSilence30sFrames: Int64 = 3000
-    /// Whether 5s silence milestone was already logged.
-    private var loggedSilence5s: Bool = false
-    /// Whether 30s silence milestone was already logged.
-    private var loggedSilence30s: Bool = false
+    /// Frames of silence before freezing AEC (30 seconds at 10ms/frame = 3000 frames).
+    private static let renderSilenceFreezeFrames: Int64 = 3000
+    /// Milestone for extended silence logging at 60 seconds.
+    private static let renderSilenceExtendedFrames: Int64 = 6000
+    /// Whether the 30s freeze threshold log was already emitted.
+    private var loggedSilenceFreeze: Bool = false
+    /// Whether the 60s extended silence log was already emitted.
+    private var loggedSilenceExtended: Bool = false
+
+    #if DEBUG
+    static let testRenderSilenceFreezeFrames = renderSilenceFreezeFrames
+    static let testRenderSilenceExtendedFrames = renderSilenceExtendedFrames
+    #endif
 
     /// Circular buffer for processing time history (O(1) insert, no heap allocs after init).
     private let processingTimeHistorySize = 100
@@ -237,8 +242,8 @@ final class AudioWorker {
         consecutiveSilentRenderFrames = 0
         captureFramesDuringRenderSilence = 0
         renderSilenceFrozen = false
-        loggedSilence5s = false
-        loggedSilence30s = false
+        loggedSilenceFreeze = false
+        loggedSilenceExtended = false
         processingTimesWriteIndex = 0
         processingTimesCount = 0
 
@@ -315,16 +320,16 @@ final class AudioWorker {
                 if renderRms < Self.renderSilenceThreshold {
                     consecutiveSilentRenderFrames += 1
 
-                    // Freeze AEC at 5s of silence to prevent filter corruption
+                    // Freeze AEC at 30s of silence to prevent filter corruption.
                     if consecutiveSilentRenderFrames >= Self.renderSilenceFreezeFrames && !renderSilenceFrozen {
                         renderSilenceFrozen = true
                         aecProcessor.freezeAdaptation()
-                        logger.warning("Render silent for 5s — freezing AEC adaptation")
+                        logger.warning("Render silent for 30s — freezing AEC adaptation")
                     }
 
                     // Log TAP_RENDER_SILENT at milestones
-                    if consecutiveSilentRenderFrames >= Self.renderSilenceFreezeFrames && !loggedSilence5s {
-                        loggedSilence5s = true
+                    if consecutiveSilentRenderFrames >= Self.renderSilenceFreezeFrames && !loggedSilenceFreeze {
+                        loggedSilenceFreeze = true
                         let silentMs = consecutiveSilentRenderFrames * 10
                         let captDuring = captureFramesDuringRenderSilence
                         Task {
@@ -332,8 +337,8 @@ final class AudioWorker {
                                 "TAP_RENDER_SILENT: silentMs=\(silentMs), captureActive=true, captureFramesDuringSilence=\(captDuring)")
                         }
                     }
-                    if consecutiveSilentRenderFrames >= Self.renderSilence30sFrames && !loggedSilence30s {
-                        loggedSilence30s = true
+                    if consecutiveSilentRenderFrames >= Self.renderSilenceExtendedFrames && !loggedSilenceExtended {
+                        loggedSilenceExtended = true
                         let silentMs = consecutiveSilentRenderFrames * 10
                         let captDuring = captureFramesDuringRenderSilence
                         Task {
@@ -342,21 +347,22 @@ final class AudioWorker {
                         }
                     }
                 } else if consecutiveSilentRenderFrames >= Self.renderSilenceFreezeFrames {
-                    // Render resumed after prolonged silence — reset AEC and unfreeze
+                    // Render resumed after prolonged silence — resume AEC adaptation.
                     let silentFrames = consecutiveSilentRenderFrames
                     let silentMs = silentFrames * 10
                     let captDuring = captureFramesDuringRenderSilence
-                    aecProcessor.reset()
                     aecProcessor.unfreezeAdaptation()
                     renderSilenceFrozen = false
                     consecutiveSilentRenderFrames = 0
                     captureFramesDuringRenderSilence = 0
-                    loggedSilence5s = false
-                    loggedSilence30s = false
-                    logger.info("Render resumed after \(silentMs)ms silence — AEC reset")
+                    loggedSilenceFreeze = false
+                    loggedSilenceExtended = false
+                    logger.info("Render resumed after \(silentMs)ms silence — AEC resumed (filter preserved)")
                     Task {
                         await DiagnosticLogger.shared.log(.aec,
-                            "AEC_RENDER_RESUME: silentFrames=\(silentFrames), silentMs=\(silentMs), captureFramesDuringSilence=\(captDuring)")
+                            "AEC_RENDER_RESUME: silentFrames=\(silentFrames), silentMs=\(silentMs), captureFramesDuringSilence=\(captDuring), preserved=true")
+                        await DiagnosticLogger.shared.log(.aec,
+                            "AEC_RENDER_RESUME_PRESERVED: silentFrames=\(silentFrames), silentMs=\(silentMs), captureFramesDuringSilence=\(captDuring)")
                     }
                 } else {
                     // Short silence ended, just reset counter

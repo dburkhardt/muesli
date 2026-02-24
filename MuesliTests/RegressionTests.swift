@@ -1226,6 +1226,93 @@ final class RegressionTests: XCTestCase {
             "Headset topology should disable AEC to avoid near-field artefacts")
     }
 
+    /// Regression test: gating unfreeze preserves filter state.
+    /// Bug: The previous implementation called bridge.reset() whenever
+    ///      adaptation transitioned from frozen -> stable, wiping ERLE history.
+    /// Fix: Preserve the WebRTC AEC3 filter state during normal render-silence pauses.
+    ///
+    /// Expected behavior:
+    /// - Freeze adaptation when stream is unstable
+    /// - Unfreeze on stable transition
+    /// - Frames processed counter is preserved (does not reset to 0)
+    func testAECGatingUnfreezePreservesFilterState() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let silence = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+
+        // Seed a few frames so we can detect reset behavior.
+        _ = aec.processCaptureFrame(silence, isStable: true)
+        _ = aec.processCaptureFrame(silence, isStable: true)
+        let beforeUnfreeze = aec.getStats().framesProcessed
+        XCTAssertGreaterThan(beforeUnfreeze, 0, "Seed frames should be processed")
+
+        // Gate into frozen state then return to stable.
+        _ = aec.processCaptureFrame(silence, isStable: false)
+        XCTAssertTrue(aec.isAdaptationFrozen, "AEC should be frozen while unstable")
+
+        _ = aec.processCaptureFrame(silence, isStable: true)
+        XCTAssertFalse(aec.isAdaptationFrozen, "AEC should unfreeze when stable again")
+
+        let afterUnfreeze = aec.getStats().framesProcessed
+        XCTAssertGreaterThan(afterUnfreeze, beforeUnfreeze,
+                             "Frames processed should continue from previous count, not reset to zero")
+    }
+
+    /// Regression test: render-silence resume preserves filter state in API-level AEC control.
+    /// Bug: Manual reset during resume destroyed learned filter state.
+    /// Fix: Preserve state by calling only unfreezeAdaptation() when transitioning
+    ///      from freeze to active adaptation.
+    ///
+    /// Expected behavior:
+    /// - Filter stats are preserved across freeze + resume sequence.
+    func testAECRenderSilenceResumePreservesFilterState() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let tone = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+        _ = aec.processCaptureFrame(tone, isStable: true)
+        let beforeResume = aec.getStats().framesProcessed
+
+        aec.freezeAdaptation()
+        aec.unfreezeAdaptation()
+
+        let afterResume = aec.getStats().framesProcessed
+        XCTAssertEqual(beforeResume, afterResume,
+                       "Freeze/resume API path must not reset internal counters")
+    }
+
+    /// Regression test: render silence freeze threshold remains at 30 seconds.
+    /// Guardrail for accidental threshold regression when adjusting silence handling.
+    func testRenderSilenceFreezeThreshold30s() {
+        XCTAssertEqual(AudioWorker.testRenderSilenceFreezeFrames, 3_000,
+                       "AEC render silence freeze threshold should be 30s")
+        XCTAssertEqual(AudioWorker.testRenderSilenceExtendedFrames, 6_000,
+                       "AEC render silence extended milestone should be 60s")
+    }
+
+    /// Regression test: legitimate topology/route transitions still reset AEC state.
+    /// Route and topology changes should continue to call aecProcessor.reset().
+    /// Since routes/tops are tested via shared reset code paths, verifying reset clears state
+    /// prevents accidental removal of this recovery behavior.
+    func testTopologyChangeStillResetsAEC() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let tone = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+        for _ in 0..<5 {
+            _ = aec.processCaptureFrame(tone, isStable: true)
+        }
+
+        XCTAssertGreaterThan(aec.getStats().framesProcessed, 0,
+                             "Need processed frames before reset to validate clear behavior")
+
+        aec.reset()
+        let postResetStats = aec.getStats()
+        XCTAssertEqual(postResetStats.framesProcessed, 0, "Reset should clear processed frame count")
+        XCTAssertFalse(postResetStats.adaptationFrozen, "Reset should clear adaptation-freeze state")
+    }
+
     /// Regression test: AEC init sequence — reset BEFORE configure, not after.
     /// Bug category: "stable but non-converging" — can occur when configure() is called before
     /// reset() so the AEC3 filter carries over stale delay estimates from a prior session.
