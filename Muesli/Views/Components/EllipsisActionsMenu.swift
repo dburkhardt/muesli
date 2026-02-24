@@ -23,17 +23,17 @@ struct EllipsisActionsMenu<MenuContent: View>: View {
                 }
             }
             .foregroundStyle(.secondary)
-            .frame(width: 28, height: 28)
-            .background(
-                Circle()
-                    .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
-            )
-            .contentShape(Circle())
-            .onHover { isHovered = $0 }
-            .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .frame(width: 28, height: 28)
+        .background(
+            Circle()
+                .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
+        )
+        .contentShape(Circle())
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
         .help("More actions")
     }
 }

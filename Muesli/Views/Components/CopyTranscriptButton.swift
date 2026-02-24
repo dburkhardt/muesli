@@ -37,17 +37,17 @@ struct CopyTranscriptButton: View {
             Image(systemName: showConfirmation ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 12))
                 .foregroundStyle(showConfirmation ? .green : .secondary)
-                .frame(width: 28, height: 28)
-                .background(
-                    Circle()
-                        .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
-                )
-                .contentShape(Circle())
-                .onHover { isHovered = $0 }
-                .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .frame(width: 28, height: 28)
+        .background(
+            Circle()
+                .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
+        )
+        .contentShape(Circle())
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
         .disabled(getBlocks() == nil)
         .help(helpText)
     }
