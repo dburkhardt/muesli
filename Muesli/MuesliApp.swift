@@ -28,13 +28,13 @@ struct MuesliApp: App {
 
     /// Stored openWindow action, captured eagerly from the App body getter
     /// so AppDelegate can reopen the main window without SwiftUI Environment access.
-    nonisolated(unsafe) private static var _openWindow: OpenWindowAction?
+    @MainActor private static var _openWindow: OpenWindowAction?
 
-    static func installOpenWindowCallback(_ action: OpenWindowAction) {
+    @MainActor static func installOpenWindowCallback(_ action: OpenWindowAction) {
         _openWindow = action
     }
 
-    static func openMainWindow() {
+    @MainActor static func openMainWindow() {
         _openWindow?(id: "main")
         NSApp.activate(ignoringOtherApps: true)
     }

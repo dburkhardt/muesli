@@ -1109,6 +1109,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                             await DiagnosticLogger.shared.log(.aec,
                                 "MIC_DEVICE_SET_FAILED: uid=\(deviceUID), audioDeviceID=\(device)")
                         }
+                        break
                     }
                 }
                 if !found {
