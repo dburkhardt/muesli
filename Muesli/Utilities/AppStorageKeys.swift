@@ -69,6 +69,9 @@ enum AppStorageKeys {
     
     /// Whether to show Continuity Camera (iPhone/iPad) microphones in the device list
     static let showContinuityCameraDevices = "showContinuityCameraDevices"
+    
+    /// Whether to save the raw microphone audio alongside the echo-canceled version
+    static let saveRawMicrophoneAudio = "saveRawMicrophoneAudio"
 
     /// Enable overlap dedup stabilization in live transcription path
     static let liveStabilizerEnabled = "liveStabilizerEnabled"

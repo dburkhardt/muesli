@@ -317,6 +317,16 @@ struct GeneralPreferencesTab: View {
                 }
                 #endif
                 
+                Toggle(isOn: $prefs.saveRawMicrophoneAudio) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Save raw microphone audio")
+                        Text("Also save the unprocessed microphone recording (raw_microphone.caf). The default microphone.caf uses echo-canceled audio for better transcription quality.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
                 LabeledContent("Audio Chunk Duration") {
                     Text(String(format: "%.1f seconds", prefs.audioChunkDuration))
                         .font(.system(size: 12, design: .monospaced))

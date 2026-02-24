@@ -34,10 +34,10 @@ protocol FileOutputServiceProtocol: Sendable {
     
     func setOutputDirectory(_ url: URL)
     func getOutputDirectory() -> URL
-    func startWriting(segmentNumber: Int) throws -> URL
+    func startWriting(segmentNumber: Int, saveRawMicrophone: Bool) throws -> URL
     func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioStreamType)
     func stopWriting() async throws -> URL
-    func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL
+    func resumeWriting(to directory: URL, segmentNumber: Int, saveRawMicrophone: Bool) throws -> URL
     func saveTranscript(_ transcript: String, title: String, date: Date, to directory: URL) throws
     func saveTranscriptBlocks(
         _ blocks: [TranscriptBlock],

@@ -502,7 +502,8 @@ Microphone:   AVAudioEngine → MicCaptureRing → AudioSynchronizer → AECProc
 
 Recordings saved to: `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD_HH-MM_[UUID]/`
 - `audio.caf` — system audio (48kHz stereo Float32 LPCM)
-- `microphone.caf` — mic audio (48kHz stereo Float32 LPCM)
+- `microphone.caf` — mic audio (48kHz mono Float32 PCM, AEC-processed)
+- `raw_microphone.caf` — optional raw mic audio (48kHz mono Float32 PCM) when explicitly enabled in Preferences
 - `transcript.md` — Markdown with timestamps and speaker labels
 
 ## Known Pitfalls

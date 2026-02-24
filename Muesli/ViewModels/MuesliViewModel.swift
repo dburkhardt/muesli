@@ -474,6 +474,9 @@ final class MuesliViewModel {
                     #else
                     return true
                     #endif
+                },
+                shouldSaveRawMicrophone: { [weak preferencesManager] in
+                    preferencesManager?.saveRawMicrophoneAudioForAudioCallback ?? false
                 }
             )
         }

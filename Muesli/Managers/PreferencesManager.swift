@@ -299,6 +299,29 @@ final class PreferencesManager {
     /// Callback when the Continuity Camera preference changes (triggers device list refresh)
     var showContinuityCameraDevicesDidChange: ((Bool) -> Void)?
     
+    // MARK: - Raw Microphone Audio
+    
+    /// Thread-safe storage for save raw microphone state (for synchronous access from audio callbacks)
+    private let saveRawMicrophoneLock = OSAllocatedUnfairLock(initialState: false)
+    
+    /// Backing storage for @Observable tracking
+    private var _saveRawMicrophoneAudio: Bool = false
+    
+    /// Whether to save raw microphone audio alongside the echo-canceled version
+    var saveRawMicrophoneAudio: Bool {
+        get { _saveRawMicrophoneAudio }
+        set {
+            _saveRawMicrophoneAudio = newValue
+            saveRawMicrophoneLock.withLock { $0 = newValue }
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.saveRawMicrophoneAudio)
+        }
+    }
+    
+    /// Thread-safe getter for audio callbacks (nonisolated)
+    nonisolated var saveRawMicrophoneAudioForAudioCallback: Bool {
+        saveRawMicrophoneLock.withLock { $0 }
+    }
+    
     // MARK: - Export Settings
     
     /// Whether automatic export is enabled
@@ -439,6 +462,9 @@ final class PreferencesManager {
 
         _isEchoCancellationEnabled = decision.effectiveValue
         echoCancellationLock.withLock { $0 = decision.effectiveValue }
+
+        _saveRawMicrophoneAudio = UserDefaults.standard.bool(forKey: AppStorageKeys.saveRawMicrophoneAudio)
+        saveRawMicrophoneLock.withLock { $0 = _saveRawMicrophoneAudio }
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()

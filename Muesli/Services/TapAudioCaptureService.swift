@@ -97,6 +97,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Closure to query whether AEC is enabled (RT-safe: reads OSAllocatedUnfairLock).
     private let isAECEnabled: @Sendable () -> Bool
 
+    /// Closure to query whether raw microphone audio should be saved (RT-safe: reads OSAllocatedUnfairLock).
+    private let shouldSaveRawMicrophone: @Sendable () -> Bool
+
     /// Tap manager for system audio
     private let tapManager = CoreAudioTapManager()
 
@@ -196,10 +199,12 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             // System Audio Recording bucket — a separate permission entry.
             UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
         },
-        isAECEnabled: @escaping @Sendable () -> Bool = { true }
+        isAECEnabled: @escaping @Sendable () -> Bool = { true },
+        shouldSaveRawMicrophone: @escaping @Sendable () -> Bool = { false }
     ) {
         self.checkPermission = checkPermission
         self.isAECEnabled = isAECEnabled
+        self.shouldSaveRawMicrophone = shouldSaveRawMicrophone
         print("[TAP DEBUG] TapAudioCaptureService.init() called - CREATED")
         logger.info("TapAudioCaptureService initialized")
         // Format descriptions are set up lazily on first use to avoid actor isolation issues in init
@@ -664,16 +669,24 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             timestamp: timestamp,
             formatDesc: nil
         ) {
+            bufferHandler?(buffer, .rawMicrophone)
+        }
+    }
+    
+    /// Deliver processed mic frame to callbacks (transcription + file output).
+    private func deliverProcessedMicFrame(_ frame: AudioFrame) {
+        let timestamp = AVAudioTime.seconds(forHostTime: frame.hostTime)
+        
+        if let buffer = createCMSampleBuffer(
+            from: frame.samples,
+            channels: 1, // AEC output is mono
+            sampleRate: Double(frame.sampleRate),
+            timestamp: timestamp,
+            formatDesc: nil
+        ) {
             bufferHandler?(buffer, .microphone)
         }
         
-        // Calculate and deliver audio level
-        let level = calculateRMSFromArray(samples)
-        levelHandler?(level, .microphone)
-    }
-    
-    /// Deliver processed mic frame to callback (for transcription - NOT file output).
-    private func deliverProcessedMicFrame(_ frame: AudioFrame) {
         processedMicHandler?(frame)
     }
 
@@ -1011,15 +1024,19 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             sampleCount: frameLength
         )
 
-        // Create array for async delivery to file output (raw mono at mic sample rate).
-        // Note: AVAudioEngine tap callbacks are high-priority but NOT true RT IOProc.
-        // Array allocation + Task dispatch is acceptable here. See handleTapAudio for
-        // the RT-safe ring-based approach used for the true IOProc callback.
+        // Always compute and deliver mic level (decoupled from file output path)
         let sampleArray = Array(UnsafeBufferPointer(start: samples, count: frameLength))
-        let timestamp = CACurrentMediaTime()
-        
-        Task { [weak self] in
-            await self?.deliverRawMicAudio(samples: sampleArray, timestamp: timestamp)
+        let level = calculateRMSFromArray(sampleArray)
+        levelHandler?(level, .microphone)
+
+        // Conditionally deliver raw mic audio for file output only when preference is enabled.
+        // Note: AVAudioEngine tap callbacks are high-priority but NOT true RT IOProc.
+        // Array allocation + Task dispatch is acceptable here.
+        if shouldSaveRawMicrophone() {
+            let timestamp = CACurrentMediaTime()
+            Task { [weak self] in
+                await self?.deliverRawMicAudio(samples: sampleArray, timestamp: timestamp)
+            }
         }
     }
 

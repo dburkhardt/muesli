@@ -300,7 +300,7 @@ User clicks "Reprocess" → ViewModel.reprocessTranscript()
                       │                           │
                       ▼                           ▼
               Validate model             Load audio files
-              Initialize WhisperKit      (audio.caf, microphone.caf)
+              Initialize WhisperKit      (audio.caf, microphone.caf[AEC-processed], [raw_microphone.caf optional])
                       │                           │
                       └─────────────┬─────────────┘
                                     │

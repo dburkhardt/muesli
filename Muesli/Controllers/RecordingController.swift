@@ -200,6 +200,11 @@ final class RecordingController {
                             buffer,
                             fileService: fileService
                         )
+                    case .rawMicrophone:
+                        try RecordingController.handleRawMicrophoneAudioBuffer(
+                            buffer,
+                            fileService: fileService
+                        )
                     }
 
                     // Reset error counter on success
@@ -317,15 +322,21 @@ final class RecordingController {
         fileService.appendAudioBuffer(buffer, type: .system)
     }
     
-    /// Process microphone audio buffer — file output only
-    /// Transcription is now handled by the AEC-processed audio callback from TapAudioCaptureService
+    /// Process AEC-processed microphone audio buffer — file output only
+    /// Transcription is handled by the AEC-processed audio callback from TapAudioCaptureService
     private static nonisolated func handleMicrophoneAudioBuffer(
         _ buffer: CMSampleBuffer,
         fileService: FileOutputService
     ) throws {
-        // Save raw mic audio to file (always, even when muted — mute only affects transcription
-        // which is handled by the processed audio callback)
         fileService.appendAudioBuffer(buffer, type: .microphone)
+    }
+
+    /// Process raw (pre-AEC) microphone audio buffer — file output only, when preference enabled
+    private static nonisolated func handleRawMicrophoneAudioBuffer(
+        _ buffer: CMSampleBuffer,
+        fileService: FileOutputService
+    ) throws {
+        fileService.appendAudioBuffer(buffer, type: .rawMicrophone)
     }
 
     // MARK: - Session Management
@@ -349,6 +360,8 @@ final class RecordingController {
             guard now.timeIntervalSince(lastSystemLevelUpdate) >= levelUpdateInterval else { return }
             lastSystemLevelUpdate = now
             session.systemAudioLevel = level
+        case .rawMicrophone:
+            break
         }
     }
     
@@ -403,7 +416,17 @@ final class RecordingController {
         warningManager.clearAll()
         do {
             // Start file output FIRST
-            session.outputDirectory = try fileOutputService.startWriting()
+            let saveRaw = preferencesManager.saveRawMicrophoneAudio
+            session.outputDirectory = try fileOutputService.startWriting(
+                saveRawMicrophone: saveRaw
+            )
+            
+            let aecOn = preferencesManager.echoCancellationEnabledForAudioCallback
+            logger.info("MIC_FILE_OUTPUT: aecEnabled=\(aecOn), saveRaw=\(saveRaw), routing=.microphone from processed path")
+            Task {
+                await DiagnosticLogger.shared.log(.app,
+                    "MIC_FILE_OUTPUT: aecEnabled=\(aecOn), saveRaw=\(saveRaw), routing=.microphone from processed path")
+            }
             
             // Configure microphone preference before starting capture
             // Pass selected mic device to audio capture service for AVAudioEngine capture
@@ -1059,10 +1082,19 @@ final class RecordingController {
             }
         }
             
+            let saveRaw = preferencesManager.saveRawMicrophoneAudio
             session.outputDirectory = try fileOutputService.resumeWriting(
                 to: meeting.directory,
-                segmentNumber: session.segmentNumber
+                segmentNumber: session.segmentNumber,
+                saveRawMicrophone: saveRaw
             )
+            
+            let aecOn = preferencesManager.echoCancellationEnabledForAudioCallback
+            logger.info("MIC_FILE_OUTPUT (resume): aecEnabled=\(aecOn), saveRaw=\(saveRaw), routing=.microphone from processed path")
+            Task {
+                await DiagnosticLogger.shared.log(.app,
+                    "MIC_FILE_OUTPUT (resume): aecEnabled=\(aecOn), saveRaw=\(saveRaw), routing=.microphone from processed path")
+            }
             
             // Pass selected mic device to audio capture service for AVAudioEngine capture
             let selectedMicID = microphoneManager.selectedDeviceID

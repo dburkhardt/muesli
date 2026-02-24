@@ -56,7 +56,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         return outputDirectory
     }
     
-    func startWriting(segmentNumber: Int = 1) throws -> URL {
+    func startWriting(segmentNumber: Int = 1, saveRawMicrophone: Bool = false) throws -> URL {
         startWritingCallCount += 1
         lastSegmentNumber = segmentNumber
         
@@ -95,7 +95,7 @@ final class MockFileOutputService: FileOutputServiceProtocol, @unchecked Sendabl
         return currentWriteDirectory ?? outputDirectory
     }
     
-    func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL {
+    func resumeWriting(to directory: URL, segmentNumber: Int, saveRawMicrophone: Bool = false) throws -> URL {
         resumeWritingCallCount += 1
         lastSegmentNumber = segmentNumber
         
