@@ -270,14 +270,17 @@ final class AudioSynchronizer {
             fallthrough
             
         case .priming:
+            // Trim capture to maintain render lead. Without this, the capture ring
+            // fills at the same rate as render during priming (getAlignedFrame returns
+            // nil, so nothing is consumed). The 250ms capture ring overflows before the
+            // render lead reaches the 100ms minimum, triggering discontinuities that
+            // create a livelock: overflow → discontinuity → cooldown → overflow → ...
+            trimCaptureForTargetLead()
             if canTransitionToStable() {
                 state = .stable
                 lastStableTime = Date()
                 delayController.unfreezeAdaptation()
                 let renderLeadSamples = renderRing.available - captureRing.available
-                // Seed the delay controller with the observed render lead so AEC3 receives
-                // the correct delay immediately. Without seeding, currentDelaySamples starts
-                // at 0 and slews at ~2ms/sec — taking ~90s to reach a typical 175ms lead.
                 delayController.seed(delaySamples: renderLeadSamples)
                 seededDelaySamples = renderLeadSamples
                 logger.info("Synchronizer transitioned to stable from priming, seeded delay=\(renderLeadSamples)samples")
@@ -286,20 +289,19 @@ final class AudioSynchronizer {
                         "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples, seededDelay=\(renderLeadSamples)samples")
                 }
             } else {
-                // Continue priming - wait for render lead
                 return nil
             }
             fallthrough
 
         case .unstable:
-            // During unstable state, still output frames but mark as unstable
-            // Re-check stability conditions
+            // Trim capture during recovery to prevent overflow-triggered discontinuities
+            // that would reset the cooldown timer and prevent stable transition.
+            trimCaptureForTargetLead()
             if canTransitionToStable() {
                 state = .stable
                 lastStableTime = Date()
                 delayController.unfreezeAdaptation()
                 let renderLeadSamples = renderRing.available - captureRing.available
-                // Re-seed on recovery from unstable — the lead may have changed
                 delayController.seed(delaySamples: renderLeadSamples)
                 seededDelaySamples = renderLeadSamples
                 logger.info("Synchronizer transitioned to stable from unstable, seeded delay=\(renderLeadSamples)samples")
@@ -561,6 +563,32 @@ final class AudioSynchronizer {
         delayController.freezeAdaptation()
     }
     
+    /// Discard excess capture samples to maintain target render lead.
+    ///
+    /// During priming, getAlignedFrame() returns nil (no consumption), so both rings
+    /// fill at the same rate. The capture ring (250ms) overflows before the render lead
+    /// ever reaches the 100ms minimum, triggering a MicCaptureRing discontinuity.
+    /// That discontinuity transitions to unstable with a 5-second cooldown, but the
+    /// capture ring overflows again within that window — creating a livelock where
+    /// stable is never reached and AEC stays frozen for the entire session.
+    ///
+    /// This method discards capture samples to keep `renderAvail - captureAvail`
+    /// near the target render lead (200ms), ensuring canTransitionToStable() can
+    /// succeed as soon as enough render data has accumulated.
+    private func trimCaptureForTargetLead() {
+        let renderAvail = renderRing.available
+        let captureAvail = captureRing.available
+        let targetLeadSamples = Self.targetRenderLeadMs * Self.sampleRate / 1000
+
+        let desiredCapture = max(0, renderAvail - targetLeadSamples)
+        let excessCapture = captureAvail - desiredCapture
+
+        guard excessCapture > 0 else { return }
+
+        captureRing.discard(excessCapture)
+        stats.overruns += 1
+    }
+
     /// Update delay controller with current buffer state
     private func updateDelayController() {
         // Only update during stable, far-end dominant periods
