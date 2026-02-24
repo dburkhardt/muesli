@@ -186,6 +186,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Whether the first render transcription frame has been logged (for diagnostics).
     private var renderTranscriptionFirstFrameLogged = false
 
+    /// Whether the mic resampler timing-domain diagnostic log has been emitted this session.
+    private nonisolated(unsafe) var hasLoggedResamplerDomain = false
+
     /// Current session ID for log correlation (short 8-char UUID prefix)
     private var currentSessionID: String = "none"
 
@@ -704,20 +707,18 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
     }
     
-    /// Deliver raw microphone audio for file output (mono Float32 at actual mic sample rate)
-    private func deliverRawMicAudio(samples: [Float], timestamp: Double) {
+    /// Deliver raw microphone audio for file output (mono Float32 at actual mic sample rate).
+    /// The sampleRate is passed explicitly because the caller (`handleMicrophoneBuffer`)
+    /// is nonisolated and cannot access the actor-isolated `microphoneSampleRate` property.
+    private func deliverRawMicAudio(samples: [Float], sampleRate: Double, timestamp: Double) {
         ensureFormatDescriptionsInitialized()
 
         guard !samples.isEmpty else { return }
 
-        // Create CMSampleBuffer with correct format (mono Float32 at actual mic sample rate)
-        // Pass nil for formatDesc so createCMSampleBuffer creates a fresh description
-        // from microphoneSampleRate — this avoids the race condition where a cached
-        // micFormatDesc could be overwritten with the wrong sample rate.
         if let buffer = createCMSampleBuffer(
             from: samples,
-            channels: 1,  // Mono
-            sampleRate: microphoneSampleRate,
+            channels: 1,
+            sampleRate: sampleRate,
             timestamp: timestamp,
             formatDesc: nil
         ) {
@@ -831,6 +832,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         fileOutputRenderRing.reset()
         renderRingForTranscription.reset()
         renderTranscriptionFirstFrameLogged = false
+        hasLoggedResamplerDomain = false
 
         _ = renderSampleIndexCounter.withLock { index in
             index = 0
@@ -1117,17 +1119,27 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             return start
         }
 
-        // Push 48kHz mono to synchronizer (RT-safe - uses OSAllocatedUnfairLock)
+        // When the mic resampler is active, sampleTime is in the source domain (e.g.,
+        // 44.1kHz) but aecCount is in the 48kHz domain. Passing the source-domain
+        // sampleTime with a 48kHz count causes MicCaptureRing to compute negative
+        // deltas and flag false discontinuities on every callback, permanently
+        // preventing AudioSynchronizer from reaching stable state.
+        // Use the 48kHz-domain startSampleIndex instead — it increments by aecCount
+        // each callback, so delta = 0 (no false discontinuity).
+        let captureSampleTime: Float64 = (micResampler != nil)
+            ? Float64(startSampleIndex)
+            : sampleTime
+
         synchronizer.pushCapture(
             samples: aecSamples,
             count: aecCount,
-            sampleTime: Float64(sampleTime),
+            sampleTime: captureSampleTime,
             hostTime: hostTime
         )
         _ = captureRingForAEC.push(
             samples: aecSamples,
             count: aecCount,
-            sampleTime: Float64(sampleTime),
+            sampleTime: captureSampleTime,
             hostTime: hostTime
         )
         pushCaptureFrameMetadata(
@@ -1136,20 +1148,37 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             sampleCount: aecCount
         )
 
-        // Compute mic level from AEC-ready samples so the UI indicator matches
-        // the echo-canceled audio that is actually recorded to .microphone files.
+        if micResampler != nil && !hasLoggedResamplerDomain {
+            hasLoggedResamplerDomain = true
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_SAMPLE_TIME_DOMAIN: using 48kHz startSampleIndex (resampler active)")
+            }
+        }
+
         let levelSamples = Array(UnsafeBufferPointer(start: aecSamples, count: aecCount))
         let level = calculateRMSFromArray(levelSamples)
         let saveRaw = shouldSaveRawMicrophone()
         let timestamp = CACurrentMediaTime()
 
+        // Copy raw mic samples synchronously before callback returns (buffer may be
+        // reused by AVAudioEngine). Only allocate when raw output is enabled to avoid
+        // heap churn on the audio thread.
+        let rawMicSamples: [Float]?
+        let rawSampleRate: Double
+        if saveRaw {
+            rawMicSamples = Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
+            rawSampleRate = buffer.format.sampleRate
+        } else {
+            rawMicSamples = nil
+            rawSampleRate = 0
+        }
+
         Task { [weak self] in
-            // Deliver mic level (always, regardless of raw file output setting)
             await self?.levelHandler?(level, .microphone)
 
-            // Conditionally deliver raw mic audio for file output
-            if saveRaw {
-                await self?.deliverRawMicAudio(samples: sampleArray, timestamp: timestamp)
+            if let rawSamples = rawMicSamples {
+                await self?.deliverRawMicAudio(samples: rawSamples, sampleRate: rawSampleRate, timestamp: timestamp)
             }
         }
     }

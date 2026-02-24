@@ -451,8 +451,7 @@ final class CoreAudioTapTests: XCTestCase {
 
         // Collect stats — start worker briefly
         worker.start(
-            micCallback: { _ in },
-            renderCallback: { _ in }
+            micCallback: { _ in }
         )
 
         // Let it run for a short period (enough to process available frames)
@@ -756,5 +755,114 @@ extension CoreAudioTapTests {
         let stats = synchronizer.getStats()
         XCTAssertLessThan(stats.discontinuities, 10,
             "Debounce should limit synchronizer discontinuity count during a rapid flood")
+    }
+
+    // MARK: - MicCaptureRing Sample-Time Domain Mismatch Regression
+
+    func testMicCaptureRingDomainMismatchCausesFalseDiscontinuity() {
+        let ring = MicCaptureRing(capacitySamples: 48000)
+
+        // Simulate a C920 webcam: AVAudioEngine delivers ~4096 frames at 44.1kHz,
+        // but after resampling to 48kHz the count is ~4458.
+        // The OLD bug: pass 44.1kHz sampleTime with 48kHz sampleCount.
+        let sourceSampleRate = 44100
+        let targetSampleRate = 48000
+        let sourceFramesPerCallback = 4096
+        let resampledFramesPerCallback = Int(Double(sourceFramesPerCallback) * Double(targetSampleRate) / Double(sourceSampleRate))
+        let samples = [Float](repeating: 0.1, count: resampledFramesPerCallback)
+
+        // Warmup phase (10 callbacks required by MicCaptureRing)
+        for i in 0..<12 {
+            let sourceSampleTime = Float64(i * sourceFramesPerCallback)
+            samples.withUnsafeBufferPointer { ptr in
+                ring.push(
+                    samples: ptr.baseAddress!,
+                    count: resampledFramesPerCallback,
+                    sampleTime: sourceSampleTime,
+                    hostTime: 0
+                )
+            }
+            ring.clearDiscontinuity()
+        }
+
+        // After warmup, the next push with the domain mismatch should trigger a
+        // discontinuity. The delta is sourceFramesPerCallback - resampledFramesPerCallback
+        // = 4096 - 4458 = -362, which is below negativeTolerance (-240).
+        let triggerSampleTime = Float64(12 * sourceFramesPerCallback)
+        samples.withUnsafeBufferPointer { ptr in
+            ring.push(
+                samples: ptr.baseAddress!,
+                count: resampledFramesPerCallback,
+                sampleTime: triggerSampleTime,
+                hostTime: 0
+            )
+        }
+
+        XCTAssertTrue(ring.hasDiscontinuity,
+            "Domain mismatch (44.1kHz sampleTime + 48kHz count) must trigger discontinuity")
+    }
+
+    func testMicCaptureRingFixedDomainNoFalseDiscontinuity() {
+        let ring = MicCaptureRing(capacitySamples: 48000)
+
+        // Simulate the FIX: use 48kHz-domain startSampleIndex as sampleTime
+        // when resampler is active. Both sampleTime and sampleCount are in 48kHz domain.
+        let resampledFramesPerCallback = 4458
+        let samples = [Float](repeating: 0.1, count: resampledFramesPerCallback)
+
+        var sampleIndex: Int64 = 0
+        for _ in 0..<20 {
+            samples.withUnsafeBufferPointer { ptr in
+                ring.push(
+                    samples: ptr.baseAddress!,
+                    count: resampledFramesPerCallback,
+                    sampleTime: Float64(sampleIndex),
+                    hostTime: 0
+                )
+            }
+            sampleIndex += Int64(resampledFramesPerCallback)
+        }
+
+        XCTAssertFalse(ring.hasDiscontinuity,
+            "Consistent 48kHz domain (sampleTime + count) must not trigger false discontinuity")
+    }
+
+    func testSynchronizerStabilizesWithResampledMicTimeDomain() {
+        let config = AudioSynchronizer.TimingConfig(
+            minNoDiscontinuitySeconds: 0.0,
+            discontinuityDebounceSeconds: 0.0
+        )
+        let synchronizer = AudioSynchronizer(timingConfig: config)
+
+        let silence = [Float](repeating: 0, count: 480)
+
+        // Build render lead of ~200ms (20 frames of 10ms each)
+        for i in 0..<20 {
+            silence.withUnsafeBufferPointer { ptr in
+                synchronizer.pushRender(
+                    samples: ptr.baseAddress!, count: 480,
+                    sampleTime: Float64(i * 480), hostTime: 0
+                )
+            }
+        }
+
+        // Push capture using 48kHz-domain sample index (the fix).
+        // Use larger chunks (~4458 samples) to simulate resampled mic delivery.
+        let captureChunk = [Float](repeating: 0, count: 4458)
+        var captureIndex: Int64 = 0
+        captureChunk.withUnsafeBufferPointer { ptr in
+            synchronizer.pushCapture(
+                samples: ptr.baseAddress!, count: 4458,
+                sampleTime: Float64(captureIndex), hostTime: 0
+            )
+        }
+        captureIndex += 4458
+
+        let frame = synchronizer.getAlignedFrame()
+        XCTAssertNotNil(frame, "Synchronizer should stabilize with consistent 48kHz capture domain")
+
+        let stats = synchronizer.getStats()
+        XCTAssertEqual(stats.discontinuities, 0,
+            "No discontinuities should occur with consistent timing domain")
     }
 }
