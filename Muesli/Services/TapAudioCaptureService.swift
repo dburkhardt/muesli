@@ -1024,17 +1024,18 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             sampleCount: frameLength
         )
 
-        // Always compute and deliver mic level (decoupled from file output path)
+        // Always compute mic level (decoupled from file output path)
         let sampleArray = Array(UnsafeBufferPointer(start: samples, count: frameLength))
         let level = calculateRMSFromArray(sampleArray)
-        levelHandler?(level, .microphone)
+        let saveRaw = shouldSaveRawMicrophone()
+        let timestamp = CACurrentMediaTime()
 
-        // Conditionally deliver raw mic audio for file output only when preference is enabled.
-        // Note: AVAudioEngine tap callbacks are high-priority but NOT true RT IOProc.
-        // Array allocation + Task dispatch is acceptable here.
-        if shouldSaveRawMicrophone() {
-            let timestamp = CACurrentMediaTime()
-            Task { [weak self] in
+        Task { [weak self] in
+            // Deliver mic level (always, regardless of raw file output setting)
+            await self?.levelHandler?(level, .microphone)
+
+            // Conditionally deliver raw mic audio for file output
+            if saveRaw {
                 await self?.deliverRawMicAudio(samples: sampleArray, timestamp: timestamp)
             }
         }
@@ -1216,7 +1217,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     }
 
     /// Calculate RMS level from array
-    private func calculateRMSFromArray(_ samples: [Float]) -> Float {
+    private nonisolated func calculateRMSFromArray(_ samples: [Float]) -> Float {
         guard !samples.isEmpty else { return 0 }
 
         var sumSquares: Float = 0

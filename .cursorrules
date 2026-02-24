@@ -18,6 +18,7 @@ ENGINEERING PRINCIPLES
 - Small diffs, compile often, keep project building
 - COMMIT before build: Always commit changes to the branch BEFORE running build-and-launch
 - After code changes: rebuild and relaunch automatically (see AGENTS.md for commands)
+- NEVER use --build-only: Always build AND launch so the user can immediately test and debug. Do not use the --build-only flag unless explicitly asked.
 - Poll builds: Run builds in background, then poll with while loop + sleep until done. Do NOT wait for user to report build results.
 - Swift 6 concurrency, @Observable, minimal SwiftUI
 - One primary type per file; reusable UI in Views/Components

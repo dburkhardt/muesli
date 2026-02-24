@@ -30,12 +30,27 @@ struct MuesliApp: App {
     /// so AppDelegate can reopen the main window without SwiftUI Environment access.
     @MainActor private static var _openWindow: OpenWindowAction?
 
+    /// Set when openMainWindow() is called before SwiftUI's body has been
+    /// evaluated (i.e. _openWindow is still nil).  installOpenWindowCallback()
+    /// drains this flag as soon as the action becomes available.
+    @MainActor private static var _pendingMainWindowOpen = false
+
     @MainActor static func installOpenWindowCallback(_ action: OpenWindowAction) {
         _openWindow = action
+        if _pendingMainWindowOpen {
+            _pendingMainWindowOpen = false
+            logger.info("Fulfilling deferred openMainWindow request")
+            openMainWindow()
+        }
     }
 
     @MainActor static func openMainWindow() {
-        _openWindow?(id: "main")
+        guard let action = _openWindow else {
+            logger.warning("openMainWindow: _openWindow not yet available — deferring until body is evaluated")
+            _pendingMainWindowOpen = true
+            return
+        }
+        action(id: "main")
         NSApp.activate(ignoringOtherApps: true)
     }
 
