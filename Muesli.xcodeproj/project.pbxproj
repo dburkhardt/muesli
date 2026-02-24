@@ -84,6 +84,7 @@
 		C1000007241D1A1D00000053 /* TranscriptionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000008241D1A1D00000053 /* TranscriptionCoordinator.swift */; };
 		C5EC4FA3BB35A1EEB4E7C343 /* AudioWorker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C604C85A259F08FD026A962 /* AudioWorker.swift */; };
 		'CT00001241D1A1D00000013' = {isa = PBXBuildFile; fileRef = CT00002241D1A1D00000013; };
+		'EA00001241D1A1D00000014' = {isa = PBXBuildFile; fileRef = EA00002241D1A1D00000014; };
 		D1000001241D1A1D00000060 /* ServiceProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1000002241D1A1D00000060 /* ServiceProtocols.swift */; };
 		'DI00001241D1A1D00000101' = {isa = PBXBuildFile; fileRef = DI00002241D1A1D00000101; };
 		'DIV0001241D1A1D00000104' = {isa = PBXBuildFile; fileRef = DIV0002241D1A1D00000104; };
@@ -204,6 +205,7 @@
 		C1000006241D1A1D00000052 /* RefinementCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementCoordinator.swift; sourceTree = "<group>"; };
 		C1000008241D1A1D00000053 /* TranscriptionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionCoordinator.swift; sourceTree = "<group>"; };
 		'CT00002241D1A1D00000013' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyTranscriptButton.swift; sourceTree = "<group>"; };
+		'EA00002241D1A1D00000014' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EllipsisActionsMenu.swift; sourceTree = "<group>"; };
 		D1000002241D1A1D00000060 /* ServiceProtocols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceProtocols.swift; sourceTree = "<group>"; };
 		DC8648E89347076AAD9EAF71 /* AudioSynchronizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AudioSynchronizer.swift; path = Muesli/Services/AudioSynchronizer.swift; sourceTree = SOURCE_ROOT; };
 		'DI00002241D1A1D00000101' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugInfoView.swift; sourceTree = "<group>"; };
@@ -411,6 +413,7 @@
 				A1000071241D1A1D00000010 /* MeetingTitlePromptSheet.swift */,
 				A1000075241D1A1D00000012 /* RecordingIndicator.swift */,
 				CT00002241D1A1D00000013,
+				EA00002241D1A1D00000014,
 				DIV0002241D1A1D00000104,
 				HL00002241D1A1D00000102,
 				A1000088241D1A1D00000024 /* TranscriptBlockView.swift */,
@@ -702,6 +705,7 @@
 				A1000072241D1A1D00000011 /* PreferencesView.swift in Sources */,
 				A1000074241D1A1D00000012 /* RecordingIndicator.swift in Sources */,
 				CT00001241D1A1D00000013,
+				EA00001241D1A1D00000014,
 				DIV0001241D1A1D00000104,
 				A1000081241D1A1D00000020 /* TranscriptBlock.swift in Sources */,
 				A1000083241D1A1D00000021 /* TranscriptProcessor.swift in Sources */,

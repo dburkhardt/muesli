@@ -11,6 +11,7 @@ struct CopyTranscriptButton: View {
     
     /// Show temporary confirmation feedback
     @State private var showConfirmation = false
+    @State private var isHovered = false
     
     init(getBlocks: @escaping () -> [TranscriptBlock]?, helpText: String = "Copy transcript to clipboard") {
         self.getBlocks = getBlocks
@@ -34,7 +35,16 @@ struct CopyTranscriptButton: View {
             }
         } label: {
             Image(systemName: showConfirmation ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 12))
                 .foregroundStyle(showConfirmation ? .green : .secondary)
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
+                )
+                .contentShape(Circle())
+                .onHover { isHovered = $0 }
+                .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)

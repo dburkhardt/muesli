@@ -887,7 +887,7 @@ struct RecordingDetailView: View {
     
     /// Ellipsis menu for completed-meeting actions (Apple HIG: ellipsis for "more actions").
     private func meetingActionsMenu(for meeting: MeetingHistoryItem) -> some View {
-        Menu {
+        EllipsisActionsMenu(isReprocessing: meeting.isReprocessing) {
             Button("Open in Finder") {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
             }
@@ -895,22 +895,7 @@ struct RecordingDetailView: View {
             Button("Delete Recording", role: .destructive) {
                 historyManager.requestDeleteMeeting(meeting)
             }
-        } label: {
-            Group {
-                if meeting.isReprocessing {
-                    ProgressView()
-                        .scaleEffect(0.65)
-                        .frame(width: 12, height: 12)
-                } else {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .medium))
-                }
-            }
-            .foregroundStyle(.secondary)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .help("More actions")
     }
     
     private func formatDate(_ date: Date) -> String {
