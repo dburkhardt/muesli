@@ -7,7 +7,7 @@
 //
 
 // Marketing version (user-facing version number, follows semantic versioning)
-MARKETING_VERSION = 0.6.2-rc.1
+MARKETING_VERSION = 0.6.2-rc.2
 
 // Build number (incremented for each build/release)
 CURRENT_PROJECT_VERSION = 1
