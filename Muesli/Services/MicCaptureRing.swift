@@ -134,6 +134,8 @@ final class MicCaptureRing {
 
                 if isDomainMismatch {
                     expectedSamplesPerCallback = Int(expectedFromCallback)
+                    hasDiscontinuity = true
+                    debounceRemaining = discontinuityDuration
                 } else {
                     expectedSamplesPerCallback = sampleCount
                     let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
