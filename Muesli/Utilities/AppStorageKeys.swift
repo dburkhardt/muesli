@@ -67,6 +67,9 @@ enum AppStorageKeys {
     /// Audio chunk duration for transcription (2-30 seconds)
     static let audioChunkDuration = "audioChunkDuration"
     
+    /// Whether to show Continuity Camera (iPhone/iPad) microphones in the device list
+    static let showContinuityCameraDevices = "showContinuityCameraDevices"
+
     /// Enable overlap dedup stabilization in live transcription path
     static let liveStabilizerEnabled = "liveStabilizerEnabled"
     

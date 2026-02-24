@@ -268,6 +268,23 @@ final class PreferencesManager {
     /// Callback when audio chunk duration changes
     var audioChunkDurationDidChange: ((TimeInterval) -> Void)?
     
+    // MARK: - Continuity Camera Devices
+    
+    /// Whether to show Continuity Camera (iPhone/iPad) microphones in the device list.
+    /// Defaults to false (hidden) — UserDefaults.bool(forKey:) returns false for unset keys.
+    var showContinuityCameraDevices: Bool {
+        get {
+            UserDefaults.standard.bool(forKey: AppStorageKeys.showContinuityCameraDevices)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.showContinuityCameraDevices)
+            showContinuityCameraDevicesDidChange?(newValue)
+        }
+    }
+    
+    /// Callback when the Continuity Camera preference changes (triggers device list refresh)
+    var showContinuityCameraDevicesDidChange: ((Bool) -> Void)?
+    
     // MARK: - Export Settings
     
     /// Whether automatic export is enabled

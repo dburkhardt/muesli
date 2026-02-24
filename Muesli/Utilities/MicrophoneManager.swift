@@ -17,11 +17,13 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         let id: String
         let name: String
         let isDefault: Bool
-        
-        init(id: String, name: String, isDefault: Bool = false) {
+        let isContinuityCamera: Bool
+
+        init(id: String, name: String, isDefault: Bool = false, isContinuityCamera: Bool = false) {
             self.id = id
             self.name = name
             self.isDefault = isDefault
+            self.isContinuityCamera = isContinuityCamera
         }
     }
     
@@ -213,6 +215,9 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
             ?? captureDevices.first
         logger.info("System default input UID: \(systemDefaultUID ?? "unknown") → matched: \(defaultDevice?.localizedName ?? "none")")
         
+        let showContinuityCamera = UserDefaults.standard.bool(
+            forKey: AppStorageKeys.showContinuityCameraDevices
+        )
         for device in captureDevices {
             // Filter out virtual aggregate devices created by ScreenCaptureKit
             // These devices (like "CADefaultDeviceAggregate-XXXXX") don't deliver real audio
@@ -221,38 +226,45 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
                 logger.debug("Skipping aggregate device: \(device.localizedName) (\(device.uniqueID))")
                 continue
             }
-            
-            // Filter out Continuity Camera devices (iPhone/iPad microphones)
-            if isContinuityCameraDevice(device) {
+
+            let isContinuity = isContinuityCameraDevice(device)
+            if isContinuity && !showContinuityCamera {
                 continue
             }
-            
+
             let isDefault = device.uniqueID == defaultDevice?.uniqueID
             let microphoneDevice = MicrophoneDevice(
                 id: device.uniqueID,
                 name: device.localizedName,
-                isDefault: isDefault
+                isDefault: isDefault,
+                isContinuityCamera: isContinuity
             )
             devices.append(microphoneDevice)
         }
-        
+
         // Sort: default first, then alphabetically
         devices.sort { device1, device2 in
             if device1.isDefault { return true }
             if device2.isDefault { return false }
             return device1.name < device2.name
         }
-        
+
         availableDevices = devices
-        
+
         // If we have a saved preference but it's not in the list, clear it
         if let savedID = selectedDeviceID, !devices.contains(where: { $0.id == savedID }) {
             selectedDeviceID = nil
         }
-        
-        // If no device is selected but we have devices, select the default
-        if selectedDeviceID == nil, let defaultDevice = devices.first(where: { $0.isDefault }) {
-            selectedDeviceID = defaultDevice.id
+
+        // If no device is selected but we have devices, select the default.
+        // If the system default isn't in the list, fall back to the first
+        // non-Continuity Camera device to avoid surprising auto-selection.
+        if selectedDeviceID == nil {
+            if let defaultDevice = devices.first(where: { $0.isDefault }) {
+                selectedDeviceID = defaultDevice.id
+            } else if let fallback = devices.first(where: { !$0.isContinuityCamera }) {
+                selectedDeviceID = fallback.id
+            }
         }
     }
     
@@ -299,15 +311,22 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         )
         
         // Find the system default input device via Core Audio, filtering out
-        // aggregate and Continuity Camera devices that don't deliver real audio
+        // aggregate devices that don't deliver real audio
         let systemDefaultUID = Self.getSystemDefaultInputUID()
+        let showContinuityCamera = UserDefaults.standard.bool(
+            forKey: AppStorageKeys.showContinuityCameraDevices
+        )
         let eligibleDevices = discoverySession.devices.filter { device in
             !device.uniqueID.contains("Aggregate") &&
-            !device.localizedName.contains("Aggregate") &&
-            !isContinuityCameraDevice(device)
+            !device.localizedName.contains("Aggregate")
         }
-        // Prefer the true system default; fall back to first eligible device
-        guard let defaultDevice = eligibleDevices.first(where: { $0.uniqueID == systemDefaultUID })
+        // Prefer the true system default if it's visible (not a hidden Continuity Camera).
+        // Fall back to first non-Continuity Camera device to avoid surprising auto-selection.
+        guard let defaultDevice = eligibleDevices.first(where: {
+                    $0.uniqueID == systemDefaultUID &&
+                    (showContinuityCamera || !isContinuityCameraDevice($0))
+                })
+                ?? eligibleDevices.first(where: { !isContinuityCameraDevice($0) })
                 ?? eligibleDevices.first else { return nil }
         
         return MicrophoneDevice(
