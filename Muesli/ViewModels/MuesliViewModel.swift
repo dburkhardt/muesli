@@ -629,10 +629,17 @@ final class MuesliViewModel {
         
         self.recordingController.onAutoReprocessRequested = { [weak self] directory in
             guard let self else { return }
-            // Resolve the directory to the canonical MeetingHistoryItem so
-            // observable state (isReprocessing, startTime) propagates to the UI.
-            guard let meeting = self.meetingHistory.first(where: { $0.directory == directory }) else {
-                self.logger.warning("Auto-reprocess: meeting not found in history for \(directory.lastPathComponent)")
+            // Prefer selectedMeeting — it's the instance the UI is bound to.
+            // Falling back to meetingHistory lookup handles edge cases where
+            // the user navigated away before the callback fired.
+            let meeting: MeetingHistoryItem?
+            if let selected = self.selectedMeeting, selected.directory == directory {
+                meeting = selected
+            } else {
+                meeting = self.meetingHistory.first(where: { $0.directory == directory })
+            }
+            guard let meeting else {
+                self.logger.warning("Auto-reprocess: meeting not found for \(directory.lastPathComponent)")
                 return
             }
             self.transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)

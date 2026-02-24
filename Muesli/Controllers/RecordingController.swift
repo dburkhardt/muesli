@@ -698,12 +698,15 @@ final class RecordingController {
         session.state = .completed
         session.canResume = true
         
-        // Notify completion — refreshes history and selects the new meeting
+        // Notify completion — refreshes history and selects the new meeting.
+        // NOTE: do NOT call onRefreshHistory here; onSessionCompleted already
+        // refreshes. A second refresh would replace the MeetingHistoryItem
+        // objects, orphaning the selectedMeeting reference.
         onSessionCompleted?(session, session.outputDirectory)
-        onRefreshHistory?()
         
         // Auto-reprocess completed meetings when enabled.
-        // Runs AFTER history refresh so the canonical MeetingHistoryItem exists.
+        // Runs AFTER onSessionCompleted so the canonical MeetingHistoryItem
+        // (the same instance the UI observes) exists in meetingHistory.
         let hasEmptyTranscript = session.transcriptBlocks.isEmpty
         let shouldAutoReprocess = preferencesManager.isAutoReprocessAfterMeetingEnabled || hasEmptyTranscript
         
