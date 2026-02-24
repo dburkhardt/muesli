@@ -5,6 +5,9 @@ import os.lock
 import os.log
 @preconcurrency import WhisperKit
 
+/// Global typealias for live draft callbacks used across TranscriptionService, TranscriptionCoordinator, and RecordingController
+typealias TranscriptionDraftHandler = @Sendable (String, TranscriptionService.TranscriptSegment.Speaker) -> Void
+
 /// Service for real-time audio transcription using WhisperKit
 /// Handles both system audio ("Them") and microphone audio ("Me")
 final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProtocol {

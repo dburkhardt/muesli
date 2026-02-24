@@ -246,6 +246,21 @@ final class RefinementCoordinator {
         }
     }
     
+    /// Automatically refine transcript if the preference is enabled
+    func autoRefineIfEnabled(meeting: MeetingHistoryItem, preferences: PreferencesManager) {
+        guard preferences.isAutoRefineEnabled else { return }
+        guard canRefineTranscripts else {
+            logger.info("Auto-refine skipped: LLM not available")
+            return
+        }
+        guard !isRefining else {
+            logger.info("Auto-refine skipped: already refining")
+            return
+        }
+        logger.info("Auto-refine starting for meeting: \(meeting.title)")
+        refineTranscript(for: meeting)
+    }
+    
     /// Cancel ongoing refinement
     func cancelRefinement() {
         refinementTask?.cancel()

@@ -145,6 +145,28 @@ final class RecordingSession: Identifiable {
     
     var isRetranscribing: Bool = false
     
+    // MARK: - Live Draft State
+    
+    /// Tentative draft text currently being transcribed (nil when idle)
+    var liveDraftText: String?
+    
+    /// Speaker associated with the current live draft
+    var liveDraftSpeaker: TranscriptBlock.Speaker?
+    
+    /// Whether the transcript is being finalized via second-pass ASR
+    var isFinalizingTranscript: Bool = false
+    
+    /// Update the live draft text and speaker shown during recording
+    func updateLiveDraft(_ text: String, speaker: TranscriptBlock.Speaker) {
+        if text.isEmpty {
+            liveDraftText = nil
+            liveDraftSpeaker = nil
+        } else {
+            liveDraftText = text
+            liveDraftSpeaker = speaker
+        }
+    }
+    
     // MARK: - Microphone Mute State
     
     var isMicrophoneMuted: Bool = false
@@ -260,6 +282,8 @@ final class RecordingSession: Identifiable {
     func finalizeTranscript() {
         transcriptProcessor.finalize()
         transcriptBlocks = transcriptProcessor.blocks
+        liveDraftText = nil
+        liveDraftSpeaker = nil
     }
     
     /// Get formatted transcript text for file output (merged block format)
@@ -274,6 +298,9 @@ final class RecordingSession: Identifiable {
         transcriptText = ""
         transcriptBlocks = []
         transcriptProcessor.reset()
+        liveDraftText = nil
+        liveDraftSpeaker = nil
+        isFinalizingTranscript = false
     }
     
     // MARK: - Error Handling
