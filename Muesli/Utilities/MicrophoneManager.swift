@@ -334,7 +334,8 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         return MicrophoneDevice(
             id: defaultDevice.uniqueID,
             name: defaultDevice.localizedName,
-            isDefault: true
+            isDefault: true,
+            isContinuityCamera: isContinuityCameraDevice(defaultDevice)
         )
     }
     
