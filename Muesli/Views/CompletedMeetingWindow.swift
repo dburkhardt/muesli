@@ -130,6 +130,19 @@ struct CompletedMeetingWindow: View {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
             }
             
+            if !viewModel.modelManager.downloadedModels.isEmpty {
+                Divider()
+                Menu("Reprocess Transcript") {
+                    ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
+                        Button("With \(model.displayName)") {
+                            viewModel.reprocessTranscript(for: meeting, using: model)
+                        }
+                    }
+                }
+                .disabled(meeting.isReprocessing)
+            }
+            
+            Divider()
             Button("Delete Recording", role: .destructive) {
                 historyManager.requestDeleteMeeting(meeting)
             }
