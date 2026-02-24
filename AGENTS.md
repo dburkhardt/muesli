@@ -99,7 +99,6 @@ grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)" | head -20
 ```bash
 ./scripts/build-and-launch.sh              # Fast rebuild with cached intermediates (DEFAULT)
 ./scripts/build-and-launch.sh --deep-clean # Full cache clear (use if builds behave unexpectedly)
-./scripts/build-and-launch.sh --build-only # Build without launching
 ./scripts/build-and-launch.sh --no-log     # Disable logging to file
 ./scripts/build-and-launch.sh --dry-run    # Show what would happen
 ```
@@ -111,6 +110,8 @@ grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)" | head -20
 - Removes only app bundles to ensure fresh binary
 - Runs `xcodebuild clean build` to recompile changed sources
 - Build time: ~1-2 minutes (vs 5-8 min with `--deep-clean`)
+
+**DO NOT use `--build-only`**: Always build AND launch. The `--build-only` flag skips launching the app, which makes it impossible for the user to test and debug changes. Never use it unless explicitly asked.
 
 **Advanced options** (rarely needed):
 - `--deep-clean` — Full cache clear (DerivedData, Launch Services, module caches); use if builds behave unexpectedly

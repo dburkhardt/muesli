@@ -463,8 +463,9 @@ final class PreferencesManager {
         _isEchoCancellationEnabled = decision.effectiveValue
         echoCancellationLock.withLock { $0 = decision.effectiveValue }
 
-        _saveRawMicrophoneAudio = UserDefaults.standard.bool(forKey: AppStorageKeys.saveRawMicrophoneAudio)
-        saveRawMicrophoneLock.withLock { $0 = _saveRawMicrophoneAudio }
+        let savedRawMicPref = UserDefaults.standard.bool(forKey: AppStorageKeys.saveRawMicrophoneAudio)
+        _saveRawMicrophoneAudio = savedRawMicPref
+        saveRawMicrophoneLock.withLock { $0 = savedRawMicPref }
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()
