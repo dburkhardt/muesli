@@ -107,6 +107,10 @@ enum AudioConfiguration {
     /// Maximum draft UI emit frequency (4Hz)
     static let stabilizerDraftEmitIntervalMs: Int = 250
     
+    /// Seconds of silence after last voice activity before flushing pending stabilizer hypotheses.
+    /// Keeps live output responsive when the speaker pauses or stops.
+    static let silenceFlushDelay: TimeInterval = 3.0
+    
     // MARK: - Audio Level Updates
     
     /// Minimum interval between audio level UI updates (~30fps)

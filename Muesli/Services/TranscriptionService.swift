@@ -91,6 +91,12 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Context chaining: last transcript suffix per speaker (~200 chars)
         var systemLastTranscriptSuffix: String = ""
         var micLastTranscriptSuffix: String = ""
+        // Silence flush: track when last VAD-positive chunk was processed per stream.
+        // nil until first voice activity; silence flush is gated on != nil.
+        var systemLastVoiceTime: Date?
+        var micLastVoiceTime: Date?
+        var systemSilenceFlushDone: Bool = false
+        var micSilenceFlushDone: Bool = false
     }
     private let bufferState = OSAllocatedUnfairLock(initialState: BufferState())
     
@@ -210,6 +216,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             state.micChunksProcessed = 0
             state.systemLastTranscriptSuffix = ""
             state.micLastTranscriptSuffix = ""
+            state.systemLastVoiceTime = nil
+            state.micLastVoiceTime = nil
+            state.systemSilenceFlushDone = false
+            state.micSilenceFlushDone = false
             state.isProcessing = true
         }
         
@@ -377,7 +387,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Process system audio ("Them") with VAD check.
         // Warmup counter is advanced here (not in the lock) so silent chunks don't consume warmup.
         if let chunk = chunkInfo.systemChunk, hasVoiceActivity(chunk) {
-            bufferState.withLock { $0.systemChunksProcessed += 1 }
+            bufferState.withLock {
+                $0.systemChunksProcessed += 1
+                $0.systemLastVoiceTime = Date()
+                $0.systemSilenceFlushDone = false
+            }
             Task { await DiagnosticLogger.shared.log(.transcription,
                 "Live chunk: speaker=them, samples=\(chunk.count)") }
             if let resultText = await transcribeChunk(
@@ -394,7 +408,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
 
         // Process mic audio ("Me") with VAD check
         if let chunk = chunkInfo.micChunk, hasVoiceActivity(chunk) {
-            bufferState.withLock { $0.micChunksProcessed += 1 }
+            bufferState.withLock {
+                $0.micChunksProcessed += 1
+                $0.micLastVoiceTime = Date()
+                $0.micSilenceFlushDone = false
+            }
             Task { await DiagnosticLogger.shared.log(.transcription,
                 "Live chunk: speaker=me, samples=\(chunk.count)") }
             if let resultText = await transcribeChunk(
@@ -407,6 +425,117 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             ) {
                 bufferState.withLock { $0.micLastTranscriptSuffix = String(resultText.suffix(200)) }
             }
+        }
+
+        // MARK: Silence flush — commit pending stabilizer hypotheses after silence
+        await performSilenceFlushIfNeeded(whisperKit: whisperKit)
+    }
+
+    /// When a stream has had voice activity but then goes silent for `silenceFlushDelay`,
+    /// force-extract the partial buffer, transcribe it, and flush the stabilizer.
+    /// Stabilizer-only: skipped when `liveStabilizer` is nil.
+    private func performSilenceFlushIfNeeded(whisperKit: WhisperKit) async {
+        guard let stabilizer = liveStabilizer else { return }
+
+        let now = Date()
+        let silenceDelay = AudioConfiguration.silenceFlushDelay
+
+        struct PartialExtraction {
+            let samples: [Float]
+            let cumulativeOffset: Int
+            let startTime: Date
+            let contextSuffix: String
+            let silenceDuration: TimeInterval
+        }
+
+        // Phase 1: extract partial buffers under the lock
+        let (sysExtraction, micExtraction): (PartialExtraction?, PartialExtraction?) = bufferState.withLock { state in
+            let startTime = state.recordingStartTime ?? Date()
+            var sys: PartialExtraction?
+            var mic: PartialExtraction?
+
+            if let lastVoice = state.systemLastVoiceTime,
+               !state.systemSilenceFlushDone,
+               state.systemChunksProcessed > 0,
+               now.timeIntervalSince(lastVoice) > silenceDelay {
+                let cumOffset = state.systemTotalSamplesReceived - state.systemAudioBuffer.count
+                let silence = now.timeIntervalSince(lastVoice)
+                sys = PartialExtraction(
+                    samples: state.systemAudioBuffer,
+                    cumulativeOffset: cumOffset,
+                    startTime: startTime,
+                    contextSuffix: state.systemLastTranscriptSuffix,
+                    silenceDuration: silence
+                )
+                state.systemAudioBuffer.removeAll()
+                state.systemProcessedSamples = 0
+                state.systemSilenceFlushDone = true
+            }
+
+            if let lastVoice = state.micLastVoiceTime,
+               !state.micSilenceFlushDone,
+               state.micChunksProcessed > 0,
+               now.timeIntervalSince(lastVoice) > silenceDelay {
+                let cumOffset = state.micTotalSamplesReceived - state.micAudioBuffer.count
+                let silence = now.timeIntervalSince(lastVoice)
+                mic = PartialExtraction(
+                    samples: state.micAudioBuffer,
+                    cumulativeOffset: cumOffset,
+                    startTime: startTime,
+                    contextSuffix: state.micLastTranscriptSuffix,
+                    silenceDuration: silence
+                )
+                state.micAudioBuffer.removeAll()
+                state.micProcessedSamples = 0
+                state.micSilenceFlushDone = true
+            }
+
+            return (sys, mic)
+        }
+
+        let needsFlush = sysExtraction != nil || micExtraction != nil
+        guard needsFlush else { return }
+
+        // Phase 2: transcribe partial buffers outside the lock
+        let minSamples = 16_000 // 1 second at 16kHz
+
+        if let ext = sysExtraction, ext.samples.count >= minSamples, hasVoiceActivity(ext.samples) {
+            Task { await DiagnosticLogger.shared.log(.transcription,
+                "Silence flush: speaker=them, silenceDuration=\(String(format: "%.1f", ext.silenceDuration))s, samples=\(ext.samples.count)") }
+            if let resultText = await transcribeChunk(
+                ext.samples, speaker: .them, whisperKit: whisperKit,
+                startTime: ext.startTime, cumulativeSampleOffset: ext.cumulativeOffset,
+                previousText: ext.contextSuffix.isEmpty ? nil : ext.contextSuffix
+            ) {
+                bufferState.withLock { $0.systemLastTranscriptSuffix = String(resultText.suffix(200)) }
+            }
+        } else if let ext = sysExtraction {
+            Task { await DiagnosticLogger.shared.log(.transcription,
+                "Silence flush: speaker=them, skipped partial transcription (samples=\(ext.samples.count))") }
+        }
+
+        if let ext = micExtraction, ext.samples.count >= minSamples, hasVoiceActivity(ext.samples) {
+            Task { await DiagnosticLogger.shared.log(.transcription,
+                "Silence flush: speaker=me, silenceDuration=\(String(format: "%.1f", ext.silenceDuration))s, samples=\(ext.samples.count)") }
+            if let resultText = await transcribeChunk(
+                ext.samples, speaker: .me, whisperKit: whisperKit,
+                startTime: ext.startTime, cumulativeSampleOffset: ext.cumulativeOffset,
+                previousText: ext.contextSuffix.isEmpty ? nil : ext.contextSuffix
+            ) {
+                bufferState.withLock { $0.micLastTranscriptSuffix = String(resultText.suffix(200)) }
+            }
+        } else if let ext = micExtraction {
+            Task { await DiagnosticLogger.shared.log(.transcription,
+                "Silence flush: speaker=me, skipped partial transcription (samples=\(ext.samples.count))") }
+        }
+
+        // Flush stabilizer: commit all pending hypotheses regardless of agreement window
+        let output = await stabilizer.flushAll()
+        for segment in output.committedSegments {
+            transcriptHandler?(segment)
+        }
+        if let draft = output.draftUpdate {
+            draftHandler?(draft.text, draft.speaker)
         }
     }
     
