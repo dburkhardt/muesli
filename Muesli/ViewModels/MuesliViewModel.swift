@@ -899,6 +899,7 @@ final class MuesliViewModel {
         Task {
             meeting.isReprocessing = true
             meeting.reprocessingProgress = 0.0
+            meeting.reprocessingStartTime = Date()
             
             do {
                 try await transcriptionCoordinator.reprocessTranscript(
@@ -918,6 +919,7 @@ final class MuesliViewModel {
             
             meeting.isReprocessing = false
             meeting.reprocessingProgress = 0.0
+            meeting.reprocessingStartTime = nil
         }
     }
     
@@ -939,6 +941,7 @@ final class MuesliViewModel {
         
         meeting.isReprocessing = true
         meeting.reprocessingProgress = 0.0
+        meeting.reprocessingStartTime = Date()
         
         do {
             try await transcriptionCoordinator.reprocessTranscript(
@@ -958,6 +961,7 @@ final class MuesliViewModel {
         
         meeting.isReprocessing = false
         meeting.reprocessingProgress = 0.0
+        meeting.reprocessingStartTime = nil
     }
     
     // MARK: - Model Switching (delegates to TranscriptionCoordinator)

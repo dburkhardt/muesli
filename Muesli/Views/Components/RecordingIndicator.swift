@@ -374,19 +374,43 @@ struct RefinementToggleControl: View {
     }
 }
 
-// MARK: - Floating Refinement Indicator
+// MARK: - Floating Processing Indicator
 
 /// Non-blocking floating indicator shown in the bottom-right corner while
-/// background transcript refinement is in progress. Displays an animated
-/// wand icon, meeting title, and elapsed timer. Tapping navigates to the
-/// meeting being refined.
-struct FloatingRefinementIndicator: View {
-    let meetingTitle: String
+/// background reprocessing or refinement is in progress. Displays an
+/// animated icon, status label, and elapsed timer.
+struct FloatingProcessingIndicator: View {
+    enum Phase {
+        case reprocessing
+        case refining
+        
+        var label: String {
+            switch self {
+            case .reprocessing: "Reprocessing…"
+            case .refining: "Refining…"
+            }
+        }
+        
+        var icon: String {
+            switch self {
+            case .reprocessing: "arrow.trianglehead.2.clockwise"
+            case .refining: "wand.and.stars"
+            }
+        }
+        
+        var tint: Color {
+            switch self {
+            case .reprocessing: .blue
+            case .refining: .purple
+            }
+        }
+    }
+    
+    let phase: Phase
     let startTime: Date
-    let onTap: () -> Void
+    var onTap: (() -> Void)?
     
     @State private var isPulsing = false
-    @State private var rotation: Double = 0
     @State private var now = Date()
     
     private var elapsedText: String {
@@ -397,47 +421,60 @@ struct FloatingRefinementIndicator: View {
     }
     
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 8) {
-                Image(systemName: "wand.and.stars")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.purple)
-                    .opacity(isPulsing ? 1.0 : 0.5)
-                    .rotationEffect(.degrees(rotation))
-                
-                Text("Refining…")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                
-                Text(elapsedText)
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.regularMaterial)
-                    .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
-            }
+        let content = HStack(spacing: 8) {
+            Image(systemName: phase.icon)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(phase.tint)
+                .opacity(isPulsing ? 1.0 : 0.5)
+            
+            Text(phase.label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            
+            Text(elapsedText)
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(.tertiary)
         }
-        .buttonStyle(.plain)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                isPulsing = true
-            }
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
-                rotation = 18.0
-            }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
         }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { tick in
-            now = tick
+        
+        if let onTap {
+            Button(action: onTap) { content }
+                .buttonStyle(.plain)
+                .modifier(ProcessingIndicatorAnimations(isPulsing: $isPulsing, now: $now))
+        } else {
+            content
+                .modifier(ProcessingIndicatorAnimations(isPulsing: $isPulsing, now: $now))
         }
-        .help("View \"\(meetingTitle)\" — refinement in progress")
-        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 }
+
+private struct ProcessingIndicatorAnimations: ViewModifier {
+    @Binding var isPulsing: Bool
+    @Binding var now: Date
+    
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                    isPulsing = true
+                }
+            }
+            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { tick in
+                now = tick
+            }
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+}
+
+/// Convenience alias for call-sites that used the old name.
+typealias FloatingRefinementIndicator = FloatingProcessingIndicator
 
 #Preview("Refinement Loading") {
     RefinementLoadingIndicator()
@@ -457,9 +494,17 @@ struct FloatingRefinementIndicator: View {
         .background(.regularMaterial)
 }
 
-#Preview("Floating Refinement Indicator") {
-    FloatingRefinementIndicator(
-        meetingTitle: "Team Standup",
+#Preview("Floating Processing - Reprocessing") {
+    FloatingProcessingIndicator(
+        phase: .reprocessing,
+        startTime: Date().addingTimeInterval(-42)
+    )
+    .padding()
+}
+
+#Preview("Floating Processing - Refining") {
+    FloatingProcessingIndicator(
+        phase: .refining,
         startTime: Date().addingTimeInterval(-93),
         onTap: {}
     )

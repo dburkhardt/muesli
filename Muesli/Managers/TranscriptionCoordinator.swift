@@ -544,11 +544,10 @@ final class TranscriptionCoordinator {
         
         logger.info("Auto-reprocessing meeting '\(meeting.title)' when model becomes ready")
         
-        // Mark as reprocessing immediately (shows spinner in UI)
         meeting.isReprocessing = true
+        meeting.reprocessingStartTime = Date()
         
         Task { @MainActor in
-            // Wait for model to be ready (may already be ready)
             let modelStateResult = await prepareModel()
             
             if modelStateResult.isReady {
@@ -563,6 +562,7 @@ final class TranscriptionCoordinator {
             }
             
             meeting.isReprocessing = false
+            meeting.reprocessingStartTime = nil
         }
     }
     

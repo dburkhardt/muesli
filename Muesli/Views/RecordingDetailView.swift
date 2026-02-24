@@ -125,16 +125,13 @@ struct RecordingDetailView: View {
                     .padding(.bottom, 16)
             }
             
-            // Refinement indicator for a previous meeting refining in the background
             if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
                let startTime = viewModel.refinementCoordinator.refinementStartTime,
                viewModel.refinementCoordinator.isRefining {
-                FloatingRefinementIndicator(
-                    meetingTitle: refinedMeeting.title,
+                FloatingProcessingIndicator(
+                    phase: .refining,
                     startTime: startTime,
-                    onTap: {
-                        historyManager.selectMeeting(refinedMeeting)
-                    }
+                    onTap: { historyManager.selectMeeting(refinedMeeting) }
                 )
                 .padding(.trailing, 16)
                 .padding(.bottom, 80)
@@ -596,25 +593,40 @@ struct RecordingDetailView: View {
 
     // MARK: - Historical Meeting View with Floating Indicator
     
+    @ViewBuilder
+    private func processingIndicators(for meeting: MeetingHistoryItem) -> some View {
+        // 1. Current meeting reprocessing (second-pass ASR)
+        if meeting.isReprocessing, let startTime = meeting.reprocessingStartTime {
+            FloatingProcessingIndicator(phase: .reprocessing, startTime: startTime)
+        }
+        
+        // 2. Current meeting refinement (LLM polish)
+        if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+           let startTime = viewModel.refinementCoordinator.refinementStartTime,
+           viewModel.refinementCoordinator.isRefining,
+           refinedMeeting.id == meeting.id {
+            FloatingProcessingIndicator(phase: .refining, startTime: startTime)
+        }
+        
+        // 3. Different meeting refinement — tap to navigate
+        if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+           let startTime = viewModel.refinementCoordinator.refinementStartTime,
+           viewModel.refinementCoordinator.isRefining,
+           refinedMeeting.id != meeting.id {
+            FloatingProcessingIndicator(
+                phase: .refining,
+                startTime: startTime,
+                onTap: { historyManager.selectMeeting(refinedMeeting) }
+            )
+        }
+    }
+    
     private func historicalMeetingViewWithIndicator(meeting: MeetingHistoryItem) -> some View {
         ZStack(alignment: .bottomTrailing) {
             historicalMeetingView(meeting: meeting)
             
             VStack(spacing: 8) {
-                // Show refinement indicator when refining a *different* meeting
-                // (the meeting being viewed already shows state via ResumeControlPane)
-                if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
-                   let startTime = viewModel.refinementCoordinator.refinementStartTime,
-                   viewModel.refinementCoordinator.isRefining,
-                   refinedMeeting.id != meeting.id {
-                    FloatingRefinementIndicator(
-                        meetingTitle: refinedMeeting.title,
-                        startTime: startTime,
-                        onTap: {
-                            historyManager.selectMeeting(refinedMeeting)
-                        }
-                    )
-                }
+                processingIndicators(for: meeting)
                 
                 // Show floating indicator when there's an active recording
                 if viewModel.isViewingPastMeetingWhileRecording,
@@ -632,6 +644,7 @@ struct RecordingDetailView: View {
                 }
             }
             .padding(16)
+            .animation(.easeInOut(duration: 0.3), value: meeting.isReprocessing)
             .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
         }
     }
@@ -805,12 +818,10 @@ struct RecordingDetailView: View {
             if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
                let startTime = viewModel.refinementCoordinator.refinementStartTime,
                viewModel.refinementCoordinator.isRefining {
-                FloatingRefinementIndicator(
-                    meetingTitle: refinedMeeting.title,
+                FloatingProcessingIndicator(
+                    phase: .refining,
                     startTime: startTime,
-                    onTap: {
-                        historyManager.selectMeeting(refinedMeeting)
-                    }
+                    onTap: { historyManager.selectMeeting(refinedMeeting) }
                 )
                 .padding(16)
                 .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
