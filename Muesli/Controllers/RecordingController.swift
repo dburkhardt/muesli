@@ -1100,21 +1100,21 @@ final class RecordingController {
             // Notify ViewModel that session started
             onSessionStarted?(session)
             
-        transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
-            Task { @MainActor in
-                guard let session = session else { return }
-                session.appendTranscriptSegment(segment)
+            transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
+                Task { @MainActor in
+                    guard let session = session else { return }
+                    session.appendTranscriptSegment(segment)
+                }
             }
-        }
-        transcriptionCoordinator.setDraftHandler { [weak session] draftText, speaker in
-            Task { @MainActor in
-                guard let session = session else { return }
-                session.updateLiveDraft(
-                    draftText,
-                    speaker: speaker == .me ? .me : .them
-                )
+            transcriptionCoordinator.setDraftHandler { [weak session] draftText, speaker in
+                Task { @MainActor in
+                    guard let session = session else { return }
+                    session.updateLiveDraft(
+                        draftText,
+                        speaker: speaker == .me ? .me : .them
+                    )
+                }
             }
-        }
             
             let saveRaw = preferencesManager.saveRawMicrophoneAudio
             session.outputDirectory = try fileOutputService.resumeWriting(
