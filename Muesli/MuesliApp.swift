@@ -143,7 +143,7 @@ struct MuesliApp: App {
         .windowResizability(.contentSize)
 
         // Main window - SINGLE window for recordings (not WindowGroup)
-        Window("", id: "main") {
+        Window(Self.appDisplayName, id: "main") {
             MainWindowView(viewModel: viewModel)
                 .environment(viewModel)
                 .environment(meetingHistoryManager)

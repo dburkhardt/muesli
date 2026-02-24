@@ -1136,10 +1136,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             sampleCount: aecCount
         )
 
-        // Always compute mic level from RAW samples (decoupled from file output path)
-        let rawSamples = floatChannelData[0]
-        let sampleArray = Array(UnsafeBufferPointer(start: rawSamples, count: frameLength))
-        let level = calculateRMSFromArray(sampleArray)
+        // Compute mic level from AEC-ready samples so the UI indicator matches
+        // the echo-canceled audio that is actually recorded to .microphone files.
+        let levelSamples = Array(UnsafeBufferPointer(start: aecSamples, count: aecCount))
+        let level = calculateRMSFromArray(levelSamples)
         let saveRaw = shouldSaveRawMicrophone()
         let timestamp = CACurrentMediaTime()
 
