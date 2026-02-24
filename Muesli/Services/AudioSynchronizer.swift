@@ -309,8 +309,6 @@ final class AudioSynchronizer {
                     await DiagnosticLogger.shared.log(.aec,
                         "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples, seededDelay=\(renderLeadSamples)samples")
                 }
-            } else {
-                return nil
             }
             fallthrough
             
