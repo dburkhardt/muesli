@@ -917,6 +917,10 @@ final class MuesliViewModel {
     func reprocessTranscript(for meeting: MeetingHistoryItem, using model: ModelManager.ModelSize) {
         guard !meeting.isReprocessing else { return }
         
+        // Cancel any running second-pass so user intent takes precedence
+        // without ANE contention or transcript.md write races.
+        recordingController.cancelSecondPassIfRunning()
+        
         Task {
             meeting.isReprocessing = true
             meeting.reprocessingProgress = 0.0

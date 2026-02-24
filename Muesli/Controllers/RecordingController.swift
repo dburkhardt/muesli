@@ -662,6 +662,9 @@ final class RecordingController {
         session.state = .stopping
         session.stopDisplayTimer()
         
+        var secondPassLaunched = false
+        var hasAudioFiles = false
+        
         do {
             try await audioCaptureService.stopCapture()
             await transcriptionCoordinator.stopTranscription()
@@ -702,13 +705,15 @@ final class RecordingController {
                 // Continue - we have audio files even if transcript save failed
             }
             
-            let hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
-                                FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
+            hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
+                            FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
             
             if preferencesManager.isSecondPassASREnabled,
                hasAudioFiles,
                (session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0) >= AudioConfiguration.secondPassMinDurationSeconds {
+                transcriptionCoordinator.markSecondPassActive(for: directory)
                 launchSecondPassFinalization(for: session, directory: directory)
+                secondPassLaunched = true
             }
             
             // Export meeting to exports directory (if enabled)
@@ -730,16 +735,24 @@ final class RecordingController {
         // Auto-reprocess completed meetings when enabled.
         // Runs AFTER onSessionCompleted so the canonical MeetingHistoryItem
         // (the same instance the UI observes) exists in meetingHistory.
+        //
+        // Second-pass finalization is a superset of auto-reprocessing: it re-transcribes
+        // from saved audio with a (potentially larger) model. When it launches, skip
+        // auto-reprocess to avoid ANE resource contention and transcript.md write races.
+        // This also covers empty-transcript rescue — second-pass will produce the
+        // transcript even when the live model wasn't ready during recording.
+        // If second-pass fails, launchSecondPassFinalization's catch path fires
+        // onAutoReprocessRequested as recovery.
         let hasEmptyTranscript = session.transcriptBlocks.isEmpty
         let shouldAutoReprocess = preferencesManager.isAutoReprocessAfterMeetingEnabled || hasEmptyTranscript
         
         if let directory = session.outputDirectory {
-            let hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
-                                FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
-            if hasAudioFiles && shouldAutoReprocess {
+            if hasAudioFiles && shouldAutoReprocess && !secondPassLaunched {
                 let triggerReason = hasEmptyTranscript ? "empty transcript" : "preference enabled"
                 logger.info("Auto-triggering reprocessing (\(triggerReason))")
                 onAutoReprocessRequested?(directory)
+            } else if secondPassLaunched && shouldAutoReprocess {
+                logger.info("Skipping auto-reprocess: second-pass finalization already launched")
             }
         }
         
@@ -814,8 +827,29 @@ final class RecordingController {
                 self.logger.info("Second-pass finalization cancelled")
             } catch {
                 self.logger.error("Second-pass finalization failed: \(error.localizedDescription)")
+                
+                // Fallback: if second-pass failed and transcript is empty, trigger
+                // auto-reprocess as recovery so the user doesn't get a blank transcript.
+                let transcriptURL = directory.appendingPathComponent("transcript.md")
+                let transcriptExists = FileManager.default.fileExists(atPath: transcriptURL.path)
+                let transcriptEmpty = transcriptExists && ((try? String(contentsOf: transcriptURL))?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                if !transcriptExists || transcriptEmpty {
+                    await MainActor.run {
+                        self.logger.info("Second-pass failed with empty transcript; falling back to auto-reprocess")
+                        self.onAutoReprocessRequested?(directory)
+                    }
+                }
             }
         }
+    }
+    
+    /// Cancel any running second-pass finalization so a manual reprocess can proceed
+    /// without ANE resource contention or transcript.md write races.
+    func cancelSecondPassIfRunning() {
+        guard let task = secondPassFinalizationTask else { return }
+        logger.info("Cancelling second-pass: user initiated manual reprocess")
+        task.cancel()
+        secondPassFinalizationTask = nil
     }
     
     /// Export meeting to exports directory if export is enabled

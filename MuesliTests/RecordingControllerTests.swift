@@ -589,6 +589,15 @@ final class RecordingControllerTests: XCTestCase {
         // We don't assert a specific value because the last writer wins.
         XCTAssertNotNil(session, "Session must survive concurrent draft updates")
     }
+    
+    // MARK: - Second-Pass Cancellation
+    
+    func testCancelSecondPassIfRunningDoesNotCrashWithNoTask() async {
+        let controller = await createTestController()
+        
+        // Should be a no-op when no second-pass is running
+        controller.cancelSecondPassIfRunning()
+    }
 }
 
 // MARK: - Thread Safety Tests for ViewModel

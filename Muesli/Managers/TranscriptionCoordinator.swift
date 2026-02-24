@@ -81,6 +81,9 @@ final class TranscriptionCoordinator {
         }
     }
     
+    /// Directories with an active second-pass ASR task (prevents concurrent auto-reprocess)
+    private var activeSecondPassDirectories: Set<URL> = []
+    
     /// Audio buffering while model loads (protected by serial actor execution)
     private var pendingSystemAudio: [Float] = []
     private var pendingMicAudio: [Float] = []
@@ -532,11 +535,26 @@ final class TranscriptionCoordinator {
         bufferStartTime = nil
     }
     
+    // MARK: - Second-Pass Lifecycle
+    
+    /// Mark a directory as having an active second-pass ASR task.
+    /// Called by RecordingController before launching `launchSecondPassFinalization`.
+    /// Cleared automatically via `defer` inside `runSecondPassASR`.
+    func markSecondPassActive(for directory: URL) {
+        activeSecondPassDirectories.insert(directory.standardizedFileURL)
+        logger.info("Second-pass marked active for \(directory.lastPathComponent)")
+    }
+    
     // MARK: - Auto-Reprocessing (for empty transcripts)
     
     /// Auto-reprocess a meeting once the model becomes ready
     /// Used when recording stopped with empty transcript (model wasn't ready in time)
     func autoReprocessWhenReady(meeting: MeetingHistoryItem) {
+        if activeSecondPassDirectories.contains(meeting.directory.standardizedFileURL) {
+            logger.warning("Skipping auto-reprocess for '\(meeting.title)': second-pass in progress")
+            return
+        }
+        
         guard let activeModel = modelManager.activeModel else {
             logger.warning("Cannot auto-reprocess: no active model")
             return
@@ -576,6 +594,11 @@ final class TranscriptionCoordinator {
         preference: PreferencesManager.SecondPassModelPreference,
         liveModel: ModelManager.ModelSize? = nil
     ) async throws -> [TranscriptBlock] {
+        defer {
+            activeSecondPassDirectories.remove(directory.standardizedFileURL)
+            logger.info("Second-pass cleared for \(directory.lastPathComponent)")
+        }
+        
         guard let selectedModel = resolveSecondPassModel(
             preference: preference,
             liveModel: liveModel
