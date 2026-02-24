@@ -125,7 +125,7 @@ struct CompletedMeetingWindow: View {
     
     /// Ellipsis menu for completed-meeting actions (Apple HIG: ellipsis for "more actions").
     private var meetingActionsMenu: some View {
-        EllipsisActionsMenu(isReprocessing: meeting.isReprocessing) {
+        EllipsisActionsMenu {
             Button("Open in Finder") {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
             }

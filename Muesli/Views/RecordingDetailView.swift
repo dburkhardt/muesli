@@ -898,7 +898,7 @@ struct RecordingDetailView: View {
     
     /// Ellipsis menu for completed-meeting actions (Apple HIG: ellipsis for "more actions").
     private func meetingActionsMenu(for meeting: MeetingHistoryItem) -> some View {
-        EllipsisActionsMenu(isReprocessing: meeting.isReprocessing) {
+        EllipsisActionsMenu {
             Button("Open in Finder") {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
             }

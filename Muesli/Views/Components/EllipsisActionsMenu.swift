@@ -3,7 +3,6 @@ import SwiftUI
 /// Reusable ellipsis (more actions) menu with native hover circle effect.
 /// Matches Apple Notes-style icon buttons: subtle circular gray background on hover.
 struct EllipsisActionsMenu<MenuContent: View>: View {
-    let isReprocessing: Bool
     @ViewBuilder let menuContent: () -> MenuContent
 
     @State private var isHovered = false
@@ -12,17 +11,9 @@ struct EllipsisActionsMenu<MenuContent: View>: View {
         Menu {
             menuContent()
         } label: {
-            Group {
-                if isReprocessing {
-                    ProgressView()
-                        .scaleEffect(0.65)
-                        .frame(width: 12, height: 12)
-                } else {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .medium))
-                }
-            }
-            .foregroundStyle(.secondary)
+            Image(systemName: "ellipsis")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
