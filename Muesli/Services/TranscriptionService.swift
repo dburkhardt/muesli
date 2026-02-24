@@ -469,6 +469,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 )
                 state.systemAudioBuffer.removeAll()
                 state.systemProcessedSamples = 0
+                state.systemChunksProcessed = 0
                 state.systemSilenceFlushDone = true
             }
 
@@ -487,6 +488,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 )
                 state.micAudioBuffer.removeAll()
                 state.micProcessedSamples = 0
+                state.micChunksProcessed = 0
                 state.micSilenceFlushDone = true
             }
 
