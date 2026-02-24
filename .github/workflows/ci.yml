@@ -179,10 +179,6 @@ jobs:
 
   test-quarantined:
     name: Test Quarantined
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
     runs-on: macos-26
     timeout-minutes: 120
     continue-on-error: true

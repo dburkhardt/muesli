@@ -44,9 +44,6 @@ final class RecordingController {
     /// Session pending stop (waiting for title input)
     var pendingStopSession: RecordingSession?
     
-    /// Background second-pass finalization task for the latest completed session.
-    nonisolated(unsafe) private var secondPassFinalizationTask: Task<Void, Never>?
-    
     // MARK: - Audio Level Throttling
     
     /// Last time microphone level was updated (for throttling UI updates)
@@ -162,7 +159,6 @@ final class RecordingController {
     }
     
     deinit {
-        secondPassFinalizationTask?.cancel()
         logger.debug("Deallocating")
     }
     
@@ -462,15 +458,6 @@ final class RecordingController {
                     session?.appendTranscriptSegment(segment)
                 }
             }
-            transcriptionCoordinator.setDraftHandler { [weak session] draftText, speaker in
-                Task { @MainActor in
-                    guard let session = session else { return }
-                    session.updateLiveDraft(
-                        draftText,
-                        speaker: speaker == .me ? .me : .them
-                    )
-                }
-            }
             transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
             
         case .failed(let error):
@@ -608,7 +595,6 @@ final class RecordingController {
     }
     
     private func discardRecordingAsync(for session: RecordingSession) async {
-        secondPassFinalizationTask?.cancel()
         session.state = .stopping
         session.stopDisplayTimer()
         
@@ -681,17 +667,10 @@ final class RecordingController {
                 // Continue - we have audio files even if transcript save failed
             }
             
-            let hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
-                                FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
-            
-            if preferencesManager.isSecondPassASREnabled,
-               hasAudioFiles,
-               (session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0) >= AudioConfiguration.secondPassMinDurationSeconds {
-                launchSecondPassFinalization(for: session, directory: directory)
-            }
-            
             // Check if we have audio but no transcript (model wasn't ready during recording)
             // If so, auto-trigger reprocessing once the model becomes ready
+            let hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
+                                FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
             let hasEmptyTranscript = session.transcriptBlocks.isEmpty
             
             if hasAudioFiles && hasEmptyTranscript {
@@ -717,77 +696,6 @@ final class RecordingController {
         
         activeSession = nil
         resetMuteState()
-    }
-    
-    private func launchSecondPassFinalization(for session: RecordingSession, directory: URL) {
-        let title = session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle
-        let meetingDate = session.recordingStartTime ?? Date()
-        
-        do {
-            try fileOutputService.saveTranscriptBlocks(
-                session.transcriptBlocks,
-                title: title,
-                date: meetingDate,
-                to: directory,
-                filename: "transcript.live.md"
-            )
-        } catch {
-            logger.error("Failed to save live snapshot transcript: \(error.localizedDescription)")
-        }
-        
-        secondPassFinalizationTask?.cancel()
-        session.isFinalizingTranscript = true
-        
-        secondPassFinalizationTask = Task { [weak self, weak session] in
-            guard let self, let session else { return }
-            defer {
-                Task { @MainActor in
-                    session.isFinalizingTranscript = false
-                    self.onRefreshHistory?()
-                }
-            }
-            
-            do {
-                let blocks = try await self.transcriptionCoordinator.runSecondPassASR(
-                    in: directory,
-                    recordingStartTime: meetingDate,
-                    preference: self.preferencesManager.secondPassModelPreference
-                )
-                try Task.checkCancellation()
-                
-                try self.fileOutputService.saveTranscriptBlocks(
-                    blocks,
-                    title: title,
-                    date: meetingDate,
-                    to: directory,
-                    filename: "transcript.md"
-                )
-                
-                await MainActor.run {
-                    session.resetTranscript()
-                    for block in blocks {
-                        let segment = TranscriptionService.TranscriptSegment(
-                            text: block.text,
-                            timestamp: block.startTimestamp,
-                            speaker: block.speaker == .me ? .me : .them
-                        )
-                        session.appendTranscriptSegment(segment)
-                    }
-                    session.finalizeTranscript()
-                }
-                
-                await self.exportMeetingIfEnabled(directory: directory)
-                
-                if let meeting = self.createMeetingHistoryItem(from: directory),
-                   let refinementCoordinator = self.transcriptionCoordinator.refinementCoordinator {
-                    refinementCoordinator.autoRefineIfEnabled(meeting: meeting, preferences: self.preferencesManager)
-                }
-            } catch is CancellationError {
-                self.logger.info("Second-pass finalization cancelled")
-            } catch {
-                self.logger.error("Second-pass finalization failed: \(error.localizedDescription)")
-            }
-        }
     }
     
     /// Export meeting to exports directory if export is enabled
@@ -824,9 +732,7 @@ final class RecordingController {
     /// Create a MeetingHistoryItem from a directory URL (for immediate export after recording)
     private func createMeetingHistoryItem(from directory: URL) -> MeetingHistoryItem? {
         let fileManager = FileManager.default
-        let transcriptURL = fileManager.fileExists(atPath: directory.appendingPathComponent("transcript.md").path)
-            ? directory.appendingPathComponent("transcript.md")
-            : directory.appendingPathComponent("transcript.live.md")
+        let transcriptURL = directory.appendingPathComponent("transcript.md")
         
         guard fileManager.fileExists(atPath: transcriptURL.path) else {
             return nil
@@ -1045,15 +951,6 @@ final class RecordingController {
                 session.appendTranscriptSegment(segment)
             }
         }
-        transcriptionCoordinator.setDraftHandler { [weak session] draftText, speaker in
-            Task { @MainActor in
-                guard let session = session else { return }
-                session.updateLiveDraft(
-                    draftText,
-                    speaker: speaker == .me ? .me : .them
-                )
-            }
-        }
             
             session.outputDirectory = try fileOutputService.resumeWriting(
                 to: meeting.directory,
@@ -1134,7 +1031,6 @@ final class RecordingController {
                 session.appendTranscriptSegment(segment)
             }
         }
-        transcriptionCoordinator.setDraftHandler { _, _ in }
         
         let systemAudioURL = directory.appendingPathComponent("audio.caf")
         let micAudioURL = directory.appendingPathComponent("microphone.caf")

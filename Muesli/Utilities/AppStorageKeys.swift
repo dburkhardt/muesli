@@ -64,23 +64,8 @@ enum AppStorageKeys {
     /// AEC delay mode: how stream delay is computed for echo cancellation
     static let aecDelayMode = "aecDelayMode"
     
-    /// Audio chunk duration for transcription (2-30 seconds)
+    /// Audio chunk duration for transcription (2-10 seconds)
     static let audioChunkDuration = "audioChunkDuration"
-    
-    /// Enable overlap dedup stabilization in live transcription path
-    static let liveStabilizerEnabled = "liveStabilizerEnabled"
-    
-    /// Enable post-stop second-pass ASR finalization
-    static let secondPassASREnabled = "secondPassASREnabled"
-    
-    /// Enable automatic LLM refinement after second-pass ASR
-    static let autoRefineEnabled = "autoRefineEnabled"
-    
-    /// Second-pass model preference strategy
-    static let secondPassModelPreference = "secondPassModelPreference"
-    
-    /// Explicit model raw value when secondPassModelPreference == specific
-    static let secondPassSpecificModel = "secondPassSpecificModel"
     
     // MARK: - Export
     
