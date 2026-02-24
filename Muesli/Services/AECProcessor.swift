@@ -183,7 +183,7 @@ final class AECProcessor {
 
             guard let bridge = state.bridge, bridge.isReady else {
                 state.stats.framesSkipped += 1
-                return (false, changed, frozen, false, false)
+                return (false, changed, frozen, preservedFilterState, false)
             }
 
             // When adaptation is frozen, feed silence to AEC3's render path.
