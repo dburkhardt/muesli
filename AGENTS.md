@@ -59,9 +59,16 @@ Detailed description of the feature or improvement.
 
 **Build & Launch** (recommended):
 
+**IMPORTANT — Commit before building**: Always commit your changes before starting a build. The build script bakes the current git SHA into the binary (visible in Help → About). If you build with uncommitted changes, the About page will show `(dirty)` and the user cannot verify which code is running. After committing, capture the short SHA with `git rev-parse --short HEAD` — you will report this alongside the build timestamp.
+
 The build takes 1-8 minutes depending on cache state. Run the build in the background and poll until it finishes:
 
 ```bash
+# 0. Commit changes first (REQUIRED) and note the SHA
+git add -A && git commit -m "description of changes"
+COMMIT_SHA=$(git rev-parse --short HEAD)
+echo "Building commit: $COMMIT_SHA"
+
 # 1. Start the build in background
 ./scripts/build-and-launch.sh
 ```
@@ -72,22 +79,25 @@ Run the build script in the background (using the Bash tool's `run_in_background
 # 2. Poll until build completes (check every 15 seconds)
 while [ -f /tmp/muesli-build.lock ]; do sleep 15; done
 
-# 3. Check result
+# 3. Check result and report commit + timestamp
 LOG=$(ls -t /tmp/muesli-build-*.log | head -1)
 if grep -q "BUILD SUCCEEDED" "$LOG"; then
-  echo "SUCCESS"; grep "BUILD TIMESTAMP:" "$LOG"; cat /tmp/muesli-build-timestamp.txt
+  echo "SUCCESS"
+  echo "Commit: $(git rev-parse --short HEAD)"
+  grep "BUILD TIMESTAMP:" "$LOG"
+  cat /tmp/muesli-build-timestamp.txt
 else
   echo "FAILED"; grep "error:" "$LOG" | head -20
 fi
 ```
 
-**Build timestamp verification** (REQUIRED after build success):
-- After successful build, the log includes a prominent `BUILD TIMESTAMP` box
-- The timestamp is also written to `/tmp/muesli-build-timestamp.txt`
-- **Agents MUST provide this timestamp to the user** when reporting build completion
-- Format: UTC ISO 8601 (e.g., `2026-01-24T15:49:31Z`)
-- User can verify in app: Help → About → Build Details → Built
-- This ensures the user knows they're running the exact build that was just compiled
+**Build verification** (REQUIRED after build success):
+- **Agents MUST report both the git commit SHA and build timestamp** when reporting build completion
+- Git commit: short SHA from `git rev-parse --short HEAD` (e.g., `abc1234`)
+- Build timestamp: from the log's `BUILD TIMESTAMP` box or `/tmp/muesli-build-timestamp.txt` (UTC ISO 8601, e.g., `2026-01-24T15:49:31Z`)
+- User verifies in app: Help → About → Build Details shows Commit and Built timestamp
+- Example agent output: "Build succeeded. Commit: `abc1234`, timestamp: `2026-01-24T15:49:31Z`"
+- This ensures the user knows they're running the exact code that was just compiled
 
 **If the build fails**, check the log for errors:
 

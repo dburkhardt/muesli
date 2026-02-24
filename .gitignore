@@ -30,6 +30,9 @@ package-lock.json
 # Development notes (local only, not for public repo)
 dev-notes/
 
+# Agent lessons learned (local knowledge base, not tracked)
+lessons/
+
 # Build logs
 build-*.txt
 
