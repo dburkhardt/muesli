@@ -620,7 +620,7 @@ extension CoreAudioTapTests {
     }
 
     func testMicCaptureRingNoDiscontinuityOnSlightlyNegativeDelta() {
-        let ring = MicCaptureRing(capacitySamples: 48000)
+        let ring = MicCaptureRing(capacitySamples: 120000)
         let samples = [Float](repeating: 0.1, count: 480)
 
         // Push warmup callbacks
@@ -760,7 +760,7 @@ extension CoreAudioTapTests {
     // MARK: - MicCaptureRing Sample-Time Domain Mismatch Regression
 
     func testMicCaptureRingDomainMismatchCausesFalseDiscontinuity() {
-        let ring = MicCaptureRing(capacitySamples: 48000)
+        let ring = MicCaptureRing(capacitySamples: 120000)
 
         // Simulate a C920 webcam: AVAudioEngine delivers ~4096 frames at 44.1kHz,
         // but after resampling to 48kHz the count is ~4458.
@@ -803,7 +803,7 @@ extension CoreAudioTapTests {
     }
 
     func testMicCaptureRingFixedDomainNoFalseDiscontinuity() {
-        let ring = MicCaptureRing(capacitySamples: 48000)
+        let ring = MicCaptureRing(capacitySamples: 120000)
 
         // Simulate the FIX: use 48kHz-domain startSampleIndex as sampleTime
         // when resampler is active. Both sampleTime and sampleCount are in 48kHz domain.

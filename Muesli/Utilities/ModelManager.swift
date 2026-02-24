@@ -101,7 +101,15 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
     }
     
     /// Currently active model for transcription
-    var activeModel: ModelSize?
+    var activeModel: ModelSize? {
+        didSet {
+            if let activeModel {
+                UserDefaults.standard.set(activeModel.rawValue, forKey: AppStorageKeys.activeWhisperModel)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
+            }
+        }
+    }
     
     /// Legacy single model path (for backwards compatibility)
     var modelPath: URL? {
@@ -345,11 +353,11 @@ final class ModelManager: @unchecked Sendable, ModelManagerProtocol {
         
         // If this was active, try to switch
         if activeModel == model {
+            activeModel = nil
             if let valid = getFirstValidModel() {
                 setActiveModel(valid)
             } else {
                 activeModel = nil
-                UserDefaults.standard.removeObject(forKey: AppStorageKeys.activeWhisperModel)
             }
         }
         

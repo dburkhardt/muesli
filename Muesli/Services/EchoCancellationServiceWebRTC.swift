@@ -308,6 +308,12 @@ final class EchoCancellationServiceWebRTC: @unchecked Sendable, EchoCancellation
     func processMicrophoneAudio(microphoneSamples: [Float]) -> [Float] {
         guard !microphoneSamples.isEmpty else { return microphoneSamples }
         guard aecBridge?.isReady == true else { return microphoneSamples }
+        let hasSystemAudio = state.withLock { state in
+            state.totalSystemSamples > 0 && state.systemRingBuffer.available > 0
+        }
+        guard hasSystemAudio else {
+            return microphoneSamples
+        }
         
         // With the startup order fix (2026-01-27), system audio
         // now starts BEFORE mic audio, so render frames should already be arriving.

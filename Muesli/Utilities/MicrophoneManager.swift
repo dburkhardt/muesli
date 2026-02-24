@@ -36,6 +36,12 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     private(set) var selectedDeviceID: String?
     
     private static let selectedDeviceIDKey = "selectedMicrophoneDeviceID"
+    /// Detect test environment for deterministic unit test behavior.
+    /// In tests we avoid touching Core Audio/AVFoundation device APIs and return
+    /// stable default values instead.
+    private static var isRunningTests: Bool {
+        NSClassFromString("XCTestCase") != nil
+    }
     
     /// Listener for device list changes (devices added/removed)
     private var deviceListListenerID: AudioObjectPropertyListenerBlock?
@@ -168,6 +174,14 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     /// Set the selected microphone device ID
     func setSelectedDeviceID(_ deviceID: String?) {
         selectedDeviceID = deviceID
+        guard !Self.isRunningTests else {
+            if let deviceID = deviceID {
+                UserDefaults.standard.set(deviceID, forKey: Self.selectedDeviceIDKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.selectedDeviceIDKey)
+            }
+            return
+        }
         
         if let deviceID = deviceID {
             UserDefaults.standard.set(deviceID, forKey: Self.selectedDeviceIDKey)
@@ -199,6 +213,11 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     /// AVCaptureDevice.DiscoverySession can trigger permission prompts on macOS.
     /// See: spec/onboarding_flow.md "AVCaptureDevice and Permission Prompts"
     func refreshDevices() {
+        guard !Self.isRunningTests else {
+            availableDevices = []
+            return
+        }
+        
         // Check if microphone permission is granted before accessing devices
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         guard status == .authorized else {
@@ -280,6 +299,7 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     /// Set the preferred microphone device
     /// Note: We now use AVAudioEngine which allows specifying the input device.
     private func setSystemDefaultMicrophone(deviceID: String) {
+        guard !Self.isRunningTests else { return }
         // Check permission before accessing devices
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             // Just store the preference, device validation will happen when permission is granted
@@ -305,6 +325,7 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     /// ⚠️ WARNING: Only call this after microphone permission has been granted.
     /// AVCaptureDevice.DiscoverySession can trigger permission prompts.
     var currentDefaultDevice: MicrophoneDevice? {
+        guard !Self.isRunningTests else { return nil }
         // Check if microphone permission is granted before accessing devices
         // to avoid triggering the permission prompt during onboarding
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
