@@ -124,6 +124,16 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
     
     // MARK: - Device Filtering
     
+    /// Whether a device is a virtual aggregate or Muesli's own tap aggregate.
+    /// Used by both `refreshDevices()` and `currentDefaultDevice` to keep
+    /// filtering logic consistent and case-insensitive.
+    private func isAggregateOrTapDevice(_ device: AVCaptureDevice) -> Bool {
+        let uid = device.uniqueID.lowercased()
+        let name = device.localizedName.lowercased()
+        return uid.contains("aggregate") || name.contains("aggregate")
+            || uid.hasPrefix("com.muesli.tap") || name.contains("muesli tap")
+    }
+
     /// Check if a device is a Continuity Camera device (iPhone/iPad microphone)
     /// - Parameter device: The AVCaptureDevice to check
     /// - Returns: true if the device is an iPhone/iPad Continuity Camera device
@@ -219,12 +229,7 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
             forKey: AppStorageKeys.showContinuityCameraDevices
         )
         for device in captureDevices {
-            let uid = device.uniqueID.lowercased()
-            let name = device.localizedName.lowercased()
-
-            // Filter out virtual aggregate devices (system-created and Muesli's own tap device)
-            if uid.contains("aggregate") || name.contains("aggregate")
-                || uid.hasPrefix("com.muesli.tap") || name.contains("muesli tap") {
+            if isAggregateOrTapDevice(device) {
                 logger.debug("Skipping aggregate/tap device: \(device.localizedName) (\(device.uniqueID))")
                 continue
             }
@@ -318,10 +323,7 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         let showContinuityCamera = UserDefaults.standard.bool(
             forKey: AppStorageKeys.showContinuityCameraDevices
         )
-        let eligibleDevices = discoverySession.devices.filter { device in
-            !device.uniqueID.contains("Aggregate") &&
-            !device.localizedName.contains("Aggregate")
-        }
+        let eligibleDevices = discoverySession.devices.filter { !isAggregateOrTapDevice($0) }
         // Prefer the true system default if it's visible (not a hidden Continuity Camera).
         // Fall back to first non-Continuity Camera device to avoid surprising auto-selection.
         guard let defaultDevice = eligibleDevices.first(where: {
