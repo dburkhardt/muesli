@@ -26,6 +26,19 @@ struct MuesliApp: App {
     /// Shared ViewModel instance for the entire app (including onboarding)
     static var sharedViewModel: MuesliViewModel?
 
+    /// Stored openWindow action, captured eagerly from the App body getter
+    /// so AppDelegate can reopen the main window without SwiftUI Environment access.
+    nonisolated(unsafe) private static var _openWindow: OpenWindowAction?
+
+    static func installOpenWindowCallback(_ action: OpenWindowAction) {
+        _openWindow = action
+    }
+
+    static func openMainWindow() {
+        _openWindow?(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     init() {
         // Create managers in dependency order
         let prefs = PreferencesManager()
@@ -72,14 +85,17 @@ struct MuesliApp: App {
         MuesliApp.sharedViewModel = vm
     }
     
+    @Environment(\.openWindow) private var openWindow
+
     var body: some Scene {
+        let _ = Self.installOpenWindowCallback(openWindow)
+
         // Menu bar dropdown - always available
         MenuBarExtra {
             MenuBarView(viewModel: viewModel)
                 .environment(viewModel)
                 .environment(meetingHistoryManager)
                 .environment(refinementCoordinator)
-                .background(OpenWindowCallbackSetter())
         } label: {
             MenuBarIconView()
         }
@@ -137,6 +153,10 @@ struct MuesliApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                NewMeetingMenuButton()
+            }
+
             // Replace the standard About command with our custom one
             CommandGroup(replacing: .appInfo) {
                 AboutMenuButton()
@@ -156,14 +176,53 @@ private struct AboutMenuButton: View {
     }
 }
 
+/// File > New command that always reveals the main app window.
+private struct NewMeetingMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("New") {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        .keyboardShortcut("n", modifiers: .command)
+    }
+}
+
 /// App delegate that opens onboarding window on first launch
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate?
     private var onboardingWindow: NSWindow?
-    
-    /// Callback to open the main window (set by MuesliApp body)
-    var openMainWindowCallback: (() -> Void)?
+
+    /// Dock click handler: reopen main window (or bring onboarding to front).
+    nonisolated func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        Task { @MainActor in
+            if let window = onboardingWindow, window.isVisible {
+                bringOnboardingWindowToFront()
+                return
+            }
+            showMainWindow()
+        }
+        return true
+    }
+
+    /// Fallback: when app activates with no visible main window, show it.
+    nonisolated func applicationDidBecomeActive(_ notification: Notification) {
+        Task { @MainActor in
+            let hasVisibleMainWindow = NSApplication.shared.windows.contains {
+                $0.identifier?.rawValue == "main" && $0.isVisible
+            }
+            guard !hasVisibleMainWindow else { return }
+
+            if let window = onboardingWindow, window.isVisible {
+                bringOnboardingWindowToFront()
+                return
+            }
+
+            showMainWindow()
+        }
+    }
     
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
@@ -231,10 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Normal launch - open main window
                     // Small delay to ensure window system is ready
                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                    NSApplication.shared.activate(ignoringOtherApps: true)
-                    if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
-                        window.makeKeyAndOrderFront(nil)
-                    }
+                    self.showMainWindow()
                     
                     // Check for updates after 5 seconds
                     try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
@@ -359,11 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Show main window (same as normal launch completion)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            
-            if let mainWindow = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
-                mainWindow.makeKeyAndOrderFront(nil)
-            }
+            showMainWindow()
         }
     }
     
@@ -450,34 +502,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             
             // Show the main window
-            if let window = mainWindow {
-                window.makeKeyAndOrderFront(nil)
-                window.orderFrontRegardless()
-            } else if let callback = self.openMainWindowCallback {
-                // Use the callback to open the main window via SwiftUI's openWindow
-                callback()
-            } else {
-                // Last resort: log error
-                MuesliApp.logger.warning("Main window not found and no callback available.")
-            }
+            self.showMainWindow(existingWindow: mainWindow)
         }
     }
-}
 
-/// Helper view that captures openWindow environment and sets callback on AppDelegate
-private struct OpenWindowCallbackSetter: View {
-    @Environment(\.openWindow) private var openWindow
-    
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onAppear {
-                // Set the callback so AppDelegate can open the main window
-                AppDelegate.shared?.openMainWindowCallback = { [openWindow] in
-                    openWindow(id: "main")
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-            }
+    /// Reveal and activate the main window, creating it via the stored
+    /// OpenWindowAction if the NSWindow no longer exists.
+    private func showMainWindow(existingWindow: NSWindow? = nil) {
+        let mainWindow = existingWindow ?? NSApplication.shared.windows.first(where: { window in
+            window.identifier?.rawValue == "main"
+        })
+
+        if let mainWindow {
+            mainWindow.makeKeyAndOrderFront(nil)
+            mainWindow.orderFrontRegardless()
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return
+        }
+
+        MuesliApp.openMainWindow()
     }
 }
 
