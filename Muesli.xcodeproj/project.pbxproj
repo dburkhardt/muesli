@@ -102,6 +102,7 @@
 		DTV0001241D1A1D00000061 /* DraftTranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTV0002241D1A1D00000061 /* DraftTranscriptView.swift */; };
 		LST0001241D1A1D00000062 /* LiveStabilizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LST0002241D1A1D00000062 /* LiveStabilizerTests.swift */; };
 		TRS0001241D1A1D00000063 /* GuardrailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRS0002241D1A1D00000063 /* GuardrailTests.swift */; };
+		TRF0001241D1A1D00000066 /* TranscriptRefinementServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRF0002241D1A1D00000066 /* TranscriptRefinementServiceTests.swift */; };
 		TSS0001241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSS0002241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift */; };
 		SRT0001241D1A1D00000065 /* StabilizerRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRT0002241D1A1D00000065 /* StabilizerRegressionTests.swift */; };
 		'HL00001241D1A1D00000102' = {isa = PBXBuildFile; fileRef = HL00002241D1A1D00000102; };
@@ -226,6 +227,7 @@
 		DTV0002241D1A1D00000061 /* DraftTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftTranscriptView.swift; sourceTree = "<group>"; };
 		LST0002241D1A1D00000062 /* LiveStabilizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStabilizerTests.swift; sourceTree = "<group>"; };
 		TRS0002241D1A1D00000063 /* GuardrailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuardrailTests.swift; sourceTree = "<group>"; };
+		TRF0002241D1A1D00000066 /* TranscriptRefinementServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRefinementServiceTests.swift; sourceTree = "<group>"; };
 		TSS0002241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionServiceStabilizerTests.swift; sourceTree = "<group>"; };
 		SRT0002241D1A1D00000065 /* StabilizerRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilizerRegressionTests.swift; sourceTree = "<group>"; };
 		'HL00002241D1A1D00000102' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverableLink.swift; sourceTree = "<group>"; };
@@ -446,9 +448,10 @@
 				B100001D241D1A1D00000040 /* Protocols */,
 				B100001E241D1A1D00000040 /* Mocks */,
 				LST0002241D1A1D00000062 /* LiveStabilizerTests.swift */,
-				TRS0002241D1A1D00000063 /* GuardrailTests.swift */,
-				TSS0002241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift */,
-				SRT0002241D1A1D00000065 /* StabilizerRegressionTests.swift */,
+			TRS0002241D1A1D00000063 /* GuardrailTests.swift */,
+			TRF0002241D1A1D00000066 /* TranscriptRefinementServiceTests.swift */,
+			TSS0002241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift */,
+			SRT0002241D1A1D00000065 /* StabilizerRegressionTests.swift */,
 			);
 			path = MuesliTests;
 			sourceTree = "<group>";
@@ -783,7 +786,8 @@
 				LST0001241D1A1D00000062 /* LiveStabilizerTests.swift in Sources */,
 				TSS0001241D1A1D00000064 /* TranscriptionServiceStabilizerTests.swift in Sources */,
 				SRT0001241D1A1D00000065 /* StabilizerRegressionTests.swift in Sources */,
-				TRS0001241D1A1D00000063 /* TranscriptRefinementServiceTests.swift in Sources */,
+				TRS0001241D1A1D00000063 /* GuardrailTests.swift in Sources */,
+			TRF0001241D1A1D00000066 /* TranscriptRefinementServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
