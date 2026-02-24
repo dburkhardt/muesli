@@ -62,6 +62,10 @@ final class MicCaptureRing {
     
     /// Discontinuity threshold multiplier
     private let discontinuityMultiplier = 8
+
+    /// Acceptable ratio between observed sample-time delta and declared callback sample count
+    /// before considering the two domains mismatched.
+    private let sampleRateDomainTolerance: Double = 0.05
     
     /// Whether a discontinuity was detected since last reset
     private(set) var hasDiscontinuity: Bool = false
@@ -123,12 +127,23 @@ final class MicCaptureRing {
             }
             if lastSampleTime > 0 && callbackCount > warmupCallbackCount && debounceRemaining == 0 {
                 let deltaSamples = sampleTime - lastSampleTime
-                let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
-                let negativeTolerance = -Double(expectedSamplesPerCallback) / 2.0  // -5ms
+                let expectedFromCallback = Double(sampleCount)
+                let deltaVsCallbackDiff = abs(deltaSamples - expectedFromCallback)
+                let isDomainMismatch = expectedFromCallback > 0 && (deltaVsCallbackDiff / expectedFromCallback) > sampleRateDomainTolerance
 
-                if deltaSamples < negativeTolerance || deltaSamples > threshold {
+                if isDomainMismatch {
+                    expectedSamplesPerCallback = Int(expectedFromCallback)
                     hasDiscontinuity = true
                     debounceRemaining = debounceDuration
+                } else {
+                    expectedSamplesPerCallback = sampleCount
+                    let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
+                    let negativeTolerance = -Double(expectedSamplesPerCallback) / 2.0  // -5ms
+
+                    if deltaSamples < negativeTolerance || deltaSamples > threshold {
+                        hasDiscontinuity = true
+                        debounceRemaining = debounceDuration
+                    }
                 }
             }
             lastSampleTime = sampleTime + Float64(sampleCount)
@@ -334,6 +349,7 @@ final class MicCaptureRing {
         lock.lock()
         defer { lock.unlock() }
         hasDiscontinuity = false
+        debounceRemaining = 0
     }
     
     /// Set expected samples per callback (for discontinuity detection)

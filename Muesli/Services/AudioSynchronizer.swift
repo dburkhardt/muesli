@@ -574,20 +574,31 @@ final class AudioSynchronizer {
     /// capture ring overflows again within that window — creating a livelock where
     /// stable is never reached and AEC stays frozen for the entire session.
     ///
-    /// This method discards capture samples to keep `renderAvail - captureAvail`
-    /// near the target render lead (200ms), ensuring canTransitionToStable() can
-    /// succeed as soon as enough render data has accumulated.
+    /// This method discards capture samples while lead is below the minimum valid
+    /// 100ms window so priming can progress toward a valid transition.
     private func trimCaptureForTargetLead() {
         let renderAvail = renderRing.available
         let captureAvail = captureRing.available
-        let targetLeadSamples = Self.targetRenderLeadMs * Self.sampleRate / 1000
+        let minLeadSamples = Self.minRenderLeadMs * Self.sampleRate / 1000
 
-        let desiredCapture = max(0, renderAvail - targetLeadSamples)
+        // Preserve at least one frame for alignment, and only trim while
+        // capture is too high relative to render so that render lead can
+        // reach the minimum valid window.
+        let renderLeadSamples = renderAvail - captureAvail
+        if renderLeadSamples >= minLeadSamples {
+            return
+        }
+
+        let desiredCapture = max(0, renderAvail - minLeadSamples)
         let excessCapture = captureAvail - desiredCapture
 
         guard excessCapture > 0 else { return }
 
-        captureRing.discard(excessCapture)
+        let minCaptureToKeep = Self.frameSizeSamples
+        let maxDiscard = max(0, captureAvail - minCaptureToKeep)
+        guard maxDiscard > 0 else { return }
+
+        captureRing.discard(min(excessCapture, maxDiscard))
         stats.overruns += 1
     }
 

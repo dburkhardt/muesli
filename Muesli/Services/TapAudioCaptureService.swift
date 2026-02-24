@@ -975,9 +975,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                         userInfo: [NSLocalizedDescriptionKey: "Microphone input format is invalid"]))
         }
 
-        var hardwareSampleRate = inputFormat.sampleRate
-        var hardwareChannels = inputFormat.channelCount
-        microphoneSampleRate = hardwareSampleRate
+        let hardwareSampleRate = inputFormat.sampleRate
+        let hardwareChannels = inputFormat.channelCount
+        var derivedHardwareSampleRate = hardwareSampleRate
+        var derivedHardwareChannels = hardwareChannels
+        microphoneSampleRate = derivedHardwareSampleRate
 
         // Use nil format (device's native output format) — explicit 48kHz format
         // causes zero-frame delivery on some USB devices (e.g., C920 webcam).
@@ -1002,9 +1004,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 guard fallbackFormat.sampleRate > 0, fallbackFormat.channelCount > 0 else {
                     throw error
                 }
-                hardwareSampleRate = fallbackFormat.sampleRate
-                hardwareChannels = fallbackFormat.channelCount
-                microphoneSampleRate = hardwareSampleRate
+                derivedHardwareSampleRate = fallbackFormat.sampleRate
+                derivedHardwareChannels = fallbackFormat.channelCount
+                microphoneSampleRate = derivedHardwareSampleRate
 
                 fallbackInputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
                     self?.handleMicrophoneBuffer(buffer, time: time)
@@ -1049,10 +1051,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             micResampleBuffer = nil
         }
 
-        logger.info("Microphone capture started at native \(hardwareSampleRate)Hz, \(hardwareChannels)ch, tapOutput=\(tapSampleRate)Hz \(tapChannels)ch")
+        logger.info("Microphone capture started at native \(derivedHardwareSampleRate)Hz, \(derivedHardwareChannels)ch, tapOutput=\(tapSampleRate)Hz \(tapChannels)ch")
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_SAMPLE_RATE: hardware=\(hardwareSampleRate)Hz, channels=\(hardwareChannels), tapOutput=\(tapSampleRate)Hz/\(tapChannels)ch, aecTarget=48000Hz, resampler=\(self.micResampler != nil)")
+                "MIC_SAMPLE_RATE: hardware=\(derivedHardwareSampleRate)Hz, channels=\(derivedHardwareChannels), tapOutput=\(tapSampleRate)Hz/\(tapChannels)ch, aecTarget=48000Hz, resampler=\(self.micResampler != nil)")
         }
     }
 
