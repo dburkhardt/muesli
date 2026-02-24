@@ -72,7 +72,8 @@ struct CompletedMeetingWindow: View {
             
             Spacer()
             
-            // Copy transcript button
+            meetingActionsMenu
+            
             copyTranscriptButton
             
             CompletedIndicator()
@@ -118,17 +119,11 @@ struct CompletedMeetingWindow: View {
             Label(formatDate(meeting.date), systemImage: "calendar")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-            
-            Text("·")
-                .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
-            
-            meetingActionsMenu
         }
         .padding(.bottom, 8)
     }
     
-    /// Hamburger menu for completed-meeting actions.
+    /// Ellipsis menu for completed-meeting actions (Apple HIG: ellipsis for "more actions").
     private var meetingActionsMenu: some View {
         Menu {
             Button("Open in Finder") {
@@ -139,21 +134,23 @@ struct CompletedMeetingWindow: View {
                 historyManager.requestDeleteMeeting(meeting)
             }
         } label: {
-            HStack(spacing: 6) {
+            Group {
                 if meeting.isReprocessing {
                     ProgressView()
                         .scaleEffect(0.65)
-                        .frame(width: 10, height: 10)
+                        .frame(width: 12, height: 12)
+                } else {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .medium))
                 }
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Actions")
-                    .font(.system(size: 12))
             }
             .foregroundStyle(.secondary)
+            .padding(8)
+            .background(Color.secondary.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .menuStyle(.borderlessButton)
-        .help("Recording actions")
+        .help("More actions")
     }
     
     // MARK: - Recording Start Time

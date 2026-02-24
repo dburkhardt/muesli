@@ -38,6 +38,9 @@ final class RefinementCoordinator {
     /// Current refinement task (for cancellation)
     private var refinementTask: Task<Void, Never>?
     
+    /// When refinement started (for elapsed timer UI); nil when not refining
+    var refinementStartTime: Date?
+    
     /// Per-meeting state: whether to show original transcript (vs refined)
     /// Key is meeting ID UUID string
     private var showOriginalTranscriptForMeeting: [String: Bool] = [:]
@@ -124,6 +127,7 @@ final class RefinementCoordinator {
         }
         
         meetingBeingRefined = meeting
+        refinementStartTime = Date()
         
         refinementTask = Task {
             await refineTranscriptAsync(for: meeting)
@@ -152,6 +156,7 @@ final class RefinementCoordinator {
                 onWarning?("Refinement unavailable", details, true)
                 
                 meetingBeingRefined = nil
+                refinementStartTime = nil
                 return
             }
         }
@@ -213,11 +218,13 @@ final class RefinementCoordinator {
             } else {
                 logger.warning("No transcript blocks or text available for refinement")
                 meetingBeingRefined = nil
+                refinementStartTime = nil
                 return
             }
             
             // Clear refinement state
             meetingBeingRefined = nil
+            refinementStartTime = nil
         } catch {
             // Error is already set in refinementService
             logger.error("Refinement failed: \(error)")
@@ -235,6 +242,7 @@ final class RefinementCoordinator {
             }
             
             meetingBeingRefined = nil
+            refinementStartTime = nil
         }
     }
     
@@ -243,6 +251,7 @@ final class RefinementCoordinator {
         refinementTask?.cancel()
         refinementTask = nil
         meetingBeingRefined = nil
+        refinementStartTime = nil
     }
     
     /// Auto-refine after second-pass finalization when enabled.

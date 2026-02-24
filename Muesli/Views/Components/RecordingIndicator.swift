@@ -374,6 +374,71 @@ struct RefinementToggleControl: View {
     }
 }
 
+// MARK: - Floating Refinement Indicator
+
+/// Non-blocking floating indicator shown in the bottom-right corner while
+/// background transcript refinement is in progress. Displays an animated
+/// wand icon, meeting title, and elapsed timer. Tapping navigates to the
+/// meeting being refined.
+struct FloatingRefinementIndicator: View {
+    let meetingTitle: String
+    let startTime: Date
+    let onTap: () -> Void
+    
+    @State private var isPulsing = false
+    @State private var rotation: Double = 0
+    @State private var now = Date()
+    
+    private var elapsedText: String {
+        let seconds = max(0, Int(now.timeIntervalSince(startTime)))
+        let minutes = seconds / 60
+        let secs = seconds % 60
+        return String(format: "%d:%02d", minutes, secs)
+    }
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 8) {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.purple)
+                    .opacity(isPulsing ? 1.0 : 0.5)
+                    .rotationEffect(.degrees(rotation))
+                
+                Text("Refining…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                
+                Text(elapsedText)
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.regularMaterial)
+                    .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
+            }
+        }
+        .buttonStyle(.plain)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                isPulsing = true
+            }
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                rotation = 18.0
+            }
+        }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { tick in
+            now = tick
+        }
+        .help("View "\(meetingTitle)" — refinement in progress")
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+}
+
 #Preview("Refinement Loading") {
     RefinementLoadingIndicator()
         .padding()
@@ -390,4 +455,13 @@ struct RefinementToggleControl: View {
     RefinementToggleControl(isOn: .constant(false))
         .padding()
         .background(.regularMaterial)
+}
+
+#Preview("Floating Refinement Indicator") {
+    FloatingRefinementIndicator(
+        meetingTitle: "Team Standup",
+        startTime: Date().addingTimeInterval(-93),
+        onTap: {}
+    )
+    .padding()
 }

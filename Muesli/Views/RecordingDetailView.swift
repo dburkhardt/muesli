@@ -583,23 +583,40 @@ struct RecordingDetailView: View {
         ZStack(alignment: .bottomTrailing) {
             historicalMeetingView(meeting: meeting)
             
-            // Show floating indicator when there's an active recording
-            if viewModel.isViewingPastMeetingWhileRecording,
-               let activeSession = viewModel.activeRecordingSession {
-                FloatingRecordingIndicator(
-                    elapsedTime: activeSession.elapsedTimeString,
-                    isInitializing: activeSession.isInitializing,
-                    isModelLoading: activeSession.isModelLoading,
-                    isSlowModelLoad: viewModel.isSlowModelLoad,
-                    isRecordingOnly: activeSession.isRecordingOnly,
-                    onTap: {
-                        viewModel.returnToLiveRecording()
-                    }
-                )
-                .padding(16)
+            VStack(spacing: 8) {
+                // Show refinement indicator when refining a *different* meeting
+                // (the meeting being viewed already shows state via ResumeControlPane)
+                if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+                   let startTime = viewModel.refinementCoordinator.refinementStartTime,
+                   viewModel.refinementCoordinator.isRefining,
+                   refinedMeeting.id != meeting.id {
+                    FloatingRefinementIndicator(
+                        meetingTitle: refinedMeeting.title,
+                        startTime: startTime,
+                        onTap: {
+                            historyManager.selectMeeting(refinedMeeting)
+                        }
+                    )
+                }
+                
+                // Show floating indicator when there's an active recording
+                if viewModel.isViewingPastMeetingWhileRecording,
+                   let activeSession = viewModel.activeRecordingSession {
+                    FloatingRecordingIndicator(
+                        elapsedTime: activeSession.elapsedTimeString,
+                        isInitializing: activeSession.isInitializing,
+                        isModelLoading: activeSession.isModelLoading,
+                        isSlowModelLoad: viewModel.isSlowModelLoad,
+                        isRecordingOnly: activeSession.isRecordingOnly,
+                        onTap: {
+                            viewModel.returnToLiveRecording()
+                        }
+                    )
+                }
             }
+            .padding(16)
+            .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
         }
-
     }
     
     // MARK: - Historical Meeting View
@@ -619,7 +636,8 @@ struct RecordingDetailView: View {
                     
                     Spacer()
                     
-                    // Copy transcript button
+                    meetingActionsMenu(for: meeting)
+                    
                     copyTranscriptButton(for: meeting)
                     
                     CompletedIndicator()
@@ -630,17 +648,11 @@ struct RecordingDetailView: View {
                 // Content
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        // Metadata row with date and actions menu
+                        // Metadata row with date
                         HStack(spacing: 8) {
                             Label(formatDate(meeting.date), systemImage: "calendar")
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
-                            
-                            Text("·")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.tertiary)
-                            
-                            meetingActionsMenu(for: meeting)
                         }
                         .padding(.bottom, 8)
                         
@@ -840,7 +852,7 @@ struct RecordingDetailView: View {
         return nil
     }
     
-    /// Hamburger menu for completed-meeting actions.
+    /// Ellipsis menu for completed-meeting actions (Apple HIG: ellipsis for "more actions").
     private func meetingActionsMenu(for meeting: MeetingHistoryItem) -> some View {
         Menu {
             Button("Open in Finder") {
@@ -851,21 +863,23 @@ struct RecordingDetailView: View {
                 historyManager.requestDeleteMeeting(meeting)
             }
         } label: {
-            HStack(spacing: 6) {
+            Group {
                 if meeting.isReprocessing {
                     ProgressView()
                         .scaleEffect(0.65)
-                        .frame(width: 10, height: 10)
+                        .frame(width: 12, height: 12)
+                } else {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .medium))
                 }
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Actions")
-                    .font(.system(size: 12))
             }
             .foregroundStyle(.secondary)
+            .padding(8)
+            .background(Color.secondary.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .menuStyle(.borderlessButton)
-        .help("Recording actions")
+        .help("More actions")
     }
     
     private func formatDate(_ date: Date) -> String {
