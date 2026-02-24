@@ -850,15 +850,6 @@ struct RecordingDetailView: View {
             Button("Delete Recording", role: .destructive) {
                 historyManager.requestDeleteMeeting(meeting)
             }
-            
-            Menu("Reprocess") {
-                ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
-                    Button("With \(model.displayName)") {
-                        viewModel.reprocessTranscript(for: meeting, using: model)
-                    }
-                }
-            }
-            .disabled(meeting.isReprocessing || viewModel.modelManager.downloadedModelsOrdered.isEmpty)
         } label: {
             HStack(spacing: 6) {
                 if meeting.isReprocessing {
