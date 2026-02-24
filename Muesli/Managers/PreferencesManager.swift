@@ -302,10 +302,10 @@ final class PreferencesManager {
     // MARK: - Raw Microphone Audio
     
     /// Thread-safe storage for save raw microphone state (for synchronous access from audio callbacks)
-    private let saveRawMicrophoneLock = OSAllocatedUnfairLock(initialState: false)
+    private let saveRawMicrophoneLock = OSAllocatedUnfairLock(initialState: true)
     
     /// Backing storage for @Observable tracking
-    private var _saveRawMicrophoneAudio: Bool = false
+    private var _saveRawMicrophoneAudio: Bool = true
     
     /// Whether to save raw microphone audio alongside the echo-canceled version
     var saveRawMicrophoneAudio: Bool {
@@ -463,9 +463,14 @@ final class PreferencesManager {
         _isEchoCancellationEnabled = decision.effectiveValue
         echoCancellationLock.withLock { $0 = decision.effectiveValue }
 
-        let savedRawMicPref = UserDefaults.standard.bool(forKey: AppStorageKeys.saveRawMicrophoneAudio)
-        _saveRawMicrophoneAudio = savedRawMicPref
-        saveRawMicrophoneLock.withLock { $0 = savedRawMicPref }
+        if UserDefaults.standard.object(forKey: AppStorageKeys.saveRawMicrophoneAudio) == nil {
+            _saveRawMicrophoneAudio = true
+            saveRawMicrophoneLock.withLock { $0 = true }
+        } else {
+            let saved = UserDefaults.standard.bool(forKey: AppStorageKeys.saveRawMicrophoneAudio)
+            _saveRawMicrophoneAudio = saved
+            saveRawMicrophoneLock.withLock { $0 = saved }
+        }
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()

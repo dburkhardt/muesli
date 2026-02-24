@@ -294,9 +294,9 @@ final class AudioSynchronizer {
             fallthrough
 
         case .unstable:
-            // Trim capture during recovery to prevent overflow-triggered discontinuities
-            // that would reset the cooldown timer and prevent stable transition.
-            trimCaptureForTargetLead()
+            // Aggressively manage both rings to prevent overflow-triggered discontinuities
+            // that would reset the cooldown and permanently block stable transition.
+            trimBothRingsForRecovery()
             if canTransitionToStable() {
                 state = .stable
                 lastStableTime = Date()
@@ -309,6 +309,8 @@ final class AudioSynchronizer {
                     await DiagnosticLogger.shared.log(.aec,
                         "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples, seededDelay=\(renderLeadSamples)samples")
                 }
+            } else {
+                return nil
             }
             fallthrough
             
@@ -587,6 +589,53 @@ final class AudioSynchronizer {
 
         captureRing.discard(excessCapture)
         stats.overruns += 1
+    }
+
+    /// Discard excess render samples to prevent lead from exceeding maxRenderLeadMs.
+    ///
+    /// In recovery states (unstable), getAlignedFrame() returns nil, so no frames
+    /// are consumed. Both rings accumulate data, and the render ring (600ms capacity)
+    /// grows faster than the capture ring (250ms capacity) can hold after trimming.
+    /// Once renderLead exceeds maxRenderLeadMs (300ms), canTransitionToStable()
+    /// permanently fails the leadInBand check — freezing AEC for the entire session.
+    ///
+    /// This method caps the render lead at maxRenderLeadMs so that the leadInBand
+    /// condition remains satisfiable once the cooldown timer expires.
+    private func trimRenderForMaxLead() {
+        let maxLeadSamples = Self.maxRenderLeadMs * Self.sampleRate / 1000
+        let currentLead = renderRing.available - captureRing.available
+        if currentLead > maxLeadSamples {
+            renderRing.discard(currentLead - maxLeadSamples)
+        }
+    }
+
+    /// Aggressively manage both rings during recovery (unstable state).
+    ///
+    /// When getAlignedFrame() returns nil, neither ring is consumed by frame extraction.
+    /// Both accumulate data. trimCaptureForTargetLead() alone fails when the render ring
+    /// grows much larger than capture ring capacity: it computes desiredCapture =
+    /// renderAvail - targetLead, which can exceed the capture ring's 250ms capacity,
+    /// resulting in NO trim. The capture ring then overflows on the next push, triggering
+    /// a discontinuity that refreshes the cooldown — permanently blocking stable transition.
+    ///
+    /// This method keeps capture at 50% capacity (safe from overflow) and render at
+    /// capture + targetLead (ensuring leadInBand is satisfied for canTransitionToStable).
+    private func trimBothRingsForRecovery() {
+        let captureCapSamples = Self.maxCaptureBufferMs * Self.sampleRate / 1000
+        let halfCap = captureCapSamples / 2
+
+        let captureExcess = captureRing.available - halfCap
+        if captureExcess > 0 {
+            captureRing.discard(captureExcess)
+            stats.overruns += 1
+        }
+
+        let targetLeadSamples = Self.targetRenderLeadMs * Self.sampleRate / 1000
+        let desiredRender = captureRing.available + targetLeadSamples
+        let renderExcess = renderRing.available - desiredRender
+        if renderExcess > 0 {
+            renderRing.discard(renderExcess)
+        }
     }
 
     /// Update delay controller with current buffer state

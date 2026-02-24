@@ -22,9 +22,6 @@ typealias PopAECFrameCallback = @Sendable (
 /// Callback for processed microphone frames (AEC output).
 typealias ProcessedMicFrameCallback = @Sendable (AudioFrame) -> Void
 
-/// Callback for processed render/system frames (transcription stream).
-typealias ProcessedRenderFrameCallback = @Sendable (AudioFrame) -> Void
-
 // MARK: - Audio Worker Statistics
 
 /// Statistics from the audio worker.
@@ -79,9 +76,6 @@ final class AudioWorker {
 
     /// Callback for processed microphone frames.
     private var processedMicCallback: ProcessedMicFrameCallback?
-
-    /// Callback for processed render frames.
-    private var processedRenderCallback: ProcessedRenderFrameCallback?
 
     /// Worker thread.
     private var workerThread: Thread?
@@ -162,8 +156,7 @@ final class AudioWorker {
 
     /// Start the audio worker.
     func start(
-        micCallback: @escaping ProcessedMicFrameCallback,
-        renderCallback: @escaping ProcessedRenderFrameCallback
+        micCallback: @escaping ProcessedMicFrameCallback
     ) {
         lock.lock()
         defer { lock.unlock() }
@@ -171,7 +164,6 @@ final class AudioWorker {
         guard !isRunning else { return }
 
         processedMicCallback = micCallback
-        processedRenderCallback = renderCallback
         isRunning = true
         stats.isRunning = true
 
@@ -206,7 +198,6 @@ final class AudioWorker {
 
         lock.lock()
         processedMicCallback = nil
-        processedRenderCallback = nil
         let logCaptureFrames = stats.captureFramesProcessed
         let logRenderFrames = stats.renderFramesFed
         let logMissed = stats.framesMissed
@@ -448,25 +439,17 @@ final class AudioWorker {
             updateProcessingTimeStats(processingTimeMs)
         }
 
-        // 3) Drain aligned frames for render transcription stream.
-        var alignedFramesDelivered = 0
-        while alignedFramesDelivered < maxFramesPerIteration {
-            guard let alignedFrame = synchronizer.getAlignedFrame() else {
+        // 3) Drain aligned frames to keep the synchronizer state machine healthy.
+        // Aligned frames are consumed but discarded — render transcription is now
+        // delivered independently via TapAudioCaptureService.drainRenderTranscriptionRing().
+        // This loop must run so getAlignedFrame() advances internal pointers,
+        // maintaining correct isStable transitions for AEC gating.
+        var alignedFramesDrained = 0
+        while alignedFramesDrained < maxFramesPerIteration {
+            guard synchronizer.getAlignedFrame() != nil else {
                 break
             }
-
-            lock.lock()
-            let renderCallback = processedRenderCallback
-            lock.unlock()
-
-            renderCallback?(AudioFrame(
-                samples: alignedFrame.renderSamples,
-                sampleRate: Self.sampleRate,
-                hostTime: alignedFrame.renderHostTime,
-                startSampleIndex: alignedFrame.sampleIndex
-            ))
-
-            alignedFramesDelivered += 1
+            alignedFramesDrained += 1
         }
 
         lock.lock()
