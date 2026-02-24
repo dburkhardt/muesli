@@ -434,7 +434,7 @@ struct FloatingRefinementIndicator: View {
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { tick in
             now = tick
         }
-        .help("View "\(meetingTitle)" — refinement in progress")
+        .help("View \"\(meetingTitle)\" — refinement in progress")
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 }
