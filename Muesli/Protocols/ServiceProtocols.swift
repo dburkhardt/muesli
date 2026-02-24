@@ -48,6 +48,23 @@ protocol FileOutputServiceProtocol: Sendable {
     ) throws
 }
 
+extension FileOutputServiceProtocol {
+    /// Convenience overload — `segmentNumber` defaults to 1.
+    func startWriting(saveRawMicrophone: Bool = false) throws -> URL {
+        try startWriting(segmentNumber: 1, saveRawMicrophone: saveRawMicrophone)
+    }
+
+    /// Convenience overload — `saveRawMicrophone` defaults to false.
+    func startWriting(segmentNumber: Int) throws -> URL {
+        try startWriting(segmentNumber: segmentNumber, saveRawMicrophone: false)
+    }
+
+    /// Convenience overload — `saveRawMicrophone` defaults to false.
+    func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL {
+        try resumeWriting(to: directory, segmentNumber: segmentNumber, saveRawMicrophone: false)
+    }
+}
+
 // MARK: - MeetingHistoryServiceProtocol
 
 /// Protocol for MeetingHistoryService to enable mocking in tests
