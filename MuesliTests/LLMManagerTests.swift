@@ -54,7 +54,7 @@ final class LLMManagerTests: XCTestCase {
         let manager = LLMManager(skipHubAccess: true)
         
         // With skip hub access, path should be nil
-        let path = manager.pathForModel(.llama32_3b)
+        let path = manager.pathForModel(.llama323B)
         
         XCTAssertNil(path, "Path should be nil when skipHubAccess is true")
     }
@@ -66,7 +66,7 @@ final class LLMManagerTests: XCTestCase {
         // Since skipHubAccess is true and no models exist, pathForModel returns nil
         // So we can't really test validation without real files
         // This test just ensures the method exists and doesn't crash
-        let path = manager.pathForModel(.llama32_3b)
+        let path = manager.pathForModel(.llama323B)
         
         XCTAssertNil(path)
     }
@@ -92,7 +92,7 @@ final class LLMManagerTests: XCTestCase {
         XCTAssertNil(manager.activeModel)
         
         // Set active model (even though not downloaded - for state tracking)
-        manager.setActiveModel(.llama32_3b)
+        manager.setActiveModel(.llama323B)
         
         // Note: setActiveModel checks if model is downloaded, so it won't actually set it
         // This tests the guard condition
@@ -104,15 +104,15 @@ final class LLMManagerTests: XCTestCase {
         let manager = LLMManager(skipHubAccess: true)
         
         // Try to set model that's not downloaded (invalid)
-        manager.setActiveModel(.llama32_3b)
+        manager.setActiveModel(.llama323B)
         XCTAssertNil(manager.activeModel, "Should not set non-downloaded model as active")
         
         // Add model to downloaded set
-        manager.downloadedModels.insert(.llama32_3b)
-        manager.setActiveModel(.llama32_3b)
+        manager.downloadedModels.insert(.llama323B)
+        manager.setActiveModel(.llama323B)
         
         // Now should be set
-        XCTAssertEqual(manager.activeModel, .llama32_3b)
+        XCTAssertEqual(manager.activeModel, .llama323B)
     }
     
     /// Test check if model is downloaded
@@ -120,12 +120,12 @@ final class LLMManagerTests: XCTestCase {
         let manager = LLMManager(skipHubAccess: true)
         
         // No models downloaded initially
-        XCTAssertFalse(manager.isModelDownloaded(.llama32_3b))
+        XCTAssertFalse(manager.isModelDownloaded(.llama323B))
         
         // Add to downloaded set
-        manager.downloadedModels.insert(.llama32_3b)
+        manager.downloadedModels.insert(.llama323B)
         
-        XCTAssertTrue(manager.isModelDownloaded(.llama32_3b))
+        XCTAssertTrue(manager.isModelDownloaded(.llama323B))
         XCTAssertFalse(manager.isModelDownloaded(.phi3Mini), "Other models should not be downloaded")
     }
     
@@ -137,8 +137,8 @@ final class LLMManagerTests: XCTestCase {
         XCTAssertFalse(manager.isLLMAvailable)
         
         // With model but no container
-        manager.downloadedModels.insert(.llama32_3b)
-        manager.setActiveModel(.llama32_3b)
+        manager.downloadedModels.insert(.llama323B)
+        manager.setActiveModel(.llama323B)
         XCTAssertFalse(manager.isLLMAvailable, "Not available without loaded model container")
     }
     
@@ -150,7 +150,7 @@ final class LLMManagerTests: XCTestCase {
         XCTAssertFalse(manager.isLLMStitchingEnabled)
         
         // Add a model manually
-        manager.downloadedModels.insert(.llama32_3b)
+        manager.downloadedModels.insert(.llama323B)
         
         // Accessing isLLMStitchingEnabled should return true when hasModel is true
         XCTAssertTrue(manager.isLLMStitchingEnabled, "Should auto-enable when model exists")
@@ -163,14 +163,14 @@ final class LLMManagerTests: XCTestCase {
         let manager = LLMManager(skipHubAccess: true)
         
         // Add model
-        manager.downloadedModels.insert(.llama32_3b)
-        XCTAssertTrue(manager.isModelDownloaded(.llama32_3b))
+        manager.downloadedModels.insert(.llama323B)
+        XCTAssertTrue(manager.isModelDownloaded(.llama323B))
         
         // Delete model
-        let deleted = manager.deleteModel(.llama32_3b)
+        let deleted = manager.deleteModel(.llama323B)
         
         XCTAssertTrue(deleted, "Should return true for successful deletion")
-        XCTAssertFalse(manager.isModelDownloaded(.llama32_3b), "Model should be removed from downloaded set")
+        XCTAssertFalse(manager.isModelDownloaded(.llama323B), "Model should be removed from downloaded set")
     }
     
     /// Test delete active model (selects replacement)
@@ -178,17 +178,17 @@ final class LLMManagerTests: XCTestCase {
         let manager = LLMManager(skipHubAccess: true)
         
         // Add two models
-        manager.downloadedModels.insert(.llama32_3b)
+        manager.downloadedModels.insert(.llama323B)
         manager.downloadedModels.insert(.phi3Mini)
-        manager.setActiveModel(.llama32_3b)
+        manager.setActiveModel(.llama323B)
         
-        XCTAssertEqual(manager.activeModel, .llama32_3b)
+        XCTAssertEqual(manager.activeModel, .llama323B)
         
         // Delete active model
-        _ = manager.deleteModel(.llama32_3b)
+        _ = manager.deleteModel(.llama323B)
         
         // Should automatically select another available model
-        XCTAssertNotEqual(manager.activeModel, .llama32_3b, "Active model should change")
+        XCTAssertNotEqual(manager.activeModel, .llama323B, "Active model should change")
         // Might be phi3Mini or nil depending on implementation
     }
     
@@ -197,11 +197,11 @@ final class LLMManagerTests: XCTestCase {
         let manager = LLMManager(skipHubAccess: true)
         
         // Add one model
-        manager.downloadedModels.insert(.llama32_3b)
-        manager.setActiveModel(.llama32_3b)
+        manager.downloadedModels.insert(.llama323B)
+        manager.setActiveModel(.llama323B)
         
         // Delete it
-        _ = manager.deleteModel(.llama32_3b)
+        _ = manager.deleteModel(.llama323B)
         
         XCTAssertNil(manager.activeModel, "Active model should be nil")
         XCTAssertFalse(manager.hasModel, "Should have no models")
@@ -212,9 +212,9 @@ final class LLMManagerTests: XCTestCase {
         let manager = LLMManager(skipHubAccess: true)
         
         // Add some state
-        manager.downloadedModels.insert(.llama32_3b)
+        manager.downloadedModels.insert(.llama323B)
         manager.downloadedModels.insert(.phi3Mini)
-        manager.setActiveModel(.llama32_3b)
+        manager.setActiveModel(.llama323B)
         
         XCTAssertTrue(manager.hasModel)
         
@@ -247,7 +247,7 @@ final class LLMManagerTests: XCTestCase {
     
     /// Test model identifiable conformance
     func testModelIdentifiable() {
-        let model = LLMManager.LLMModel.llama32_3b
+        let model = LLMManager.LLMModel.llama323B
         XCTAssertEqual(model.id, model.rawValue)
     }
     
@@ -316,11 +316,11 @@ final class LLMManagerTests: XCTestCase {
         let manager = LLMManager(skipHubAccess: true)
         
         // Simulate different download states
-        manager.downloadStates[.llama32_3b] = .completed
+        manager.downloadStates[.llama323B] = .completed
         manager.downloadStates[.phi3Mini] = .downloading(progress: 0.5)
         manager.downloadStates[.gemma22b] = .idle
         
-        XCTAssertEqual(manager.downloadState(for: .llama32_3b), .completed)
+        XCTAssertEqual(manager.downloadState(for: .llama323B), .completed)
         XCTAssertEqual(manager.downloadState(for: .phi3Mini), .downloading(progress: 0.5))
         XCTAssertEqual(manager.downloadState(for: .gemma22b), .idle)
     }
@@ -331,15 +331,15 @@ final class LLMManagerTests: XCTestCase {
         XCTAssertEqual(LLMManager.LLMModel.allCases.count, 3)
         
         let models = LLMManager.LLMModel.allCases
-        XCTAssertTrue(models.contains(.llama32_3b))
+        XCTAssertTrue(models.contains(.llama323B))
         XCTAssertTrue(models.contains(.phi3Mini))
         XCTAssertTrue(models.contains(.gemma22b))
     }
     
     /// Test model hashable conformance
     func testModelHashable() {
-        let model1 = LLMManager.LLMModel.llama32_3b
-        let model2 = LLMManager.LLMModel.llama32_3b
+        let model1 = LLMManager.LLMModel.llama323B
+        let model2 = LLMManager.LLMModel.llama323B
         let model3 = LLMManager.LLMModel.phi3Mini
         
         XCTAssertEqual(model1.hashValue, model2.hashValue)
@@ -355,10 +355,10 @@ final class LLMManagerTests: XCTestCase {
         let manager = LLMManager(skipHubAccess: true)
         
         // Add and then remove all models
-        manager.downloadedModels.insert(.llama32_3b)
+        manager.downloadedModels.insert(.llama323B)
         XCTAssertTrue(manager.isLLMStitchingEnabled)
         
-        _ = manager.deleteModel(.llama32_3b)
+        _ = manager.deleteModel(.llama323B)
         
         // Should be disabled after last model deleted
         XCTAssertFalse(manager.hasModel)

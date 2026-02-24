@@ -49,8 +49,8 @@ final class RefinementCoordinatorTests: XCTestCase {
     /// Test canRefineTranscripts when model available
     func testCanRefineTranscriptsWhenModelAvailable() {
         // Given: Model available
-        mockLLMManager.downloadedModels.insert(.llama32_3b)
-        mockLLMManager.setActiveModel(.llama32_3b)
+        mockLLMManager.downloadedModels.insert(.llama323B)
+        mockLLMManager.setActiveModel(.llama323B)
         mockLLMManager.isLLMStitchingEnabled = true
         
         // Then: Can refine
@@ -230,8 +230,8 @@ final class RefinementCoordinatorTests: XCTestCase {
     /// Test refinement with no transcript available (early exit)
     func testRefinementWithNoTranscriptAvailable() {
         // Given: LLM available
-        mockLLMManager.downloadedModels.insert(.llama32_3b)
-        mockLLMManager.setActiveModel(.llama32_3b)
+        mockLLMManager.downloadedModels.insert(.llama323B)
+        mockLLMManager.setActiveModel(.llama323B)
         mockLLMManager.isLLMStitchingEnabled = true
         
         let meeting = MeetingHistoryItem(
@@ -271,8 +271,8 @@ final class RefinementCoordinatorTests: XCTestCase {
     /// Test skip already refined segments
     func testSkipAlreadyRefinedSegments() async {
         // Given: LLM available
-        mockLLMManager.downloadedModels.insert(.llama32_3b)
-        mockLLMManager.setActiveModel(.llama32_3b)
+        mockLLMManager.downloadedModels.insert(.llama323B)
+        mockLLMManager.setActiveModel(.llama323B)
         mockLLMManager.isLLMStitchingEnabled = true
         
         let meeting = MeetingHistoryItem(

@@ -128,13 +128,15 @@ final class MicCaptureRing {
             if lastSampleTime > 0 && callbackCount > warmupCallbackCount && debounceRemaining == 0 {
                 let deltaSamples = sampleTime - lastSampleTime
                 let expectedFromCallback = Double(sampleCount)
-                // Domain mismatch: delta differs from expected by > 5% (e.g., sampleTime in wrong
-                // sample-rate domain), but is still within the discontinuity window. The upper-bound
-                // cap is essential: without it, a real discontinuity (large gap) also satisfies the
-                // relative-error condition and is incorrectly routed here instead of to the threshold
-                // check below.
+                // Domain mismatch: delta is a sustained negative drift significantly larger than
+                // a normal callback delta. This catches sample-time/sample-count domain
+                // mismatches (e.g. sampleTime stays in 44.1kHz while count is resampled to 48kHz),
+                // while allowing tiny negative jitter in normal 48kHz-domain delivery.
+                // The upper-bound cap is essential: without it, a real discontinuity (large gap)
+                // can also satisfy the relative-error condition and be routed here incorrectly.
                 let isDomainMismatch = expectedFromCallback > 0 &&
-                    abs(deltaSamples - expectedFromCallback) / expectedFromCallback > sampleRateDomainTolerance &&
+                    deltaSamples < 0 &&
+                    abs(deltaSamples) / expectedFromCallback > sampleRateDomainTolerance &&
                     abs(deltaSamples) < expectedFromCallback * Double(discontinuityMultiplier)
 
                 if isDomainMismatch {
