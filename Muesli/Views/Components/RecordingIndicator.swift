@@ -35,15 +35,10 @@ struct RecordingIndicator: View {
                         value: isPulsing
                     )
                 
-                Text("REC")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.red)
-                
                 Text(elapsedTime)
                     .font(.system(size: 11, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
                 
-                // Model state indicator
                 if isModelLoading {
                     ProgressView()
                         .scaleEffect(0.6)
@@ -56,11 +51,6 @@ struct RecordingIndicator: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .help("Recording audio only (transcription unavailable)")
-                } else {
-                    Image(systemName: "text.append")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.green)
-                        .help("Live transcription active")
                 }
             }
         }

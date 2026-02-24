@@ -968,17 +968,10 @@ struct FloatingRecordingIndicator: View {
                             value: isPulsing
                         )
                     
-                    // Waveform icon
-                    Image(systemName: "waveform")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.primary)
-                    
-                    // Elapsed time
                     Text(elapsedTime)
                         .font(.system(size: 12, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                     
-                    // Model state indicator
                     if isModelLoading {
                         ProgressView()
                             .scaleEffect(0.5)
@@ -990,10 +983,6 @@ struct FloatingRecordingIndicator: View {
                         Image(systemName: "waveform.slash")
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
-                    } else {
-                        Image(systemName: "text.append")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.green)
                     }
                 }
             }
