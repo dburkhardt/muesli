@@ -6,6 +6,11 @@ import Foundation
 
 // MARK: - TranscriptionServiceProtocol
 
+typealias TranscriptionDraftHandler = @Sendable (
+    String,
+    TranscriptionService.TranscriptSegment.Speaker
+) -> Void
+
 /// Protocol for TranscriptionService to enable mocking in tests
 protocol TranscriptionServiceProtocol: Sendable {
     var transcriptionMode: TranscriptionService.TranscriptionMode { get }
@@ -13,6 +18,7 @@ protocol TranscriptionServiceProtocol: Sendable {
     func initialize(modelPath: URL) async throws
     func setTranscriptionMode(_ mode: TranscriptionService.TranscriptionMode)
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler)
+    func setDraftHandler(_ handler: @escaping TranscriptionDraftHandler)
     func startTranscription(recordingStartTime: Date)
     func stopTranscription() async
     func appendSystemAudio(_ samples: [Float])

@@ -446,4 +446,5 @@ final class TranscriptRefinementServiceTests: XCTestCase {
         // Should handle gracefully
         XCTAssertEqual(result.count, 3)
     }
+
 }

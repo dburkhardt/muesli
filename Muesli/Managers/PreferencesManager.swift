@@ -102,6 +102,78 @@ final class PreferencesManager {
         case postProcessing
     }
     
+    // MARK: - Transcription Quality Pipeline
+    
+    enum SecondPassModelPreference: String, CaseIterable {
+        case bestAvailable
+        case sameAsLive
+        case bestAvailableNoDowngrade
+        case specific
+    }
+    
+    /// Toggle for deterministic live overlap deduplication.
+    /// Default false for staged rollout safety.
+    var isLiveStabilizerEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.liveStabilizerEnabled) == nil {
+                return false
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.liveStabilizerEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.liveStabilizerEnabled)
+        }
+    }
+    
+    /// Toggle for post-stop second-pass final transcription.
+    /// Default false for staged rollout safety.
+    var isSecondPassASREnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.secondPassASREnabled) == nil {
+                return false
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.secondPassASREnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.secondPassASREnabled)
+        }
+    }
+    
+    /// Toggle for optional automatic LLM cleanup after ASR finalization.
+    var isAutoRefineEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.autoRefineEnabled) == nil {
+                return false
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.autoRefineEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.autoRefineEnabled)
+        }
+    }
+    
+    /// Strategy for picking the second-pass model.
+    var secondPassModelPreference: SecondPassModelPreference {
+        get {
+            let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassModelPreference)
+                ?? SecondPassModelPreference.bestAvailable.rawValue
+            return SecondPassModelPreference(rawValue: raw) ?? .bestAvailable
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: AppStorageKeys.secondPassModelPreference)
+        }
+    }
+    
+    /// Explicit model raw value used when secondPassModelPreference == .specific.
+    var secondPassSpecificModelRawValue: String? {
+        get {
+            UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.secondPassSpecificModel)
+        }
+    }
+    
     // MARK: - Echo Cancellation
     
     /// Thread-safe storage for echo cancellation state (for synchronous access from audio callbacks)
@@ -168,26 +240,26 @@ final class PreferencesManager {
     
     // MARK: - Audio Chunk Duration
     
-    /// Audio chunk duration for transcription (2-10 seconds)
+    /// Audio chunk duration for transcription (2-30 seconds)
     var audioChunkDuration: TimeInterval {
         get {
             // Check if key exists to distinguish "not set" from "invalid value"
             guard let savedObject = UserDefaults.standard.object(forKey: AppStorageKeys.audioChunkDuration) as? Double
             else {
                 // Key not set, return default
-                return 5.0
+                return AudioConfiguration.transcriptionChunkDuration
             }
             
             // Key exists, validate range
-            if savedObject < 2.0 || savedObject > 10.0 {
+            if savedObject < 2.0 || savedObject > 30.0 {
                 // Invalid value, return default
-                return 5.0
+                return AudioConfiguration.transcriptionChunkDuration
             }
             return savedObject
         }
         set {
             // Clamp to valid range
-            let clamped = min(max(newValue, 2.0), 10.0)
+            let clamped = min(max(newValue, 2.0), 30.0)
             UserDefaults.standard.set(clamped, forKey: AppStorageKeys.audioChunkDuration)
             audioChunkDurationDidChange?(clamped)
         }

@@ -2,10 +2,11 @@
 
 # Uninstall script for Muesli
 # Completely removes all traces of Muesli from the system
-# Usage: ./scripts/uninstall.sh [--dry-run]
+# Usage: ./scripts/uninstall.sh [--dry-run] [--yes]
 #
 # Options:
 #   --dry-run    Preview what would be deleted without making changes
+#   --yes        Non-interactive mode: delete everything without prompts
 
 set -e
 
@@ -18,6 +19,7 @@ NC='\033[0m' # No Color
 
 # CLI options
 DRY_RUN=false
+AUTO_YES=false
 LOG_FILE="/tmp/muesli-uninstall-$(date +%Y%m%d-%H%M%S).log"
 
 # Parse arguments
@@ -27,11 +29,16 @@ while [[ $# -gt 0 ]]; do
             DRY_RUN=true
             shift
             ;;
+        --yes|-y)
+            AUTO_YES=true
+            shift
+            ;;
         --help|-h)
-            echo "Usage: ./scripts/uninstall.sh [--dry-run]"
+            echo "Usage: ./scripts/uninstall.sh [--dry-run] [--yes]"
             echo ""
             echo "Options:"
             echo "  --dry-run    Preview what would be deleted without making changes"
+            echo "  --yes, -y    Non-interactive mode: delete everything without prompts"
             echo "  --help       Show this help message"
             exit 0
             ;;
@@ -329,40 +336,50 @@ interactive_select_bundles() {
         print_warning "No app bundles found to select"
         return
     fi
-    
+
+    # Auto-yes: select all bundles
+    if [ "$AUTO_YES" = true ]; then
+        SELECTED_BUNDLES=()
+        for i in "${!APP_BUNDLES[@]}"; do
+            SELECTED_BUNDLES+=("$i")
+        done
+        print_info "Auto-selecting all ${#SELECTED_BUNDLES[@]} app bundle(s)"
+        return
+    fi
+
     print_header "SELECT APP BUNDLES TO REMOVE"
-    
+
     echo "Found the following Muesli installations:"
     echo ""
-    
+
     # Initialize all as selected
     local -a selected=()
     for i in "${!APP_BUNDLES[@]}"; do
         selected[$i]=1
     done
-    
+
     # Display bundles
     for i in "${!APP_BUNDLES[@]}"; do
         local app="${APP_BUNDLES[$i]}"
         local bundle_id="${APP_BUNDLE_IDS[$i]}"
         local build_type="${APP_BUNDLE_TYPES[$i]}"
         local app_name=$(basename "$app")
-        
+
         if [ "${selected[$i]}" -eq 1 ]; then
             echo "  [x] $((i+1)). $app_name ($bundle_id) - $build_type"
         else
             echo "  [ ] $((i+1)). $app_name ($bundle_id) - $build_type"
         fi
     done
-    
+
     echo ""
     echo "Enter numbers to toggle selection (e.g., '1 3' to toggle 1 and 3),"
     echo "or press Enter to continue with current selection,"
     echo "or 'all' to select all, 'none' to deselect all:"
-    
+
     while true; do
         read -p "> " input
-        
+
         if [ -z "$input" ]; then
             # Empty input - continue with current selection
             break
@@ -422,7 +439,7 @@ interactive_select_bundles() {
             echo ""
         fi
     done
-    
+
     # Build final selection list
     SELECTED_BUNDLES=()
     for i in "${!APP_BUNDLES[@]}"; do
@@ -430,7 +447,7 @@ interactive_select_bundles() {
             SELECTED_BUNDLES+=("$i")
         fi
     done
-    
+
     if [ ${#SELECTED_BUNDLES[@]} -eq 0 ]; then
         print_warning "No bundles selected"
     else
@@ -440,6 +457,16 @@ interactive_select_bundles() {
 
 interactive_select_derived_data() {
     if [ ${#DERIVED_DATA_FOLDERS[@]} -eq 0 ]; then
+        return
+    fi
+
+    # Auto-yes: select all DerivedData folders
+    if [ "$AUTO_YES" = true ]; then
+        SELECTED_DERIVED_DATA=()
+        for i in "${!DERIVED_DATA_FOLDERS[@]}"; do
+            SELECTED_DERIVED_DATA+=("$i")
+        done
+        print_info "Auto-selecting all ${#SELECTED_DERIVED_DATA[@]} DerivedData folder(s)"
         return
     fi
 
@@ -531,7 +558,14 @@ prompt_recording_action() {
         RECORDING_ACTION="none"
         return
     fi
-    
+
+    # Auto-yes: delete all recordings
+    if [ "$AUTO_YES" = true ]; then
+        RECORDING_ACTION="delete"
+        print_info "Auto-selecting: delete all recordings"
+        return
+    fi
+
     print_header "MEETING RECORDINGS"
     
     echo "Found $RECORDINGS_COUNT meeting recording(s) in:"
@@ -605,13 +639,21 @@ prompt_app_support_action() {
         APP_SUPPORT_ACTION="keep"
         return
     fi
-    
+
     # Skip if Application Support folder doesn't exist
     if [ ! -d "$APP_SUPPORT_DIR" ]; then
         APP_SUPPORT_ACTION="none"
         return
     fi
-    
+
+    # Auto-yes: delete everything
+    if [ "$AUTO_YES" = true ]; then
+        APP_SUPPORT_ACTION="delete"
+        KEEP_MODELS=false
+        print_info "Auto-selecting: delete all Application Support files"
+        return
+    fi
+
     print_header "APPLICATION SUPPORT FILES"
     
     echo "Found the following Muesli data in Application Support:"
@@ -678,7 +720,14 @@ prompt_mounted_dmg_action() {
     if [ ${#MOUNTED_DMG_APPS[@]} -eq 0 ]; then
         return
     fi
-    
+
+    # Auto-yes: eject all DMGs
+    if [ "$AUTO_YES" = true ]; then
+        EJECT_DMGS=true
+        print_info "Auto-selecting: eject all mounted DMGs"
+        return
+    fi
+
     print_header "MOUNTED DMG VOLUMES"
     
     echo "Found ${#MOUNTED_DMG_APPS[@]} Muesli app(s) on mounted DMG volume(s):"
@@ -720,7 +769,14 @@ prompt_trash_deletion() {
     if [ ${#TRASH_APPS[@]} -eq 0 ]; then
         return
     fi
-    
+
+    # Auto-yes: delete trash apps
+    if [ "$AUTO_YES" = true ]; then
+        DELETE_TRASH_APPS=true
+        print_info "Auto-selecting: delete all Muesli apps from Trash"
+        return
+    fi
+
     print_header "APPS IN TRASH"
     
     echo -e "${RED}⚠️  WARNING: Deleting apps from Trash is PERMANENT.${NC}"
@@ -761,11 +817,18 @@ prompt_trash_deletion() {
 
 prompt_per_bundle_artifacts() {
     local total_artifacts=$((${#BUNDLE_CACHE_DIRS[@]} + ${#BUNDLE_HTTP_DIRS[@]} + ${#BUNDLE_PREF_FILES[@]}))
-    
+
     if [ $total_artifacts -eq 0 ]; then
         return
     fi
-    
+
+    # Auto-yes: clean all per-bundle artifacts
+    if [ "$AUTO_YES" = true ]; then
+        CLEAN_PER_BUNDLE_ARTIFACTS=true
+        print_info "Auto-selecting: delete all per-bundle artifacts ($total_artifacts items)"
+        return
+    fi
+
     print_header "PER-BUNDLE ARTIFACTS"
     
     echo "Found artifacts from Muesli bundle ID variants:"
@@ -1036,6 +1099,11 @@ show_summary() {
 }
 
 confirm_uninstall() {
+    # Auto-yes: skip confirmation
+    if [ "$AUTO_YES" = true ]; then
+        return 0
+    fi
+
     echo ""
     echo -e "Type ${RED}uninstall${NC} to confirm, or anything else to cancel:"
     echo ""
@@ -1460,10 +1528,7 @@ reset_tcc_permissions() {
             #   Microphone     — microphone access (AVAudioEngine)
             #   ListenEvent    — system audio capture (Core Audio taps / NSAudioCaptureUsageDescription)
             for svc in ScreenCapture Microphone ListenEvent; do
-                local svc_output
-                svc_output=$(tccutil reset "$svc" "$bundle_id" 2>&1)
-                local svc_exit=$?
-                if [ $svc_exit -eq 0 ]; then
+                if svc_output=$(tccutil reset "$svc" "$bundle_id" 2>&1); then
                     log_action "reset_tcc_$svc" "$bundle_id"
                     print_success "Reset $svc for: $bundle_id"
                 else

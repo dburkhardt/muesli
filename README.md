@@ -8,7 +8,7 @@
 
 🔗 **[Download from our website](https://dburkhardt.github.io/muesli)**
 
-The latest release is available as a DMG installer from our [GitHub releases page](https://github.com/dburkhardt/muesli/releases/latest).
+The latest release is available as a DMG installer from our [GitHub releases page](https://github.com/dburkhardt/muesli/releases/latest). Stable releases come from `main`; release candidates (for testing) appear under "Pre-releases" on the same page.
 
 **Note:** Muesli is signed with a Developer ID certificate and notarized by Apple. It should open without any Gatekeeper warnings on macOS.
 

@@ -218,7 +218,6 @@ final class MicrophoneManager: MicrophoneManagerProtocol {
         let showContinuityCamera = UserDefaults.standard.bool(
             forKey: AppStorageKeys.showContinuityCameraDevices
         )
-
         for device in captureDevices {
             // Filter out virtual aggregate devices created by ScreenCaptureKit
             // These devices (like "CADefaultDeviceAggregate-XXXXX") don't deliver real audio
