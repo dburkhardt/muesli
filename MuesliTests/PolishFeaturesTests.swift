@@ -66,8 +66,8 @@ final class PolishFeaturesTests: XCTestCase {
     func testAudioChunkDurationDefaultValue() {
         let prefs = PreferencesManager()
         
-        // Default should match AudioConfiguration.transcriptionChunkDuration
-        XCTAssertEqual(prefs.audioChunkDuration, AudioConfiguration.transcriptionChunkDuration, accuracy: 0.01)
+        // Default should be 5.0 seconds
+        XCTAssertEqual(prefs.audioChunkDuration, 5.0, accuracy: 0.01)
     }
     
     func testAudioChunkDurationValidRange() {
@@ -78,12 +78,12 @@ final class PolishFeaturesTests: XCTestCase {
         XCTAssertEqual(prefs.audioChunkDuration, 2.0, accuracy: 0.01)
         
         // Set to maximum
-        prefs.audioChunkDuration = 30.0
-        XCTAssertEqual(prefs.audioChunkDuration, 30.0, accuracy: 0.01)
+        prefs.audioChunkDuration = 10.0
+        XCTAssertEqual(prefs.audioChunkDuration, 10.0, accuracy: 0.01)
         
         // Set to mid-range
-        prefs.audioChunkDuration = 15.0
-        XCTAssertEqual(prefs.audioChunkDuration, 15.0, accuracy: 0.01)
+        prefs.audioChunkDuration = 6.5
+        XCTAssertEqual(prefs.audioChunkDuration, 6.5, accuracy: 0.01)
     }
     
     func testAudioChunkDurationClampingBelowRange() {
@@ -100,12 +100,12 @@ final class PolishFeaturesTests: XCTestCase {
     func testAudioChunkDurationClampingAboveRange() {
         let prefs = PreferencesManager()
         
-        // Try to set above maximum (should clamp to 30.0)
-        prefs.audioChunkDuration = 35.0
-        XCTAssertEqual(prefs.audioChunkDuration, 30.0, accuracy: 0.01)
+        // Try to set above maximum (should clamp to 10.0)
+        prefs.audioChunkDuration = 15.0
+        XCTAssertEqual(prefs.audioChunkDuration, 10.0, accuracy: 0.01)
         
         prefs.audioChunkDuration = 100.0
-        XCTAssertEqual(prefs.audioChunkDuration, 30.0, accuracy: 0.01)
+        XCTAssertEqual(prefs.audioChunkDuration, 10.0, accuracy: 0.01)
     }
     
     func testAudioChunkDurationPersistence() {
@@ -162,7 +162,7 @@ final class PolishFeaturesTests: XCTestCase {
     func testTranscriptionServiceChunkDurationClamping() {
         // Test clamping - these should not crash
         let service1 = TranscriptionService(chunkDuration: 1.0)  // Below minimum
-        let service2 = TranscriptionService(chunkDuration: 35.0) // Above maximum
+        let service2 = TranscriptionService(chunkDuration: 15.0) // Above maximum
         
         XCTAssertNotNil(service1)
         XCTAssertNotNil(service2)

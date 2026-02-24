@@ -254,13 +254,6 @@ final class RefinementCoordinator {
         refinementStartTime = nil
     }
     
-    /// Auto-refine after second-pass finalization when enabled.
-    func autoRefineIfEnabled(meeting: MeetingHistoryItem, preferences: PreferencesManager) {
-        guard preferences.isAutoRefineEnabled else { return }
-        guard canRefineTranscripts else { return }
-        refineTranscript(for: meeting)
-    }
-    
     // MARK: - Segment Refinement
     
     /// Refine a single transcript segment

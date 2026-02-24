@@ -251,22 +251,6 @@ struct RecordingDetailView: View {
                                 .id(block.id)
                         }
                     }
-                    
-                    if let draftText = session.liveDraftText {
-                        DraftTranscriptView(text: draftText, speaker: session.liveDraftSpeaker)
-                            .id("liveDraft")
-                    }
-                    
-                    if session.isFinalizingTranscript {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Finalizing transcript...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
@@ -556,22 +540,6 @@ struct RecordingDetailView: View {
                         ForEach(session.transcriptBlocks) { block in
                             TranscriptBlockView(block: block)
                                 .id(block.id)
-                        }
-                        
-                        if let draftText = session.liveDraftText {
-                            DraftTranscriptView(text: draftText, speaker: session.liveDraftSpeaker)
-                                .id("liveDraft")
-                        }
-                        
-                        if session.isFinalizingTranscript {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                                Text("Finalizing transcript...")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 8)
                         }
                     }
                     .padding(.horizontal, 16)

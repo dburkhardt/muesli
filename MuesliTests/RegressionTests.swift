@@ -288,12 +288,12 @@ final class RegressionTests: XCTestCase {
     
     /// Regression test: Transcription timing values are correct
     func testTranscriptionTimingValues() async {
-        XCTAssertEqual(AudioConfiguration.transcriptionChunkDuration, 15.0)
-        XCTAssertEqual(AudioConfiguration.transcriptionOverlapDuration, 3.0)
+        XCTAssertEqual(AudioConfiguration.transcriptionChunkDuration, 5.0)
+        XCTAssertEqual(AudioConfiguration.transcriptionOverlapDuration, 1.5)
         
         // Derived values
-        XCTAssertEqual(AudioConfiguration.minSamplesForProcessing, 240_000)  // 16000 * 15
-        XCTAssertEqual(AudioConfiguration.overlapSamples, 48_000)  // 16000 * 3
+        XCTAssertEqual(AudioConfiguration.minSamplesForProcessing, 80_000)  // 16000 * 5
+        XCTAssertEqual(AudioConfiguration.overlapSamples, 24_000)  // 16000 * 1.5
     }
     
     // MARK: - Transcription Cancellation Regression Tests (Bug Fix: Jan 15, 2026)
