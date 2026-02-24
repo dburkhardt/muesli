@@ -333,6 +333,9 @@ struct GeneralPreferencesTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 
+            }
+            
+            Section("Devices") {
                 Toggle(isOn: $prefs.showContinuityCameraDevices) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Show Continuity Camera Devices")

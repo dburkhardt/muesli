@@ -89,6 +89,12 @@ final class RecordingController {
     /// Called when the selected meeting should change
     var onSelectedMeetingChanged: ((MeetingHistoryItem?) -> Void)?
     
+    /// Called when auto-reprocessing should run on a completed meeting directory.
+    /// The ViewModel must resolve the directory to its canonical MeetingHistoryItem
+    /// from the history list (not a local throwaway copy) so observable state
+    /// changes propagate to the UI.
+    var onAutoReprocessRequested: ((URL) -> Void)?
+    
     /// Called when a permission error is detected during recording start.
     /// Parameters: (missingScreen: Bool, missingMic: Bool)
     var onPermissionRecoveryNeeded: ((Bool, Bool) -> Void)?
@@ -682,19 +688,6 @@ final class RecordingController {
                 launchSecondPassFinalization(for: session, directory: directory)
             }
             
-            // Auto-reprocess completed meetings when enabled.
-            // Also preserve historical behavior of forcing reprocess for empty transcripts.
-            let hasEmptyTranscript = session.transcriptBlocks.isEmpty
-            let shouldAutoReprocess = preferencesManager.isAutoReprocessAfterMeetingEnabled || hasEmptyTranscript
-            
-            if hasAudioFiles && shouldAutoReprocess {
-                if let meeting = createMeetingHistoryItem(from: directory) {
-                    let triggerReason = hasEmptyTranscript ? "empty transcript" : "preference enabled"
-                    logger.info("Auto-triggering reprocessing (\(triggerReason))")
-                    transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)
-                }
-            }
-            
             // Export meeting to exports directory (if enabled)
             await exportMeetingIfEnabled(directory: directory)
         } catch {
@@ -705,9 +698,24 @@ final class RecordingController {
         session.state = .completed
         session.canResume = true
         
-        // Notify completion
+        // Notify completion — refreshes history and selects the new meeting
         onSessionCompleted?(session, session.outputDirectory)
         onRefreshHistory?()
+        
+        // Auto-reprocess completed meetings when enabled.
+        // Runs AFTER history refresh so the canonical MeetingHistoryItem exists.
+        let hasEmptyTranscript = session.transcriptBlocks.isEmpty
+        let shouldAutoReprocess = preferencesManager.isAutoReprocessAfterMeetingEnabled || hasEmptyTranscript
+        
+        if let directory = session.outputDirectory {
+            let hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
+                                FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
+            if hasAudioFiles && shouldAutoReprocess {
+                let triggerReason = hasEmptyTranscript ? "empty transcript" : "preference enabled"
+                logger.info("Auto-triggering reprocessing (\(triggerReason))")
+                onAutoReprocessRequested?(directory)
+            }
+        }
         
         activeSession = nil
         resetMuteState()

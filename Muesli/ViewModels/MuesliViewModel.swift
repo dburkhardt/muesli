@@ -627,6 +627,17 @@ final class MuesliViewModel {
             self?.refreshMeetingHistory()
         }
         
+        self.recordingController.onAutoReprocessRequested = { [weak self] directory in
+            guard let self else { return }
+            // Resolve the directory to the canonical MeetingHistoryItem so
+            // observable state (isReprocessing, startTime) propagates to the UI.
+            guard let meeting = self.meetingHistory.first(where: { $0.directory == directory }) else {
+                self.logger.warning("Auto-reprocess: meeting not found in history for \(directory.lastPathComponent)")
+                return
+            }
+            self.transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)
+        }
+        
         self.recordingController.onSelectedMeetingChanged = { [weak self] meeting in
             self?.selectedMeeting = meeting
         }
