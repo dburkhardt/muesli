@@ -1036,4 +1036,73 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertTrue(meetingB.isReprocessing,
                       "Auto-reprocess should proceed for a directory without an active second-pass")
     }
+
+    /// Clearing an active second-pass marker should allow auto-reprocess for that same directory.
+    @MainActor
+    func testClearSecondPassActiveUnblocksAutoReprocessForSameDirectory() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        mockModelManager.addDownloadedModel(.small)
+        _ = await sut.prepareModel()
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-clear-second-pass-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let meeting = MeetingHistoryItem(
+            title: "Meeting",
+            date: Date(),
+            directory: directory,
+            hasAudio: true,
+            hasMicrophone: false
+        )
+
+        sut.markSecondPassActive(for: directory)
+        sut.autoReprocessWhenReady(meeting: meeting)
+        XCTAssertFalse(meeting.isReprocessing, "Marked directory should block auto-reprocess")
+
+        sut.clearSecondPassActive(for: directory)
+        sut.autoReprocessWhenReady(meeting: meeting)
+        XCTAssertTrue(meeting.isReprocessing, "Cleared directory should allow auto-reprocess")
+    }
+
+    /// clearSecondPassActive should be safe to call more than once.
+    @MainActor
+    func testClearSecondPassActiveIsIdempotent() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        mockModelManager.addDownloadedModel(.small)
+        _ = await sut.prepareModel()
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-clear-second-pass-idempotent-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let meeting = MeetingHistoryItem(
+            title: "Meeting",
+            date: Date(),
+            directory: directory,
+            hasAudio: true,
+            hasMicrophone: false
+        )
+
+        sut.markSecondPassActive(for: directory)
+        sut.clearSecondPassActive(for: directory)
+        sut.clearSecondPassActive(for: directory)  // second clear should be a no-op
+
+        sut.autoReprocessWhenReady(meeting: meeting)
+        XCTAssertTrue(meeting.isReprocessing, "Double clear should leave directory unblocked")
+    }
 }

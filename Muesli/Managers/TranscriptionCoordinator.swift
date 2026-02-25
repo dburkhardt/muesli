@@ -549,10 +549,18 @@ final class TranscriptionCoordinator {
     
     /// Mark a directory as having an active second-pass ASR task.
     /// Called by RecordingController before launching `launchSecondPassFinalization`.
-    /// Cleared automatically via `defer` inside `runSecondPassASR`.
+    /// Cleared via `clearSecondPassActive(for:)` (including `runSecondPassASR` defer).
     func markSecondPassActive(for directory: URL) {
         activeSecondPassDirectories.insert(directory.standardizedFileURL)
         logger.info("Second-pass marked active for \(directory.lastPathComponent)")
+    }
+
+    /// Idempotently clear active second-pass marker for a directory.
+    func clearSecondPassActive(for directory: URL) {
+        let standardizedDirectory = directory.standardizedFileURL
+        if activeSecondPassDirectories.remove(standardizedDirectory) != nil {
+            logger.info("Second-pass cleared for \(directory.lastPathComponent)")
+        }
     }
     
     // MARK: - Auto-Reprocessing (for empty transcripts)
@@ -605,8 +613,7 @@ final class TranscriptionCoordinator {
         liveModel: ModelManager.ModelSize? = nil
     ) async throws -> [TranscriptBlock] {
         defer {
-            activeSecondPassDirectories.remove(directory.standardizedFileURL)
-            logger.info("Second-pass cleared for \(directory.lastPathComponent)")
+            clearSecondPassActive(for: directory)
         }
         
         guard let selectedModel = resolveSecondPassModel(

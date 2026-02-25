@@ -46,6 +46,19 @@ final class RecordingController {
     
     /// Background second-pass finalization task for the latest completed session.
     nonisolated(unsafe) private var secondPassFinalizationTask: Task<Void, Never>?
+
+    /// Deterministic skip reasons for automatic post-stop finalization.
+    enum AutomaticFinalizationSkipReason: String, Equatable {
+        case noAudioFiles
+        case preferenceDisabled
+        case recordingTooShort
+    }
+
+    /// Pure decision output for second-pass eligibility.
+    struct AutomaticFinalizationDecision: Equatable {
+        let shouldLaunchSecondPass: Bool
+        let skipReason: AutomaticFinalizationSkipReason?
+    }
     
     // MARK: - Audio Level Throttling
     
@@ -665,12 +678,27 @@ final class RecordingController {
         }
     }
     
+    static func automaticFinalizationDecision(
+        hasAudioFiles: Bool,
+        secondPassEnabled: Bool,
+        recordingDuration: TimeInterval,
+        minimumDuration: TimeInterval = AudioConfiguration.secondPassMinDurationSeconds
+    ) -> AutomaticFinalizationDecision {
+        guard hasAudioFiles else {
+            return AutomaticFinalizationDecision(shouldLaunchSecondPass: false, skipReason: .noAudioFiles)
+        }
+        guard secondPassEnabled else {
+            return AutomaticFinalizationDecision(shouldLaunchSecondPass: false, skipReason: .preferenceDisabled)
+        }
+        guard recordingDuration >= minimumDuration else {
+            return AutomaticFinalizationDecision(shouldLaunchSecondPass: false, skipReason: .recordingTooShort)
+        }
+        return AutomaticFinalizationDecision(shouldLaunchSecondPass: true, skipReason: nil)
+    }
+
     private func stopRecordingAsync(for session: RecordingSession) async {
         session.state = .stopping
         session.stopDisplayTimer()
-        
-        var automaticFinalizationLaunched = false
-        var hasAudioFiles = false
         
         do {
             try await audioCaptureService.stopCapture()
@@ -711,70 +739,106 @@ final class RecordingController {
                 session.showError(.transcriptSaveFailed(underlying: error))
                 // Continue - we have audio files even if transcript save failed
             }
-            
-            hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
-                            FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
-            
-            let recordingDuration = session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-            let meetsDurationRequirement = recordingDuration >= AudioConfiguration.secondPassMinDurationSeconds
-            
-            if hasAudioFiles,
-               preferencesManager.isSecondPassASREnabled,
-               meetsDurationRequirement {
-                session.effectiveLiveModel = transcriptionCoordinator.effectiveLiveModelForSession ?? session.effectiveLiveModel
-                transcriptionCoordinator.markSecondPassActive(for: directory)
-                launchSecondPassFinalization(for: session, directory: directory)
-                automaticFinalizationLaunched = true
-            } else {
-                if !hasAudioFiles {
-                    logger.info("Skipping automatic finalization: no audio files")
-                } else if !preferencesManager.isSecondPassASREnabled {
-                    logger.info("Skipping automatic finalization: preference disabled")
-                } else {
-                    logger.info(
-                        "Skipping automatic finalization: recording too short (\(String(format: "%.1f", recordingDuration))s < \(String(format: "%.1f", AudioConfiguration.secondPassMinDurationSeconds))s)"
-                    )
-                }
-            }
-            
-            // Export meeting to exports directory (if enabled)
-            await exportMeetingIfEnabled(directory: directory)
+
+            await completeStopFlow(for: session, directory: directory)
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
         }
-        
-        // Mark session as completed
+
+        activeSession = nil
+        resetMuteState()
+    }
+
+    private func recordingDuration(for session: RecordingSession) -> TimeInterval {
+        session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+    }
+
+    private func hasAudioFiles(in directory: URL) -> Bool {
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
+    }
+
+    private func logAutomaticFinalizationSkip(
+        reason: AutomaticFinalizationSkipReason,
+        recordingDuration: TimeInterval
+    ) {
+        switch reason {
+        case .noAudioFiles:
+            logger.info("Skipping automatic finalization: no audio files")
+        case .preferenceDisabled:
+            logger.info("Skipping automatic finalization: preference disabled")
+        case .recordingTooShort:
+            logger.info(
+                "Skipping automatic finalization: recording too short (\(String(format: "%.1f", recordingDuration))s < \(String(format: "%.1f", AudioConfiguration.secondPassMinDurationSeconds))s)"
+            )
+        }
+    }
+
+    private func runAutomaticFinalizationIfEligible(
+        for session: RecordingSession,
+        directory: URL
+    ) async -> (hasAudioFiles: Bool, automaticFinalizationLaunched: Bool) {
+        let hasAudioFiles = hasAudioFiles(in: directory)
+        let duration = recordingDuration(for: session)
+        let decision = Self.automaticFinalizationDecision(
+            hasAudioFiles: hasAudioFiles,
+            secondPassEnabled: preferencesManager.isSecondPassASREnabled,
+            recordingDuration: duration
+        )
+
+        var automaticFinalizationLaunched = false
+        if decision.shouldLaunchSecondPass {
+            session.effectiveLiveModel = transcriptionCoordinator.effectiveLiveModelForSession ?? session.effectiveLiveModel
+            transcriptionCoordinator.markSecondPassActive(for: directory)
+            launchSecondPassFinalization(for: session, directory: directory)
+            automaticFinalizationLaunched = true
+        } else if let reason = decision.skipReason {
+            logAutomaticFinalizationSkip(reason: reason, recordingDuration: duration)
+        }
+
+        await exportMeetingIfEnabled(directory: directory)
+        return (hasAudioFiles, automaticFinalizationLaunched)
+    }
+
+    private func completeStopFlow(
+        for session: RecordingSession,
+        directory: URL,
+        interruptionMessage: String? = nil
+    ) async {
+        let finalizationState = await runAutomaticFinalizationIfEligible(for: session, directory: directory)
+
         session.state = .completed
+        // Interruption may end the live capture stream, but history resume affordance
+        // is determined from saved audio presence (`MeetingHistoryItem.canResume`).
         session.canResume = true
-        
+
+        if let interruptionMessage {
+            session.showErrorMessage(interruptionMessage)
+        }
+
         // Notify completion — refreshes history and selects the new meeting.
         // NOTE: do NOT call onRefreshHistory here; onSessionCompleted already
         // refreshes. A second refresh would replace the MeetingHistoryItem
         // objects, orphaning the selectedMeeting reference.
-        onSessionCompleted?(session, session.outputDirectory)
-        
+        onSessionCompleted?(session, directory)
+
         // Empty-transcript rescue runs AFTER onSessionCompleted so the canonical
         // MeetingHistoryItem exists in meetingHistory.
         // Automatic finalization is the primary path; rescue only runs if it did
         // not launch and the transcript is empty.
         let hasEmptyTranscript = session.transcriptBlocks.isEmpty
-        
-        if let directory = session.outputDirectory {
-            if hasAudioFiles && hasEmptyTranscript && !automaticFinalizationLaunched {
-                logger.info("Auto-triggering reprocessing (empty transcript rescue)")
-                onAutoReprocessRequested?(directory)
-            } else if hasEmptyTranscript && automaticFinalizationLaunched {
-                logger.info("Skipping empty-transcript rescue: automatic finalization already launched")
-            }
+        if finalizationState.hasAudioFiles && hasEmptyTranscript && !finalizationState.automaticFinalizationLaunched {
+            logger.info("Auto-triggering reprocessing (empty transcript rescue)")
+            onAutoReprocessRequested?(directory)
+        } else if hasEmptyTranscript && finalizationState.automaticFinalizationLaunched {
+            logger.info("Skipping empty-transcript rescue: automatic finalization already launched")
         }
-        
-        activeSession = nil
-        resetMuteState()
     }
     
     private func launchSecondPassFinalization(for session: RecordingSession, directory: URL) {
         let title = session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle
         let meetingDate = session.recordingStartTime ?? Date()
+        let transcriptionCoordinator = self.transcriptionCoordinator
         
         do {
             try fileOutputService.saveTranscriptBlocks(
@@ -790,15 +854,21 @@ final class RecordingController {
         
         secondPassFinalizationTask?.cancel()
         session.isFinalizingTranscript = true
+        Task {
+            await DiagnosticLogger.shared.log(.stabilizer, "secondPass:scheduled dir=\(directory.lastPathComponent)")
+        }
         
-        secondPassFinalizationTask = Task { [weak self, weak session] in
-            guard let self, let session else { return }
+        secondPassFinalizationTask = Task { [weak self, weak session, transcriptionCoordinator] in
             defer {
                 Task { @MainActor in
-                    session.isFinalizingTranscript = false
-                    self.onRefreshHistory?()
+                    // Fallback clear in case the task exits before runSecondPassASR reaches its internal defer.
+                    transcriptionCoordinator.clearSecondPassActive(for: directory)
+                    session?.isFinalizingTranscript = false
+                    self?.onRefreshHistory?()
                 }
             }
+
+            guard let self, let session else { return }
             
             do {
                 let blocks = try await self.transcriptionCoordinator.runSecondPassASR(
@@ -837,8 +907,13 @@ final class RecordingController {
                 }
             } catch is CancellationError {
                 self.logger.info("Second-pass finalization cancelled")
+                await DiagnosticLogger.shared.log(.stabilizer, "secondPass:cancelled dir=\(directory.lastPathComponent)")
             } catch {
                 self.logger.error("Second-pass finalization failed: \(error.localizedDescription)")
+                await DiagnosticLogger.shared.log(
+                    .stabilizer,
+                    "secondPass:failed dir=\(directory.lastPathComponent) error=\(error.localizedDescription)"
+                )
                 
                 // Fallback: if second-pass failed and transcript is empty, trigger
                 // auto-reprocess as recovery so the user doesn't get a blank transcript.
@@ -990,20 +1065,44 @@ final class RecordingController {
     
     private func handleCaptureInterrupted(error: Error?) {
         guard let session = activeSession else { return }
-        
+
+        guard session.state == .recording else {
+            logger.info("Ignoring duplicate capture interruption while session is not actively recording")
+            return
+        }
+
+        // Move to stopping immediately so repeated interruption callbacks become no-ops.
+        session.state = .stopping
+        session.stopDisplayTimer()
         session.wasInterrupted = true
-        session.interruptionReason = "The captured app was closed"
-        
+        if session.interruptionReason == nil {
+            session.interruptionReason = "The captured app was closed"
+        }
+
+        let reason = session.interruptionReason ?? "The captured stream was interrupted"
+        let errorDescription = error?.localizedDescription ?? "none"
+        logger.warning("RECORDING_INTERRUPTED: reason=\(reason), error=\(errorDescription)")
+        Task {
+            await DiagnosticLogger.shared.log(
+                .app,
+                "RECORDING_INTERRUPTED: reason=\(reason), error=\(errorDescription)"
+            )
+        }
+
         Task {
             await stopRecordingAfterInterruption(for: session)
         }
     }
     
     private func stopRecordingAfterInterruption(for session: RecordingSession) async {
-        session.state = .stopping
-        session.stopDisplayTimer()
+        if session.state != .stopping {
+            session.state = .stopping
+            session.stopDisplayTimer()
+        }
         
         do {
+            // Interruption has already terminated the source stream, so this path
+            // intentionally does NOT call audioCaptureService.stopCapture().
             await transcriptionCoordinator.stopTranscription()
 
             // Stop file writing and get output directory
@@ -1041,19 +1140,17 @@ final class RecordingController {
                 session.showError(.transcriptSaveFailed(underlying: error))
                 // Continue - we have audio files even if transcript save failed
             }
+
+            let interruptionMessage = "Recording saved. \(session.interruptionReason ?? "The stream was interrupted.")"
+            await completeStopFlow(
+                for: session,
+                directory: directory,
+                interruptionMessage: interruptionMessage
+            )
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
         }
-        
-        session.state = .completed
-        // Show success message with interruption reason
-        if let reason = session.interruptionReason {
-            session.showErrorMessage("Recording saved. \(reason)")
-        } else {
-            session.showErrorMessage("Recording saved. The stream was interrupted.")
-        }
-        
-        onSessionCompleted?(session, session.outputDirectory)
+
         activeSession = nil
         resetMuteState()
     }

@@ -610,7 +610,7 @@ final class MuesliViewModel {
             self?.permissionManager.isActivelyRecording = true
         }
 
-        self.recordingController.onSessionCompleted = { [weak self] _, outputDirectory in
+        self.recordingController.onSessionCompleted = { [weak self] session, outputDirectory in
             guard let self = self else { return }
 
             // Re-enable the background permission re-probe now that recording has ended.
@@ -623,6 +623,12 @@ final class MuesliViewModel {
             if let directory = outputDirectory,
                let newMeeting = self.meetingHistory.first(where: { $0.directory == directory }) {
                 self.selectedMeeting = newMeeting
+                // Reflect controller-driven second-pass finalization in history UI so users
+                // see that automatic work is in progress and don't manually re-run it.
+                if session.isFinalizingTranscript {
+                    newMeeting.isReprocessing = true
+                    newMeeting.reprocessingStartTime = Date()
+                }
             }
         }
         
