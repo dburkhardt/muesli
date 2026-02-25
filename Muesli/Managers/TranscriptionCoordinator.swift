@@ -28,6 +28,20 @@ final class TranscriptionCoordinator {
             return false
         }
     }
+
+    /// High-level processing phase shown in meeting UI.
+    enum ProcessingPhase: String, Sendable {
+        case secondPass
+        case autoReprocess
+        case manualReprocess
+    }
+
+    /// Canonical processing state keyed by meeting directory path.
+    struct MeetingProcessingState: Sendable {
+        let phase: ProcessingPhase
+        let startedAt: Date
+        let cancellable: Bool
+    }
     
     // MARK: - Dependencies
     
@@ -82,10 +96,13 @@ final class TranscriptionCoordinator {
     }
     
     /// Directories with an active second-pass ASR task (prevents concurrent auto-reprocess)
-    private var activeSecondPassDirectories: Set<URL> = []
+    private var activeSecondPassDirectories: Set<String> = []
 
-    /// Active auto-reprocess tasks keyed by meeting id (supports user cancellation)
-    private var autoReprocessTasks: [UUID: Task<Void, Never>] = [:]
+    /// Canonical meeting processing states keyed by standardized directory path.
+    private var processingStatesByDirectory: [String: MeetingProcessingState] = [:]
+
+    /// Active auto-reprocess tasks keyed by canonical directory path (supports user cancellation).
+    private var autoReprocessTasks: [String: Task<Void, Never>] = [:]
     
     /// Effective model used by live transcription in the current recording session.
     /// This may differ from modelManager.activeModel when fallback is used.
@@ -420,6 +437,60 @@ final class TranscriptionCoordinator {
     deinit {
         logger.debug("Deallocating")
     }
+
+    // MARK: - Processing State
+
+    /// Canonical key for matching meeting directories across refreshed URL instances.
+    private func canonicalDirectoryKey(_ directory: URL) -> String {
+        directory.standardizedFileURL.path
+    }
+
+    /// Snapshot all active processing states keyed by canonical directory path.
+    func allActiveProcessingStates() -> [String: MeetingProcessingState] {
+        processingStatesByDirectory
+    }
+
+    /// Active processing state for a specific meeting directory, if any.
+    func processingState(for directory: URL) -> MeetingProcessingState? {
+        processingStatesByDirectory[canonicalDirectoryKey(directory)]
+    }
+
+    /// Register active processing for a meeting directory.
+    func beginProcessingState(
+        for directory: URL,
+        phase: ProcessingPhase,
+        startedAt: Date = Date(),
+        cancellable: Bool
+    ) {
+        let key = canonicalDirectoryKey(directory)
+        let preservedStart = processingStatesByDirectory[key]?.startedAt ?? startedAt
+        processingStatesByDirectory[key] = MeetingProcessingState(
+            phase: phase,
+            startedAt: preservedStart,
+            cancellable: cancellable
+        )
+        logger.info(
+            "processingState:set phase=\(phase.rawValue) dir=\(directory.lastPathComponent) cancellable=\(cancellable)"
+        )
+    }
+
+    /// Clear active processing state for a directory.
+    /// If `phase` is set, clear only when the current state matches that phase.
+    func clearProcessingState(
+        for directory: URL,
+        phase: ProcessingPhase? = nil,
+        reason: String? = nil
+    ) {
+        let key = canonicalDirectoryKey(directory)
+        guard let current = processingStatesByDirectory[key] else { return }
+        if let phase, current.phase != phase {
+            return
+        }
+        processingStatesByDirectory.removeValue(forKey: key)
+        logger.info(
+            "processingState:clear phase=\(current.phase.rawValue) dir=\(directory.lastPathComponent) reason=\(reason ?? "none")"
+        )
+    }
     
     /// Set transcript handler for receiving segments
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler) {
@@ -554,16 +625,19 @@ final class TranscriptionCoordinator {
     /// Called by RecordingController before launching `launchSecondPassFinalization`.
     /// Cleared via `clearSecondPassActive(for:)` (including `runSecondPassASR` defer).
     func markSecondPassActive(for directory: URL) {
-        activeSecondPassDirectories.insert(directory.standardizedFileURL)
+        let key = canonicalDirectoryKey(directory)
+        activeSecondPassDirectories.insert(key)
+        beginProcessingState(for: directory, phase: .secondPass, cancellable: true)
         logger.info("Second-pass marked active for \(directory.lastPathComponent)")
     }
 
     /// Idempotently clear active second-pass marker for a directory.
     func clearSecondPassActive(for directory: URL) {
-        let standardizedDirectory = directory.standardizedFileURL
-        if activeSecondPassDirectories.remove(standardizedDirectory) != nil {
+        let key = canonicalDirectoryKey(directory)
+        if activeSecondPassDirectories.remove(key) != nil {
             logger.info("Second-pass cleared for \(directory.lastPathComponent)")
         }
+        clearProcessingState(for: directory, phase: .secondPass, reason: "secondPassCleared")
     }
     
     // MARK: - Auto-Reprocessing (for empty transcripts)
@@ -571,7 +645,8 @@ final class TranscriptionCoordinator {
     /// Auto-reprocess a meeting once the model becomes ready
     /// Used when recording stopped with empty transcript (model wasn't ready in time)
     func autoReprocessWhenReady(meeting: MeetingHistoryItem) {
-        if activeSecondPassDirectories.contains(meeting.directory.standardizedFileURL) {
+        let meetingKey = canonicalDirectoryKey(meeting.directory)
+        if activeSecondPassDirectories.contains(meetingKey) {
             logger.warning("Skipping auto-reprocess for '\(meeting.title)': second-pass in progress")
             return
         }
@@ -585,10 +660,14 @@ final class TranscriptionCoordinator {
         
         meeting.isReprocessing = true
         meeting.reprocessingStartTime = Date()
+        beginProcessingState(for: meeting.directory, phase: .autoReprocess, startedAt: meeting.reprocessingStartTime ?? Date(), cancellable: true)
 
-        autoReprocessTasks[meeting.id]?.cancel()
+        autoReprocessTasks[meetingKey]?.cancel()
         let task = Task { @MainActor in
-            defer { self.autoReprocessTasks[meeting.id] = nil }
+            defer {
+                self.autoReprocessTasks[meetingKey] = nil
+                self.clearProcessingState(for: meeting.directory, phase: .autoReprocess, reason: "autoReprocessFinished")
+            }
             let modelStateResult = await prepareModel()
             
             if modelStateResult.isReady {
@@ -608,13 +687,15 @@ final class TranscriptionCoordinator {
             meeting.isReprocessing = false
             meeting.reprocessingStartTime = nil
         }
-        autoReprocessTasks[meeting.id] = task
+        autoReprocessTasks[meetingKey] = task
     }
 
     /// Cancel auto-reprocessing for a meeting, if a task is currently active.
     func cancelAutoReprocess(for meeting: MeetingHistoryItem) {
-        guard let task = autoReprocessTasks.removeValue(forKey: meeting.id) else { return }
+        let meetingKey = canonicalDirectoryKey(meeting.directory)
+        guard let task = autoReprocessTasks.removeValue(forKey: meetingKey) else { return }
         task.cancel()
+        clearProcessingState(for: meeting.directory, phase: .autoReprocess, reason: "userCancelled")
         logger.info("Cancelled auto-reprocess for '\(meeting.title)'")
     }
     

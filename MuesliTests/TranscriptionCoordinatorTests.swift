@@ -927,6 +927,63 @@ final class TranscriptionCoordinatorTests: XCTestCase {
     */
     
     // MARK: - Second-Pass / Auto-Reprocess Race Condition Guards
+
+    @MainActor
+    func testMarkSecondPassActiveRegistersProcessingState() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-processing-state-\(UUID().uuidString)")
+        sut.markSecondPassActive(for: directory)
+
+        let state = sut.processingState(for: directory)
+        XCTAssertNotNil(state)
+        XCTAssertEqual(state?.phase, .secondPass)
+        XCTAssertEqual(state?.cancellable, true)
+    }
+
+    @MainActor
+    func testProcessingStateLookupUsesCanonicalDirectoryPath() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-processing-state-canonical-\(UUID().uuidString)", isDirectory: true)
+        let variantDirectory = URL(fileURLWithPath: directory.path + "/")
+
+        sut.markSecondPassActive(for: directory)
+
+        let state = sut.processingState(for: variantDirectory)
+        XCTAssertNotNil(state)
+        XCTAssertEqual(state?.phase, .secondPass)
+    }
+
+    @MainActor
+    func testClearSecondPassActiveClearsProcessingState() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-processing-state-clear-\(UUID().uuidString)")
+        sut.markSecondPassActive(for: directory)
+        XCTAssertNotNil(sut.processingState(for: directory))
+
+        sut.clearSecondPassActive(for: directory)
+        XCTAssertNil(sut.processingState(for: directory))
+    }
     
     /// When a directory is marked as having an active second-pass, autoReprocessWhenReady should skip.
     @MainActor

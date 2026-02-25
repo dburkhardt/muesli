@@ -85,6 +85,35 @@ final class MeetingHistoryServiceTests: XCTestCase {
         XCTAssertEqual(meeting.title, "Team Standup")
         XCTAssertEqual(meeting.directory.standardizedFileURL, meetingDir.standardizedFileURL)
     }
+
+    func testDiscoverMeetings_WithOnlyLiveTranscript_ReturnsMeeting() throws {
+        // Given: Meeting directory with transcript.live.md but no transcript.md
+        let meetingDir = testDirectory.appendingPathComponent("2024-01-15_14-30_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: meetingDir, withIntermediateDirectories: true)
+
+        let transcriptContent = """
+        # Live Snapshot Meeting
+        2024-01-15 14:30
+        
+        ## Transcript
+        
+        **Me** _[0:05]_
+        
+        Working draft transcript.
+        """
+        try transcriptContent.write(
+            to: meetingDir.appendingPathComponent("transcript.live.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // When: Discovering meetings
+        let meetings = service.discoverMeetings()
+
+        // Then: Should discover the in-progress meeting
+        XCTAssertEqual(meetings.count, 1)
+        XCTAssertEqual(meetings.first?.title, "Live Snapshot Meeting")
+    }
     
     func testDiscoverMeetings_WithMultipleMeetings_SortsNewestFirst() throws {
         // Given: Multiple meeting directories with different dates
@@ -327,6 +356,31 @@ final class MeetingHistoryServiceTests: XCTestCase {
         // Then: Should return nil
         XCTAssertNil(transcript)
     }
+
+    func testLoadTranscript_FallsBackToLiveTranscriptWhenFinalizedMissing() throws {
+        // Given: Directory with transcript.live.md only
+        let meetingDir = testDirectory.appendingPathComponent("2024-01-15_14-30_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: meetingDir, withIntermediateDirectories: true)
+        let content = """
+        # Meeting
+        
+        ## Transcript
+        
+        Live content from second-pass snapshot
+        """
+        try content.write(
+            to: meetingDir.appendingPathComponent("transcript.live.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // When
+        let transcript = service.loadTranscript(at: meetingDir)
+
+        // Then
+        XCTAssertNotNil(transcript)
+        XCTAssertTrue(transcript?.contains("Live content from second-pass snapshot") == true)
+    }
     
     func testLoadTranscript_ForMeeting_LoadsCorrectTranscript() throws {
         // Given: Meeting item
@@ -473,6 +527,34 @@ final class MeetingHistoryServiceTests: XCTestCase {
         
         // Then: Should return nil for invalid format
         XCTAssertNil(blocks)
+    }
+
+    func testLoadTranscriptBlocks_FallsBackToLiveTranscriptWhenFinalizedMissing() throws {
+        // Given: Structured transcript.live.md without transcript.md
+        let meetingDir = testDirectory.appendingPathComponent("2024-01-15_14-30_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: meetingDir, withIntermediateDirectories: true)
+        let content = """
+        # Meeting
+        
+        ## Transcript
+        
+        **Me** _[0:05]_
+        
+        Live block content.
+        """
+        try content.write(
+            to: meetingDir.appendingPathComponent("transcript.live.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // When
+        let blocks = service.loadTranscriptBlocks(at: meetingDir)
+
+        // Then
+        let unwrappedBlocks = try XCTUnwrap(blocks)
+        XCTAssertEqual(unwrappedBlocks.count, 1)
+        XCTAssertTrue(unwrappedBlocks[0].text.contains("Live block content"))
     }
     
     func testLoadOriginalTranscriptBlocks_WithRefinedMeeting_ReturnsOriginalBlocks() throws {

@@ -157,8 +157,8 @@ final class MuesliViewModel {
     /// Recording controller - owns all recording lifecycle logic
     private let recordingController: RecordingController
 
-    /// Active manual reprocessing tasks keyed by meeting id.
-    private var reprocessingTasks: [UUID: Task<Void, Never>] = [:]
+    /// Active manual reprocessing tasks keyed by canonical meeting directory path.
+    private var reprocessingTasks: [String: Task<Void, Never>] = [:]
     
     /// Whether echo cancellation is enabled (delegates to PreferencesManager)
     var isEchoCancellationEnabled: Bool {
@@ -419,6 +419,48 @@ final class MuesliViewModel {
         selectedMeeting = nil
         selectedMeetingIDs.removeAll()
     }
+
+    // MARK: - Meeting Resolution
+
+    /// Canonical key for matching meeting directories across refreshed instances.
+    private func canonicalDirectoryKey(_ directory: URL) -> String {
+        directory.standardizedFileURL.path
+    }
+
+    /// Resolve a meeting by canonical directory, preferring the currently selected instance.
+    private func resolveMeeting(for directory: URL) -> MeetingHistoryItem? {
+        let key = canonicalDirectoryKey(directory)
+        if let selected = selectedMeeting, canonicalDirectoryKey(selected.directory) == key {
+            return selected
+        }
+        return meetingHistory.first(where: { canonicalDirectoryKey($0.directory) == key })
+    }
+
+    /// Re-project coordinator-owned processing state onto refreshed meeting instances.
+    private func rehydrateMeetingProcessingState() {
+        let processingStates = transcriptionCoordinator.allActiveProcessingStates()
+        for meeting in meetingHistory {
+            let key = canonicalDirectoryKey(meeting.directory)
+            if let state = processingStates[key] {
+                meeting.isReprocessing = true
+                meeting.reprocessingStartTime = state.startedAt
+            } else {
+                meeting.isReprocessing = false
+                meeting.reprocessingProgress = 0.0
+                meeting.reprocessingStartTime = nil
+            }
+        }
+    }
+
+    /// Refresh history and restore transient processing state for newly reloaded items.
+    private func refreshMeetingHistoryAndRehydrateProcessingState(selecting directory: URL? = nil) {
+        historyManager.refreshMeetingHistory()
+        rehydrateMeetingProcessingState()
+        if let directory, let meeting = resolveMeeting(for: directory) {
+            selectedMeeting = meeting
+            selectedMeetingIDs = [meeting.id]
+        }
+    }
     
     // MARK: - Microphone Mute (delegates to RecordingController)
     
@@ -613,43 +655,24 @@ final class MuesliViewModel {
             self?.permissionManager.isActivelyRecording = true
         }
 
-        self.recordingController.onSessionCompleted = { [weak self] session, outputDirectory in
+        self.recordingController.onSessionCompleted = { [weak self] _, outputDirectory in
             guard let self = self else { return }
 
             // Re-enable the background permission re-probe now that recording has ended.
             self.permissionManager.isActivelyRecording = false
-            
-            // Refresh history first to ensure the new meeting is available
-            self.refreshMeetingHistory()
-            
-            // Find and select the newly completed meeting
-            if let directory = outputDirectory,
-               let newMeeting = self.meetingHistory.first(where: { $0.directory == directory }) {
-                self.selectedMeeting = newMeeting
-                // Reflect controller-driven second-pass finalization in history UI so users
-                // see that automatic work is in progress and don't manually re-run it.
-                if session.isFinalizingTranscript {
-                    newMeeting.isReprocessing = true
-                    newMeeting.reprocessingStartTime = Date()
-                }
-            }
+
+            // Refresh + rehydrate using coordinator-owned processing state, then reselect
+            // the completed meeting via canonical directory matching.
+            self.refreshMeetingHistoryAndRehydrateProcessingState(selecting: outputDirectory)
         }
         
         self.recordingController.onRefreshHistory = { [weak self] in
-            self?.refreshMeetingHistory()
+            self?.refreshMeetingHistoryAndRehydrateProcessingState()
         }
         
         self.recordingController.onAutoReprocessRequested = { [weak self] directory in
             guard let self else { return }
-            // Prefer selectedMeeting — it's the instance the UI is bound to.
-            // Falling back to meetingHistory lookup handles edge cases where
-            // the user navigated away before the callback fired.
-            let meeting: MeetingHistoryItem?
-            if let selected = self.selectedMeeting, selected.directory == directory {
-                meeting = selected
-            } else {
-                meeting = self.meetingHistory.first(where: { $0.directory == directory })
-            }
+            let meeting = self.resolveMeeting(for: directory)
             guard let meeting else {
                 self.logger.warning("Auto-reprocess: meeting not found for \(directory.lastPathComponent)")
                 return
@@ -659,12 +682,7 @@ final class MuesliViewModel {
         
         self.recordingController.onAutoRefineRequested = { [weak self] directory in
             guard let self else { return }
-            let meeting: MeetingHistoryItem?
-            if let selected = self.selectedMeeting, selected.directory == directory {
-                meeting = selected
-            } else {
-                meeting = self.meetingHistory.first(where: { $0.directory == directory })
-            }
+            let meeting = self.resolveMeeting(for: directory)
             guard let meeting else {
                 self.logger.warning("Auto-refine: meeting not found for \(directory.lastPathComponent)")
                 return
@@ -850,7 +868,7 @@ final class MuesliViewModel {
     
     /// Refresh meeting history (delegates to historyManager)
     func refreshMeetingHistory() {
-        historyManager.refreshMeetingHistory()
+        refreshMeetingHistoryAndRehydrateProcessingState()
     }
     
     /// Group meetings by date (delegates to historyManager)
@@ -943,23 +961,41 @@ final class MuesliViewModel {
     ///   - model: The model to use for reprocessing
     func reprocessTranscript(for meeting: MeetingHistoryItem, using model: ModelManager.ModelSize) {
         guard !meeting.isReprocessing else { return }
+        let meetingKey = canonicalDirectoryKey(meeting.directory)
         
         // Cancel any running second-pass so user intent takes precedence
         // without ANE contention or transcript.md write races.
         recordingController.cancelSecondPassIfRunning()
 
-        reprocessingTasks[meeting.id]?.cancel()
+        reprocessingTasks[meetingKey]?.cancel()
+        transcriptionCoordinator.clearProcessingState(
+            for: meeting.directory,
+            phase: .manualReprocess,
+            reason: "manualReprocessRestarted"
+        )
         let task = Task { @MainActor in
             defer {
-                self.reprocessingTasks[meeting.id] = nil
+                self.reprocessingTasks[meetingKey] = nil
+                self.transcriptionCoordinator.clearProcessingState(
+                    for: meeting.directory,
+                    phase: .manualReprocess,
+                    reason: "manualReprocessFinished"
+                )
                 meeting.isReprocessing = false
                 meeting.reprocessingProgress = 0.0
                 meeting.reprocessingStartTime = nil
             }
 
+            let startedAt = Date()
+            self.transcriptionCoordinator.beginProcessingState(
+                for: meeting.directory,
+                phase: .manualReprocess,
+                startedAt: startedAt,
+                cancellable: true
+            )
             meeting.isReprocessing = true
             meeting.reprocessingProgress = 0.0
-            meeting.reprocessingStartTime = Date()
+            meeting.reprocessingStartTime = startedAt
             
             do {
                 try await transcriptionCoordinator.reprocessTranscript(
@@ -979,13 +1015,17 @@ final class MuesliViewModel {
                 logger.error("Reprocessing failed: \(error.localizedDescription)")
             }
         }
-        reprocessingTasks[meeting.id] = task
+        reprocessingTasks[meetingKey] = task
     }
 
     /// Cancel active reprocessing for a meeting (manual + auto paths).
     func cancelReprocessing(for meeting: MeetingHistoryItem) {
-        reprocessingTasks.removeValue(forKey: meeting.id)?.cancel()
+        let meetingKey = canonicalDirectoryKey(meeting.directory)
+        reprocessingTasks.removeValue(forKey: meetingKey)?.cancel()
+        recordingController.cancelSecondPassIfRunning()
         transcriptionCoordinator.cancelAutoReprocess(for: meeting)
+        transcriptionCoordinator.clearProcessingState(for: meeting.directory, phase: .manualReprocess, reason: "userCancelled")
+        transcriptionCoordinator.clearProcessingState(for: meeting.directory, phase: .secondPass, reason: "userCancelled")
         meeting.isReprocessing = false
         meeting.reprocessingProgress = 0.0
         meeting.reprocessingStartTime = nil
@@ -1006,11 +1046,23 @@ final class MuesliViewModel {
     /// Helper for synchronous reprocessing wrapper
     private func reprocessTranscript(for meeting: MeetingHistoryItem, using model: ModelManager.ModelSize) async {
         guard !meeting.isReprocessing else { return }
+        let startedAt = Date()
         
+        transcriptionCoordinator.beginProcessingState(
+            for: meeting.directory,
+            phase: .manualReprocess,
+            startedAt: startedAt,
+            cancellable: true
+        )
         meeting.isReprocessing = true
         meeting.reprocessingProgress = 0.0
-        meeting.reprocessingStartTime = Date()
+        meeting.reprocessingStartTime = startedAt
         defer {
+            transcriptionCoordinator.clearProcessingState(
+                for: meeting.directory,
+                phase: .manualReprocess,
+                reason: "bulkManualReprocessFinished"
+            )
             meeting.isReprocessing = false
             meeting.reprocessingProgress = 0.0
             meeting.reprocessingStartTime = nil
@@ -1031,6 +1083,11 @@ final class MuesliViewModel {
         } catch {
             logger.error("Reprocessing failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Whether the current reprocessing phase supports cancellation from the UI.
+    func isReprocessingCancellable(for meeting: MeetingHistoryItem) -> Bool {
+        transcriptionCoordinator.processingState(for: meeting.directory)?.cancellable ?? true
     }
     
     // MARK: - Model Switching (delegates to TranscriptionCoordinator)

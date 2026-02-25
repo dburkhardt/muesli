@@ -565,10 +565,13 @@ struct RecordingDetailView: View {
     private func processingIndicators(for meeting: MeetingHistoryItem) -> some View {
         // 1. Current meeting reprocessing (second-pass ASR)
         if meeting.isReprocessing, let startTime = meeting.reprocessingStartTime {
+            let cancelAction: (() -> Void)? = viewModel.isReprocessingCancellable(for: meeting)
+                ? { viewModel.cancelReprocessing(for: meeting) }
+                : nil
             FloatingProcessingIndicator(
                 phase: .reprocessing,
                 startTime: startTime,
-                onCancel: { viewModel.cancelReprocessing(for: meeting) }
+                onCancel: cancelAction
             )
         }
         
