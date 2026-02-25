@@ -144,13 +144,14 @@ final class MicCaptureRing {
                     hasDiscontinuity = true
                     debounceRemaining = debounceDuration
                 } else {
-                    expectedSamplesPerCallback = sampleCount
                     let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
                     let negativeTolerance = -Double(expectedSamplesPerCallback) / 2.0  // -5ms
 
                     if deltaSamples < negativeTolerance || deltaSamples > threshold {
                         hasDiscontinuity = true
                         debounceRemaining = debounceDuration
+                    } else {
+                        expectedSamplesPerCallback = sampleCount
                     }
                 }
             }
