@@ -32,6 +32,8 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### February
 
+- [2026-02-24: Reprocess Transcript Block Ordering Lost](2026-02-24_reprocess-block-ordering.md) - Post-meeting reprocessing lost chronological speaker interleaving; fix adds timestamp sort matching second-pass ASR pattern
+- [2026-02-24: Consolidated Automatic Finalization Workflow Migration](2026-02-24_consolidated-finalization-workflow-migration.md) - Unified overlapping post-meeting workflows, simplified model preference options, and added deterministic settings migration
 - [2026-02-24: installTap NSException Crash During Mic Start](2026-02-24_installtap-nsexception-crash.md) - AVAudioNode.installTap NSException aborted the process; fix adds ObjC try/catch wrapper and permission-gated error classification
 - [2026-02-24: AEC convergence recovery: preserve filter through silence freezes](2026-02-24_aec_convergence_freeze_reset_fix.md) - Preserve AEC filter state across render-silence pauses and raise freeze threshold to reduce false resets
 - [2026-02-24: Auto-Reprocess and Second-Pass Race Condition](2026-02-24_reprocessing-race-condition.md) - Concurrent WhisperKit instances compete for ANE resources, producing incomplete transcripts

@@ -84,6 +84,10 @@ final class TranscriptionCoordinator {
     /// Directories with an active second-pass ASR task (prevents concurrent auto-reprocess)
     private var activeSecondPassDirectories: Set<URL> = []
     
+    /// Effective model used by live transcription in the current recording session.
+    /// This may differ from modelManager.activeModel when fallback is used.
+    private(set) var effectiveLiveModelForSession: ModelManager.ModelSize?
+    
     /// Audio buffering while model loads (protected by serial actor execution)
     private var pendingSystemAudio: [Float] = []
     private var pendingMicAudio: [Float] = []
@@ -213,6 +217,7 @@ final class TranscriptionCoordinator {
         if case .failed = modelState {
             modelState = .notAvailable
         }
+        effectiveLiveModelForSession = nil
         clearBuffers()
         
         // Reset slow-load detection state
@@ -235,6 +240,7 @@ final class TranscriptionCoordinator {
         
         // Check if model is available
         guard let activeModel = modelManager.activeModel else {
+            effectiveLiveModelForSession = nil
             modelState = .notAvailable
             return .notAvailable
         }
@@ -285,12 +291,14 @@ final class TranscriptionCoordinator {
                 return await prepareModel()  // Retry with fallback
             }
 
+            effectiveLiveModelForSession = nil
             modelState = .notAvailable
             return .notAvailable
         }
         
         // If already initialized, return ready
         if isInitialized {
+            effectiveLiveModelForSession = modelToUse
             modelState = .ready
             // Flush any buffered audio in case we resumed
             processBufferedAudio()
@@ -341,6 +349,7 @@ final class TranscriptionCoordinator {
         
         do {
             try await transcriptionService.initialize(modelPath: modelPath)
+            effectiveLiveModelForSession = modelToUse
             isInitialized = true
             modelState = .ready
             
@@ -375,6 +384,7 @@ final class TranscriptionCoordinator {
                 return await prepareModel()  // Retry with fallback
             }
 
+            effectiveLiveModelForSession = nil
             return .failed(error)
         }
     }
@@ -668,7 +678,7 @@ final class TranscriptionCoordinator {
         preference: PreferencesManager.SecondPassModelPreference,
         liveModel: ModelManager.ModelSize?
     ) -> ModelManager.ModelSize? {
-        let effectiveLiveModel = liveModel ?? modelManager.activeModel
+        let effectiveLiveModel = liveModel ?? effectiveLiveModelForSession ?? modelManager.activeModel
 
         func isReady(_ model: ModelManager.ModelSize) -> Bool {
             modelManager.downloadState(for: model) == .completed &&
@@ -685,21 +695,6 @@ final class TranscriptionCoordinator {
         case .sameAsLive:
             guard let effectiveLiveModel, isReady(effectiveLiveModel) else { return nil }
             return effectiveLiveModel
-        case .bestAvailableNoDowngrade:
-            guard let effectiveLiveModel else { return bestAvailable }
-            guard let candidate = bestAvailable else { return nil }
-            let rank: [ModelManager.ModelSize: Int] = [.large: 0, .largeTurbo: 1, .medium: 2, .small: 3]
-            guard let liveRank = rank[effectiveLiveModel], let candidateRank = rank[candidate], candidateRank <= liveRank else {
-                return nil
-            }
-            return candidate
-        case .specific:
-            guard let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel),
-                  let model = ModelManager.ModelSize(rawValue: raw),
-                  isReady(model) else {
-                return nil
-            }
-            return model
         }
     }
 
@@ -822,7 +817,7 @@ final class TranscriptionCoordinator {
         // Use TranscriptProcessor to filter artifacts (e.g., [BLANK_AUDIO], hallucinations)
         // and merge segments into blocks with word limits
         let processor = TranscriptProcessor()
-        for segment in segments {
+        for segment in segments.sorted(by: { $0.timestamp < $1.timestamp }) {
             processor.processSegment(segment)
         }
         processor.finalize()

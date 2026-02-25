@@ -677,4 +677,71 @@ final class TranscriptProcessorTests: XCTestCase {
         XCTAssertFalse(allText.contains("[inaudible]"))
         XCTAssertFalse(allText.contains("♪"))
     }
+    
+    // MARK: - Part 7: Reprocess Ordering Regression
+    
+    /// Regression test: transcribePostProcessing emits all system audio segments (speaker: .them)
+    /// first, then all mic segments (speaker: .me). Without sorting by timestamp before processing,
+    /// blocks are grouped by speaker instead of chronologically interleaved.
+    /// Bug: reprocessTranscript() fed segments to TranscriptProcessor in arrival order (unsorted).
+    /// Fix: Sort segments by timestamp before processing, matching runSecondPassASR() pattern.
+    func testReprocessTranscriptSortsSegmentsByTimestampBeforeProcessing() {
+        // Simulate transcribePostProcessing output: all .them first, then all .me
+        let segments = [
+            // System audio batch (all .them, ascending timestamps)
+            TranscriptionService.TranscriptSegment(text: "Welcome everyone to the call", timestamp: 0.0, speaker: .them),
+            TranscriptionService.TranscriptSegment(text: "Let me share my screen with the quarterly results", timestamp: 30.0, speaker: .them),
+            TranscriptionService.TranscriptSegment(text: "As you can see revenue is up fifteen percent", timestamp: 60.0, speaker: .them),
+            // Mic audio batch (all .me, ascending timestamps)
+            TranscriptionService.TranscriptSegment(text: "Hi thanks for setting this up", timestamp: 5.0, speaker: .me),
+            TranscriptionService.TranscriptSegment(text: "That looks great can you zoom in on the chart", timestamp: 35.0, speaker: .me),
+            TranscriptionService.TranscriptSegment(text: "Impressive numbers I have a few questions", timestamp: 65.0, speaker: .me),
+        ]
+        
+        // Phase 1: Feed unsorted (arrival order) — demonstrates the bug
+        for segment in segments {
+            processor.processSegment(segment)
+        }
+        processor.finalize()
+        
+        let unsortedBlocks = processor.blocks
+        XCTAssertGreaterThanOrEqual(unsortedBlocks.count, 2, "Should produce at least 2 blocks")
+        
+        // With unsorted input, all .them blocks come first, then all .me blocks
+        // Find the index where speaker switches from .them to .me
+        let firstMeIndex = unsortedBlocks.firstIndex(where: { $0.speaker == .me })
+        let lastThemIndex = unsortedBlocks.lastIndex(where: { $0.speaker == .them })
+        if let firstMe = firstMeIndex, let lastThem = lastThemIndex {
+            XCTAssertGreaterThan(firstMe, lastThem,
+                "Bug: unsorted input groups all .them before all .me (no interleaving)")
+        }
+        
+        // Phase 2: Feed sorted by timestamp — demonstrates the fix
+        processor.reset()
+        
+        let sortedSegments = segments.sorted(by: { $0.timestamp < $1.timestamp })
+        for segment in sortedSegments {
+            processor.processSegment(segment)
+        }
+        processor.finalize()
+        
+        let sortedBlocks = processor.blocks
+        XCTAssertGreaterThanOrEqual(sortedBlocks.count, 4, "Sorted input should produce interleaved blocks")
+        
+        // Verify chronological interleaving: speakers should alternate
+        var speakerTransitions = 0
+        for i in 1..<sortedBlocks.count {
+            if sortedBlocks[i].speaker != sortedBlocks[i - 1].speaker {
+                speakerTransitions += 1
+            }
+        }
+        XCTAssertGreaterThanOrEqual(speakerTransitions, 3,
+            "Fix: sorted input should produce multiple speaker transitions (interleaving)")
+        
+        // Verify chronological ordering: timestamps should be non-decreasing
+        for i in 1..<sortedBlocks.count {
+            XCTAssertGreaterThanOrEqual(sortedBlocks[i].startTimestamp, sortedBlocks[i - 1].startTimestamp,
+                "Blocks should be in chronological order")
+        }
+    }
 }

@@ -89,6 +89,14 @@ Each item should include:
 
 ### Enhancements
 
+**[Bug]** [High] reprocessTranscript() does not handle resumed-recording segment-numbered audio files
+- Description: `reprocessTranscript()` only looks for `audio.caf` and `microphone.caf`, silently ignoring segment-numbered files (`audio_2.caf`, `microphone_2.caf`) from resumed recordings.
+- Notes:
+  - `runSecondPassASR()` correctly uses `enumerateAudioSegments()` to discover all segment files.
+  - For resumed meetings, reprocessing only transcribes the first segment's audio.
+  - Fix: refactor `reprocessTranscript()` to use `enumerateAudioSegments()` and iterate over all segment pairs, matching the second-pass ASR approach.
+- Related: `Muesli/Managers/TranscriptionCoordinator.swift` (`reprocessTranscript()`, `enumerateAudioSegments()`), `docs/debug-logs/2026-02-24_reprocess-block-ordering.md`
+
 **[Bug]** [High] Ensure failed session cleanup stops partially-started capture
 - Description: Harden `RecordingController.cleanupFailedSession()` to stop `audioCaptureService` when startup fails after partial capture initialization.
 - Notes:
