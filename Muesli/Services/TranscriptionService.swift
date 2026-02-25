@@ -737,10 +737,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             }
 
             logger.info(
-                "Finalization decision: speaker=\(snapshot.channel.logSpeaker), " +
-                "samples=\(snapshot.samples.count), reason=\(decision.reason.rawValue), " +
-                "strict=\(decision.strictDecision.reason.rawValue), " +
-                "boundary=\(decision.boundaryDecision?.reason.rawValue ?? "notAttempted")"
+                "Finalization decision: speaker=\(snapshot.channel.logSpeaker), samples=\(snapshot.samples.count), reason=\(decision.reason.rawValue), strict=\(decision.strictDecision.reason.rawValue), boundary=\(decision.boundaryDecision?.reason.rawValue ?? "notAttempted")"
             )
         }
 
