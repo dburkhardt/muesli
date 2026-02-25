@@ -223,7 +223,7 @@ jobs:
         # actions/upload-artifact v4
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: webrtc-fingerprint-release-${{ github.sha }}
+          name: webrtc-fingerprint-release
           path: webrtc-fingerprint.json
           retention-days: 90
 
@@ -237,7 +237,7 @@ jobs:
 
           REPO="${{ github.repository }}"
           SHA="${{ github.sha }}"
-          ARTIFACT_NAME="webrtc-fingerprint-ci-${SHA}"
+          ARTIFACT_NAME="webrtc-fingerprint-ci"
           API="https://api.github.com/repos/${REPO}"
 
           ARTIFACT_ID=""
@@ -635,7 +635,7 @@ jobs:
         # actions/upload-artifact v4
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: pr-preview-dmg-${{ github.event_name == 'pull_request' && github.event.number || 'manual' }}-${{ github.sha }}
+          name: pr-preview-dmg-${{ github.event_name == 'pull_request' && github.event.number || 'manual' }}
           path: ${{ steps.build.outputs.dmg_file }}
           retention-days: 14
           if-no-files-found: error
