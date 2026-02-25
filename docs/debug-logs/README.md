@@ -32,6 +32,7 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### February
 
+- [2026-02-25: Reprocessing Indicator Stuck on Completed Meeting](2026-02-25_reprocessing-ui-stuck-stale-selection.md) - Detail pane remained in reprocessing due to stale selected meeting reference after history refresh
 - [2026-02-25: ASR Finalization Missing on Interruption Stop](2026-02-25_asr-finalization-interruption-gap.md) - Interrupted-stop path skipped export/second-pass/rescue parity; fix unifies stop finalization flow and hardens interruption idempotency
 - [2026-02-24: Reprocess Transcript Block Ordering Lost](2026-02-24_reprocess-block-ordering.md) - Post-meeting reprocessing lost chronological speaker interleaving; fix adds timestamp sort matching second-pass ASR pattern
 - [2026-02-24: Consolidated Automatic Finalization Workflow Migration](2026-02-24_consolidated-finalization-workflow-migration.md) - Unified overlapping post-meeting workflows, simplified model preference options, and added deterministic settings migration

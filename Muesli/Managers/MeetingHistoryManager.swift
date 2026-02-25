@@ -12,7 +12,7 @@ final class MeetingHistoryManager {
     
     // MARK: - Dependencies
     
-    private let meetingHistoryService: MeetingHistoryService
+    private let meetingHistoryService: any MeetingHistoryServiceProtocol
     
     // MARK: - Meeting History
     
@@ -62,7 +62,10 @@ final class MeetingHistoryManager {
     /// - Parameters:
     ///   - meetingHistoryService: Service for discovering meetings (injectable for testing)
     ///   - skipInitialLoad: If true, skips loading history from disk (for testing)
-    init(meetingHistoryService: MeetingHistoryService = MeetingHistoryService(), skipInitialLoad: Bool = false) {
+    init(
+        meetingHistoryService: any MeetingHistoryServiceProtocol = MeetingHistoryService(),
+        skipInitialLoad: Bool = false
+    ) {
         self.meetingHistoryService = meetingHistoryService
         if !skipInitialLoad {
             loadMeetingHistory()
@@ -77,13 +80,52 @@ final class MeetingHistoryManager {
     
     /// Load meeting history from disk
     func loadMeetingHistory() {
+        let previousSelectedMeetingID = selectedMeeting?.id
+        let previousSelectedDirectory = selectedMeeting?.directory.standardizedFileURL
+        let previousSelectedMeetingIDs = selectedMeetingIDs
+
         meetingHistory = meetingHistoryService.discoverMeetings()
+        reconcileSelectionAfterReload(
+            previousSelectedMeetingID: previousSelectedMeetingID,
+            previousSelectedDirectory: previousSelectedDirectory,
+            previousSelectedMeetingIDs: previousSelectedMeetingIDs
+        )
         groupedHistory = groupMeetingsByDate(meetingHistory)
     }
     
     /// Refresh meeting history (call after recording completes)
     func refreshMeetingHistory() {
         loadMeetingHistory()
+    }
+
+    /// Rebind selection to the refreshed meeting instances after a history reload.
+    /// This avoids stale selectedMeeting references retaining outdated transient state.
+    private func reconcileSelectionAfterReload(
+        previousSelectedMeetingID: UUID?,
+        previousSelectedDirectory: URL?,
+        previousSelectedMeetingIDs: Set<UUID>
+    ) {
+        let availableMeetingIDs = Set(meetingHistory.map(\.id))
+        selectedMeetingIDs = previousSelectedMeetingIDs.intersection(availableMeetingIDs)
+
+        if let previousSelectedMeetingID,
+           let refreshedMeeting = meetingHistory.first(where: { $0.id == previousSelectedMeetingID }) {
+            selectedMeeting = refreshedMeeting
+            return
+        }
+
+        if let previousSelectedDirectory,
+           let refreshedMeeting = meetingHistory.first(where: { $0.directory.standardizedFileURL == previousSelectedDirectory }) {
+            selectedMeeting = refreshedMeeting
+            selectedMeetingIDs.insert(refreshedMeeting.id)
+            return
+        }
+
+        if selectedMeetingIDs.count == 1, let selectedID = selectedMeetingIDs.first {
+            selectedMeeting = meetingHistory.first(where: { $0.id == selectedID })
+        } else {
+            selectedMeeting = nil
+        }
     }
     
     /// Group meetings by date: by day for last week, by month for older
@@ -231,12 +273,9 @@ final class MeetingHistoryManager {
         
         meeting.isLoadingTranscript = true
 
-        let directory = meeting.directory
-        
-        // Both MeetingHistoryManager and MeetingHistoryService are @MainActor
-        // Call the existing service instance
-        let transcript = meetingHistoryService.loadTranscript(at: directory)
-        let blocks = meetingHistoryService.loadTranscriptBlocks(at: directory)
+        // Both MeetingHistoryManager and MeetingHistoryService are @MainActor.
+        let transcript = meetingHistoryService.loadTranscript(for: meeting)
+        let blocks = meetingHistoryService.loadTranscriptBlocks(for: meeting)
 
         meeting.transcript = transcript
         if meeting.transcriptBlocks == nil {

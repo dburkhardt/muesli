@@ -1583,6 +1583,71 @@ final class MuesliViewModelTests: XCTestCase {
         XCTAssertNotNil(manager.meetingHistory)
         XCTAssertNotNil(manager.groupedHistory)
     }
+
+    func testMeetingHistoryManagerRefreshRebindsSelectedMeetingInstance() async {
+        let mockHistoryService = MockMeetingHistoryService()
+        let meetingID = UUID()
+        let oldMeeting = MockMeetingHistoryService.createMockMeeting(
+            id: meetingID,
+            title: "Reprocess Test"
+        )
+        oldMeeting.isReprocessing = true
+
+        let manager = MeetingHistoryManager(meetingHistoryService: mockHistoryService, skipInitialLoad: true)
+        manager.meetingHistory = [oldMeeting]
+        manager.selectedMeeting = oldMeeting
+        manager.selectedMeetingIDs = [meetingID]
+
+        let refreshedMeeting = MeetingHistoryItem(
+            id: meetingID,
+            title: "Reprocess Test",
+            date: oldMeeting.date,
+            directory: oldMeeting.directory,
+            hasAudio: true,
+            hasMicrophone: true
+        )
+        refreshedMeeting.isReprocessing = false
+        mockHistoryService.mockMeetings = [refreshedMeeting]
+
+        manager.refreshMeetingHistory()
+
+        XCTAssertTrue(manager.selectedMeeting === refreshedMeeting)
+        XCTAssertFalse(manager.selectedMeeting?.isReprocessing ?? true)
+        XCTAssertEqual(manager.selectedMeetingIDs, [meetingID])
+
+        try? FileManager.default.removeItem(at: oldMeeting.directory)
+    }
+
+    func testMeetingHistoryManagerRefreshPrunesStaleSelectionIDs() async {
+        let mockHistoryService = MockMeetingHistoryService()
+
+        let meetingA = MockMeetingHistoryService.createMockMeeting(title: "A")
+        let meetingB = MockMeetingHistoryService.createMockMeeting(title: "B")
+        let staleSelectionID = UUID()
+
+        let manager = MeetingHistoryManager(meetingHistoryService: mockHistoryService, skipInitialLoad: true)
+        manager.meetingHistory = [meetingA, meetingB]
+        manager.selectedMeeting = meetingB
+        manager.selectedMeetingIDs = [meetingA.id, meetingB.id, staleSelectionID]
+
+        let refreshedMeetingA = MeetingHistoryItem(
+            id: meetingA.id,
+            title: meetingA.title,
+            date: meetingA.date,
+            directory: meetingA.directory,
+            hasAudio: meetingA.hasAudio,
+            hasMicrophone: meetingA.hasMicrophone
+        )
+        mockHistoryService.mockMeetings = [refreshedMeetingA]
+
+        manager.refreshMeetingHistory()
+
+        XCTAssertEqual(manager.selectedMeetingIDs, [meetingA.id])
+        XCTAssertTrue(manager.selectedMeeting === refreshedMeetingA)
+
+        try? FileManager.default.removeItem(at: meetingA.directory)
+        try? FileManager.default.removeItem(at: meetingB.directory)
+    }
     
     func testMeetingHistoryManagerSelection() async {
         let manager = MeetingHistoryManager(skipInitialLoad: true)
