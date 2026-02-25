@@ -95,6 +95,10 @@ final class RecordingController {
     /// changes propagate to the UI.
     var onAutoReprocessRequested: ((URL) -> Void)?
     
+    /// Called when auto-refinement should run on a completed meeting directory.
+    /// Same canonical-resolution requirement as onAutoReprocessRequested.
+    var onAutoRefineRequested: ((URL) -> Void)?
+    
     /// Called when a permission error is detected during recording start.
     /// Parameters: (missingScreen: Bool, missingMic: Bool)
     var onPermissionRecoveryNeeded: ((Bool, Bool) -> Void)?
@@ -819,9 +823,8 @@ final class RecordingController {
                 
                 await self.exportMeetingIfEnabled(directory: directory)
                 
-                if let meeting = self.createMeetingHistoryItem(from: directory),
-                   let refinementCoordinator = self.transcriptionCoordinator.refinementCoordinator {
-                    refinementCoordinator.autoRefineIfEnabled(meeting: meeting, preferences: self.preferencesManager)
+                await MainActor.run {
+                    self.onAutoRefineRequested?(directory)
                 }
             } catch is CancellationError {
                 self.logger.info("Second-pass finalization cancelled")

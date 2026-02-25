@@ -648,6 +648,24 @@ final class MuesliViewModel {
             self.transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)
         }
         
+        self.recordingController.onAutoRefineRequested = { [weak self] directory in
+            guard let self else { return }
+            let meeting: MeetingHistoryItem?
+            if let selected = self.selectedMeeting, selected.directory == directory {
+                meeting = selected
+            } else {
+                meeting = self.meetingHistory.first(where: { $0.directory == directory })
+            }
+            guard let meeting else {
+                self.logger.warning("Auto-refine: meeting not found for \(directory.lastPathComponent)")
+                return
+            }
+            self.transcriptionCoordinator.refinementCoordinator?.autoRefineIfEnabled(
+                meeting: meeting,
+                preferences: self.preferencesManager
+            )
+        }
+        
         self.recordingController.onSelectedMeetingChanged = { [weak self] meeting in
             self?.selectedMeeting = meeting
         }
