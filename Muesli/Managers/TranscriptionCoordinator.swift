@@ -1,4 +1,5 @@
 import Foundation
+import os.lock
 import os.log
 
 /// Coordinates transcription model lifecycle and audio buffering
@@ -736,11 +737,7 @@ final class TranscriptionCoordinator {
         
         await DiagnosticLogger.shared.log(.stabilizer, "secondPass:start model=\(selectedModel.rawValue)")
         let start = Date()
-        
-        let tempService = TranscriptionService()
-        try await tempService.initialize(modelPath: modelPath)
-        tempService.setTranscriptionMode(.postProcessing)
-        
+
         let segmentsToProcess = enumerateAudioSegments(in: directory)
         guard !segmentsToProcess.isEmpty else {
             throw NSError(
@@ -749,21 +746,15 @@ final class TranscriptionCoordinator {
                 userInfo: [NSLocalizedDescriptionKey: "No audio files found for second-pass ASR"]
             )
         }
-        
-        nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
-        tempService.setTranscriptHandler { segment in
-            segments.append(segment)
-        }
-        
-        for pair in segmentsToProcess {
-            try Task.checkCancellation()
-            try await tempService.transcribePostProcessing(
-                systemAudioURL: pair.systemURL,
-                micAudioURL: pair.micURL,
-                startTime: recordingStartTime
+
+        let segments = try await Task.detached(priority: .userInitiated) {
+            try await Self.collectPostProcessingSegments(
+                modelPath: modelPath,
+                segmentsToProcess: segmentsToProcess,
+                recordingStartTime: recordingStartTime
             )
-        }
-        
+        }.value
+
         let processor = TranscriptProcessor()
         for segment in segments.sorted(by: { $0.timestamp < $1.timestamp }) {
             processor.processSegment(segment)
@@ -840,6 +831,34 @@ final class TranscriptionCoordinator {
             .map { ($0.1, $0.2) }
             .filter { $0.0 != nil || $0.1 != nil }
     }
+
+    /// Run post-processing ASR over one or more audio segment pairs and collect raw segments.
+    /// This helper is nonisolated so heavy WhisperKit work stays off the MainActor.
+    private nonisolated static func collectPostProcessingSegments(
+        modelPath: URL,
+        segmentsToProcess: [(systemURL: URL?, micURL: URL?)],
+        recordingStartTime: Date
+    ) async throws -> [TranscriptionService.TranscriptSegment] {
+        let tempService = TranscriptionService()
+        try await tempService.initialize(modelPath: modelPath)
+        tempService.setTranscriptionMode(.postProcessing)
+
+        let segmentsLock = OSAllocatedUnfairLock(initialState: [TranscriptionService.TranscriptSegment]())
+        tempService.setTranscriptHandler { segment in
+            segmentsLock.withLock { $0.append(segment) }
+        }
+
+        for pair in segmentsToProcess {
+            try Task.checkCancellation()
+            try await tempService.transcribePostProcessing(
+                systemAudioURL: pair.systemURL,
+                micAudioURL: pair.micURL,
+                startTime: recordingStartTime
+            )
+        }
+
+        return segmentsLock.withLock { $0 }
+    }
     
     private func parseSegmentIndex(from name: String, prefix: String, suffix: String) -> Int? {
         guard name.hasPrefix(prefix), name.hasSuffix(suffix) else { return nil }
@@ -889,39 +908,33 @@ final class TranscriptionCoordinator {
         Task { await DiagnosticLogger.shared.log(.transcription,
             "Reprocess: model=\(modelSize.rawValue)") }
         
-        // Initialize transcription service with selected model
-        let tempService = TranscriptionService()
-        try await tempService.initialize(modelPath: modelPath)
-        tempService.setTranscriptionMode(.postProcessing)
-        try Task.checkCancellation()
-        
         // Get audio file URLs
         let systemAudioURL = meeting.directory.appendingPathComponent("audio.caf")
         let micAudioURL = meeting.directory.appendingPathComponent("microphone.caf")
+        let recordingStartTime = meeting.date
         let systemExists = FileManager.default.fileExists(atPath: systemAudioURL.path)
         let micExists = FileManager.default.fileExists(atPath: micAudioURL.path)
         
         // Log audio file availability
         Task { await DiagnosticLogger.shared.log(.transcription,
             "Audio files: system=\(systemExists), mic=\(micExists)") }
-        
-        // Transcribe - use nonisolated(unsafe) since we're on MainActor and handler runs synchronously
-        nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
-        tempService.setTranscriptHandler { segment in
-            segments.append(segment)
-        }
-        
-        try await tempService.transcribePostProcessing(
-            systemAudioURL: systemExists ? systemAudioURL : nil,
-            micAudioURL: micExists ? micAudioURL : nil,
-            startTime: meeting.date
-        )
+
+        let segments = try await Task.detached(priority: .userInitiated) {
+            try await Self.collectPostProcessingSegments(
+                modelPath: modelPath,
+                segmentsToProcess: [(
+                    systemURL: systemExists ? systemAudioURL : nil,
+                    micURL: micExists ? micAudioURL : nil
+                )],
+                recordingStartTime: recordingStartTime
+            )
+        }.value
         try Task.checkCancellation()
-        
+
         // Log reprocess completion
         Task { await DiagnosticLogger.shared.log(.transcription,
             "Reprocess done: segments=\(segments.count)") }
-        
+
         // Use TranscriptProcessor to filter artifacts (e.g., [BLANK_AUDIO], hallucinations)
         // and merge segments into blocks with word limits
         let processor = TranscriptProcessor()

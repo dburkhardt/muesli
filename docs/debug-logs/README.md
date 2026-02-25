@@ -32,6 +32,7 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### February
 
+- [2026-02-25: Stop UI Hang + AEC Delay-Hint Regression](2026-02-25_stop-ui-hang-and-aec-delay-hint-regression.md) - Stop appeared stalled without clear end-state indicator; restored off-main post-processing flow and synchronizer-derived AEC delay hints
 - [2026-02-25: Second-Pass Finalization Stop-Flow Latency and Session Lifetime Race](2026-02-25_second-pass-finalization-stopflow-latency.md) - Stop path awaited export during active second-pass and could exit early if session deallocated before task start
 - [2026-02-25: Reprocessing Indicator Stuck on Completed Meeting](2026-02-25_reprocessing-ui-stuck-stale-selection.md) - Detail pane remained in reprocessing due to stale selected meeting reference after history refresh
 - [2026-02-25: ASR Finalization Missing on Interruption Stop](2026-02-25_asr-finalization-interruption-gap.md) - Interrupted-stop path skipped export/second-pass/rescue parity; fix unifies stop finalization flow and hardens interruption idempotency

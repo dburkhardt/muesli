@@ -111,6 +111,10 @@ struct RecordingDetailView: View {
                     
                     // Header with title and recording indicator
                     headerView(session: session)
+
+                    if session.state == .stopping {
+                        stoppingStatusBanner(isFinalizing: session.isFinalizingTranscript)
+                    }
                     
                     // Transcript content - different view for resumed vs new recordings
                     if let parentMeeting = session.parentMeeting {
@@ -463,15 +467,40 @@ struct RecordingDetailView: View {
                 viewModel.stopRecording(for: session)
             },
             label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(.red))
+                if session.state == .stopping {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(.orange))
+                } else {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(.red))
+                }
             }
         )
         .buttonStyle(.plain)
         .disabled(session.state == .stopping)
+    }
+
+    private func stoppingStatusBanner(isFinalizing: Bool) -> some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(isFinalizing ? "Finalizing transcript..." : "Stopping recording...")
+                .font(.system(size: 12, weight: .medium))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background {
+            Capsule()
+                .fill(.regularMaterial)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
     }
     
     // MARK: - Recording Content

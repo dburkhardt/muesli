@@ -261,7 +261,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Initialize WhisperKit with the specified model path
     /// - Parameter modelPath: Path to the WhisperKit model directory (required)
-    @MainActor
     func initialize(modelPath: URL) async throws {
         guard !isInitialized else { return }
         

@@ -465,6 +465,101 @@ final class CoreAudioTapTests: XCTestCase {
         XCTAssertLessThanOrEqual(stats.renderLeadFrames, Int64(AudioWorker.maxRenderLeadFrames) + 1,
             "Render lead should be bounded by maxRenderLeadFrames")
     }
+
+    func testAudioWorkerFeedsSynchronizerDelayHintToAEC() async throws {
+        let config = AudioSynchronizer.TimingConfig(
+            minNoDiscontinuitySeconds: 0.0,
+            discontinuityDebounceSeconds: 0.0
+        )
+        let synchronizer = AudioSynchronizer(timingConfig: config)
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone, synchronizer: synchronizer)
+
+        // Prime synchronizer into stable state with non-zero render lead.
+        let silence = [Float](repeating: 0, count: 480)
+        for i in 0..<15 {
+            silence.withUnsafeBufferPointer { ptr in
+                synchronizer.pushRender(
+                    samples: ptr.baseAddress!,
+                    count: 480,
+                    sampleTime: Float64(i * 480),
+                    hostTime: 0
+                )
+            }
+        }
+        silence.withUnsafeBufferPointer { ptr in
+            synchronizer.pushCapture(
+                samples: ptr.baseAddress!,
+                count: 480,
+                sampleTime: 0,
+                hostTime: 0
+            )
+        }
+        _ = synchronizer.getAlignedFrame()
+        XCTAssertGreaterThan(synchronizer.coarseDelayMs, 0, "Precondition: synchronizer should expose a non-zero delay hint")
+
+        let renderRing = TapCaptureRing(capacityMs: 200)
+        let captureRing = TapCaptureRing(capacityMs: 200)
+        for i in 0..<6 {
+            silence.withUnsafeBufferPointer { ptr in
+                renderRing.push(
+                    samples: ptr.baseAddress!,
+                    count: 480,
+                    sampleTime: Float64(i * 480),
+                    hostTime: 0
+                )
+                captureRing.push(
+                    samples: ptr.baseAddress!,
+                    count: 480,
+                    sampleTime: Float64(i * 480),
+                    hostTime: 0
+                )
+            }
+        }
+
+        nonisolated(unsafe) let renderRingRef = renderRing
+        nonisolated(unsafe) let captureRingRef = captureRing
+        let renderCounter = OSAllocatedUnfairLock(initialState: Int64(0))
+        let captureCounter = OSAllocatedUnfairLock(initialState: Int64(0))
+
+        let worker = AudioWorker(
+            synchronizer: synchronizer,
+            aecProcessor: aec,
+            popRenderAECFrame: { dest in
+                guard renderRingRef.pop(into: dest, count: 480) else { return nil }
+                let idx = renderCounter.withLock { count -> Int64 in
+                    let current = count
+                    count += 1
+                    return current
+                }
+                return (hostTime: 0, startSampleIndex: idx * 480)
+            },
+            popCaptureAECFrame: { dest in
+                guard captureRingRef.pop(into: dest, count: 480) else { return nil }
+                let idx = captureCounter.withLock { count -> Int64 in
+                    let current = count
+                    count += 1
+                    return current
+                }
+                return (hostTime: 0, startSampleIndex: idx * 480)
+            }
+        )
+
+        let processedExpectation = expectation(description: "Capture frame processed")
+        processedExpectation.assertForOverFulfill = false
+        worker.start { _ in
+            processedExpectation.fulfill()
+        }
+        defer { worker.stop() }
+
+        await fulfillment(of: [processedExpectation], timeout: 1.0)
+
+        let lastDelayMs = aec.getStats().lastStreamDelayMs
+        if lastDelayMs == -1 {
+            throw XCTSkip("AEC bridge unavailable in this environment")
+        }
+        XCTAssertGreaterThan(lastDelayMs, 0, "AudioWorker should feed non-zero synchronizer delay hint to AEC")
+    }
 }
 
 // MARK: - TapAudioCaptureService Permission Tests
