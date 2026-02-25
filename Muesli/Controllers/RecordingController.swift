@@ -792,11 +792,16 @@ final class RecordingController {
             transcriptionCoordinator.markSecondPassActive(for: directory)
             launchSecondPassFinalization(for: session, directory: directory)
             automaticFinalizationLaunched = true
+            logger.debug("Deferring immediate export until second-pass finalization completes")
         } else if let reason = decision.skipReason {
             logAutomaticFinalizationSkip(reason: reason, recordingDuration: duration)
         }
 
-        await exportMeetingIfEnabled(directory: directory)
+        // When second-pass is running, finalization exports the completed transcript.
+        // Skip the immediate export here so stop-flow completion remains responsive.
+        if !automaticFinalizationLaunched {
+            await exportMeetingIfEnabled(directory: directory)
+        }
         return (hasAudioFiles, automaticFinalizationLaunched)
     }
 
@@ -838,6 +843,7 @@ final class RecordingController {
     private func launchSecondPassFinalization(for session: RecordingSession, directory: URL) {
         let title = session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle
         let meetingDate = session.recordingStartTime ?? Date()
+        let liveModelAtStop = session.effectiveLiveModel
         let transcriptionCoordinator = self.transcriptionCoordinator
         
         do {
@@ -858,7 +864,7 @@ final class RecordingController {
             await DiagnosticLogger.shared.log(.stabilizer, "secondPass:scheduled dir=\(directory.lastPathComponent)")
         }
         
-        secondPassFinalizationTask = Task { [weak self, weak session, transcriptionCoordinator] in
+        secondPassFinalizationTask = Task { [weak self, weak session, transcriptionCoordinator, liveModelAtStop] in
             defer {
                 Task { @MainActor in
                     // Fallback clear in case the task exits before runSecondPassASR reaches its internal defer.
@@ -868,14 +874,14 @@ final class RecordingController {
                 }
             }
 
-            guard let self, let session else { return }
+            guard let self else { return }
             
             do {
                 let blocks = try await self.transcriptionCoordinator.runSecondPassASR(
                     in: directory,
                     recordingStartTime: meetingDate,
                     preference: self.preferencesManager.secondPassModelPreference,
-                    liveModel: session.effectiveLiveModel
+                    liveModel: liveModelAtStop
                 )
                 try Task.checkCancellation()
                 
@@ -888,6 +894,7 @@ final class RecordingController {
                 )
                 
                 await MainActor.run {
+                    guard let session else { return }
                     session.resetTranscript()
                     for block in blocks {
                         let segment = TranscriptionService.TranscriptSegment(
