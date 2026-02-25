@@ -119,6 +119,7 @@
 		'WR00001241D1A1D00000200' = {isa = PBXBuildFile; fileRef = WR00002241D1A1D00000201; };
 		'WR00003241D1A1D00000202' = {isa = PBXBuildFile; fileRef = WR00004241D1A1D00000203; };
 		'WR00005241D1A1D00000204' = {isa = PBXBuildFile; fileRef = WR00006241D1A1D00000205; };
+		9FA0B1C2D3E4F50617283940 /* ObjCExceptionCatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = 9FA0B1C2D3E4F50617283942 /* ObjCExceptionCatcher.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -247,6 +248,8 @@
 		'WR00006241D1A1D00000205' = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRingBuffer.swift; sourceTree = "<group>"; };
 		'WR00007241D1A1D00000206' = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WebRTCAECBridge.h; sourceTree = "<group>"; };
 		'WR00008241D1A1D00000207' = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Muesli-Bridging-Header.h"; sourceTree = "<group>"; };
+		9FA0B1C2D3E4F50617283941 /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptionCatcher.h; sourceTree = "<group>"; };
+		9FA0B1C2D3E4F50617283942 /* ObjCExceptionCatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptionCatcher.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -304,6 +307,7 @@
 				A1000011241D1A1D00000001 /* Views */,
 				A1000012241D1A1D00000001 /* Services */,
 				A1000013241D1A1D00000001 /* Utilities */,
+				9FA0B1C2D3E4F50617283943 /* Helpers */,
 				C1000003241D1A1D00000050 /* Managers */,
 				E1000007241D1A1D00000073 /* Controllers */,
 				D1000003241D1A1D00000060 /* Protocols */,
@@ -400,6 +404,15 @@
 				UC00002241D1A1D00000099,
 			);
 			path = Utilities;
+			sourceTree = "<group>";
+		};
+		9FA0B1C2D3E4F50617283943 /* Helpers */ = {
+			isa = PBXGroup;
+			children = (
+				9FA0B1C2D3E4F50617283941 /* ObjCExceptionCatcher.h */,
+				9FA0B1C2D3E4F50617283942 /* ObjCExceptionCatcher.m */,
+			);
+			path = Helpers;
 			sourceTree = "<group>";
 		};
 		A1000014241D1A1D00000001 /* Resources */ = {
@@ -747,6 +760,7 @@
 				C5EC4FA3BB35A1EEB4E7C343 /* AudioWorker.swift in Sources */,
 				316F436F929B6FDA7801735D /* CoarseDelayController.swift in Sources */,
 				16DE4609821FCFFEA6A6C9F7 /* CoreAudioTapManager.swift in Sources */,
+				9FA0B1C2D3E4F50617283940 /* ObjCExceptionCatcher.m in Sources */,
 				816641C1A8F7C8B4F25DD13F /* DriftTracker.swift in Sources */,
 				9DC44C6AB7F15C421F71D794 /* MicCaptureRing.swift in Sources */,
 				E83D43D0A25FBD04284F00E9 /* TapAudioCaptureService.swift in Sources */,

@@ -75,6 +75,12 @@ final class AudioFrameMetadataRing {
     }
 }
 
+/// Box for values captured by synchronous C/ObjC no-escape closures.
+/// Safe here because ObjCTryCatch executes immediately on the same thread.
+private struct UnsafeSynchronousCapture<Value>: @unchecked Sendable {
+    let value: Value
+}
+
 // MARK: - Tap Audio Capture Service
 
 /// Core Audio Tap-based audio capture service
@@ -980,12 +986,28 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         var derivedHardwareSampleRate = hardwareSampleRate
         var derivedHardwareChannels = hardwareChannels
         microphoneSampleRate = derivedHardwareSampleRate
+        let inputNodeBox = UnsafeSynchronousCapture(value: inputNode)
 
         // Use nil format (device's native output format) — explicit 48kHz format
         // causes zero-frame delivery on some USB devices (e.g., C920 webcam).
         // Resampling to 48kHz for the AEC pipeline is done in handleMicrophoneBuffer.
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
-            self?.handleMicrophoneBuffer(buffer, time: time)
+        if let installException = ObjCTryCatch({
+            inputNodeBox.value.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
+                self?.handleMicrophoneBuffer(buffer, time: time)
+            }
+        }) {
+            logger.error(
+                "MIC_ENGINE: installTap NSException \(installException.name.rawValue): \(installException.reason ?? "unknown reason")"
+            )
+            throw AudioCaptureError.microphoneStartFailed(
+                NSError(
+                    domain: "TapAudioCapture.InstallTapException",
+                    code: -4,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "installTap failed: \(installException.name.rawValue) - \(installException.reason ?? "unknown reason")",
+                    ]
+                )
+            )
         }
         do {
             try engine.start()
@@ -1007,9 +1029,25 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 derivedHardwareSampleRate = fallbackFormat.sampleRate
                 derivedHardwareChannels = fallbackFormat.channelCount
                 microphoneSampleRate = derivedHardwareSampleRate
+                let fallbackInputNodeBox = UnsafeSynchronousCapture(value: fallbackInputNode)
 
-                fallbackInputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
-                    self?.handleMicrophoneBuffer(buffer, time: time)
+                if let fallbackInstallException = ObjCTryCatch({
+                    fallbackInputNodeBox.value.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
+                        self?.handleMicrophoneBuffer(buffer, time: time)
+                    }
+                }) {
+                    logger.error(
+                        "MIC_ENGINE: fallback installTap NSException \(fallbackInstallException.name.rawValue): \(fallbackInstallException.reason ?? "unknown reason")"
+                    )
+                    throw AudioCaptureError.microphoneStartFailed(
+                        NSError(
+                            domain: "TapAudioCapture.InstallTapException",
+                            code: -5,
+                            userInfo: [
+                                NSLocalizedDescriptionKey: "fallback installTap failed: \(fallbackInstallException.name.rawValue) - \(fallbackInstallException.reason ?? "unknown reason")",
+                            ]
+                        )
+                    )
                 }
                 do {
                     try fallbackEngine.start()

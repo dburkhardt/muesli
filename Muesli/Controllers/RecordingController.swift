@@ -517,6 +517,8 @@ final class RecordingController {
     }
     
     private func handleCaptureError(_ error: AudioCaptureError, for session: RecordingSession) {
+        let missingMicPermission = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+
         let muesliError: MuesliError
         switch error {
         case .noContentToCapture:
@@ -524,7 +526,7 @@ final class RecordingController {
         case .permissionDenied, .streamStartFailed:
             muesliError = .screenRecordingDenied
         case .microphoneStartFailed:
-            muesliError = .microphoneDenied
+            muesliError = missingMicPermission ? .microphoneDenied : .captureStartFailed(underlying: error)
         default:
             muesliError = .captureStartFailed(underlying: error)
         }
@@ -533,19 +535,17 @@ final class RecordingController {
         switch error {
         case .permissionDenied, .streamStartFailed:
             let missingTap = !UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
-            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
             // If both checks say granted (false negative), default to missingTap
             // since system audio tap is what actually failed
-            let effectiveMissingTap = missingTap || (!missingTap && !missingMic)
+            let effectiveMissingTap = missingTap || (!missingTap && !missingMicPermission)
             if let callback = onPermissionRecoveryNeeded {
-                logger.warning("Permission error during capture start, triggering recovery: missingTap=\(effectiveMissingTap), missingMic=\(missingMic)")
-                callback(effectiveMissingTap, missingMic)
+                logger.warning("Permission error during capture start, triggering recovery: missingTap=\(effectiveMissingTap), missingMic=\(missingMicPermission)")
+                callback(effectiveMissingTap, missingMicPermission)
                 cleanupFailedSession(session)
                 return
             }
         case .microphoneStartFailed:
-            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
-            if missingMic, let callback = onPermissionRecoveryNeeded {
+            if missingMicPermission, let callback = onPermissionRecoveryNeeded {
                 logger.warning("Microphone permission error during capture start, triggering recovery")
                 callback(false, true)
                 cleanupFailedSession(session)

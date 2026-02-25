@@ -89,6 +89,17 @@ Each item should include:
 
 ### Enhancements
 
+**[Bug]** [High] Ensure failed session cleanup stops partially-started capture
+- Description: Harden `RecordingController.cleanupFailedSession()` to stop `audioCaptureService` when startup fails after partial capture initialization.
+- Notes:
+  - Current behavior resets UI/session state and stops file writing, but does not explicitly stop capture service.
+  - Risk: capture service may remain in partial-start state (`alreadyRecording` on next start attempt in some failure paths).
+  - Proposed follow-up:
+    - Add best-effort `audioCaptureService.stopCapture()` in failed-session cleanup path.
+    - Keep cleanup idempotent and safe if capture never started.
+    - Add regression test for "start fails after partial init, next start succeeds."
+- Related: `Muesli/Controllers/RecordingController.swift`, `Muesli/Services/TapAudioCaptureService.swift`, `MuesliTests/RecordingControllerTests.swift`
+
 **[Enhancement]** [High] Increase default transcription chunk size and raise the preference ceiling
 - Description: The default chunk size is 5s and the preference slider caps at 10s; both should be raised
 - Notes: Whisper was trained on 30-second chunks; 5 seconds provides limited context and causes word-boundary errors

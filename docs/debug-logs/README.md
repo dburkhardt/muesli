@@ -32,6 +32,7 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### February
 
+- [2026-02-24: installTap NSException Crash During Mic Start](2026-02-24_installtap-nsexception-crash.md) - AVAudioNode.installTap NSException aborted the process; fix adds ObjC try/catch wrapper and permission-gated error classification
 - [2026-02-24: AEC convergence recovery: preserve filter through silence freezes](2026-02-24_aec_convergence_freeze_reset_fix.md) - Preserve AEC filter state across render-silence pauses and raise freeze threshold to reduce false resets
 - [2026-02-24: Auto-Reprocess and Second-Pass Race Condition](2026-02-24_reprocessing-race-condition.md) - Concurrent WhisperKit instances compete for ANE resources, producing incomplete transcripts
 - [2026-02-24: AEC Convergence Failure with Non-48kHz Microphones](2026-02-24_aec_convergence_non48khz_mic.md) - Sample-time domain mismatch causes false discontinuities, permanently freezing AEC when mic resampler is active

@@ -6,3 +6,4 @@
 //
 
 #import "Services/WebRTCAEC/WebRTCAECBridge.h"
+#import "Helpers/ObjCExceptionCatcher.h"

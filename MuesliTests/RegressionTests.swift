@@ -452,6 +452,47 @@ final class RegressionTests: XCTestCase {
             "Raw format guard must execute before deriving hardwareChannels"
         )
     }
+
+    /// Regression test: installTap calls are wrapped with ObjCTryCatch to prevent NSException crashes.
+    /// Bug: AVAudioNode.installTap can throw NSException, which Swift cannot catch via do/catch.
+    func testStartMicrophoneCaptureWrapsInstallTapCallsInObjCTryCatch() throws {
+        let source = try tapAudioCaptureServiceSource()
+
+        let primaryPattern = #"if let installException = ObjCTryCatch\(\{\s*[A-Za-z0-9_\.]+\.installTap\(onBus:\s*0,\s*bufferSize:\s*4096,\s*format:\s*nil\)"#
+        let fallbackPattern = #"if let fallbackInstallException = ObjCTryCatch\(\{\s*[A-Za-z0-9_\.]+\.installTap\(onBus:\s*0,\s*bufferSize:\s*4096,\s*format:\s*nil\)"#
+
+        XCTAssertNotNil(
+            source.range(of: primaryPattern, options: .regularExpression),
+            "Primary inputNode.installTap call must be wrapped in ObjCTryCatch"
+        )
+        XCTAssertNotNil(
+            source.range(of: fallbackPattern, options: .regularExpression),
+            "Fallback fallbackInputNode.installTap call must be wrapped in ObjCTryCatch"
+        )
+    }
+
+    /// Regression test: microphoneStartFailed mapping is permission-gated.
+    /// Bug: Non-permission microphone start failures were mapped to microphoneDenied.
+    func testHandleCaptureErrorPermissionGatesMicrophoneStartFailureMapping() throws {
+        let source = try recordingControllerSource()
+
+        XCTAssertTrue(
+            source.contains("let missingMicPermission = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized"),
+            "handleCaptureError should compute missingMicPermission once and use it for classification"
+        )
+
+        let mappingPattern = #"case \.microphoneStartFailed:\s*muesliError = missingMicPermission \? \.microphoneDenied : \.captureStartFailed\(underlying: error\)"#
+        XCTAssertNotNil(
+            source.range(of: mappingPattern, options: .regularExpression),
+            "microphoneStartFailed should map to microphoneDenied only when permission is actually missing"
+        )
+
+        let recoveryPattern = #"case \.microphoneStartFailed:\s*if missingMicPermission, let callback = onPermissionRecoveryNeeded"#
+        XCTAssertNotNil(
+            source.range(of: recoveryPattern, options: .regularExpression),
+            "permission-recovery callback for microphoneStartFailed should remain permission-gated"
+        )
+    }
     
     /// Regression test: Mic audio RMS should be measurable (not all zeros)
     /// Bug: Logs showed mic audio RMS was consistently 0.0 with all-zero samples.
@@ -473,6 +514,13 @@ final class RegressionTests: XCTestCase {
         let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
         let serviceURL = repoRoot.appendingPathComponent("Muesli/Services/TapAudioCaptureService.swift")
         return try String(contentsOf: serviceURL, encoding: .utf8)
+    }
+
+    private func recordingControllerSource() throws -> String {
+        let testsFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
+        let controllerURL = repoRoot.appendingPathComponent("Muesli/Controllers/RecordingController.swift")
+        return try String(contentsOf: controllerURL, encoding: .utf8)
     }
     
     // MARK: - Window Management Regression Tests (Bug Fix: Jan 15, 2026)
