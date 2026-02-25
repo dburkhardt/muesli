@@ -97,6 +97,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Closure to query whether AEC is enabled (RT-safe: reads OSAllocatedUnfairLock).
     private let isAECEnabled: @Sendable () -> Bool
 
+    /// Closure to query whether raw microphone audio should be saved (RT-safe: reads OSAllocatedUnfairLock).
+    private let shouldSaveRawMicrophone: @Sendable () -> Bool
+
     /// Tap manager for system audio
     private let tapManager = CoreAudioTapManager()
 
@@ -124,6 +127,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// Selected microphone device ID
     private var selectedMicrophoneDeviceID: String?
+
+    /// Snapshot of the real system default input device, captured BEFORE the
+    /// aggregate device is created. Used as a fallback when setting the mic device
+    /// on AVAudioEngine to avoid latching onto the aggregate. Session-scoped.
+    private var preAggregateDefaultInputDeviceID: AudioDeviceID?
 
     /// Microphone sample rate (detected at start)
     private var microphoneSampleRate: Double = 48000
@@ -155,12 +163,31 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         initialState: [Float](repeating: 0, count: 4096)
     )
 
+    /// Dedicated render ring for transcription (48kHz mono, 600ms capacity).
+    /// Decoupled from AudioSynchronizer — feeds processedRenderHandler directly.
+    private nonisolated(unsafe) let renderRingForTranscription = TapCaptureRing(capacityMs: 600)
+
     /// Dedicated file-output ring for raw stereo system audio (RT-safe push from IOProc).
     /// 600ms × 48kHz × 2ch = 57600 samples.
     private nonisolated(unsafe) let fileOutputRenderRing = TapCaptureRing(capacitySamples: 57600)
 
+    /// Mic resampler for converting non-48kHz mic audio to 48kHz mono for the AEC pipeline.
+    /// Set during startMicrophoneCapture; nil when mic runs natively at 48kHz.
+    private nonisolated(unsafe) var micResampler: AVAudioConverter?
+    /// Pre-allocated output buffer for mic resampling (enough for ~100ms at 48kHz).
+    private nonisolated(unsafe) var micResampleBuffer: AVAudioPCMBuffer?
+
     /// File output drain timer task handle.
     private var fileOutputDrainTask: Task<Void, Never>?
+
+    /// Render transcription drain timer task handle.
+    private var renderTranscriptionDrainTask: Task<Void, Never>?
+
+    /// Whether the first render transcription frame has been logged (for diagnostics).
+    private var renderTranscriptionFirstFrameLogged = false
+
+    /// Whether the mic resampler timing-domain diagnostic log has been emitted this session.
+    private nonisolated(unsafe) var hasLoggedResamplerDomain = false
 
     /// Current session ID for log correlation (short 8-char UUID prefix)
     private var currentSessionID: String = "none"
@@ -191,10 +218,12 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             // System Audio Recording bucket — a separate permission entry.
             UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
         },
-        isAECEnabled: @escaping @Sendable () -> Bool = { true }
+        isAECEnabled: @escaping @Sendable () -> Bool = { true },
+        shouldSaveRawMicrophone: @escaping @Sendable () -> Bool = { false }
     ) {
         self.checkPermission = checkPermission
         self.isAECEnabled = isAECEnabled
+        self.shouldSaveRawMicrophone = shouldSaveRawMicrophone
         print("[TAP DEBUG] TapAudioCaptureService.init() called - CREATED")
         logger.info("TapAudioCaptureService initialized")
         // Format descriptions are set up lazily on first use to avoid actor isolation issues in init
@@ -215,6 +244,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         
         guard isRecording else { return }
         
+        // Re-snapshot the current default input. The aggregate is already running,
+        // so the current default reflects real hardware (user may have plugged in
+        // a new device since recording started).
+        preAggregateDefaultInputDeviceID = try? CoreAudioHelpers.getDefaultInputDevice()
+
         logger.info("Switching microphone device during tap capture: \(deviceID ?? "system default")")
         stopMicrophoneCapture()
         synchronizer.reset()
@@ -334,6 +368,15 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             throw error
         }
 
+        // Snapshot the real system default input BEFORE creating the aggregate device.
+        // After aggregate creation, macOS may transiently report the aggregate as the
+        // default input, which would cause AVAudioEngine to latch onto it.
+        preAggregateDefaultInputDeviceID = try? CoreAudioHelpers.getDefaultInputDevice()
+        if let devID = preAggregateDefaultInputDeviceID {
+            let uid = (try? CoreAudioHelpers.getDeviceUID(devID)) ?? "unknown"
+            logger.info("Pre-aggregate default input: \(uid) (AudioDeviceID: \(devID))")
+        }
+
         // Start the tap for system audio
         do {
             print("[TAP DEBUG] Calling tapManager.start()...")
@@ -407,9 +450,6 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         worker.start(
             micCallback: { [weak self] frame in
                 self?.handleProcessedMicFrame(frame)
-            },
-            renderCallback: { [weak self] frame in
-                self?.handleProcessedRenderFrame(frame)
             }
         )
         audioWorker = worker
@@ -419,6 +459,14 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             while !Task.isCancelled {
                 await self?.drainFileOutputRings()
                 try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+            }
+        }
+
+        // Start render transcription drain (every 20ms, independent from synchronizer path)
+        renderTranscriptionDrainTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.drainRenderTranscriptionRing()
+                try? await Task.sleep(nanoseconds: 20_000_000) // 20ms
             }
         }
 
@@ -464,6 +512,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         fileOutputDrainTask?.cancel()
         fileOutputDrainTask = nil
 
+        // Stop render transcription drain
+        renderTranscriptionDrainTask?.cancel()
+        renderTranscriptionDrainTask = nil
+
         // Stop audio worker
         audioWorker?.stop()
         audioWorker = nil
@@ -484,6 +536,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         synchronizer.reset()
         aecProcessor.reset()
         resetAECRingsAndCounters()
+        preAggregateDefaultInputDeviceID = nil
 
         isRecording = false
         logger.info("Tap-based audio capture stopped")
@@ -567,6 +620,12 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                     sampleTime: sampleTime,
                     hostTime: hostTime
                 )
+                _ = renderRingForTranscription.push(
+                    samples: baseAddress,
+                    count: count,
+                    sampleTime: sampleTime,
+                    hostTime: hostTime
+                )
             }
         }
         pushRenderFrameMetadata(hostTime: hostTime, startSampleIndex: startSampleIndex, sampleCount: count)
@@ -579,13 +638,6 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     private nonisolated func handleProcessedMicFrame(_ frame: AudioFrame) {
         Task {
             await self.deliverProcessedMicFrame(frame)
-        }
-    }
-
-    /// Handle processed render frame from worker.
-    private nonisolated func handleProcessedRenderFrame(_ frame: AudioFrame) {
-        Task {
-            await self.deliverProcessedRenderFrame(frame)
         }
     }
 
@@ -626,40 +678,69 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         deliverRawSystemAudio(samples: samples, timestamp: CACurrentMediaTime())
     }
+
+    /// Drain the render transcription ring and deliver to processedRenderHandler (runs on actor).
+    /// Pops 480-sample frames and delivers with mach_absolute_time() hostTime.
+    private func drainRenderTranscriptionRing() {
+        while renderRingForTranscription.available >= AudioWorker.frameSizeSamples {
+            var frameSamples = [Float](repeating: 0, count: AudioWorker.frameSizeSamples)
+            let popped = frameSamples.withUnsafeMutableBufferPointer { ptr -> Bool in
+                renderRingForTranscription.pop(into: ptr.baseAddress!, count: AudioWorker.frameSizeSamples)
+            }
+            guard popped else { break }
+
+            let hostTime = mach_absolute_time()
+            processedRenderHandler?(AudioFrame(
+                samples: frameSamples,
+                sampleRate: AudioWorker.sampleRate,
+                hostTime: hostTime,
+                startSampleIndex: 0
+            ))
+
+            if !renderTranscriptionFirstFrameLogged {
+                renderTranscriptionFirstFrameLogged = true
+                logger.info("RENDER_TRANSCRIPTION_FIRST_FRAME: delivered first 480-sample frame to transcription")
+                Task {
+                    await DiagnosticLogger.shared.log(.aec, "RENDER_TRANSCRIPTION_FIRST_FRAME")
+                }
+            }
+        }
+    }
     
-    /// Deliver raw microphone audio for file output (mono Float32 at actual mic sample rate)
-    private func deliverRawMicAudio(samples: [Float], timestamp: Double) {
+    /// Deliver raw microphone audio for file output (mono Float32 at actual mic sample rate).
+    /// The sampleRate is passed explicitly because the caller (`handleMicrophoneBuffer`)
+    /// is nonisolated and cannot access the actor-isolated `microphoneSampleRate` property.
+    private func deliverRawMicAudio(samples: [Float], sampleRate: Double, timestamp: Double) {
         ensureFormatDescriptionsInitialized()
 
         guard !samples.isEmpty else { return }
 
-        // Create CMSampleBuffer with correct format (mono Float32 at actual mic sample rate)
-        // Pass nil for formatDesc so createCMSampleBuffer creates a fresh description
-        // from microphoneSampleRate — this avoids the race condition where a cached
-        // micFormatDesc could be overwritten with the wrong sample rate.
         if let buffer = createCMSampleBuffer(
             from: samples,
-            channels: 1,  // Mono
-            sampleRate: microphoneSampleRate,
+            channels: 1,
+            sampleRate: sampleRate,
+            timestamp: timestamp,
+            formatDesc: nil
+        ) {
+            bufferHandler?(buffer, .rawMicrophone)
+        }
+    }
+    
+    /// Deliver processed mic frame to callbacks (transcription + file output).
+    private func deliverProcessedMicFrame(_ frame: AudioFrame) {
+        let timestamp = AVAudioTime.seconds(forHostTime: frame.hostTime)
+        
+        if let buffer = createCMSampleBuffer(
+            from: frame.samples,
+            channels: 1, // AEC output is mono
+            sampleRate: Double(frame.sampleRate),
             timestamp: timestamp,
             formatDesc: nil
         ) {
             bufferHandler?(buffer, .microphone)
         }
         
-        // Calculate and deliver audio level
-        let level = calculateRMSFromArray(samples)
-        levelHandler?(level, .microphone)
-    }
-    
-    /// Deliver processed mic frame to callback (for transcription - NOT file output).
-    private func deliverProcessedMicFrame(_ frame: AudioFrame) {
         processedMicHandler?(frame)
-    }
-
-    /// Deliver processed render frame to callback (for transcription - NOT file output).
-    private func deliverProcessedRenderFrame(_ frame: AudioFrame) {
-        processedRenderHandler?(frame)
     }
 
     /// Pop one render frame for AEC worker processing.
@@ -749,6 +830,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         renderMetadataRingForAEC.reset()
         captureMetadataRingForAEC.reset()
         fileOutputRenderRing.reset()
+        renderRingForTranscription.reset()
+        renderTranscriptionFirstFrameLogged = false
+        hasLoggedResamplerDomain = false
 
         _ = renderSampleIndexCounter.withLock { index in
             index = 0
@@ -861,43 +945,116 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Start microphone capture using AVAudioEngine
     private func startMicrophoneCapture() throws {
         let engine = AVAudioEngine()
+
+        // Set the user-selected mic (or pre-aggregate default) BEFORE reading
+        // the input format — the format depends on which device is active.
+        // Uses low-level AudioUnitSetProperty which is safe before installTap.
+        let deviceWasSet = setMicrophoneInputDevice(
+            engine: engine,
+            deviceUID: selectedMicrophoneDeviceID,
+            fallbackDeviceID: preAggregateDefaultInputDeviceID
+        )
+
         let inputNode = engine.inputNode
-
-        // Set device if specified
-        if let deviceID = selectedMicrophoneDeviceID {
-            setMicrophoneInputDevice(engine: engine, deviceID: deviceID)
-        }
-
-        // Force 48kHz mono for AEC invariants.
-        let inputFormat = inputNode.inputFormat(forBus: 0)
-        let hardwareSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
-        let tapSampleRate = 48000.0
-        microphoneSampleRate = tapSampleRate
-        // Note: microphoneSampleRate is actor-isolated. The nonisolated handleMicrophoneBuffer
-        // callback does not read it directly — it dispatches to deliverRawMicAudio via Task,
-        // which runs on the actor and reads microphoneSampleRate safely.
-
-        // Install tap
-        guard let tapFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: tapSampleRate,
-            channels: 1,
-            interleaved: false
-        ) else {
-            throw AudioCaptureError.microphoneStartFailed(NSError(domain: "TapAudioCapture", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create tap format"]))
-        }
-
-        inputNode.installTap(onBus: 0, bufferSize: 480, format: tapFormat) { [weak self] buffer, time in
-            self?.handleMicrophoneBuffer(buffer, time: time)
-        }
-
-        try engine.start()
-        microphoneEngine = engine
-
-        logger.info("Microphone capture started at \(tapSampleRate)Hz")
+        let actualDeviceID = inputNode.auAudioUnit.deviceID
+        let actualUID = (try? CoreAudioHelpers.getDeviceUID(actualDeviceID)) ?? "unknown"
+        logger.info("MIC_ENGINE_DEVICE: \(actualUID) (AudioDeviceID: \(actualDeviceID), explicitlySet: \(deviceWasSet))")
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_SAMPLE_RATE: hardware=\(hardwareSampleRate)Hz, tap=\(tapSampleRate)Hz")
+                "MIC_ENGINE_DEVICE: uid=\(actualUID), audioDeviceID=\(actualDeviceID), explicitlySet=\(deviceWasSet)")
+        }
+
+        let inputFormat = inputNode.inputFormat(forBus: 0)
+
+        // Validate raw format values before any fallback coercion.
+        // installTap can throw an uncaught NSException when format values are invalid.
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            logger.error("MIC_ENGINE: invalid input format — sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
+            throw AudioCaptureError.microphoneStartFailed(
+                NSError(domain: "TapAudioCapture", code: -3,
+                        userInfo: [NSLocalizedDescriptionKey: "Microphone input format is invalid"]))
+        }
+
+        let hardwareSampleRate = inputFormat.sampleRate
+        let hardwareChannels = inputFormat.channelCount
+        var derivedHardwareSampleRate = hardwareSampleRate
+        var derivedHardwareChannels = hardwareChannels
+        microphoneSampleRate = derivedHardwareSampleRate
+
+        // Use nil format (device's native output format) — explicit 48kHz format
+        // causes zero-frame delivery on some USB devices (e.g., C920 webcam).
+        // Resampling to 48kHz for the AEC pipeline is done in handleMicrophoneBuffer.
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
+            self?.handleMicrophoneBuffer(buffer, time: time)
+        }
+        do {
+            try engine.start()
+        } catch {
+            let nsError = error as NSError
+            // Retry on observed startup failure code after explicit device routing.
+            // Runtime evidence: device select succeeds, then engine.start fails with -10868.
+            if deviceWasSet, nsError.code == -10868 {
+                logger.warning("MIC_ENGINE_START retrying without explicit device set after -10868")
+
+                inputNode.removeTap(onBus: 0)
+
+                let fallbackEngine = AVAudioEngine()
+                let fallbackInputNode = fallbackEngine.inputNode
+                let fallbackFormat = fallbackInputNode.inputFormat(forBus: 0)
+                guard fallbackFormat.sampleRate > 0, fallbackFormat.channelCount > 0 else {
+                    throw error
+                }
+                derivedHardwareSampleRate = fallbackFormat.sampleRate
+                derivedHardwareChannels = fallbackFormat.channelCount
+                microphoneSampleRate = derivedHardwareSampleRate
+
+                fallbackInputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
+                    self?.handleMicrophoneBuffer(buffer, time: time)
+                }
+                do {
+                    try fallbackEngine.start()
+                    microphoneEngine = fallbackEngine
+                } catch {
+                    throw error
+                }
+            } else {
+                throw error
+            }
+        }
+        if microphoneEngine == nil {
+            microphoneEngine = engine
+        }
+
+        // Determine actual tap output format and set up resampler if needed.
+        // The tap with format: nil delivers the node's output format, which may
+        // not be 48kHz (e.g., C920 webcam delivers 44100Hz or 16kHz).
+        let activeEngine = microphoneEngine!
+        let tapOutputFormat = activeEngine.inputNode.outputFormat(forBus: 0)
+        let tapSampleRate = tapOutputFormat.sampleRate
+        let tapChannels = tapOutputFormat.channelCount
+
+        if tapSampleRate != 48000 || tapChannels != 1 {
+            let srcFormat = AVAudioFormat(
+                standardFormatWithSampleRate: tapSampleRate,
+                channels: AVAudioChannelCount(tapChannels)
+            )!
+            let dstFormat = AVAudioFormat(
+                standardFormatWithSampleRate: 48000,
+                channels: 1
+            )!
+            micResampler = AVAudioConverter(from: srcFormat, to: dstFormat)
+            let maxOutputFrames = AVAudioFrameCount(4800)
+            micResampleBuffer = AVAudioPCMBuffer(pcmFormat: dstFormat, frameCapacity: maxOutputFrames)
+            logger.info("Mic resampler: \(tapSampleRate)Hz \(tapChannels)ch → 48000Hz mono")
+        } else {
+            micResampler = nil
+            micResampleBuffer = nil
+        }
+
+        logger.info("Microphone capture started at native \(derivedHardwareSampleRate)Hz, \(derivedHardwareChannels)ch, tapOutput=\(tapSampleRate)Hz \(tapChannels)ch")
+        Task {
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_SAMPLE_RATE: hardware=\(derivedHardwareSampleRate)Hz, channels=\(derivedHardwareChannels), tapOutput=\(tapSampleRate)Hz/\(tapChannels)ch, aecTarget=48000Hz, resampler=\(self.micResampler != nil)")
         }
     }
 
@@ -908,6 +1065,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             engine.stop()
         }
         microphoneEngine = nil
+        micResampler = nil
+        micResampleBuffer = nil
     }
 
     /// Handle microphone buffer from AVAudioEngine
@@ -917,63 +1076,240 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         guard let floatChannelData = buffer.floatChannelData else { return }
 
         let frameLength = Int(buffer.frameLength)
-        let samples = floatChannelData[0]
+        guard frameLength > 0 else { return }
 
         // Use sample time if available, otherwise derive from host time
         let sampleTime: Float64 = time.isSampleTimeValid ? Float64(time.sampleTime) : Float64(-1)
         let hostTime = time.hostTime
+
+        // Determine samples to push to AEC: either resampled to 48kHz mono, or raw channel 0
+        let aecSamples: UnsafeMutablePointer<Float>
+        let aecCount: Int
+
+        if let converter = micResampler, let outBuf = micResampleBuffer {
+            outBuf.frameLength = 0
+            var error: NSError?
+            var consumed = false
+            converter.convert(to: outBuf, error: &error) { _, outStatus in
+                if consumed {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                consumed = true
+                outStatus.pointee = .haveData
+                return buffer
+            }
+            if let e = error {
+                // Fallback: use raw channel 0
+                aecSamples = floatChannelData[0]
+                aecCount = frameLength
+                _ = e  // suppress unused warning
+            } else {
+                aecSamples = outBuf.floatChannelData![0]
+                aecCount = Int(outBuf.frameLength)
+            }
+        } else {
+            aecSamples = floatChannelData[0]
+            aecCount = frameLength
+        }
+
+        guard aecCount > 0 else { return }
+
         let startSampleIndex = captureSampleIndexCounter.withLock { index -> Int64 in
             let start = index
-            index += Int64(frameLength)
+            index += Int64(aecCount)
             return start
         }
 
-        // Push directly to synchronizer (RT-safe - uses OSAllocatedUnfairLock)
+        // When the mic resampler is active, sampleTime is in the source domain (e.g.,
+        // 44.1kHz) but aecCount is in the 48kHz domain. Passing the source-domain
+        // sampleTime with a 48kHz count causes MicCaptureRing to compute negative
+        // deltas and flag false discontinuities on every callback, permanently
+        // preventing AudioSynchronizer from reaching stable state.
+        // Use the 48kHz-domain startSampleIndex instead — it increments by aecCount
+        // each callback, so delta = 0 (no false discontinuity).
+        let captureSampleTime: Float64 = (micResampler != nil)
+            ? Float64(startSampleIndex)
+            : sampleTime
+
         synchronizer.pushCapture(
-            samples: samples,
-            count: frameLength,
-            sampleTime: Float64(sampleTime),
+            samples: aecSamples,
+            count: aecCount,
+            sampleTime: captureSampleTime,
             hostTime: hostTime
         )
         _ = captureRingForAEC.push(
-            samples: samples,
-            count: frameLength,
-            sampleTime: Float64(sampleTime),
+            samples: aecSamples,
+            count: aecCount,
+            sampleTime: captureSampleTime,
             hostTime: hostTime
         )
         pushCaptureFrameMetadata(
             hostTime: hostTime,
             startSampleIndex: startSampleIndex,
-            sampleCount: frameLength
+            sampleCount: aecCount
         )
 
-        // Create array for async delivery to file output (raw mono at mic sample rate).
-        // Note: AVAudioEngine tap callbacks are high-priority but NOT true RT IOProc.
-        // Array allocation + Task dispatch is acceptable here. See handleTapAudio for
-        // the RT-safe ring-based approach used for the true IOProc callback.
-        let sampleArray = Array(UnsafeBufferPointer(start: samples, count: frameLength))
+        if micResampler != nil && !hasLoggedResamplerDomain {
+            hasLoggedResamplerDomain = true
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_SAMPLE_TIME_DOMAIN: using 48kHz startSampleIndex (resampler active)")
+            }
+        }
+
+        let levelSamples = Array(UnsafeBufferPointer(start: aecSamples, count: aecCount))
+        let level = calculateRMSFromArray(levelSamples)
+        let saveRaw = shouldSaveRawMicrophone()
         let timestamp = CACurrentMediaTime()
-        
+
+        // Copy raw mic samples synchronously before callback returns (buffer may be
+        // reused by AVAudioEngine). Only allocate when raw output is enabled to avoid
+        // heap churn on the audio thread.
+        let rawMicSamples: [Float]?
+        let rawSampleRate: Double
+        if saveRaw {
+            rawMicSamples = Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
+            rawSampleRate = buffer.format.sampleRate
+        } else {
+            rawMicSamples = nil
+            rawSampleRate = 0
+        }
+
         Task { [weak self] in
-            await self?.deliverRawMicAudio(samples: sampleArray, timestamp: timestamp)
+            await self?.levelHandler?(level, .microphone)
+
+            if let rawSamples = rawMicSamples {
+                await self?.deliverRawMicAudio(samples: rawSamples, sampleRate: rawSampleRate, timestamp: timestamp)
+            }
         }
     }
 
-    /// Set microphone input device
-    private func setMicrophoneInputDevice(engine: AVAudioEngine, deviceID: String) {
-        // Find device by UID
-        let devices = CoreAudioHelpers.getAllDevices()
-        for device in devices {
-            if let uid = try? CoreAudioHelpers.getDeviceUID(device), uid == deviceID {
-                do {
-                    try engine.inputNode.auAudioUnit.setDeviceID(device)
-                    logger.debug("Set microphone device: \(deviceID)")
-                    return
-                } catch {
-                    logger.warning("Failed to set microphone device: \(error)")
+    /// Returns true if the UID belongs to a Muesli tap aggregate device (current or stale).
+    private func isMuesliAggregateUID(_ uid: String) -> Bool {
+        if uid.hasPrefix("com.muesli.tap") { return true }
+        if let currentUID = tapManager.aggregateDeviceUID, uid == currentUID { return true }
+        return false
+    }
+
+    /// Set the AudioDeviceID on the engine's input node using the low-level
+    /// AudioUnit property API. This is more reliable than `auAudioUnit.setDeviceID()`
+    /// which can succeed (readback matches) but still deliver silence.
+    private func setDeviceOnInputNode(_ engine: AVAudioEngine, deviceID: AudioDeviceID) -> Bool {
+        guard let audioUnit = engine.inputNode.audioUnit else {
+            logger.error("MIC_DEVICE_SET: inputNode has no audioUnit")
+            return false
+        }
+
+        var devID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &devID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+
+        if status != noErr {
+            logger.warning("MIC_DEVICE_SET: AudioUnitSetProperty failed with status \(status)")
+            return false
+        }
+
+        var readbackID: AudioDeviceID = 0
+        var readbackSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        AudioUnitGetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &readbackID,
+            &readbackSize
+        )
+
+        if readbackID != deviceID {
+            logger.warning("MIC_DEVICE_SET: readback mismatch — set \(deviceID), got \(readbackID)")
+            return false
+        }
+        return true
+    }
+
+    /// Set microphone input device with strict two-step fallback.
+    /// Returns true only when a device was explicitly set AND verified.
+    /// Never accepts the engine's unverified default (which may be the tap aggregate).
+    private func setMicrophoneInputDevice(
+        engine: AVAudioEngine,
+        deviceUID: String?,
+        fallbackDeviceID: AudioDeviceID?
+    ) -> Bool {
+        // Step 1: Try to find and set the requested device by UID
+        if let deviceUID {
+            if isMuesliAggregateUID(deviceUID) {
+                logger.warning("MIC_DEVICE_SELECT: requested UID is a Muesli aggregate (\(deviceUID)) — skipping to fallback")
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "MIC_DEVICE_REJECT: uid=\(deviceUID), reason=muesli_aggregate")
+                }
+            } else {
+                let allDevices = CoreAudioHelpers.getAllDevices()
+                var found = false
+                for device in allDevices {
+                    guard let uid = try? CoreAudioHelpers.getDeviceUID(device) else { continue }
+                    guard uid == deviceUID else { continue }
+                    found = true
+
+                    if setDeviceOnInputNode(engine, deviceID: device) {
+                        logger.info("MIC_DEVICE_SET: \(deviceUID) (AudioDeviceID: \(device))")
+                        Task {
+                            await DiagnosticLogger.shared.log(.aec,
+                                "MIC_DEVICE_SET: uid=\(deviceUID), audioDeviceID=\(device), step=requested")
+                        }
+                        return true
+                    } else {
+                        logger.warning("MIC_DEVICE_SELECT: found \(deviceUID) (AudioDeviceID: \(device)) but setDeviceOnInputNode failed — falling back")
+                        Task {
+                            await DiagnosticLogger.shared.log(.aec,
+                                "MIC_DEVICE_SET_FAILED: uid=\(deviceUID), audioDeviceID=\(device)")
+                        }
+                        break
+                    }
+                }
+                if !found {
+                    logger.warning("MIC_DEVICE_SELECT: requested UID \(deviceUID) not found in Core Audio device list")
+                    Task {
+                        await DiagnosticLogger.shared.log(.aec,
+                            "MIC_DEVICE_NOT_FOUND: uid=\(deviceUID)")
+                    }
                 }
             }
         }
+
+        // Step 2: Fall back to pre-aggregate default AudioDeviceID
+        if let fallbackID = fallbackDeviceID, fallbackID != kAudioObjectUnknown {
+            let fallbackUID = try? CoreAudioHelpers.getDeviceUID(fallbackID)
+            if let fallbackUID, isMuesliAggregateUID(fallbackUID) {
+                logger.warning("MIC_DEVICE_SELECT: pre-aggregate fallback IS a Muesli aggregate — skipping")
+            } else {
+                if setDeviceOnInputNode(engine, deviceID: fallbackID) {
+                    logger.info("MIC_DEVICE_SET: pre-aggregate default \(fallbackUID ?? "?") (AudioDeviceID: \(fallbackID))")
+                    Task {
+                        await DiagnosticLogger.shared.log(.aec,
+                            "MIC_DEVICE_SET: uid=\(fallbackUID ?? "?"), audioDeviceID=\(fallbackID), step=fallback")
+                    }
+                    return true
+                }
+            }
+        }
+
+        // Both steps failed.
+        let currentDeviceID = engine.inputNode.auAudioUnit.deviceID
+        let currentUID = (try? CoreAudioHelpers.getDeviceUID(currentDeviceID)) ?? "unknown"
+        logger.error("MIC_DEVICE_SET: FAILED — no valid device. Engine default is AudioDeviceID \(currentDeviceID) (\(currentUID))")
+        Task {
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_DEVICE_FAILED: engineDefault=\(currentUID) (AudioDeviceID: \(currentDeviceID))")
+        }
+        return false
     }
 
     /// Set up route change listener
@@ -1025,7 +1361,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     }
 
     /// Calculate RMS level from array
-    private func calculateRMSFromArray(_ samples: [Float]) -> Float {
+    private nonisolated func calculateRMSFromArray(_ samples: [Float]) -> Float {
         guard !samples.isEmpty else { return 0 }
 
         var sumSquares: Float = 0

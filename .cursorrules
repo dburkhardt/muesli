@@ -16,8 +16,9 @@ AUTONOMOUS OPERATION (bias toward action, not asking)
 
 ENGINEERING PRINCIPLES
 - Small diffs, compile often, keep project building
-- COMMIT before build: Always commit changes to the branch BEFORE running build-and-launch
+- COMMIT before build: Always commit changes to the branch BEFORE running build-and-launch. Report the short commit SHA (git rev-parse --short HEAD) so the user can verify the About page matches.
 - After code changes: rebuild and relaunch automatically (see AGENTS.md for commands)
+- NEVER use --build-only: Always build AND launch so the user can immediately test and debug. Do not use the --build-only flag unless explicitly asked.
 - Poll builds: Run builds in background, then poll with while loop + sleep until done. Do NOT wait for user to report build results.
 - Swift 6 concurrency, @Observable, minimal SwiftUI
 - One primary type per file; reusable UI in Views/Components
@@ -31,5 +32,5 @@ OUTPUT (every response after code changes)
 - What changed (brief)
 - Files modified
 - Build/test commands
-- Build timestamp (REQUIRED after builds - user verifies via About page)
+- Git commit SHA + build timestamp (REQUIRED after builds - user verifies via About page)
 - Phase checkpoint status

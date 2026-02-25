@@ -897,4 +897,115 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertEqual(mockTranscriptionService.startTranscriptionCallCount, 0)
     }
     */
+    
+    // MARK: - Second-Pass / Auto-Reprocess Race Condition Guards
+    
+    /// When a directory is marked as having an active second-pass, autoReprocessWhenReady should skip.
+    @MainActor
+    func testAutoReprocessSkippedWhenSecondPassActive() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.small)
+        _ = await sut.prepareModel()
+        
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-second-pass-guard-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        
+        let meeting = MeetingHistoryItem(
+            title: "Test Meeting",
+            date: Date(),
+            directory: tempDir,
+            hasAudio: true,
+            hasMicrophone: false
+        )
+        
+        sut.markSecondPassActive(for: tempDir)
+        
+        // autoReprocessWhenReady should return early without setting isReprocessing
+        // because the directory has an active second-pass.
+        sut.autoReprocessWhenReady(meeting: meeting)
+        
+        XCTAssertFalse(meeting.isReprocessing,
+                       "Meeting should NOT be marked as reprocessing when second-pass is active")
+    }
+    
+    /// Without an active second-pass, autoReprocessWhenReady should proceed normally.
+    @MainActor
+    func testAutoReprocessProceedsWhenNoSecondPassActive() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.small)
+        _ = await sut.prepareModel()
+        
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-no-second-pass-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        
+        let meeting = MeetingHistoryItem(
+            title: "Test Meeting",
+            date: Date(),
+            directory: tempDir,
+            hasAudio: true,
+            hasMicrophone: false
+        )
+        
+        // No markSecondPassActive call — auto-reprocess should proceed
+        sut.autoReprocessWhenReady(meeting: meeting)
+        
+        XCTAssertTrue(meeting.isReprocessing,
+                      "Meeting should be marked as reprocessing when no second-pass is active")
+    }
+    
+    /// markSecondPassActive for one directory should not block a different directory.
+    @MainActor
+    func testAutoReprocessAllowedForDifferentDirectory() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        mockModelManager.addDownloadedModel(.small)
+        _ = await sut.prepareModel()
+        
+        let dirA = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-dir-a-\(UUID().uuidString)")
+        let dirB = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-dir-b-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dirA, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: dirB, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: dirA)
+            try? FileManager.default.removeItem(at: dirB)
+        }
+        
+        sut.markSecondPassActive(for: dirA)
+        
+        let meetingB = MeetingHistoryItem(
+            title: "Meeting B",
+            date: Date(),
+            directory: dirB,
+            hasAudio: true,
+            hasMicrophone: false
+        )
+        
+        sut.autoReprocessWhenReady(meeting: meetingB)
+        
+        XCTAssertTrue(meetingB.isReprocessing,
+                      "Auto-reprocess should proceed for a directory without an active second-pass")
+    }
 }

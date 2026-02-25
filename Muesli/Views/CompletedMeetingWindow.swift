@@ -72,42 +72,9 @@ struct CompletedMeetingWindow: View {
             
             Spacer()
             
-            // Copy transcript button
-            copyTranscriptButton
+            meetingActionsMenu
             
-            // Reprocess button with model picker
-            if !viewModel.modelManager.downloadedModels.isEmpty {
-                Menu {
-                    ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
-                        Button("Reprocess with \(model.displayName)") {
-                            viewModel.reprocessTranscript(for: meeting, using: model)
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        if meeting.isReprocessing {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                                .frame(width: 12, height: 12)
-                            Text("Reprocessing...")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 12))
-                            Text("Reprocess")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                    }
-                    .foregroundStyle(.blue)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .disabled(meeting.isReprocessing)
-                .help("Re-transcribe this recording with a different model")
-            }
+            copyTranscriptButton
             
             CompletedIndicator()
         }
@@ -152,42 +119,34 @@ struct CompletedMeetingWindow: View {
             Label(formatDate(meeting.date), systemImage: "calendar")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-            
-            Text("·")
-                .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
-            
-        Button(
-            action: {
-                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
-            },
-            label: {
-                Text("Open in Finder")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.blue)
-                    .underline()
-            }
-        )
-        .buttonStyle(.plain)
-            
-            Text("·")
-                .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
-            
-        Button(
-            action: {
-                historyManager.requestDeleteMeeting(meeting)
-            },
-            label: {
-                Text("Delete Recording")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.red)
-                    .underline()
-            }
-        )
-        .buttonStyle(.plain)
         }
         .padding(.bottom, 8)
+    }
+    
+    /// Ellipsis menu for completed-meeting actions (Apple HIG: ellipsis for "more actions").
+    private var meetingActionsMenu: some View {
+        EllipsisActionsMenu {
+            Button("Open in Finder") {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
+            }
+            
+            if !viewModel.modelManager.downloadedModels.isEmpty {
+                Divider()
+                Menu("Reprocess Transcript") {
+                    ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
+                        Button("With \(model.displayName)") {
+                            viewModel.reprocessTranscript(for: meeting, using: model)
+                        }
+                    }
+                }
+                .disabled(meeting.isReprocessing)
+            }
+            
+            Divider()
+            Button("Delete Recording", role: .destructive) {
+                historyManager.requestDeleteMeeting(meeting)
+            }
+        }
     }
     
     // MARK: - Recording Start Time

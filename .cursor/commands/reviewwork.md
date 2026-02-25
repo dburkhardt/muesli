@@ -79,8 +79,8 @@ if [[ "$CURRENT_PATH" == *".cursor/worktrees"* ]]; then
     CONTEXT="worktree"
     # Extract the base branch from worktree branch name (e.g., feat-1-98Zlw -> compare to original)
     WORKTREE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    # Find the merge-base with main (or the branch we forked from)
-    BASE_COMMIT=$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || git rev-parse HEAD~10)
+    # Find the merge-base with develop or main (whichever is closer)
+    BASE_COMMIT=$(git merge-base HEAD develop 2>/dev/null || git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || git rev-parse HEAD~10)
     DIFF_COMMAND="git diff $BASE_COMMIT...HEAD"
     echo "Context: Cursor worktree ($WORKTREE_BRANCH)"
     echo "Diff base: $BASE_COMMIT"

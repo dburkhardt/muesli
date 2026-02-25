@@ -261,9 +261,6 @@ final class MuesliViewModel {
         set { historyManager.deletionError = newValue }
     }
     
-    /// Whether the split view (sidebar + detail) should be visible
-    var isSplitViewVisible: Bool = false
-    
     /// Whether to show the start recording sheet
     var showStartRecordingSheet: Bool = false
     
@@ -477,6 +474,9 @@ final class MuesliViewModel {
                     #else
                     return true
                     #endif
+                },
+                shouldSaveRawMicrophone: { [weak preferencesManager] in
+                    preferencesManager?.saveRawMicrophoneAudioForAudioCallback ?? false
                 }
             )
         }
@@ -584,6 +584,10 @@ final class MuesliViewModel {
             )
         }
         
+        preferencesManager.showContinuityCameraDevicesDidChange = { [weak self] _ in
+            self?.microphoneManager.refreshDevices()
+        }
+        
         // Check initial permission status
         refreshPermissions()
         
@@ -619,10 +623,6 @@ final class MuesliViewModel {
             if let directory = outputDirectory,
                let newMeeting = self.meetingHistory.first(where: { $0.directory == directory }) {
                 self.selectedMeeting = newMeeting
-                self.isSplitViewVisible = true
-            } else if self.selectedMeeting == nil {
-                // Fallback: if no meeting found and nothing selected, hide split view
-                self.isSplitViewVisible = false
             }
         }
         
@@ -630,14 +630,46 @@ final class MuesliViewModel {
             self?.refreshMeetingHistory()
         }
         
+        self.recordingController.onAutoReprocessRequested = { [weak self] directory in
+            guard let self else { return }
+            // Prefer selectedMeeting — it's the instance the UI is bound to.
+            // Falling back to meetingHistory lookup handles edge cases where
+            // the user navigated away before the callback fired.
+            let meeting: MeetingHistoryItem?
+            if let selected = self.selectedMeeting, selected.directory == directory {
+                meeting = selected
+            } else {
+                meeting = self.meetingHistory.first(where: { $0.directory == directory })
+            }
+            guard let meeting else {
+                self.logger.warning("Auto-reprocess: meeting not found for \(directory.lastPathComponent)")
+                return
+            }
+            self.transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)
+        }
+        
+        self.recordingController.onAutoRefineRequested = { [weak self] directory in
+            guard let self else { return }
+            let meeting: MeetingHistoryItem?
+            if let selected = self.selectedMeeting, selected.directory == directory {
+                meeting = selected
+            } else {
+                meeting = self.meetingHistory.first(where: { $0.directory == directory })
+            }
+            guard let meeting else {
+                self.logger.warning("Auto-refine: meeting not found for \(directory.lastPathComponent)")
+                return
+            }
+            self.transcriptionCoordinator.refinementCoordinator?.autoRefineIfEnabled(
+                meeting: meeting,
+                preferences: self.preferencesManager
+            )
+        }
+        
         self.recordingController.onSelectedMeetingChanged = { [weak self] meeting in
             self?.selectedMeeting = meeting
         }
         
-        self.recordingController.onSplitViewVisibilityChanged = { [weak self] visible in
-            self?.isSplitViewVisible = visible
-        }
-
         self.recordingController.onPermissionRecoveryNeeded = { missingScreen, missingMic in
             AppDelegate.shared?.requestPermissionRecovery(
                 missingScreen: missingScreen,
@@ -731,9 +763,6 @@ final class MuesliViewModel {
     
     /// Quick start recording with all system audio (no app selection needed)
     func quickStartRecording() {
-        // Ensure live transcription mode before starting
-        transcriptionMode = .live
-        
         // Clear selection before recording
         selectedMeeting = nil
         selectedMeetingIDs.removeAll()
@@ -747,7 +776,6 @@ final class MuesliViewModel {
         }
         
         recordingController.quickStartRecording()
-        isSplitViewVisible = true
     }
     
     /// Start recording for a session
@@ -907,9 +935,14 @@ final class MuesliViewModel {
     func reprocessTranscript(for meeting: MeetingHistoryItem, using model: ModelManager.ModelSize) {
         guard !meeting.isReprocessing else { return }
         
+        // Cancel any running second-pass so user intent takes precedence
+        // without ANE contention or transcript.md write races.
+        recordingController.cancelSecondPassIfRunning()
+        
         Task {
             meeting.isReprocessing = true
             meeting.reprocessingProgress = 0.0
+            meeting.reprocessingStartTime = Date()
             
             do {
                 try await transcriptionCoordinator.reprocessTranscript(
@@ -929,6 +962,7 @@ final class MuesliViewModel {
             
             meeting.isReprocessing = false
             meeting.reprocessingProgress = 0.0
+            meeting.reprocessingStartTime = nil
         }
     }
     
@@ -950,6 +984,7 @@ final class MuesliViewModel {
         
         meeting.isReprocessing = true
         meeting.reprocessingProgress = 0.0
+        meeting.reprocessingStartTime = Date()
         
         do {
             try await transcriptionCoordinator.reprocessTranscript(
@@ -969,6 +1004,7 @@ final class MuesliViewModel {
         
         meeting.isReprocessing = false
         meeting.reprocessingProgress = 0.0
+        meeting.reprocessingStartTime = nil
     }
     
     // MARK: - Model Switching (delegates to TranscriptionCoordinator)

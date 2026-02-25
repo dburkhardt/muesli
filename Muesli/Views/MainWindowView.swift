@@ -1,41 +1,44 @@
 import SwiftUI
 
-/// Main window view that conditionally shows unified list or split view
+/// Main window view — always shows sidebar + detail split view
 struct MainWindowView: View {
     @Bindable var viewModel: MuesliViewModel
     @Environment(MeetingHistoryManager.self) private var historyManager
     
-    /// Target window size based on current view mode
-    @State private var targetSize = CGSize(width: 420, height: 600)
-    
-    /// Show split view when a meeting is selected OR recording is active
-    /// Show unified list otherwise (idle state)
-    private var shouldShowSplitView: Bool {
-        historyManager.selectedMeeting != nil || viewModel.activeRecordingSession != nil || viewModel.isSplitViewVisible
-    }
-    
     var body: some View {
-        Group {
-            if shouldShowSplitView {
-                splitView
-            } else {
-                unifiedView
+        NavigationSplitView {
+            MeetingHistorySidebar(viewModel: viewModel)
+        } detail: {
+            RecordingDetailView(viewModel: viewModel)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: {
+                    viewModel.quickStartRecording()
+                }) {
+                    HStack(spacing: 4) {
+                        if !viewModel.modelManager.hasAnyReadyModel && viewModel.activeSession == nil {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.7)
+                            Text("Preparing...")
+                        } else {
+                            Text("New")
+                            Image(systemName: "plus")
+                        }
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!viewModel.canStartRecording)
+                .help("Start New Recording")
             }
         }
-        .frame(minWidth: targetSize.width, minHeight: targetSize.height)
-        .onChange(of: shouldShowSplitView) { _, newValue in
-            withAnimation(.easeInOut(duration: 0.3)) {
-                targetSize = newValue ?
-                    CGSize(width: 900, height: 650) :
-                    CGSize(width: 420, height: 600)
-            }
-        }
-        .onAppear {
-            // Set initial size without animation
-            targetSize = shouldShowSplitView ?
-                CGSize(width: 900, height: 650) :
-                CGSize(width: 420, height: 600)
-        }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .frame(minWidth: 900, minHeight: 650)
         .sheet(isPresented: Binding(
             get: { viewModel.showStartRecordingSheet },
             set: { viewModel.showStartRecordingSheet = $0 }
@@ -61,36 +64,11 @@ struct MainWindowView: View {
             )
         }
     }
-    
-    // MARK: - Unified View
-    
-    private var unifiedView: some View {
-        UnifiedHistoryView(viewModel: viewModel)
-    }
-    
-    // MARK: - Split View
-    
-    private var splitView: some View {
-        NavigationSplitView {
-            MeetingHistorySidebar(viewModel: viewModel)
-        } detail: {
-            RecordingDetailView(viewModel: viewModel)
-        }
-    }
 }
 
-#Preview("Unified") {
+#Preview {
     let vm = MuesliViewModel()
     let historyManager = MeetingHistoryManager()
-    return MainWindowView(viewModel: vm)
-        .environment(historyManager)
-        .frame(width: 420, height: 600)
-}
-
-#Preview("Split") {
-    let vm = MuesliViewModel()
-    let historyManager = MeetingHistoryManager()
-    vm.isSplitViewVisible = true
     return MainWindowView(viewModel: vm)
         .environment(historyManager)
         .frame(width: 900, height: 650)

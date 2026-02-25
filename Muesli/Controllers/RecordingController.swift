@@ -44,6 +44,9 @@ final class RecordingController {
     /// Session pending stop (waiting for title input)
     var pendingStopSession: RecordingSession?
     
+    /// Background second-pass finalization task for the latest completed session.
+    nonisolated(unsafe) private var secondPassFinalizationTask: Task<Void, Never>?
+    
     // MARK: - Audio Level Throttling
     
     /// Last time microphone level was updated (for throttling UI updates)
@@ -86,9 +89,16 @@ final class RecordingController {
     /// Called when the selected meeting should change
     var onSelectedMeetingChanged: ((MeetingHistoryItem?) -> Void)?
     
-    /// Called when split view visibility should change
-    var onSplitViewVisibilityChanged: ((Bool) -> Void)?
-
+    /// Called when auto-reprocessing should run on a completed meeting directory.
+    /// The ViewModel must resolve the directory to its canonical MeetingHistoryItem
+    /// from the history list (not a local throwaway copy) so observable state
+    /// changes propagate to the UI.
+    var onAutoReprocessRequested: ((URL) -> Void)?
+    
+    /// Called when auto-refinement should run on a completed meeting directory.
+    /// Same canonical-resolution requirement as onAutoReprocessRequested.
+    var onAutoRefineRequested: ((URL) -> Void)?
+    
     /// Called when a permission error is detected during recording start.
     /// Parameters: (missingScreen: Bool, missingMic: Bool)
     var onPermissionRecoveryNeeded: ((Bool, Bool) -> Void)?
@@ -159,6 +169,7 @@ final class RecordingController {
     }
     
     deinit {
+        secondPassFinalizationTask?.cancel()
         logger.debug("Deallocating")
     }
     
@@ -190,6 +201,11 @@ final class RecordingController {
 
                     case .microphone:
                         try RecordingController.handleMicrophoneAudioBuffer(
+                            buffer,
+                            fileService: fileService
+                        )
+                    case .rawMicrophone:
+                        try RecordingController.handleRawMicrophoneAudioBuffer(
                             buffer,
                             fileService: fileService
                         )
@@ -310,15 +326,21 @@ final class RecordingController {
         fileService.appendAudioBuffer(buffer, type: .system)
     }
     
-    /// Process microphone audio buffer — file output only
-    /// Transcription is now handled by the AEC-processed audio callback from TapAudioCaptureService
+    /// Process AEC-processed microphone audio buffer — file output only
+    /// Transcription is handled by the AEC-processed audio callback from TapAudioCaptureService
     private static nonisolated func handleMicrophoneAudioBuffer(
         _ buffer: CMSampleBuffer,
         fileService: FileOutputService
     ) throws {
-        // Save raw mic audio to file (always, even when muted — mute only affects transcription
-        // which is handled by the processed audio callback)
         fileService.appendAudioBuffer(buffer, type: .microphone)
+    }
+
+    /// Process raw (pre-AEC) microphone audio buffer — file output only, when preference enabled
+    private static nonisolated func handleRawMicrophoneAudioBuffer(
+        _ buffer: CMSampleBuffer,
+        fileService: FileOutputService
+    ) throws {
+        fileService.appendAudioBuffer(buffer, type: .rawMicrophone)
     }
 
     // MARK: - Session Management
@@ -342,6 +364,8 @@ final class RecordingController {
             guard now.timeIntervalSince(lastSystemLevelUpdate) >= levelUpdateInterval else { return }
             lastSystemLevelUpdate = now
             session.systemAudioLevel = level
+        case .rawMicrophone:
+            break
         }
     }
     
@@ -362,9 +386,6 @@ final class RecordingController {
                 microphoneManager.setSelectedDeviceID(defaultMic.id)
             }
         }
-        
-        // Ensure live transcription mode
-        transcriptionCoordinator.setTranscriptionMode(.live)
         
         // Start recording
         startRecording(for: session)
@@ -397,10 +418,19 @@ final class RecordingController {
     private func startRecordingAsync(for session: RecordingSession) async {
         // Clear any previous warnings at start of new recording
         warningManager.clearAll()
-
         do {
             // Start file output FIRST
-            session.outputDirectory = try fileOutputService.startWriting()
+            let saveRaw = preferencesManager.saveRawMicrophoneAudio
+            session.outputDirectory = try fileOutputService.startWriting(
+                saveRawMicrophone: saveRaw
+            )
+            
+            let aecOn = preferencesManager.echoCancellationEnabledForAudioCallback
+            logger.info("MIC_FILE_OUTPUT: aecEnabled=\(aecOn), saveRaw=\(saveRaw), routing=.microphone from processed path")
+            Task {
+                await DiagnosticLogger.shared.log(.app,
+                    "MIC_FILE_OUTPUT: aecEnabled=\(aecOn), saveRaw=\(saveRaw), routing=.microphone from processed path")
+            }
             
             // Configure microphone preference before starting capture
             // Pass selected mic device to audio capture service for AVAudioEngine capture
@@ -440,7 +470,6 @@ final class RecordingController {
         
         transcriptionCoordinator.resetForNewRecording()
         let modelState = await transcriptionCoordinator.prepareModel()
-        
         switch modelState {
         case .notAvailable:
             session.isModelLoading = false
@@ -456,6 +485,15 @@ final class RecordingController {
             transcriptionCoordinator.setTranscriptHandler { [weak session] segment in
                 Task { @MainActor in
                     session?.appendTranscriptSegment(segment)
+                }
+            }
+            transcriptionCoordinator.setDraftHandler { [weak session] draftText, speaker in
+                Task { @MainActor in
+                    guard let session = session else { return }
+                    session.updateLiveDraft(
+                        draftText,
+                        speaker: speaker == .me ? .me : .them
+                    )
                 }
             }
             transcriptionCoordinator.startTranscription(recordingStartTime: session.recordingStartTime ?? Date())
@@ -595,6 +633,7 @@ final class RecordingController {
     }
     
     private func discardRecordingAsync(for session: RecordingSession) async {
+        secondPassFinalizationTask?.cancel()
         session.state = .stopping
         session.stopDisplayTimer()
         
@@ -626,6 +665,9 @@ final class RecordingController {
     private func stopRecordingAsync(for session: RecordingSession) async {
         session.state = .stopping
         session.stopDisplayTimer()
+        
+        var secondPassLaunched = false
+        var hasAudioFiles = false
         
         do {
             try await audioCaptureService.stopCapture()
@@ -667,17 +709,15 @@ final class RecordingController {
                 // Continue - we have audio files even if transcript save failed
             }
             
-            // Check if we have audio but no transcript (model wasn't ready during recording)
-            // If so, auto-trigger reprocessing once the model becomes ready
-            let hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
-                                FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
-            let hasEmptyTranscript = session.transcriptBlocks.isEmpty
+            hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
+                            FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
             
-            if hasAudioFiles && hasEmptyTranscript {
-                if let meeting = createMeetingHistoryItem(from: directory) {
-                    logger.info("Recording has audio but empty transcript, auto-triggering reprocessing")
-                    transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)
-                }
+            if preferencesManager.isSecondPassASREnabled,
+               hasAudioFiles,
+               (session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0) >= AudioConfiguration.secondPassMinDurationSeconds {
+                transcriptionCoordinator.markSecondPassActive(for: directory)
+                launchSecondPassFinalization(for: session, directory: directory)
+                secondPassLaunched = true
             }
             
             // Export meeting to exports directory (if enabled)
@@ -690,12 +730,129 @@ final class RecordingController {
         session.state = .completed
         session.canResume = true
         
-        // Notify completion
+        // Notify completion — refreshes history and selects the new meeting.
+        // NOTE: do NOT call onRefreshHistory here; onSessionCompleted already
+        // refreshes. A second refresh would replace the MeetingHistoryItem
+        // objects, orphaning the selectedMeeting reference.
         onSessionCompleted?(session, session.outputDirectory)
-        onRefreshHistory?()
+        
+        // Auto-reprocess completed meetings when enabled.
+        // Runs AFTER onSessionCompleted so the canonical MeetingHistoryItem
+        // (the same instance the UI observes) exists in meetingHistory.
+        //
+        // Second-pass finalization is a superset of auto-reprocessing: it re-transcribes
+        // from saved audio with a (potentially larger) model. When it launches, skip
+        // auto-reprocess to avoid ANE resource contention and transcript.md write races.
+        // This also covers empty-transcript rescue — second-pass will produce the
+        // transcript even when the live model wasn't ready during recording.
+        // If second-pass fails, launchSecondPassFinalization's catch path fires
+        // onAutoReprocessRequested as recovery.
+        let hasEmptyTranscript = session.transcriptBlocks.isEmpty
+        let shouldAutoReprocess = preferencesManager.isAutoReprocessAfterMeetingEnabled || hasEmptyTranscript
+        
+        if let directory = session.outputDirectory {
+            if hasAudioFiles && shouldAutoReprocess && !secondPassLaunched {
+                let triggerReason = hasEmptyTranscript ? "empty transcript" : "preference enabled"
+                logger.info("Auto-triggering reprocessing (\(triggerReason))")
+                onAutoReprocessRequested?(directory)
+            } else if secondPassLaunched && shouldAutoReprocess {
+                logger.info("Skipping auto-reprocess: second-pass finalization already launched")
+            }
+        }
         
         activeSession = nil
         resetMuteState()
+    }
+    
+    private func launchSecondPassFinalization(for session: RecordingSession, directory: URL) {
+        let title = session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle
+        let meetingDate = session.recordingStartTime ?? Date()
+        
+        do {
+            try fileOutputService.saveTranscriptBlocks(
+                session.transcriptBlocks,
+                title: title,
+                date: meetingDate,
+                to: directory,
+                filename: "transcript.live.md"
+            )
+        } catch {
+            logger.error("Failed to save live snapshot transcript: \(error.localizedDescription)")
+        }
+        
+        secondPassFinalizationTask?.cancel()
+        session.isFinalizingTranscript = true
+        
+        secondPassFinalizationTask = Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            defer {
+                Task { @MainActor in
+                    session.isFinalizingTranscript = false
+                    self.onRefreshHistory?()
+                }
+            }
+            
+            do {
+                let blocks = try await self.transcriptionCoordinator.runSecondPassASR(
+                    in: directory,
+                    recordingStartTime: meetingDate,
+                    preference: self.preferencesManager.secondPassModelPreference
+                )
+                try Task.checkCancellation()
+                
+                try self.fileOutputService.saveTranscriptBlocks(
+                    blocks,
+                    title: title,
+                    date: meetingDate,
+                    to: directory,
+                    filename: "transcript.md"
+                )
+                
+                await MainActor.run {
+                    session.resetTranscript()
+                    for block in blocks {
+                        let segment = TranscriptionService.TranscriptSegment(
+                            text: block.text,
+                            timestamp: block.startTimestamp,
+                            speaker: block.speaker == .me ? .me : .them
+                        )
+                        session.appendTranscriptSegment(segment)
+                    }
+                    session.finalizeTranscript()
+                }
+                
+                await self.exportMeetingIfEnabled(directory: directory)
+                
+                await MainActor.run {
+                    self.onAutoRefineRequested?(directory)
+                }
+            } catch is CancellationError {
+                self.logger.info("Second-pass finalization cancelled")
+            } catch {
+                self.logger.error("Second-pass finalization failed: \(error.localizedDescription)")
+                
+                // Fallback: if second-pass failed and transcript is empty, trigger
+                // auto-reprocess as recovery so the user doesn't get a blank transcript.
+                let transcriptURL = directory.appendingPathComponent("transcript.md")
+                let transcriptExists = FileManager.default.fileExists(atPath: transcriptURL.path)
+                let transcriptEmpty = transcriptExists && ((try? String(contentsOf: transcriptURL))?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                if !transcriptExists || transcriptEmpty {
+                    await MainActor.run {
+                        self.logger.info("Second-pass failed with empty transcript; falling back to auto-reprocess")
+                        self.onAutoReprocessRequested?(directory)
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Cancel any running second-pass finalization so a manual reprocess can proceed
+    /// without ANE resource contention or transcript.md write races.
+    func cancelSecondPassIfRunning() {
+        guard let task = secondPassFinalizationTask else { return }
+        logger.info("Cancelling second-pass: user initiated manual reprocess")
+        task.cancel()
+        secondPassFinalizationTask = nil
     }
     
     /// Export meeting to exports directory if export is enabled
@@ -732,7 +889,9 @@ final class RecordingController {
     /// Create a MeetingHistoryItem from a directory URL (for immediate export after recording)
     private func createMeetingHistoryItem(from directory: URL) -> MeetingHistoryItem? {
         let fileManager = FileManager.default
-        let transcriptURL = directory.appendingPathComponent("transcript.md")
+        let transcriptURL = fileManager.fileExists(atPath: directory.appendingPathComponent("transcript.md").path)
+            ? directory.appendingPathComponent("transcript.md")
+            : directory.appendingPathComponent("transcript.live.md")
         
         guard fileManager.fileExists(atPath: transcriptURL.path) else {
             return nil
@@ -943,19 +1102,36 @@ final class RecordingController {
             
             // Notify ViewModel that session started
             onSessionStarted?(session)
-            onSplitViewVisibilityChanged?(true)
             
-        transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
-            Task { @MainActor in
-                guard let session = session else { return }
-                session.appendTranscriptSegment(segment)
+            transcriptionCoordinator.setTranscriptHandler { [weak session] (segment: TranscriptionService.TranscriptSegment) in
+                Task { @MainActor in
+                    guard let session = session else { return }
+                    session.appendTranscriptSegment(segment)
+                }
             }
-        }
+            transcriptionCoordinator.setDraftHandler { [weak session] draftText, speaker in
+                Task { @MainActor in
+                    guard let session = session else { return }
+                    session.updateLiveDraft(
+                        draftText,
+                        speaker: speaker == .me ? .me : .them
+                    )
+                }
+            }
             
+            let saveRaw = preferencesManager.saveRawMicrophoneAudio
             session.outputDirectory = try fileOutputService.resumeWriting(
                 to: meeting.directory,
-                segmentNumber: session.segmentNumber
+                segmentNumber: session.segmentNumber,
+                saveRawMicrophone: saveRaw
             )
+            
+            let aecOn = preferencesManager.echoCancellationEnabledForAudioCallback
+            logger.info("MIC_FILE_OUTPUT (resume): aecEnabled=\(aecOn), saveRaw=\(saveRaw), routing=.microphone from processed path")
+            Task {
+                await DiagnosticLogger.shared.log(.app,
+                    "MIC_FILE_OUTPUT (resume): aecEnabled=\(aecOn), saveRaw=\(saveRaw), routing=.microphone from processed path")
+            }
             
             // Pass selected mic device to audio capture service for AVAudioEngine capture
             let selectedMicID = microphoneManager.selectedDeviceID
@@ -1031,6 +1207,7 @@ final class RecordingController {
                 session.appendTranscriptSegment(segment)
             }
         }
+        transcriptionCoordinator.setDraftHandler { _, _ in }
         
         let systemAudioURL = directory.appendingPathComponent("audio.caf")
         let micAudioURL = directory.appendingPathComponent("microphone.caf")

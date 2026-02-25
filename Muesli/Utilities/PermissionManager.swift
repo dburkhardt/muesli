@@ -433,7 +433,8 @@ final class PermissionManager: PermissionManagerProtocol {
     // MARK: - Microphone Permission
 
     var hasMicrophonePermission: Bool {
-        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        guard !Self.isRunningTests else { return false }
+        return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
     var isMicrophonePermissionDenied: Bool {

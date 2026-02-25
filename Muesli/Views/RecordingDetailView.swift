@@ -88,42 +88,55 @@ struct RecordingDetailView: View {
     // MARK: - Active Recording View
     
     private func activeRecordingView(session: RecordingSession) -> some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                // Warning banners (if any active warnings)
-                if viewModel.warningManager.hasActiveWarnings {
-                    WarningBannerStack(
-                        warnings: viewModel.warningManager.activeWarnings,
-                        onDismiss: { id in
-                            viewModel.warningManager.dismissWarning(id)
-                        },
-                        onCopy: { id in
-                            viewModel.warningManager.copyWarningDetails(id)
-                        }
-                    )
+        ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .bottom) {
+                VStack(spacing: 0) {
+                    // Warning banners (if any active warnings)
+                    if viewModel.warningManager.hasActiveWarnings {
+                        WarningBannerStack(
+                            warnings: viewModel.warningManager.activeWarnings,
+                            onDismiss: { id in
+                                viewModel.warningManager.dismissWarning(id)
+                            },
+                            onCopy: { id in
+                                viewModel.warningManager.copyWarningDetails(id)
+                            }
+                        )
+                    }
+                    
+                    // Audio-only mode banner (shown when model is downloading or compiling)
+                    if session.isRecordingOnly && viewModel.isAnyModelBusy {
+                        audioOnlyBanner
+                    }
+                    
+                    // Header with title and recording indicator
+                    headerView(session: session)
+                    
+                    // Transcript content - different view for resumed vs new recordings
+                    if let parentMeeting = session.parentMeeting {
+                        resumedRecordingContentView(session: session, meeting: parentMeeting)
+                    } else {
+                        recordingContentView(session: session)
+                    }
                 }
                 
-                // Audio-only mode banner (shown when model is downloading or compiling)
-                if session.isRecordingOnly && viewModel.isAnyModelBusy {
-                    audioOnlyBanner
-                }
-                
-                // Header with title and recording indicator
-                headerView(session: session)
-                
-                Divider()
-                
-                // Transcript content - different view for resumed vs new recordings
-                if let parentMeeting = session.parentMeeting {
-                    resumedRecordingContentView(session: session, meeting: parentMeeting)
-                } else {
-                    recordingContentView(session: session)
-                }
+                // Floating control bar at bottom
+                floatingControlBar(session: session)
+                    .padding(.bottom, 16)
             }
             
-            // Floating control bar at bottom
-            floatingControlBar(session: session)
-                .padding(.bottom, 16)
+            if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+               let startTime = viewModel.refinementCoordinator.refinementStartTime,
+               viewModel.refinementCoordinator.isRefining {
+                FloatingProcessingIndicator(
+                    phase: .refining,
+                    startTime: startTime,
+                    onTap: { historyManager.selectMeeting(refinedMeeting) }
+                )
+                .padding(.trailing, 16)
+                .padding(.bottom, 80)
+                .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
+            }
         }
     }
     
@@ -467,48 +480,61 @@ struct RecordingDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 if session.transcriptBlocks.isEmpty {
-                    VStack(spacing: 16) {
-                        Spacer()
-                        
-                        if session.isModelLoading && viewModel.isSlowModelLoad {
-                            // First-time compilation - show detailed message
-                            ProgressView()
-                                .scaleEffect(1.5)
-                            Text("Preparing transcription model...")
-                                .font(.headline)
-                                .foregroundStyle(.secondary)
-                            Text("This is a one-time setup that may take a few minutes.\nYour recording is active and audio is being captured.")
-                                .font(.subheadline)
-                                .foregroundStyle(.tertiary)
-                                .multilineTextAlignment(.center)
-                        } else if session.isModelLoading {
-                            // Normal loading - brief spinner
-                            ProgressView()
-                                .scaleEffect(1.2)
-                            Text("Loading model...")
-                                .font(.headline)
-                                .foregroundStyle(.secondary)
-                            Text("Transcript will appear shortly")
-                                .font(.subheadline)
-                                .foregroundStyle(.tertiary)
-                        } else {
-                            // Model ready, waiting for speech
-                            Image(systemName: "waveform")
-                                .font(.system(size: 48))
-                                .foregroundStyle(.tertiary)
-                            Text("Listening...")
-                                .font(.headline)
-                                .foregroundStyle(.secondary)
-                            Text("Transcript will appear here as you speak")
-                                .font(.subheadline)
-                                .foregroundStyle(.tertiary)
+                    if session.liveDraftText == nil {
+                        VStack(spacing: 16) {
+                            Spacer()
+                            
+                            if session.isModelLoading && viewModel.isSlowModelLoad {
+                                // First-time compilation - show detailed message
+                                ProgressView()
+                                    .scaleEffect(1.5)
+                                Text("Preparing transcription model...")
+                                    .font(.headline)
+                                    .foregroundStyle(.secondary)
+                                Text("This is a one-time setup that may take a few minutes.\nYour recording is active and audio is being captured.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.tertiary)
+                                    .multilineTextAlignment(.center)
+                            } else if session.isModelLoading {
+                                // Normal loading - brief spinner
+                                ProgressView()
+                                    .scaleEffect(1.2)
+                                Text("Loading model...")
+                                    .font(.headline)
+                                    .foregroundStyle(.secondary)
+                                Text("Transcript will appear shortly")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.tertiary)
+                            } else {
+                                // Model ready, waiting for speech
+                                Image(systemName: "waveform")
+                                    .font(.system(size: 48))
+                                    .foregroundStyle(.tertiary)
+                                Text("Listening...")
+                                    .font(.headline)
+                                    .foregroundStyle(.secondary)
+                                Text("Transcript will appear here as you speak")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            
+                            Spacer()
                         }
-                        
-                        Spacer()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding()
+                        .padding(.bottom, 100) // Space for floating control bar
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding()
-                    .padding(.bottom, 100) // Space for floating control bar
+                    
+                    // Show live draft immediately while waiting for first committed block.
+                    // This removes the long "blank transcript" gap during active recording.
+                    if let draftText = session.liveDraftText {
+                        VStack {
+                            DraftTranscriptView(text: draftText, speaker: session.liveDraftSpeaker)
+                                .id("liveDraft")
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 100)
+                    }
                 } else {
                     LazyVStack(spacing: 8) {
                         ForEach(session.transcriptBlocks) { block in
@@ -535,25 +561,59 @@ struct RecordingDetailView: View {
 
     // MARK: - Historical Meeting View with Floating Indicator
     
+    @ViewBuilder
+    private func processingIndicators(for meeting: MeetingHistoryItem) -> some View {
+        // 1. Current meeting reprocessing (second-pass ASR)
+        if meeting.isReprocessing, let startTime = meeting.reprocessingStartTime {
+            FloatingProcessingIndicator(phase: .reprocessing, startTime: startTime)
+        }
+        
+        // 2. Current meeting refinement (LLM polish)
+        if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+           let startTime = viewModel.refinementCoordinator.refinementStartTime,
+           viewModel.refinementCoordinator.isRefining,
+           refinedMeeting.id == meeting.id {
+            FloatingProcessingIndicator(phase: .refining, startTime: startTime)
+        }
+        
+        // 3. Different meeting refinement — tap to navigate
+        if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+           let startTime = viewModel.refinementCoordinator.refinementStartTime,
+           viewModel.refinementCoordinator.isRefining,
+           refinedMeeting.id != meeting.id {
+            FloatingProcessingIndicator(
+                phase: .refining,
+                startTime: startTime,
+                onTap: { historyManager.selectMeeting(refinedMeeting) }
+            )
+        }
+    }
+    
     private func historicalMeetingViewWithIndicator(meeting: MeetingHistoryItem) -> some View {
         ZStack(alignment: .bottomTrailing) {
             historicalMeetingView(meeting: meeting)
             
-            // Show floating indicator when there's an active recording
-            if viewModel.isViewingPastMeetingWhileRecording,
-               let activeSession = viewModel.activeRecordingSession {
-                FloatingRecordingIndicator(
-                    elapsedTime: activeSession.elapsedTimeString,
-                    isInitializing: activeSession.isInitializing,
-                    isModelLoading: activeSession.isModelLoading,
-                    isSlowModelLoad: viewModel.isSlowModelLoad,
-                    isRecordingOnly: activeSession.isRecordingOnly,
-                    onTap: {
-                        viewModel.returnToLiveRecording()
-                    }
-                )
-                .padding(16)
+            VStack(spacing: 8) {
+                processingIndicators(for: meeting)
+                
+                // Show floating indicator when there's an active recording
+                if viewModel.isViewingPastMeetingWhileRecording,
+                   let activeSession = viewModel.activeRecordingSession {
+                    FloatingRecordingIndicator(
+                        elapsedTime: activeSession.elapsedTimeString,
+                        isInitializing: activeSession.isInitializing,
+                        isModelLoading: activeSession.isModelLoading,
+                        isSlowModelLoad: viewModel.isSlowModelLoad,
+                        isRecordingOnly: activeSession.isRecordingOnly,
+                        onTap: {
+                            viewModel.returnToLiveRecording()
+                        }
+                    )
+                }
             }
+            .padding(16)
+            .animation(.easeInOut(duration: 0.3), value: meeting.isReprocessing)
+            .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
         }
     }
     
@@ -574,92 +634,23 @@ struct RecordingDetailView: View {
                     
                     Spacer()
                     
-                    // Copy transcript button
-                    copyTranscriptButton(for: meeting)
+                    meetingActionsMenu(for: meeting)
                     
-                    // Reprocess button with model picker
-                        if !viewModel.modelManager.downloadedModels.isEmpty {
-                        Menu {
-                            ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
-                                Button("Reprocess with \(model.displayName)") {
-                                    viewModel.reprocessTranscript(for: meeting, using: model)
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                if meeting.isReprocessing {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                        .frame(width: 12, height: 12)
-                                    Text("Reprocessing...")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundStyle(.secondary)
-                                } else {
-                                    Image(systemName: "arrow.triangle.2.circlepath")
-                                        .font(.system(size: 12))
-                                    Text("Reprocess")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                            }
-                            .foregroundStyle(.blue)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color.blue.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        .disabled(meeting.isReprocessing)
-                        .help("Re-transcribe this recording with a different model")
-                    }
+                    copyTranscriptButton(for: meeting)
                     
                     CompletedIndicator()
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
                 
-                Divider()
-                
                 // Content
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        // Metadata row with date, Open in Finder, and Delete
+                        // Metadata row with date
                         HStack(spacing: 8) {
                             Label(formatDate(meeting.date), systemImage: "calendar")
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
-                            
-                            Text("·")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.tertiary)
-                            
-                        Button(
-                            action: {
-                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
-                            },
-                            label: {
-                                Text("Open in Finder")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.blue)
-                                    .underline()
-                            }
-                        )
-                        .buttonStyle(.plain)
-                        
-                        Text("·")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                        
-                        Button(
-                            action: {
-                                historyManager.requestDeleteMeeting(meeting)
-                            },
-                            label: {
-                                Text("Delete Recording")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.red)
-                                    .underline()
-                            }
-                        )
-                        .buttonStyle(.plain)
                         }
                         .padding(.bottom, 8)
                         
@@ -770,26 +761,40 @@ struct RecordingDetailView: View {
     // MARK: - Empty Detail View
     
     private var emptyDetailView: some View {
-        VStack(spacing: 16) {
-            Spacer()
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 16) {
+                Spacer()
+                
+                Image(systemName: "doc.text")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.tertiary)
+                
+                Text("Select a meeting")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                
+                Text("Choose a meeting from the sidebar to view its transcript")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 300)
+                
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             
-            Image(systemName: "doc.text")
-                .font(.system(size: 48))
-                .foregroundStyle(.tertiary)
-            
-            Text("Select a meeting")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-            
-            Text("Choose a meeting from the sidebar to view its transcript")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
-            
-            Spacer()
+            if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+               let startTime = viewModel.refinementCoordinator.refinementStartTime,
+               viewModel.refinementCoordinator.isRefining {
+                FloatingProcessingIndicator(
+                    phase: .refining,
+                    startTime: startTime,
+                    onTap: { historyManager.selectMeeting(refinedMeeting) }
+                )
+                .padding(16)
+                .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     // MARK: - Audio-Only Mode Banner
@@ -859,6 +864,32 @@ struct RecordingDetailView: View {
         return nil
     }
     
+    /// Ellipsis menu for completed-meeting actions (Apple HIG: ellipsis for "more actions").
+    private func meetingActionsMenu(for meeting: MeetingHistoryItem) -> some View {
+        EllipsisActionsMenu {
+            Button("Open in Finder") {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: meeting.directory.path)
+            }
+            
+            if !viewModel.modelManager.downloadedModels.isEmpty {
+                Divider()
+                Menu("Reprocess Transcript") {
+                    ForEach(viewModel.modelManager.downloadedModelsOrdered, id: \.self) { model in
+                        Button("With \(model.displayName)") {
+                            viewModel.reprocessTranscript(for: meeting, using: model)
+                        }
+                    }
+                }
+                .disabled(meeting.isReprocessing)
+            }
+            
+            Divider()
+            Button("Delete Recording", role: .destructive) {
+                historyManager.requestDeleteMeeting(meeting)
+            }
+        }
+    }
+    
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -905,17 +936,10 @@ struct FloatingRecordingIndicator: View {
                             value: isPulsing
                         )
                     
-                    // Waveform icon
-                    Image(systemName: "waveform")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.primary)
-                    
-                    // Elapsed time
                     Text(elapsedTime)
                         .font(.system(size: 12, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                     
-                    // Model state indicator
                     if isModelLoading {
                         ProgressView()
                             .scaleEffect(0.5)
@@ -927,10 +951,6 @@ struct FloatingRecordingIndicator: View {
                         Image(systemName: "waveform.slash")
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
-                    } else {
-                        Image(systemName: "text.append")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.green)
                     }
                 }
             }

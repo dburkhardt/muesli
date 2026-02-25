@@ -71,14 +71,8 @@ struct StartRecordingSheet: View {
             viewModel.selectMicrophoneDevice(defaultMic.id)
         }
         
-        // Ensure live transcription mode
-        viewModel.transcriptionMode = .live
-        
         // Start recording (this will set activeSession internally)
         viewModel.startRecording(for: session)
-        
-        // Transition to split view
-        viewModel.isSplitViewVisible = true
         
         // Dismiss sheet
         isPresented = false

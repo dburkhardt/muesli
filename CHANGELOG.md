@@ -13,7 +13,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Export to additional formats (PDF, DOCX)
 - Keyboard shortcuts for common actions
 
-## [0.6.0] - TBD
+## [0.6.2] - Unreleased
+
+### Added
+- **Live Stabilizer**: Real-time transcript stabilization pipeline with finalization for smoother live output (#26)
+- **Context Chaining**: Transcription chunks now carry context from previous segments for improved accuracy (#17)
+
+### Changed
+- Transcription chunk size increased to 15 seconds with warmup for better transcription quality (#17)
+- Microphone selection now uses Core Audio system default instead of hardcoded device (#21)
+- Adopted Modified Git Flow branching model (`develop` for integration, `main` for stable releases)
+
+### Fixed
+- Microphone selection no longer ignores the user's system default device (#21)
+- `uninstall.sh` no longer prompts interactively; added `--yes` flag and fixed `tccutil` crash (#15)
+
+### Technical
+- CI quarantine tests skipped on PRs and pushes to main for faster feedback (#29)
+- CI triggers added for `develop` branch
+
+## [0.6.1-rc.1] - 2026-02-22
+
+### Fixed
+- **Model matching**: Exact folder matching prevents false positives in model selection
+
+### Technical
+- CI/release workflow hardening (P1-1 through P1-6) (#18)
+- Unquarantined stable tests and boosted coverage toward 70% threshold (#24)
+- Pinned WebRTC v2.1 to resolved commit hash for reproducible builds
+- Pinned Xcode 26.3 in release workflow
+- CI concurrency group includes event name to prevent scheduled runs cancelling push runs
+- Build and Test timeout raised to 120 minutes for large model test suites
+
+## [0.6.0] - 2026-02-20
 
 ### Added
 - **LLM Transcript Refinement**: Polish transcripts using on-device MLX LLM models (Llama 3.2 variants)
@@ -91,7 +123,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No speaker diarization in v0.1.0 (planned for future release)
 - English language models only (multilingual support planned)
 
-[unreleased]: https://github.com/dburkhardt/muesli/compare/v0.6.0...HEAD
+[unreleased]: https://github.com/dburkhardt/muesli/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/dburkhardt/muesli/compare/v0.6.1-rc.1...v0.6.2
+[0.6.1-rc.1]: https://github.com/dburkhardt/muesli/compare/v0.6.0...v0.6.1-rc.1
 [0.6.0]: https://github.com/dburkhardt/muesli/compare/v0.1.2...v0.6.0
 [0.1.2]: https://github.com/dburkhardt/muesli/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/dburkhardt/muesli/releases/tag/v0.1.0

@@ -19,17 +19,32 @@ enum AudioConfiguration {
     
     // MARK: - Transcription Timing
     
-    /// Duration of each transcription chunk for live recordings (seconds)
-    static let transcriptionChunkDuration: TimeInterval = 5.0
+    /// Duration of each transcription chunk for live recordings (seconds).
+    /// Whisper was trained on 30s windows; longer chunks improve accuracy.
+    /// 15s balances context quality with ~2-3s processing latency on M3.
+    static let transcriptionChunkDuration: TimeInterval = 15.0
     
     /// Overlap between transcription chunks for continuity (seconds)
-    static let transcriptionOverlapDuration: TimeInterval = 1.5
+    static let transcriptionOverlapDuration: TimeInterval = 3.0
+    
+    /// Duration of warmup chunks at the start of a recording (seconds).
+    /// Shorter than steady-state to get initial text on screen quickly.
+    static let warmupChunkDuration: TimeInterval = 3.0
+    
+    /// Number of warmup chunks per speaker before switching to full duration
+    static let warmupChunkCount: Int = 1
+    
+    /// Overlap for warmup chunks (seconds)
+    static let warmupOverlapDuration: TimeInterval = 1.0
     
     /// Post-processing chunk duration (30 seconds - Whisper's optimal training window)
     static let postProcessingChunkDuration: TimeInterval = 30.0
     
     /// Post-processing overlap (5 seconds - prevents word cutoffs at boundaries)
     static let postProcessingOverlapDuration: TimeInterval = 5.0
+    
+    /// Skip second-pass for very short recordings where overhead outweighs gains
+    static let secondPassMinDurationSeconds: TimeInterval = 30.0
     
     /// Minimum samples needed before processing (chunk duration at whisper sample rate)
     static var minSamplesForProcessing: Int {
@@ -39,6 +54,16 @@ enum AudioConfiguration {
     /// Overlap samples between chunks
     static var overlapSamples: Int {
         Int(Double(whisperSampleRate) * transcriptionOverlapDuration)
+    }
+    
+    /// Minimum samples for warmup chunks
+    static var warmupMinSamples: Int {
+        whisperSampleRate * Int(warmupChunkDuration)
+    }
+    
+    /// Overlap samples for warmup chunks
+    static var warmupOverlapSamples: Int {
+        whisperSampleRate * Int(warmupOverlapDuration)
     }
     
     // MARK: - Buffer Management
@@ -64,6 +89,27 @@ enum AudioConfiguration {
     
     /// RMS threshold for voice activity detection (-40dB equivalent)
     static let vadThreshold: Float = 0.01
+    
+    // MARK: - Live Stabilizer
+    
+    /// Consecutive matching hypotheses required before commit
+    static let stabilizerAgreementWindow: Int = 2
+    
+    /// Timing slack for overlap boundary calculations
+    static let stabilizerJitterMs: Int = 250
+    
+    /// Similarity threshold for overlap matching
+    static let stabilizerSimilarityThreshold: Double = 0.70
+    
+    /// Maximum number of tokens retained for draft tail
+    static let stabilizerMaxDraftTokens: Int = 40
+    
+    /// Maximum draft UI emit frequency (4Hz)
+    static let stabilizerDraftEmitIntervalMs: Int = 250
+    
+    /// Seconds of silence after last voice activity before flushing pending stabilizer hypotheses.
+    /// Keeps live output responsive when the speaker pauses or stops.
+    static let silenceFlushDelay: TimeInterval = 3.0
     
     // MARK: - Audio Level Updates
     

@@ -64,8 +64,32 @@ enum AppStorageKeys {
     /// AEC delay mode: how stream delay is computed for echo cancellation
     static let aecDelayMode = "aecDelayMode"
     
-    /// Audio chunk duration for transcription (2-10 seconds)
+    /// Audio chunk duration for transcription (2-30 seconds)
     static let audioChunkDuration = "audioChunkDuration"
+    
+    /// Whether to show Continuity Camera (iPhone/iPad) microphones in the device list
+    static let showContinuityCameraDevices = "showContinuityCameraDevices"
+    
+    /// Whether to save the raw microphone audio alongside the echo-canceled version
+    static let saveRawMicrophoneAudio = "saveRawMicrophoneAudio"
+
+    /// Enable overlap dedup stabilization in live transcription path
+    static let liveStabilizerEnabled = "liveStabilizerEnabled"
+    
+    /// Enable post-stop second-pass ASR finalization
+    static let secondPassASREnabled = "secondPassASREnabled"
+    
+    /// Enable automatic LLM refinement after second-pass ASR
+    static let autoRefineEnabled = "autoRefineEnabled"
+    
+    /// Enable automatic reprocessing after recording completion
+    static let autoReprocessAfterMeetingEnabled = "autoReprocessAfterMeetingEnabled"
+    
+    /// Second-pass model preference strategy
+    static let secondPassModelPreference = "secondPassModelPreference"
+    
+    /// Explicit model raw value when secondPassModelPreference == specific
+    static let secondPassSpecificModel = "secondPassSpecificModel"
     
     // MARK: - Export
     

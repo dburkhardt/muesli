@@ -10,10 +10,8 @@ struct MeetingHistorySidebar: View {
         @Bindable var history = historyManager
         
         VStack(spacing: 0) {
-            // Header
-            headerView
-            
-            Divider()
+            // "Meetings" section label
+            meetingsLabel
             
             // Content
             if historyManager.groupedHistory.isEmpty && viewModel.activeRecordingSession == nil {
@@ -23,7 +21,6 @@ struct MeetingHistorySidebar: View {
             }
         }
         .frame(minWidth: 200, idealWidth: 250)
-        .background(.background)
         .onDeleteCommand {
             // Handle Delete key
             historyManager.requestDeleteSelectedMeetings()
@@ -57,49 +54,18 @@ struct MeetingHistorySidebar: View {
         }
     }
     
-    // MARK: - Header
+    // MARK: - Meetings Label
     
-    private var headerView: some View {
+    private var meetingsLabel: some View {
         HStack {
             Text("Meetings")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-            
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.primary)
             Spacer()
-            
-            Button(
-                action: {
-                    // Quick start: immediately begin recording all system audio
-                    viewModel.quickStartRecording()
-                },
-                label: {
-                    HStack(spacing: 4) {
-                        if !viewModel.modelManager.hasAnyReadyModel && viewModel.activeSession == nil {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .scaleEffect(0.7)
-                            Text("Preparing...")
-                                .font(.system(size: 13, weight: .medium))
-                        } else {
-                            Text("New")
-                                .font(.system(size: 13, weight: .medium))
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.accentColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-            )
-            .buttonStyle(.plain)
-            .disabled(!viewModel.canStartRecording)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
     }
     
     // MARK: - Empty State
@@ -150,8 +116,6 @@ struct MeetingHistorySidebar: View {
                             .padding(.bottom, 4)
                     }
                     
-                    Divider()
-                        .padding(.vertical, 8)
                 }
                 
                 // Historical meetings grouped by date
@@ -303,9 +267,10 @@ struct MeetingSidebarItemView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
-            isSelected ? Color.accentColor.opacity(0.15) :
-                (isHovered ? Color.secondary.opacity(0.05) : Color.clear)
+            isSelected ? AnyShapeStyle(.selection) :
+                (isHovered ? AnyShapeStyle(Color.secondary.opacity(0.1)) : AnyShapeStyle(.clear))
         )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering

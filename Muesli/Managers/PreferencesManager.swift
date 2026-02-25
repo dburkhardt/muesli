@@ -102,6 +102,92 @@ final class PreferencesManager {
         case postProcessing
     }
     
+    // MARK: - Transcription Quality Pipeline
+    
+    enum SecondPassModelPreference: String, CaseIterable {
+        case bestAvailable
+        case sameAsLive
+        case bestAvailableNoDowngrade
+        case specific
+    }
+    
+    /// Toggle for deterministic live overlap deduplication.
+    /// Default false for staged rollout safety.
+    var isLiveStabilizerEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.liveStabilizerEnabled) == nil {
+                return false
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.liveStabilizerEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.liveStabilizerEnabled)
+        }
+    }
+    
+    /// Toggle for post-stop second-pass final transcription.
+    /// Default false for staged rollout safety.
+    var isSecondPassASREnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.secondPassASREnabled) == nil {
+                return false
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.secondPassASREnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.secondPassASREnabled)
+        }
+    }
+    
+    /// Toggle for optional automatic LLM cleanup after ASR finalization.
+    var isAutoRefineEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.autoRefineEnabled) == nil {
+                return false
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.autoRefineEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.autoRefineEnabled)
+        }
+    }
+    
+    /// Toggle for automatic post-meeting reprocessing.
+    /// Default true so completed meetings are reprocessed unless user opts out.
+    var isAutoReprocessAfterMeetingEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: AppStorageKeys.autoReprocessAfterMeetingEnabled) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: AppStorageKeys.autoReprocessAfterMeetingEnabled)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.autoReprocessAfterMeetingEnabled)
+        }
+    }
+    
+    /// Strategy for picking the second-pass model.
+    var secondPassModelPreference: SecondPassModelPreference {
+        get {
+            let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassModelPreference)
+                ?? SecondPassModelPreference.bestAvailable.rawValue
+            return SecondPassModelPreference(rawValue: raw) ?? .bestAvailable
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: AppStorageKeys.secondPassModelPreference)
+        }
+    }
+    
+    /// Explicit model raw value used when secondPassModelPreference == .specific.
+    var secondPassSpecificModelRawValue: String? {
+        get {
+            UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.secondPassSpecificModel)
+        }
+    }
+    
     // MARK: - Echo Cancellation
     
     /// Thread-safe storage for echo cancellation state (for synchronous access from audio callbacks)
@@ -168,26 +254,26 @@ final class PreferencesManager {
     
     // MARK: - Audio Chunk Duration
     
-    /// Audio chunk duration for transcription (2-10 seconds)
+    /// Audio chunk duration for transcription (2-30 seconds)
     var audioChunkDuration: TimeInterval {
         get {
             // Check if key exists to distinguish "not set" from "invalid value"
             guard let savedObject = UserDefaults.standard.object(forKey: AppStorageKeys.audioChunkDuration) as? Double
             else {
                 // Key not set, return default
-                return 5.0
+                return AudioConfiguration.transcriptionChunkDuration
             }
             
             // Key exists, validate range
-            if savedObject < 2.0 || savedObject > 10.0 {
+            if savedObject < 2.0 || savedObject > 30.0 {
                 // Invalid value, return default
-                return 5.0
+                return AudioConfiguration.transcriptionChunkDuration
             }
             return savedObject
         }
         set {
             // Clamp to valid range
-            let clamped = min(max(newValue, 2.0), 10.0)
+            let clamped = min(max(newValue, 2.0), 30.0)
             UserDefaults.standard.set(clamped, forKey: AppStorageKeys.audioChunkDuration)
             audioChunkDurationDidChange?(clamped)
         }
@@ -195,6 +281,46 @@ final class PreferencesManager {
     
     /// Callback when audio chunk duration changes
     var audioChunkDurationDidChange: ((TimeInterval) -> Void)?
+    
+    // MARK: - Continuity Camera Devices
+    
+    /// Whether to show Continuity Camera (iPhone/iPad) microphones in the device list.
+    /// Defaults to false (hidden) — UserDefaults.bool(forKey:) returns false for unset keys.
+    var showContinuityCameraDevices: Bool {
+        get {
+            UserDefaults.standard.bool(forKey: AppStorageKeys.showContinuityCameraDevices)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.showContinuityCameraDevices)
+            showContinuityCameraDevicesDidChange?(newValue)
+        }
+    }
+    
+    /// Callback when the Continuity Camera preference changes (triggers device list refresh)
+    var showContinuityCameraDevicesDidChange: ((Bool) -> Void)?
+    
+    // MARK: - Raw Microphone Audio
+    
+    /// Thread-safe storage for save raw microphone state (for synchronous access from audio callbacks)
+    private let saveRawMicrophoneLock = OSAllocatedUnfairLock(initialState: true)
+    
+    /// Backing storage for @Observable tracking
+    private var _saveRawMicrophoneAudio: Bool = true
+    
+    /// Whether to save raw microphone audio alongside the echo-canceled version
+    var saveRawMicrophoneAudio: Bool {
+        get { _saveRawMicrophoneAudio }
+        set {
+            _saveRawMicrophoneAudio = newValue
+            saveRawMicrophoneLock.withLock { $0 = newValue }
+            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.saveRawMicrophoneAudio)
+        }
+    }
+    
+    /// Thread-safe getter for audio callbacks (nonisolated)
+    nonisolated var saveRawMicrophoneAudioForAudioCallback: Bool {
+        saveRawMicrophoneLock.withLock { $0 }
+    }
     
     // MARK: - Export Settings
     
@@ -336,6 +462,15 @@ final class PreferencesManager {
 
         _isEchoCancellationEnabled = decision.effectiveValue
         echoCancellationLock.withLock { $0 = decision.effectiveValue }
+
+        if UserDefaults.standard.object(forKey: AppStorageKeys.saveRawMicrophoneAudio) == nil {
+            _saveRawMicrophoneAudio = true
+            saveRawMicrophoneLock.withLock { $0 = true }
+        } else {
+            let saved = UserDefaults.standard.bool(forKey: AppStorageKeys.saveRawMicrophoneAudio)
+            _saveRawMicrophoneAudio = saved
+            saveRawMicrophoneLock.withLock { $0 = saved }
+        }
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()

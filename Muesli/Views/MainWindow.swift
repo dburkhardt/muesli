@@ -101,14 +101,14 @@ struct MainWindow: View {
                     set: { viewModel.transcriptionMode = $0 }
                 )) {
                     Text("Live (Real-time)").tag(TranscriptionService.TranscriptionMode.live)
-                    Text("Post-processing (Better accuracy)").tag(TranscriptionService.TranscriptionMode.postProcessing)
+                    Text("Post-processing (Lower meeting CPU)").tag(TranscriptionService.TranscriptionMode.postProcessing)
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 300)
                 
                 Text(viewModel.transcriptionMode == .live 
-                     ? "Transcribe as you record (faster, lower accuracy)"
-                     : "Transcribe after recording stops (slower, higher accuracy)")
+                     ? "Transcribe during recording (uses compute while meeting is active)"
+                     : "Transcribe after recording stops (saves compute during the meeting)")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)

@@ -81,6 +81,9 @@ final class TranscriptionCoordinator {
         }
     }
     
+    /// Directories with an active second-pass ASR task (prevents concurrent auto-reprocess)
+    private var activeSecondPassDirectories: Set<URL> = []
+    
     /// Audio buffering while model loads (protected by serial actor execution)
     private var pendingSystemAudio: [Float] = []
     private var pendingMicAudio: [Float] = []
@@ -398,6 +401,7 @@ final class TranscriptionCoordinator {
         
         // Clear handler to break retain cycle
         transcriptionService.setTranscriptHandler { _ in }
+        transcriptionService.setDraftHandler { _, _ in }
     }
     
     deinit {
@@ -407,6 +411,11 @@ final class TranscriptionCoordinator {
     /// Set transcript handler for receiving segments
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler) {
         transcriptionService.setTranscriptHandler(handler)
+    }
+    
+    /// Set draft handler for receiving tentative tail text updates
+    func setDraftHandler(_ handler: @escaping TranscriptionDraftHandler) {
+        transcriptionService.setDraftHandler(handler)
     }
     
     /// Set transcription mode
@@ -526,11 +535,26 @@ final class TranscriptionCoordinator {
         bufferStartTime = nil
     }
     
+    // MARK: - Second-Pass Lifecycle
+    
+    /// Mark a directory as having an active second-pass ASR task.
+    /// Called by RecordingController before launching `launchSecondPassFinalization`.
+    /// Cleared automatically via `defer` inside `runSecondPassASR`.
+    func markSecondPassActive(for directory: URL) {
+        activeSecondPassDirectories.insert(directory.standardizedFileURL)
+        logger.info("Second-pass marked active for \(directory.lastPathComponent)")
+    }
+    
     // MARK: - Auto-Reprocessing (for empty transcripts)
     
     /// Auto-reprocess a meeting once the model becomes ready
     /// Used when recording stopped with empty transcript (model wasn't ready in time)
     func autoReprocessWhenReady(meeting: MeetingHistoryItem) {
+        if activeSecondPassDirectories.contains(meeting.directory.standardizedFileURL) {
+            logger.warning("Skipping auto-reprocess for '\(meeting.title)': second-pass in progress")
+            return
+        }
+        
         guard let activeModel = modelManager.activeModel else {
             logger.warning("Cannot auto-reprocess: no active model")
             return
@@ -538,11 +562,10 @@ final class TranscriptionCoordinator {
         
         logger.info("Auto-reprocessing meeting '\(meeting.title)' when model becomes ready")
         
-        // Mark as reprocessing immediately (shows spinner in UI)
         meeting.isReprocessing = true
+        meeting.reprocessingStartTime = Date()
         
         Task { @MainActor in
-            // Wait for model to be ready (may already be ready)
             let modelStateResult = await prepareModel()
             
             if modelStateResult.isReady {
@@ -557,10 +580,175 @@ final class TranscriptionCoordinator {
             }
             
             meeting.isReprocessing = false
+            meeting.reprocessingStartTime = nil
         }
     }
     
     // MARK: - Reprocessing (for completed meetings)
+    
+    /// Run second-pass ASR finalization over saved meeting audio segments.
+    /// Returns processed transcript blocks sorted by timestamp.
+    func runSecondPassASR(
+        in directory: URL,
+        recordingStartTime: Date,
+        preference: PreferencesManager.SecondPassModelPreference,
+        liveModel: ModelManager.ModelSize? = nil
+    ) async throws -> [TranscriptBlock] {
+        defer {
+            activeSecondPassDirectories.remove(directory.standardizedFileURL)
+            logger.info("Second-pass cleared for \(directory.lastPathComponent)")
+        }
+        
+        guard let selectedModel = resolveSecondPassModel(
+            preference: preference,
+            liveModel: liveModel
+        ) else {
+            throw NSError(
+                domain: "TranscriptionCoordinator",
+                code: 31,
+                userInfo: [NSLocalizedDescriptionKey: "No qualifying model available for second-pass ASR"]
+            )
+        }
+        
+        guard let modelPath = modelManager.pathForModel(selectedModel),
+              modelManager.validateModel(selectedModel)
+        else {
+            throw NSError(
+                domain: "TranscriptionCoordinator",
+                code: 32,
+                userInfo: [NSLocalizedDescriptionKey: "Selected second-pass model is unavailable or invalid"]
+            )
+        }
+        
+        await DiagnosticLogger.shared.log(.stabilizer, "secondPass:start model=\(selectedModel.rawValue)")
+        let start = Date()
+        
+        let tempService = TranscriptionService()
+        try await tempService.initialize(modelPath: modelPath)
+        tempService.setTranscriptionMode(.postProcessing)
+        
+        let segmentsToProcess = enumerateAudioSegments(in: directory)
+        guard !segmentsToProcess.isEmpty else {
+            throw NSError(
+                domain: "TranscriptionCoordinator",
+                code: 33,
+                userInfo: [NSLocalizedDescriptionKey: "No audio files found for second-pass ASR"]
+            )
+        }
+        
+        nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
+        tempService.setTranscriptHandler { segment in
+            segments.append(segment)
+        }
+        
+        for pair in segmentsToProcess {
+            try Task.checkCancellation()
+            try await tempService.transcribePostProcessing(
+                systemAudioURL: pair.systemURL,
+                micAudioURL: pair.micURL,
+                startTime: recordingStartTime
+            )
+        }
+        
+        let processor = TranscriptProcessor()
+        for segment in segments.sorted(by: { $0.timestamp < $1.timestamp }) {
+            processor.processSegment(segment)
+        }
+        processor.finalize()
+        
+        let elapsed = Date().timeIntervalSince(start)
+        await DiagnosticLogger.shared.log(
+            .stabilizer,
+            "secondPass:done model=\(selectedModel.rawValue) blocks=\(processor.blocks.count) segments=\(segments.count) duration=\(String(format: "%.2f", elapsed))s"
+        )
+        return processor.blocks
+    }
+
+    private func resolveSecondPassModel(
+        preference: PreferencesManager.SecondPassModelPreference,
+        liveModel: ModelManager.ModelSize?
+    ) -> ModelManager.ModelSize? {
+        let effectiveLiveModel = liveModel ?? modelManager.activeModel
+
+        func isReady(_ model: ModelManager.ModelSize) -> Bool {
+            modelManager.downloadState(for: model) == .completed &&
+                modelManager.pathForModel(model) != nil &&
+                modelManager.validateModel(model)
+        }
+        
+        let ranked: [ModelManager.ModelSize] = [.large, .largeTurbo, .medium, .small]
+        let bestAvailable = ranked.first(where: isReady)
+        
+        switch preference {
+        case .bestAvailable:
+            return bestAvailable
+        case .sameAsLive:
+            guard let effectiveLiveModel, isReady(effectiveLiveModel) else { return nil }
+            return effectiveLiveModel
+        case .bestAvailableNoDowngrade:
+            guard let effectiveLiveModel else { return bestAvailable }
+            guard let candidate = bestAvailable else { return nil }
+            let rank: [ModelManager.ModelSize: Int] = [.large: 0, .largeTurbo: 1, .medium: 2, .small: 3]
+            guard let liveRank = rank[effectiveLiveModel], let candidateRank = rank[candidate], candidateRank <= liveRank else {
+                return nil
+            }
+            return candidate
+        case .specific:
+            guard let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel),
+                  let model = ModelManager.ModelSize(rawValue: raw),
+                  isReady(model) else {
+                return nil
+            }
+            return model
+        }
+    }
+
+    private func enumerateAudioSegments(in directory: URL) -> [(systemURL: URL?, micURL: URL?)] {
+        let fm = FileManager.default
+        var pairs: [(Int, URL?, URL?)] = []
+        
+        let primarySystem = directory.appendingPathComponent("audio.caf")
+        let primaryMic = directory.appendingPathComponent("microphone.caf")
+        if fm.fileExists(atPath: primarySystem.path) || fm.fileExists(atPath: primaryMic.path) {
+            pairs.append((1, fm.fileExists(atPath: primarySystem.path) ? primarySystem : nil, fm.fileExists(atPath: primaryMic.path) ? primaryMic : nil))
+        }
+        
+        guard let contents = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
+            return pairs.map { ($0.1, $0.2) }
+        }
+        
+        for file in contents {
+            let name = file.lastPathComponent
+            if let index = parseSegmentIndex(from: name, prefix: "audio_", suffix: ".caf") {
+                while !pairs.contains(where: { $0.0 == index }) {
+                    pairs.append((index, nil, nil))
+                }
+                if let pairIndex = pairs.firstIndex(where: { $0.0 == index }) {
+                    pairs[pairIndex].1 = file
+                }
+            } else if let index = parseSegmentIndex(from: name, prefix: "microphone_", suffix: ".caf") {
+                while !pairs.contains(where: { $0.0 == index }) {
+                    pairs.append((index, nil, nil))
+                }
+                if let pairIndex = pairs.firstIndex(where: { $0.0 == index }) {
+                    pairs[pairIndex].2 = file
+                }
+            }
+        }
+        
+        return pairs
+            .sorted(by: { $0.0 < $1.0 })
+            .map { ($0.1, $0.2) }
+            .filter { $0.0 != nil || $0.1 != nil }
+    }
+    
+    private func parseSegmentIndex(from name: String, prefix: String, suffix: String) -> Int? {
+        guard name.hasPrefix(prefix), name.hasSuffix(suffix) else { return nil }
+        let start = name.index(name.startIndex, offsetBy: prefix.count)
+        let end = name.index(name.endIndex, offsetBy: -suffix.count)
+        guard start < end else { return nil }
+        return Int(name[start..<end])
+    }
     
     /// Reprocess a completed meeting's audio with a different model
     ///

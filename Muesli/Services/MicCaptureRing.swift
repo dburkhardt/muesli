@@ -62,6 +62,10 @@ final class MicCaptureRing {
     
     /// Discontinuity threshold multiplier
     private let discontinuityMultiplier = 8
+
+    /// Acceptable ratio between observed sample-time delta and declared callback sample count
+    /// before considering the two domains mismatched.
+    private let sampleRateDomainTolerance: Double = 0.05
     
     /// Whether a discontinuity was detected since last reset
     private(set) var hasDiscontinuity: Bool = false
@@ -123,12 +127,32 @@ final class MicCaptureRing {
             }
             if lastSampleTime > 0 && callbackCount > warmupCallbackCount && debounceRemaining == 0 {
                 let deltaSamples = sampleTime - lastSampleTime
-                let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
-                let negativeTolerance = -Double(expectedSamplesPerCallback) / 2.0  // -5ms
+                let expectedFromCallback = Double(sampleCount)
+                // Domain mismatch: delta is a sustained negative drift significantly larger than
+                // a normal callback delta. This catches sample-time/sample-count domain
+                // mismatches (e.g. sampleTime stays in 44.1kHz while count is resampled to 48kHz),
+                // while allowing tiny negative jitter in normal 48kHz-domain delivery.
+                // The upper-bound cap is essential: without it, a real discontinuity (large gap)
+                // can also satisfy the relative-error condition and be routed here incorrectly.
+                let isDomainMismatch = expectedFromCallback > 0 &&
+                    deltaSamples < 0 &&
+                    abs(deltaSamples) / expectedFromCallback > sampleRateDomainTolerance &&
+                    abs(deltaSamples) < expectedFromCallback * Double(discontinuityMultiplier)
 
-                if deltaSamples < negativeTolerance || deltaSamples > threshold {
+                if isDomainMismatch {
+                    expectedSamplesPerCallback = Int(expectedFromCallback)
                     hasDiscontinuity = true
                     debounceRemaining = debounceDuration
+                } else {
+                    let threshold = Double(expectedSamplesPerCallback * discontinuityMultiplier)
+                    let negativeTolerance = -Double(expectedSamplesPerCallback) / 2.0  // -5ms
+
+                    if deltaSamples < negativeTolerance || deltaSamples > threshold {
+                        hasDiscontinuity = true
+                        debounceRemaining = debounceDuration
+                    } else {
+                        expectedSamplesPerCallback = sampleCount
+                    }
                 }
             }
             lastSampleTime = sampleTime + Float64(sampleCount)
@@ -334,6 +358,7 @@ final class MicCaptureRing {
         lock.lock()
         defer { lock.unlock() }
         hasDiscontinuity = false
+        debounceRemaining = 0
     }
     
     /// Set expected samples per callback (for discontinuity detection)

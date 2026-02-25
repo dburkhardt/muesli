@@ -48,6 +48,11 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     private var micWriter: AVAssetWriter?
     private var microphoneInput: AVAssetWriterInput?
     private var micSessionStarted = false
+    private var rawMicWriter: AVAssetWriter?
+    private var rawMicrophoneInput: AVAssetWriterInput?
+    private var rawMicSessionStarted = false
+    private var rawMicBufferQueue: [CMSampleBuffer] = []
+    private var saveRawMicrophoneAudio = false
     
     private var outputDirectory: URL?
     
@@ -111,9 +116,11 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     // MARK: - Public API
     
     /// Start writing audio to a new file
-    /// - Parameter segmentNumber: Optional segment number (1 = first segment, 2+ = resumed segments). Defaults to 1.
+    /// - Parameters:
+    ///   - segmentNumber: Optional segment number (1 = first segment, 2+ = resumed segments). Defaults to 1.
+    ///   - saveRawMicrophone: Whether to save raw microphone capture in `raw_microphone.caf`.
     /// - Returns: The URL of the output directory
-    func startWriting(segmentNumber: Int = 1) throws -> URL {
+    func startWriting(segmentNumber: Int = 1, saveRawMicrophone: Bool = false) throws -> URL {
         lock.lock()
         defer { lock.unlock() }
         
@@ -124,9 +131,10 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         // Create output directory
         let directory = try createOutputDirectory()
         self.outputDirectory = directory
+        self.saveRawMicrophoneAudio = saveRawMicrophone
         
         do {
-            // Create TWO separate writers - CAF doesn't support multiple audio tracks
+            // Create separate writers - CAF doesn't support multiple audio tracks
             
             // Determine filenames based on segment number
             let systemFilename = segmentNumber == 1 ? "audio.caf" : "audio_\(segmentNumber).caf"
@@ -157,7 +165,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
                 throw OutputError.assetWriterNotReady
             }
             
-            // Writer 2: Microphone audio (48kHz, stereo, Float32 - high fidelity)
+            // Writer 2: Microphone audio (48kHz, mono, Float32 - AEC-processed)
             let micURL = directory.appendingPathComponent(micFilename)
             // Delete existing file if present
             try? FileManager.default.removeItem(at: micURL)
@@ -166,7 +174,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             let micSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: 48000.0,
-                AVNumberOfChannelsKey: 2,
+                AVNumberOfChannelsKey: 1,
                 AVLinearPCMBitDepthKey: 32,
                 AVLinearPCMIsFloatKey: true,
                 AVLinearPCMIsBigEndianKey: false,
@@ -191,6 +199,42 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             self.microphoneInput = micIn
             self.micSessionStarted = false
             self.micBufferQueue = []  // Clear any stale buffers
+
+            if saveRawMicrophone {
+                let rawMicFilename = segmentNumber == 1 ? "raw_microphone.caf" : "raw_microphone_\(segmentNumber).caf"
+                let rawMicURL = directory.appendingPathComponent(rawMicFilename)
+                try? FileManager.default.removeItem(at: rawMicURL)
+                let rawMicWr = try AVAssetWriter(outputURL: rawMicURL, fileType: .caf)
+                
+                let rawMicSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVSampleRateKey: 48000.0,
+                    AVNumberOfChannelsKey: 1,
+                    AVLinearPCMBitDepthKey: 32,
+                    AVLinearPCMIsFloatKey: true,
+                    AVLinearPCMIsBigEndianKey: false,
+                    AVLinearPCMIsNonInterleaved: false
+                ]
+                let rawMicIn = AVAssetWriterInput(mediaType: .audio, outputSettings: rawMicSettings)
+                rawMicIn.expectsMediaDataInRealTime = true
+                rawMicWr.add(rawMicIn)
+                rawMicWr.startWriting()
+                
+                // Check raw mic writer started successfully
+                guard rawMicWr.status == .writing else {
+                    throw OutputError.assetWriterNotReady
+                }
+                
+                self.rawMicWriter = rawMicWr
+                self.rawMicrophoneInput = rawMicIn
+                self.rawMicSessionStarted = false
+                self.rawMicBufferQueue = []
+            } else {
+                self.rawMicWriter = nil
+                self.rawMicrophoneInput = nil
+                self.rawMicSessionStarted = false
+                self.rawMicBufferQueue = []
+            }
             
             self._isWriting = true
             
@@ -243,6 +287,22 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             
             // Drain queue while writer is ready
             drainBufferQueue(&micBufferQueue, to: input)
+            
+        case .rawMicrophone:
+            guard saveRawMicrophoneAudio else { return }
+            guard let writer = rawMicWriter, let input = rawMicrophoneInput else { return }
+            guard writer.status == .writing else { return }
+            
+            if !rawMicSessionStarted {
+                writer.startSession(atSourceTime: presentationTime)
+                rawMicSessionStarted = true
+            }
+            
+            // Add new buffer to queue
+            rawMicBufferQueue.append(buffer)
+            
+            // Drain queue while writer is ready
+            drainBufferQueue(&rawMicBufferQueue, to: input)
         }
     }
     
@@ -327,6 +387,19 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
                 onWarning?("Audio data lost on stop", details)
             }
         }
+        if let input = rawMicrophoneInput {
+            drainBufferQueue(&rawMicBufferQueue, to: input)
+            if !self.rawMicBufferQueue.isEmpty {
+                let count = self.rawMicBufferQueue.count
+                logger.warning("\(count) raw microphone audio buffers lost on stop")
+                
+                let details = """
+                    \(count) raw microphone audio buffers could not be written.
+                    Some audio data at the end of the recording may be lost.
+                    """
+                onWarning?("Audio data lost on stop", details)
+            }
+        }
         
         // Mark inputs as finished
         if systemSessionStarted {
@@ -335,10 +408,14 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         if micSessionStarted {
             microphoneInput?.markAsFinished()
         }
+        if rawMicSessionStarted {
+            rawMicrophoneInput?.markAsFinished()
+        }
         
         // Capture writers for finalization
         let sysWr = systemWriter
         let micWr = micWriter
+        let rawMicWr = rawMicWriter
         
         // Clear state before unlocking
         self.systemWriter = nil
@@ -349,6 +426,10 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         self.microphoneInput = nil
         self.micSessionStarted = false
         self.micBufferQueue = []
+        self.rawMicWriter = nil
+        self.rawMicrophoneInput = nil
+        self.rawMicSessionStarted = false
+        self.rawMicBufferQueue = []
         self._isWriting = false
         
         lock.unlock()
@@ -369,6 +450,14 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             group.enter()
             micWr.finishWriting {
                 if micWr.status != .completed { finalSuccess = false }
+                group.leave()
+            }
+        }
+        
+        if let rawMicWr = rawMicWr {
+            group.enter()
+            rawMicWr.finishWriting {
+                if rawMicWr.status != .completed { finalSuccess = false }
                 group.leave()
             }
         }
@@ -395,8 +484,9 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     /// - Parameters:
     ///   - directory: The existing output directory
     ///   - segmentNumber: The segment number (2, 3, 4, etc.)
+    ///   - saveRawMicrophone: Whether to save raw microphone capture in `raw_microphone_\(segmentNumber).caf`.
     /// - Returns: The URL of the output directory
-    func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL {
+    func resumeWriting(to directory: URL, segmentNumber: Int, saveRawMicrophone: Bool = false) throws -> URL {
         guard segmentNumber > 1 else {
             throw OutputError.notWriting
         }
@@ -414,11 +504,13 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         }
         
         self.outputDirectory = directory
+        self.saveRawMicrophoneAudio = saveRawMicrophone
         
         do {
             // Determine filenames based on segment number
             let systemFilename = "audio_\(segmentNumber).caf"
             let micFilename = "microphone_\(segmentNumber).caf"
+            let rawMicFilename = "raw_microphone_\(segmentNumber).caf"
             
             // Writer 1: System audio (48kHz, stereo, Float32)
             let systemURL = directory.appendingPathComponent(systemFilename)
@@ -445,7 +537,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
                 throw OutputError.assetWriterNotReady
             }
             
-            // Writer 2: Microphone audio (48kHz, stereo, Float32 - high fidelity)
+            // Writer 2: Microphone audio (48kHz, mono, Float32 - AEC-processed)
             let micURL = directory.appendingPathComponent(micFilename)
             // Delete existing file if present
             try? FileManager.default.removeItem(at: micURL)
@@ -454,7 +546,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             let micSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: 48000.0,
-                AVNumberOfChannelsKey: 2,
+                AVNumberOfChannelsKey: 1,
                 AVLinearPCMBitDepthKey: 32,
                 AVLinearPCMIsFloatKey: true,
                 AVLinearPCMIsBigEndianKey: false,
@@ -479,6 +571,42 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             self.microphoneInput = micIn
             self.micSessionStarted = false
             self.micBufferQueue = []  // Clear any stale buffers
+
+            if saveRawMicrophone {
+                let rawMicURL = directory.appendingPathComponent(rawMicFilename)
+                // Delete existing file if present
+                try? FileManager.default.removeItem(at: rawMicURL)
+                let rawMicWr = try AVAssetWriter(outputURL: rawMicURL, fileType: .caf)
+                
+                let rawMicSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVSampleRateKey: 48000.0,
+                    AVNumberOfChannelsKey: 1,
+                    AVLinearPCMBitDepthKey: 32,
+                    AVLinearPCMIsFloatKey: true,
+                    AVLinearPCMIsBigEndianKey: false,
+                    AVLinearPCMIsNonInterleaved: false
+                ]
+                let rawMicIn = AVAssetWriterInput(mediaType: .audio, outputSettings: rawMicSettings)
+                rawMicIn.expectsMediaDataInRealTime = true
+                rawMicWr.add(rawMicIn)
+                rawMicWr.startWriting()
+                
+                // Check raw mic writer started successfully
+                guard rawMicWr.status == .writing else {
+                    throw OutputError.assetWriterNotReady
+                }
+                
+                self.rawMicWriter = rawMicWr
+                self.rawMicrophoneInput = rawMicIn
+                self.rawMicSessionStarted = false
+                self.rawMicBufferQueue = []  // Clear any stale buffers
+            } else {
+                self.rawMicWriter = nil
+                self.rawMicrophoneInput = nil
+                self.rawMicSessionStarted = false
+                self.rawMicBufferQueue = []
+            }
             
             self._isWriting = true
             

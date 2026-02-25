@@ -29,8 +29,10 @@
 # Usage:
 #   ./scripts/build-and-launch.sh                  # Fast rebuild (default)
 #   ./scripts/build-and-launch.sh --deep-clean     # Full cache clear if needed
-#   ./scripts/build-and-launch.sh --build-only     # Build without launching
 #   ./scripts/build-and-launch.sh --dry-run        # Show what would happen
+#
+# NOTE: --build-only exists but should NOT be used by agents. Always build AND
+# launch so the user can immediately test and debug changes.
 
 set -e
 
@@ -125,7 +127,6 @@ for arg in "$@"; do
             echo "Usage: $0 [options]"
             echo ""
             echo "Options:"
-            echo "  --build-only       Build without launching the app"
             echo "  --deep-clean       Force full cache clear (use if builds behave unexpectedly)"
             echo "  --dry-run          Show what would happen without doing it"
             echo "  --no-log           Disable logging to file (terminal output only)"
@@ -146,7 +147,9 @@ for arg in "$@"; do
             echo "Examples:"
             echo "  $0                 # Fast rebuild (default)"
             echo "  $0 --deep-clean    # Full cache clear (use if something seems wrong)"
-            echo "  $0 --build-only    # Build without launching"
+            echo ""
+            echo "Discouraged (avoid unless explicitly asked):"
+            echo "  --build-only       Build without launching (prevents testing/debugging)"
             exit 0
             ;;
         --clean)

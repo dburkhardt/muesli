@@ -270,14 +270,17 @@ final class AudioSynchronizer {
             fallthrough
             
         case .priming:
+            // Trim capture to maintain render lead. Without this, the capture ring
+            // fills at the same rate as render during priming (getAlignedFrame returns
+            // nil, so nothing is consumed). The 250ms capture ring overflows before the
+            // render lead reaches the 100ms minimum, triggering discontinuities that
+            // create a livelock: overflow → discontinuity → cooldown → overflow → ...
+            trimCaptureForTargetLead()
             if canTransitionToStable() {
                 state = .stable
                 lastStableTime = Date()
                 delayController.unfreezeAdaptation()
                 let renderLeadSamples = renderRing.available - captureRing.available
-                // Seed the delay controller with the observed render lead so AEC3 receives
-                // the correct delay immediately. Without seeding, currentDelaySamples starts
-                // at 0 and slews at ~2ms/sec — taking ~90s to reach a typical 175ms lead.
                 delayController.seed(delaySamples: renderLeadSamples)
                 seededDelaySamples = renderLeadSamples
                 logger.info("Synchronizer transitioned to stable from priming, seeded delay=\(renderLeadSamples)samples")
@@ -286,20 +289,19 @@ final class AudioSynchronizer {
                         "SYNC_STATE: stable, renderLead=\(renderLeadSamples)samples, seededDelay=\(renderLeadSamples)samples")
                 }
             } else {
-                // Continue priming - wait for render lead
                 return nil
             }
             fallthrough
 
         case .unstable:
-            // During unstable state, still output frames but mark as unstable
-            // Re-check stability conditions
+            // Aggressively manage both rings to prevent overflow-triggered discontinuities
+            // that would reset the cooldown and permanently block stable transition.
+            trimBothRingsForRecovery()
             if canTransitionToStable() {
                 state = .stable
                 lastStableTime = Date()
                 delayController.unfreezeAdaptation()
                 let renderLeadSamples = renderRing.available - captureRing.available
-                // Re-seed on recovery from unstable — the lead may have changed
                 delayController.seed(delaySamples: renderLeadSamples)
                 seededDelaySamples = renderLeadSamples
                 logger.info("Synchronizer transitioned to stable from unstable, seeded delay=\(renderLeadSamples)samples")
@@ -561,6 +563,90 @@ final class AudioSynchronizer {
         delayController.freezeAdaptation()
     }
     
+    /// Discard excess capture samples to maintain target render lead.
+    ///
+    /// During priming, getAlignedFrame() returns nil (no consumption), so both rings
+    /// fill at the same rate. The capture ring (250ms) overflows before the render lead
+    /// ever reaches the 100ms minimum, triggering a MicCaptureRing discontinuity.
+    /// That discontinuity transitions to unstable with a 5-second cooldown, but the
+    /// capture ring overflows again within that window — creating a livelock where
+    /// stable is never reached and AEC stays frozen for the entire session.
+    ///
+    /// This method discards capture samples while lead is below the minimum valid
+    /// 100ms window so priming can progress toward a valid transition.
+    private func trimCaptureForTargetLead() {
+        let renderAvail = renderRing.available
+        let captureAvail = captureRing.available
+        let minLeadSamples = Self.minRenderLeadMs * Self.sampleRate / 1000
+
+        // Preserve at least one frame for alignment, and only trim while
+        // capture is too high relative to render so that render lead can
+        // reach the minimum valid window.
+        let renderLeadSamples = renderAvail - captureAvail
+        if renderLeadSamples >= minLeadSamples {
+            return
+        }
+
+        let desiredCapture = max(0, renderAvail - minLeadSamples)
+        let excessCapture = captureAvail - desiredCapture
+
+        guard excessCapture > 0 else { return }
+
+        let minCaptureToKeep = Self.frameSizeSamples
+        let maxDiscard = max(0, captureAvail - minCaptureToKeep)
+        guard maxDiscard > 0 else { return }
+
+        captureRing.discard(min(excessCapture, maxDiscard))
+        stats.overruns += 1
+    }
+
+    /// Discard excess render samples to prevent lead from exceeding maxRenderLeadMs.
+    ///
+    /// In recovery states (unstable), getAlignedFrame() returns nil, so no frames
+    /// are consumed. Both rings accumulate data, and the render ring (600ms capacity)
+    /// grows faster than the capture ring (250ms capacity) can hold after trimming.
+    /// Once renderLead exceeds maxRenderLeadMs (300ms), canTransitionToStable()
+    /// permanently fails the leadInBand check — freezing AEC for the entire session.
+    ///
+    /// This method caps the render lead at maxRenderLeadMs so that the leadInBand
+    /// condition remains satisfiable once the cooldown timer expires.
+    private func trimRenderForMaxLead() {
+        let maxLeadSamples = Self.maxRenderLeadMs * Self.sampleRate / 1000
+        let currentLead = renderRing.available - captureRing.available
+        if currentLead > maxLeadSamples {
+            renderRing.discard(currentLead - maxLeadSamples)
+        }
+    }
+
+    /// Aggressively manage both rings during recovery (unstable state).
+    ///
+    /// When getAlignedFrame() returns nil, neither ring is consumed by frame extraction.
+    /// Both accumulate data. trimCaptureForTargetLead() alone fails when the render ring
+    /// grows much larger than capture ring capacity: it computes desiredCapture =
+    /// renderAvail - targetLead, which can exceed the capture ring's 250ms capacity,
+    /// resulting in NO trim. The capture ring then overflows on the next push, triggering
+    /// a discontinuity that refreshes the cooldown — permanently blocking stable transition.
+    ///
+    /// This method keeps capture at 50% capacity (safe from overflow) and render at
+    /// capture + targetLead (ensuring leadInBand is satisfied for canTransitionToStable).
+    private func trimBothRingsForRecovery() {
+        let captureCapSamples = Self.maxCaptureBufferMs * Self.sampleRate / 1000
+        let halfCap = captureCapSamples / 2
+
+        let captureExcess = captureRing.available - halfCap
+        if captureExcess > 0 {
+            captureRing.discard(captureExcess)
+            stats.overruns += 1
+        }
+
+        let targetLeadSamples = Self.targetRenderLeadMs * Self.sampleRate / 1000
+        let desiredRender = captureRing.available + targetLeadSamples
+        let renderExcess = renderRing.available - desiredRender
+        if renderExcess > 0 {
+            renderRing.discard(renderExcess)
+        }
+    }
+
     /// Update delay controller with current buffer state
     private func updateDelayController() {
         // Only update during stable, far-end dominant periods

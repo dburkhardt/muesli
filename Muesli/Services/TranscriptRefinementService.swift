@@ -128,6 +128,65 @@ final class TranscriptRefinementService {
         return refinedText
     }
     
+    // MARK: - Guardrails
+    
+    /// Validates that LLM output preserves required structure (speaker labels, timestamps)
+    /// and doesn't excessively rewrite the original text.
+    func passesGuardrails(original: String, candidate: String) -> Bool {
+        guard !original.isEmpty else { return true }
+        
+        let speakerPattern = #"\*\*(Me|Them)\*\*"#
+        let timestampPattern = #"_\[[\d:]+\]_"#
+        
+        let originalSpeakers = matches(for: speakerPattern, in: original)
+        let candidateSpeakers = matches(for: speakerPattern, in: candidate)
+        if !originalSpeakers.isEmpty && candidateSpeakers.count < originalSpeakers.count {
+            return false
+        }
+        
+        let originalTimestamps = matches(for: timestampPattern, in: original)
+        let candidateTimestamps = matches(for: timestampPattern, in: candidate)
+        if !originalTimestamps.isEmpty && candidateTimestamps.count < originalTimestamps.count {
+            return false
+        }
+        
+        let originalWords = original.split(separator: " ")
+        let candidateWords = candidate.split(separator: " ")
+        guard !originalWords.isEmpty else { return true }
+        
+        let commonCount = longestCommonSubsequenceCount(Array(originalWords), Array(candidateWords))
+        let editRatio = 1.0 - (Double(commonCount) / Double(originalWords.count))
+        let maxAllowedEditRatio = 0.5
+        return editRatio <= maxAllowedEditRatio
+    }
+    
+    private func matches(for pattern: String, in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            Range(match.range, in: text).map { String(text[$0]) }
+        }
+    }
+    
+    private func longestCommonSubsequenceCount<T: Equatable>(_ a: [T], _ b: [T]) -> Int {
+        let m = a.count, n = b.count
+        guard m > 0, n > 0 else { return 0 }
+        var prev = [Int](repeating: 0, count: n + 1)
+        var curr = [Int](repeating: 0, count: n + 1)
+        for i in 1...m {
+            for j in 1...n {
+                if a[i - 1] == b[j - 1] {
+                    curr[j] = prev[j - 1] + 1
+                } else {
+                    curr[j] = max(prev[j], curr[j - 1])
+                }
+            }
+            prev = curr
+            curr = [Int](repeating: 0, count: n + 1)
+        }
+        return prev[n]
+    }
+    
     // MARK: - Private Methods
     
     private func refineBlockText(

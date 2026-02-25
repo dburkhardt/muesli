@@ -288,12 +288,12 @@ final class RegressionTests: XCTestCase {
     
     /// Regression test: Transcription timing values are correct
     func testTranscriptionTimingValues() async {
-        XCTAssertEqual(AudioConfiguration.transcriptionChunkDuration, 5.0)
-        XCTAssertEqual(AudioConfiguration.transcriptionOverlapDuration, 1.5)
-        
+        XCTAssertEqual(AudioConfiguration.transcriptionChunkDuration, 15.0)
+        XCTAssertEqual(AudioConfiguration.transcriptionOverlapDuration, 3.0)
+
         // Derived values
-        XCTAssertEqual(AudioConfiguration.minSamplesForProcessing, 80_000)  // 16000 * 5
-        XCTAssertEqual(AudioConfiguration.overlapSamples, 24_000)  // 16000 * 1.5
+        XCTAssertEqual(AudioConfiguration.minSamplesForProcessing, 240_000)  // 16000 * 15
+        XCTAssertEqual(AudioConfiguration.overlapSamples, 48_000)  // 16000 * 3
     }
     
     // MARK: - Transcription Cancellation Regression Tests (Bug Fix: Jan 15, 2026)
@@ -406,6 +406,52 @@ final class RegressionTests: XCTestCase {
         
         XCTAssertTrue(true, "User's selected microphone device is respected")
     }
+
+    /// Regression test: startMicrophoneCapture attempts selected/fallback mic routing.
+    /// Bug: A previous refactor removed the call to setMicrophoneInputDevice(...),
+    /// causing capture to always use macOS default input and ignore user selection.
+    func testStartMicrophoneCaptureCallsSetMicrophoneInputDevice() throws {
+        let source = try tapAudioCaptureServiceSource()
+        let pattern = #"let deviceWasSet = setMicrophoneInputDevice\(\s*engine: engine,\s*deviceUID: selectedMicrophoneDeviceID,\s*fallbackDeviceID: preAggregateDefaultInputDeviceID\s*\)"#
+
+        XCTAssertNotNil(
+            source.range(of: pattern, options: .regularExpression),
+            "startMicrophoneCapture must call setMicrophoneInputDevice with selected and fallback IDs"
+        )
+        XCTAssertTrue(
+            source.contains("explicitlySet: \\(deviceWasSet)"),
+            "Diagnostic log should include explicitlySet status for device-routing troubleshooting"
+        )
+    }
+
+    /// Regression test: invalid format guard checks raw inputFormat before coercion.
+    /// Bug: Guarding on fallback-coerced values made the validation ineffective.
+    func testStartMicrophoneCaptureGuardsRawInputFormatBeforeDerivedValues() throws {
+        let source = try tapAudioCaptureServiceSource()
+        let guardSnippet = "guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else"
+
+        guard let guardRange = source.range(of: guardSnippet) else {
+            XCTFail("Missing raw input format guard in startMicrophoneCapture")
+            return
+        }
+
+        guard let sampleRateRange = source.range(of: "let hardwareSampleRate = inputFormat.sampleRate"),
+              let channelsRange = source.range(of: "let hardwareChannels = inputFormat.channelCount") else {
+            XCTFail("Expected derived sample-rate/channel assignments were not found")
+            return
+        }
+
+        XCTAssertLessThan(
+            source.distance(from: source.startIndex, to: guardRange.lowerBound),
+            source.distance(from: source.startIndex, to: sampleRateRange.lowerBound),
+            "Raw format guard must execute before deriving hardwareSampleRate"
+        )
+        XCTAssertLessThan(
+            source.distance(from: source.startIndex, to: guardRange.lowerBound),
+            source.distance(from: source.startIndex, to: channelsRange.lowerBound),
+            "Raw format guard must execute before deriving hardwareChannels"
+        )
+    }
     
     /// Regression test: Mic audio RMS should be measurable (not all zeros)
     /// Bug: Logs showed mic audio RMS was consistently 0.0 with all-zero samples.
@@ -420,6 +466,13 @@ final class RegressionTests: XCTestCase {
         // The AVAudioEngine fix ensures we get actual audio data.
         
         XCTAssertTrue(true, "Mic audio should have non-zero RMS when user speaks")
+    }
+
+    private func tapAudioCaptureServiceSource() throws -> String {
+        let testsFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
+        let serviceURL = repoRoot.appendingPathComponent("Muesli/Services/TapAudioCaptureService.swift")
+        return try String(contentsOf: serviceURL, encoding: .utf8)
     }
     
     // MARK: - Window Management Regression Tests (Bug Fix: Jan 15, 2026)
@@ -1171,6 +1224,93 @@ final class RegressionTests: XCTestCase {
         aec.configure(topology: .headset)
         XCTAssertEqual(aec.mode, .off,
             "Headset topology should disable AEC to avoid near-field artefacts")
+    }
+
+    /// Regression test: gating unfreeze preserves filter state.
+    /// Bug: The previous implementation called bridge.reset() whenever
+    ///      adaptation transitioned from frozen -> stable, wiping ERLE history.
+    /// Fix: Preserve the WebRTC AEC3 filter state during normal render-silence pauses.
+    ///
+    /// Expected behavior:
+    /// - Freeze adaptation when stream is unstable
+    /// - Unfreeze on stable transition
+    /// - Frames processed counter is preserved (does not reset to 0)
+    func testAECGatingUnfreezePreservesFilterState() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let silence = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+
+        // Seed a few frames so we can detect reset behavior.
+        _ = aec.processCaptureFrame(silence, isStable: true)
+        _ = aec.processCaptureFrame(silence, isStable: true)
+        let beforeUnfreeze = aec.getStats().framesProcessed
+        XCTAssertGreaterThan(beforeUnfreeze, 0, "Seed frames should be processed")
+
+        // Gate into frozen state then return to stable.
+        _ = aec.processCaptureFrame(silence, isStable: false)
+        XCTAssertTrue(aec.isAdaptationFrozen, "AEC should be frozen while unstable")
+
+        _ = aec.processCaptureFrame(silence, isStable: true)
+        XCTAssertFalse(aec.isAdaptationFrozen, "AEC should unfreeze when stable again")
+
+        let afterUnfreeze = aec.getStats().framesProcessed
+        XCTAssertGreaterThan(afterUnfreeze, beforeUnfreeze,
+                             "Frames processed should continue from previous count, not reset to zero")
+    }
+
+    /// Regression test: render-silence resume preserves filter state in API-level AEC control.
+    /// Bug: Manual reset during resume destroyed learned filter state.
+    /// Fix: Preserve state by calling only unfreezeAdaptation() when transitioning
+    ///      from freeze to active adaptation.
+    ///
+    /// Expected behavior:
+    /// - Filter stats are preserved across freeze + resume sequence.
+    func testAECRenderSilenceResumePreservesFilterState() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let tone = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+        _ = aec.processCaptureFrame(tone, isStable: true)
+        let beforeResume = aec.getStats().framesProcessed
+
+        aec.freezeAdaptation()
+        aec.unfreezeAdaptation()
+
+        let afterResume = aec.getStats().framesProcessed
+        XCTAssertEqual(beforeResume, afterResume,
+                       "Freeze/resume API path must not reset internal counters")
+    }
+
+    /// Regression test: render silence freeze threshold remains at 30 seconds.
+    /// Guardrail for accidental threshold regression when adjusting silence handling.
+    func testRenderSilenceFreezeThreshold30s() {
+        XCTAssertEqual(AudioWorker.testRenderSilenceFreezeFrames, 3_000,
+                       "AEC render silence freeze threshold should be 30s")
+        XCTAssertEqual(AudioWorker.testRenderSilenceExtendedFrames, 6_000,
+                       "AEC render silence extended milestone should be 60s")
+    }
+
+    /// Regression test: legitimate topology/route transitions still reset AEC state.
+    /// Route and topology changes should continue to call aecProcessor.reset().
+    /// Since routes/tops are tested via shared reset code paths, verifying reset clears state
+    /// prevents accidental removal of this recovery behavior.
+    func testTopologyChangeStillResetsAEC() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let tone = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+        for _ in 0..<5 {
+            _ = aec.processCaptureFrame(tone, isStable: true)
+        }
+
+        XCTAssertGreaterThan(aec.getStats().framesProcessed, 0,
+                             "Need processed frames before reset to validate clear behavior")
+
+        aec.reset()
+        let postResetStats = aec.getStats()
+        XCTAssertEqual(postResetStats.framesProcessed, 0, "Reset should clear processed frame count")
+        XCTAssertFalse(postResetStats.adaptationFrozen, "Reset should clear adaptation-freeze state")
     }
 
     /// Regression test: AEC init sequence — reset BEFORE configure, not after.

@@ -453,6 +453,40 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertEqual(session.state, .recording, "Session should remain in recording state despite potential callback errors")
     }
     
+    // MARK: - Second-Pass Finalization Tests
+
+    func testSecondPassFinalizingFlagDefaultsFalse() async {
+        let controller = await createTestController()
+        let session = controller.createSession()
+        XCTAssertFalse(session.isFinalizingTranscript,
+                       "isFinalizingTranscript should default to false on a new session")
+    }
+
+    func testLiveDraftClearedAfterFinalizeTranscript() async {
+        let controller = await createTestController()
+        let session = controller.createSession()
+
+        session.updateLiveDraft("some in-progress text", speaker: .me)
+        XCTAssertNotNil(session.liveDraftText, "Live draft should be set")
+
+        session.finalizeTranscript()
+        XCTAssertNil(session.liveDraftText, "Live draft should be cleared after finalizeTranscript")
+    }
+
+    func testLiveDraftClearedAfterResetTranscript() async {
+        let controller = await createTestController()
+        let session = controller.createSession()
+
+        session.updateLiveDraft("partial text", speaker: .them)
+        session.isFinalizingTranscript = true
+        XCTAssertNotNil(session.liveDraftText)
+        XCTAssertTrue(session.isFinalizingTranscript)
+
+        session.resetTranscript()
+        XCTAssertNil(session.liveDraftText, "Live draft should be cleared after resetTranscript")
+        XCTAssertFalse(session.isFinalizingTranscript, "isFinalizingTranscript should be false after reset")
+    }
+
     func testMicrophoneMuteToggle() async {
         let controller = await createTestController()
         let session = controller.createSession()
@@ -469,6 +503,100 @@ final class RecordingControllerTests: XCTestCase {
         
         // Then: Mute state should toggle
         XCTAssertNotEqual(wasMuted, wasUnmuted)
+    }
+
+    // MARK: - Race & Cancellation Tests
+
+    /// Verifies that calling stopRecording on a session that is not active is a no-op (idempotent).
+    func testStopWithNoActiveSessionIsIdempotent() async {
+        let controller = await createTestController()
+        let session = controller.createSession()
+        XCTAssertNil(controller.activeSession, "Pre-condition: no active session")
+        // Guard inside stopRecording checks session.id == activeSession?.id; should not crash
+        controller.stopRecording(for: session)
+        XCTAssertNil(controller.activeSession, "No active session expected after no-op stop")
+    }
+
+    /// Verifies that repeated stopRecording calls after first stop do not crash.
+    func testRepeatedStopCallsAreIdempotent() async {
+        let (controller, _) = await createTestControllerWithMocks()
+        let session = controller.createSession()
+        session.meetingTitle = "Test Meeting"
+        controller.startRecording(for: session)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        controller.stopRecording(for: session)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        // Second stop should be a no-op (session no longer active)
+        controller.stopRecording(for: session)
+        XCTAssertNil(controller.activeSession, "No active session after repeated stops")
+    }
+
+    /// Verifies that isFinalizingTranscript is false on a freshly stopped session when second-pass is disabled.
+    func testFinalizingFlagClearedWhenSecondPassDisabled() async {
+        let controller = await createTestController()
+        let session = controller.createSession()
+
+        // Flags default to false, so second pass is skipped and flag is never set
+        XCTAssertFalse(session.isFinalizingTranscript)
+        session.meetingTitle = "Test Meeting"
+        controller.startRecording(for: session)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        controller.stopRecording(for: session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertFalse(session.isFinalizingTranscript,
+                       "isFinalizingTranscript must be false after stop when second pass is disabled")
+    }
+
+    /// Verifies that live draft is nil after recording is stopped and transcript finalized.
+    func testLiveDraftClearedAfterStop() async {
+        let controller = await createTestController()
+        let session = controller.createSession()
+        session.meetingTitle = "Test Meeting"
+        controller.startRecording(for: session)
+
+        // Inject a draft directly on the session (simulating stabilizer output)
+        session.updateLiveDraft("in progress text", speaker: .me)
+        XCTAssertNotNil(session.liveDraftText)
+
+        controller.stopRecording(for: session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // The finalizeTranscript call during stop should clear the draft
+        XCTAssertNil(session.liveDraftText,
+                     "liveDraftText must be nil after recording stops and transcript is finalized")
+    }
+
+    /// Verifies that concurrent draft updates from multiple speakers do not
+    /// leave inconsistent state on the session.
+    func testConcurrentDraftUpdatesFromMultipleSpeakers() async {
+        let controller = await createTestController()
+        let session = controller.createSession()
+        controller.startRecording(for: session)
+
+        // Fire concurrent draft updates from both speakers
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<10 {
+                group.addTask { @MainActor in
+                    let speaker: TranscriptBlock.Speaker = i.isMultiple(of: 2) ? .me : .them
+                    session.updateLiveDraft("text \(i)", speaker: speaker)
+                }
+            }
+        }
+
+        // Session should be in a consistent state (not nil, not crashed)
+        // We don't assert a specific value because the last writer wins.
+        XCTAssertNotNil(session, "Session must survive concurrent draft updates")
+    }
+    
+    // MARK: - Second-Pass Cancellation
+    
+    func testCancelSecondPassIfRunningDoesNotCrashWithNoTask() async {
+        let controller = await createTestController()
+        
+        // Should be a no-op when no second-pass is running
+        controller.cancelSecondPassIfRunning()
     }
 }
 

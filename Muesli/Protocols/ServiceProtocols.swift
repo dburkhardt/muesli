@@ -13,6 +13,7 @@ protocol TranscriptionServiceProtocol: Sendable {
     func initialize(modelPath: URL) async throws
     func setTranscriptionMode(_ mode: TranscriptionService.TranscriptionMode)
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler)
+    func setDraftHandler(_ handler: @escaping TranscriptionDraftHandler)
     func startTranscription(recordingStartTime: Date)
     func stopTranscription() async
     func appendSystemAudio(_ samples: [Float])
@@ -28,10 +29,10 @@ protocol FileOutputServiceProtocol: Sendable {
     
     func setOutputDirectory(_ url: URL)
     func getOutputDirectory() -> URL
-    func startWriting(segmentNumber: Int) throws -> URL
+    func startWriting(segmentNumber: Int, saveRawMicrophone: Bool) throws -> URL
     func appendAudioBuffer(_ buffer: CMSampleBuffer, type: AudioStreamType)
     func stopWriting() async throws -> URL
-    func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL
+    func resumeWriting(to directory: URL, segmentNumber: Int, saveRawMicrophone: Bool) throws -> URL
     func saveTranscript(_ transcript: String, title: String, date: Date, to directory: URL) throws
     func saveTranscriptBlocks(
         _ blocks: [TranscriptBlock],
@@ -40,6 +41,23 @@ protocol FileOutputServiceProtocol: Sendable {
         to directory: URL,
         filename: String?
     ) throws
+}
+
+extension FileOutputServiceProtocol {
+    /// Convenience overload — `segmentNumber` defaults to 1.
+    func startWriting(saveRawMicrophone: Bool = false) throws -> URL {
+        try startWriting(segmentNumber: 1, saveRawMicrophone: saveRawMicrophone)
+    }
+
+    /// Convenience overload — `saveRawMicrophone` defaults to false.
+    func startWriting(segmentNumber: Int) throws -> URL {
+        try startWriting(segmentNumber: segmentNumber, saveRawMicrophone: false)
+    }
+
+    /// Convenience overload — `saveRawMicrophone` defaults to false.
+    func resumeWriting(to directory: URL, segmentNumber: Int) throws -> URL {
+        try resumeWriting(to: directory, segmentNumber: segmentNumber, saveRawMicrophone: false)
+    }
 }
 
 // MARK: - MeetingHistoryServiceProtocol

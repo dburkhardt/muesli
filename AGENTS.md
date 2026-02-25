@@ -59,9 +59,16 @@ Detailed description of the feature or improvement.
 
 **Build & Launch** (recommended):
 
+**IMPORTANT — Commit before building**: Always commit your changes before starting a build. The build script bakes the current git SHA into the binary (visible in Help → About). If you build with uncommitted changes, the About page will show `(dirty)` and the user cannot verify which code is running. After committing, capture the short SHA with `git rev-parse --short HEAD` — you will report this alongside the build timestamp.
+
 The build takes 1-8 minutes depending on cache state. Run the build in the background and poll until it finishes:
 
 ```bash
+# 0. Commit changes first (REQUIRED) and note the SHA
+git add -A && git commit -m "description of changes"
+COMMIT_SHA=$(git rev-parse --short HEAD)
+echo "Building commit: $COMMIT_SHA"
+
 # 1. Start the build in background
 ./scripts/build-and-launch.sh
 ```
@@ -72,22 +79,25 @@ Run the build script in the background (using the Bash tool's `run_in_background
 # 2. Poll until build completes (check every 15 seconds)
 while [ -f /tmp/muesli-build.lock ]; do sleep 15; done
 
-# 3. Check result
+# 3. Check result and report commit + timestamp
 LOG=$(ls -t /tmp/muesli-build-*.log | head -1)
 if grep -q "BUILD SUCCEEDED" "$LOG"; then
-  echo "SUCCESS"; grep "BUILD TIMESTAMP:" "$LOG"; cat /tmp/muesli-build-timestamp.txt
+  echo "SUCCESS"
+  echo "Commit: $(git rev-parse --short HEAD)"
+  grep "BUILD TIMESTAMP:" "$LOG"
+  cat /tmp/muesli-build-timestamp.txt
 else
   echo "FAILED"; grep "error:" "$LOG" | head -20
 fi
 ```
 
-**Build timestamp verification** (REQUIRED after build success):
-- After successful build, the log includes a prominent `BUILD TIMESTAMP` box
-- The timestamp is also written to `/tmp/muesli-build-timestamp.txt`
-- **Agents MUST provide this timestamp to the user** when reporting build completion
-- Format: UTC ISO 8601 (e.g., `2026-01-24T15:49:31Z`)
-- User can verify in app: Help → About → Build Details → Built
-- This ensures the user knows they're running the exact build that was just compiled
+**Build verification** (REQUIRED after build success):
+- **Agents MUST report both the git commit SHA and build timestamp** when reporting build completion
+- Git commit: short SHA from `git rev-parse --short HEAD` (e.g., `abc1234`)
+- Build timestamp: from the log's `BUILD TIMESTAMP` box or `/tmp/muesli-build-timestamp.txt` (UTC ISO 8601, e.g., `2026-01-24T15:49:31Z`)
+- User verifies in app: Help → About → Build Details shows Commit and Built timestamp
+- Example agent output: "Build succeeded. Commit: `abc1234`, timestamp: `2026-01-24T15:49:31Z`"
+- This ensures the user knows they're running the exact code that was just compiled
 
 **If the build fails**, check the log for errors:
 
@@ -99,7 +109,6 @@ grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)" | head -20
 ```bash
 ./scripts/build-and-launch.sh              # Fast rebuild with cached intermediates (DEFAULT)
 ./scripts/build-and-launch.sh --deep-clean # Full cache clear (use if builds behave unexpectedly)
-./scripts/build-and-launch.sh --build-only # Build without launching
 ./scripts/build-and-launch.sh --no-log     # Disable logging to file
 ./scripts/build-and-launch.sh --dry-run    # Show what would happen
 ```
@@ -111,6 +120,8 @@ grep "error:" "$(ls -t /tmp/muesli-build-*.log | head -1)" | head -20
 - Removes only app bundles to ensure fresh binary
 - Runs `xcodebuild clean build` to recompile changed sources
 - Build time: ~1-2 minutes (vs 5-8 min with `--deep-clean`)
+
+**DO NOT use `--build-only`**: Always build AND launch. The `--build-only` flag skips launching the app, which makes it impossible for the user to test and debug changes. Never use it unless explicitly asked.
 
 **Advanced options** (rarely needed):
 - `--deep-clean` — Full cache clear (DerivedData, Launch Services, module caches); use if builds behave unexpectedly
@@ -247,23 +258,29 @@ git push origin <branch>
 git push origin vX.Y.Z
 ```
 
-### RC Workflow (from feature branches)
+### RC Workflow (from develop)
 
-Use release candidates to test builds before merging to main:
+Release candidates are cut from `develop`. Use RCs to test builds before promoting to stable:
 
 ```bash
-# 1. Ensure Version.xcconfig is already set to the target version (e.g., 0.6.0)
-grep MARKETING_VERSION Version.xcconfig  # Should show 0.6.0
+# 1. On develop, update Version.xcconfig to X.Y.Z-rc.N (e.g., 0.6.2-rc.1)
+git checkout develop && git pull
+# Edit Version.xcconfig: MARKETING_VERSION = 0.6.2-rc.1
+git add Version.xcconfig && git commit -m "chore: Bump version to 0.6.2-rc.1"
+git push origin develop
 
-# 2. Tag the RC
-git tag v0.6.0-rc.1
+# 2. Tag the RC from develop (MUST match Version.xcconfig)
+git tag v0.6.2-rc.1
 
 # 3. Push the tag (triggers release workflow, creates pre-release)
-git push origin v0.6.0-rc.1
+git push origin v0.6.2-rc.1
 
-# 4. If issues found, fix on branch, then:
-git tag v0.6.0-rc.2
-git push origin v0.6.0-rc.2
+# 4. If issues found, fix on develop, bump to -rc.2, then:
+# Edit Version.xcconfig: 0.6.2-rc.2, commit, push
+git add Version.xcconfig && git commit -m "chore: Bump version to 0.6.2-rc.2"
+git push origin develop
+git tag v0.6.2-rc.2
+git push origin v0.6.2-rc.2
 ```
 
 ### Stable Release Workflow (from main)
@@ -271,13 +288,15 @@ git push origin v0.6.0-rc.2
 After the PR is merged to main:
 
 ```bash
-# 1. Verify Version.xcconfig on main has the correct version
+# 1. On main, update Version.xcconfig to X.Y.Z (remove -rc.N suffix)
 git checkout main && git pull
-grep MARKETING_VERSION Version.xcconfig
+# Edit Version.xcconfig: MARKETING_VERSION = X.Y.Z
+git add Version.xcconfig && git commit -m "chore: Bump version to X.Y.Z"
+git push origin main
 
-# 2. Tag the stable release
-git tag v0.6.0
-git push origin v0.6.0
+# 2. Tag the stable release (MUST match Version.xcconfig)
+git tag vX.Y.Z
+git push origin vX.Y.Z
 
 # 3. Watch the release build
 ./scripts/watch-release.sh
@@ -292,11 +311,13 @@ grep MARKETING_VERSION Version.xcconfig  # e.g., 0.5.2
 # Edit to 0.5.3, commit, tag, push (follow procedure above)
 ```
 
-**"Create an RC from this branch"**:
+**"Create an RC from develop"**:
 ```bash
-# Verify Version.xcconfig matches intended version
-grep MARKETING_VERSION Version.xcconfig
-# If not, bump it first (commit before tagging!)
+git checkout develop && git pull
+# Edit Version.xcconfig to X.Y.Z-rc.N, commit, push (MUST happen before tagging!)
+# e.g. MARKETING_VERSION = 0.6.2-rc.1
+git add Version.xcconfig && git commit -m "chore: Bump version to X.Y.Z-rc.N"
+git push origin develop
 git tag vX.Y.Z-rc.N
 git push origin vX.Y.Z-rc.N
 ```
@@ -453,7 +474,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history and release notes.
 
 ### App Structure
 - `MuesliApp` — MenuBarExtra + single main Window
-- **Single-window model**: Shows `UnifiedHistoryView` (idle) or split view (recording/viewing)
+- **Single-window model**: Always shows `NavigationSplitView` with sidebar + detail pane
 - **Contextual sizing**: compact for list, adjusts for split view
 
 ### State Management (Delegation Pattern)
@@ -492,7 +513,8 @@ Microphone:   AVAudioEngine → MicCaptureRing → AudioSynchronizer → AECProc
 
 Recordings saved to: `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD_HH-MM_[UUID]/`
 - `audio.caf` — system audio (48kHz stereo Float32 LPCM)
-- `microphone.caf` — mic audio (48kHz stereo Float32 LPCM)
+- `microphone.caf` — mic audio (48kHz mono Float32 PCM, AEC-processed)
+- `raw_microphone.caf` — optional raw mic audio (48kHz mono Float32 PCM) when explicitly enabled in Preferences
 - `transcript.md` — Markdown with timestamps and speaker labels
 
 ## Known Pitfalls
@@ -621,9 +643,10 @@ The debug logs capture:
 
 This builds a searchable knowledge base that helps future debugging sessions.
 
-## Git Workflow (GitHub Flow)
+## Git Workflow (Modified Git Flow)
 
-Simple, agent-friendly branching. All work happens in feature branches merged to `main` via PRs.
+- **main**: Production. Stable releases only. Tag `vX.Y.Z` from `main` after RC validation.
+- **develop**: Integration. Feature branches merge here. Cut `vX.Y.Z-rc.N` from `develop` for testing.
 
 **For comprehensive workflow documentation**: See [`spec/git_workflow.md`](spec/git_workflow.md)
 

@@ -11,6 +11,7 @@ struct CopyTranscriptButton: View {
     
     /// Show temporary confirmation feedback
     @State private var showConfirmation = false
+    @State private var isHovered = false
     
     init(getBlocks: @escaping () -> [TranscriptBlock]?, helpText: String = "Copy transcript to clipboard") {
         self.getBlocks = getBlocks
@@ -33,20 +34,20 @@ struct CopyTranscriptButton: View {
                 }
             }
         } label: {
-            Group {
-                if showConfirmation {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12))
-                } else {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 12))
-                }
-            }
-            .foregroundStyle(.blue)
-            .padding(8)
-            .background(Color.blue.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            Image(systemName: showConfirmation ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 12))
+                .foregroundStyle(showConfirmation ? .green : .secondary)
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 28, height: 28)
+        .background(
+            Circle()
+                .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
+        )
+        .contentShape(Circle())
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
         .disabled(getBlocks() == nil)
         .help(helpText)
     }

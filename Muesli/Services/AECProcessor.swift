@@ -173,17 +173,17 @@ final class AECProcessor {
             return false
         }
 
-        let result = stateLock.withLock { state -> (feedSucceeded: Bool, shouldLogGatingChange: Bool, logFrozen: Bool, shouldWarn: Bool) in
+        let result = stateLock.withLock { state -> (feedSucceeded: Bool, shouldLogGatingChange: Bool, logFrozen: Bool, preservedFilterState: Bool, shouldWarn: Bool) in
             guard state.mode != .off else {
                 state.stats.framesSkipped += 1
-                return (false, false, false, false)
+                return (false, false, false, false, false)
             }
 
-            let (changed, frozen) = Self.updateGatingLocked(state: &state, isStable: isStable)
+            let (changed, frozen, preservedFilterState) = Self.updateGatingLocked(state: &state, isStable: isStable)
 
             guard let bridge = state.bridge, bridge.isReady else {
                 state.stats.framesSkipped += 1
-                return (false, changed, frozen, false)
+                return (false, changed, frozen, preservedFilterState, false)
             }
 
             // When adaptation is frozen, feed silence to AEC3's render path.
@@ -202,12 +202,12 @@ final class AECProcessor {
 
             if !feedSucceeded {
                 state.stats.framesSkipped += 1
-                return (false, changed, frozen, true)
+                return (false, changed, frozen, preservedFilterState, true)
             }
 
             state.stats.erleDb = bridge.getERLE()
             state.stats.delayMs = Int(bridge.getDelayMs())
-            return (true, changed, frozen, false)
+            return (true, changed, frozen, preservedFilterState, false)
         }
 
         if result.shouldLogGatingChange {
@@ -215,6 +215,12 @@ final class AECProcessor {
             Task {
                 await DiagnosticLogger.shared.log(.aec,
                     "session=\(logSessionID) AEC_GATING: frozen=\(result.logFrozen), stable=\(isStable)")
+            }
+            if result.preservedFilterState {
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "session=\(logSessionID) AEC_GATING_PRESERVED: stable=\(isStable)")
+                }
             }
         }
 
@@ -243,17 +249,17 @@ final class AECProcessor {
             return captureSamples
         }
 
-        let result = stateLock.withLock { state -> (output: [Float], captureSucceeded: Bool, shouldLogGatingChange: Bool, logFrozen: Bool, shouldWarn: Bool) in
+        let result = stateLock.withLock { state -> (output: [Float], captureSucceeded: Bool, shouldLogGatingChange: Bool, logFrozen: Bool, preservedFilterState: Bool, shouldWarn: Bool) in
             guard state.mode != .off else {
                 state.stats.framesSkipped += 1
-                return (captureSamples, false, false, false, false)
+                return (captureSamples, false, false, false, false, false)
             }
 
-            let (changed, frozen) = Self.updateGatingLocked(state: &state, isStable: isStable)
+            let (changed, frozen, preservedFilterState) = Self.updateGatingLocked(state: &state, isStable: isStable)
 
             guard let bridge = state.bridge, bridge.isReady else {
                 state.stats.framesSkipped += 1
-                return (captureSamples, false, changed, frozen, false)
+                return (captureSamples, false, changed, frozen, preservedFilterState, false)
             }
 
             let captureSucceeded = captureSamples.withUnsafeBufferPointer { inputPtr in
@@ -267,13 +273,13 @@ final class AECProcessor {
 
             if !captureSucceeded {
                 state.stats.framesSkipped += 1
-                return (captureSamples, false, changed, frozen, true)
+                return (captureSamples, false, changed, frozen, preservedFilterState, true)
             }
 
             state.stats.framesProcessed += 1
             state.stats.erleDb = bridge.getERLE()
             state.stats.delayMs = Int(bridge.getDelayMs())
-            return (state.outputBuffer, true, changed, frozen, false)
+            return (state.outputBuffer, true, changed, frozen, preservedFilterState, false)
         }
 
         if result.shouldLogGatingChange {
@@ -281,6 +287,12 @@ final class AECProcessor {
             Task {
                 await DiagnosticLogger.shared.log(.aec,
                     "session=\(logSessionID) AEC_GATING: frozen=\(result.logFrozen), stable=\(isStable)")
+            }
+            if result.preservedFilterState {
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "session=\(logSessionID) AEC_GATING_PRESERVED: stable=\(isStable)")
+                }
             }
         }
 
@@ -554,8 +566,9 @@ final class AECProcessor {
     }
     
     /// Update gating based on stability
-    private static func updateGatingLocked(state: inout State, isStable: Bool) -> (changed: Bool, frozen: Bool) {
+    private static func updateGatingLocked(state: inout State, isStable: Bool) -> (changed: Bool, frozen: Bool, preservedFilterState: Bool) {
         let wasAdaptationFrozen = state.isAdaptationFrozen
+        var preservedFilterState = false
 
         if !isStable {
             if !state.isAdaptationFrozen {
@@ -564,13 +577,15 @@ final class AECProcessor {
             }
         } else if state.isAdaptationFrozen {
             // Unfreeze when stable returns (any mode).
-            // Reset the bridge to clear stale internal delay estimates accumulated
-            // while the adaptive filter was starved with silence.
-            state.bridge?.reset()
+            // Preserve learned filter state through normal AEC pauses.
+            // WebRTC AEC3 adapts with leaked memory and internal re-seeding,
+            // so full bridge reset here slows convergence and can re-trigger
+            // non-convergence on normal conversation gaps.
+            preservedFilterState = true
             state.isAdaptationFrozen = false
             state.stats.adaptationFrozen = false
         }
 
-        return (wasAdaptationFrozen != state.isAdaptationFrozen, state.isAdaptationFrozen)
+        return (wasAdaptationFrozen != state.isAdaptationFrozen, state.isAdaptationFrozen, preservedFilterState)
     }
 }

@@ -39,8 +39,9 @@ final class MeetingHistoryItem: Identifiable, Hashable {
     var isLoadingTranscript: Bool = false  // Whether transcript is currently being loaded
     
     // Reprocessing state (for re-transcribing with different models)
-    var isReprocessing: Bool = false  // Whether this meeting is currently being reprocessed
-    var reprocessingProgress: Double = 0.0  // Progress of reprocessing (0.0 to 1.0)
+    var isReprocessing: Bool = false
+    var reprocessingProgress: Double = 0.0
+    var reprocessingStartTime: Date?
     
     // Original transcript before refinement (if refinement was applied)
     var originalTranscript: String?

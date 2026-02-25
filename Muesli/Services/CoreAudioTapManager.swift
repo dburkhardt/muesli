@@ -95,6 +95,13 @@ final class CoreAudioTapManager: @unchecked Sendable {
     /// Cached tap stream format (for decoding diagnostics)
     private var tapStreamFormat: AudioStreamBasicDescription?
     
+    /// The UID of the currently active Muesli aggregate device, or nil if none.
+    /// Safe to read between start() and stop() — both are called sequentially
+    /// on the TapAudioCaptureService actor.
+    var aggregateDeviceUID: String? {
+        aggregateDeviceManager?.currentAggregateUID
+    }
+
     /// Lock for thread-safe state access
     private let stateLock = NSLock()
     

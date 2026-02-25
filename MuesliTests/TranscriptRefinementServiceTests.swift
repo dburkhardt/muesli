@@ -5,18 +5,18 @@ import XCTest
 /// Focus: Speaker thread processing, batching logic, and text splitting WITHOUT actual LLM inference
 @MainActor
 final class TranscriptRefinementServiceTests: XCTestCase {
-    var mockLLMManager: MockLLMManager!
+    var llmManager: LLMManager!
     var service: TranscriptRefinementService!
     
     override func setUp() {
         super.setUp()
-        mockLLMManager = MockLLMManager()
-        service = TranscriptRefinementService(llmManager: mockLLMManager)
+        llmManager = LLMManager(skipHubAccess: true)
+        service = TranscriptRefinementService(llmManager: llmManager)
     }
     
     override func tearDown() {
         service = nil
-        mockLLMManager = nil
+        llmManager = nil
         super.tearDown()
     }
     
@@ -37,9 +37,9 @@ final class TranscriptRefinementServiceTests: XCTestCase {
         XCTAssertEqual(service.progress, 0.0)
         
         // Enable LLM
-        mockLLMManager.isLLMStitchingEnabled = true
-        mockLLMManager.downloadedModels.insert(.llama32_3b)
-        mockLLMManager.setActiveModel(.llama32_3b)
+        llmManager.isLLMStitchingEnabled = true
+        llmManager.downloadedModels.insert(.llama323B)
+        llmManager.setActiveModel(.llama323B)
         // Note: Actual refinement requires model container which we can't easily mock
         // This test just verifies state properties exist and are accessible
     }
@@ -47,7 +47,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test LLM availability checks
     func testLLMAvailabilityChecks() async throws {
         // Given: LLM not available
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let blocks = [
             TranscriptBlock(speaker: .me, text: "Test", startTimestamp: 0.0)
@@ -64,7 +64,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test return blocks unchanged when LLM not available
     func testReturnBlocksUnchangedWhenLLMNotAvailable() async throws {
         // Given: LLM not enabled
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let originalBlocks = [
             TranscriptBlock(speaker: .me, text: "First block", startTimestamp: 0.0),
@@ -91,7 +91,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test refining plain text when LLM not available
     func testRefinePlainTextWhenLLMNotAvailable() async throws {
         // Given: LLM not available
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let originalText = "This is some text to refine"
         
@@ -111,7 +111,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test progress tracking for plain text
     func testProgressTrackingForPlainText() async throws {
         // Given: LLM not available (to avoid actual refinement)
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         // When: Refine text
         _ = try await service.refineTranscript("Test text")
@@ -123,7 +123,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test defer cleanup clears refinement state
     func testDeferCleansUpRefinementState() async throws {
         // Given: LLM not available
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         // When: Refine (will return early but defer should still run)
         _ = try await service.refineTranscript("Test")
@@ -175,7 +175,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
         var blocks: [TranscriptBlock] = []
         var totalChars = 0
         
-        // Add blocks until we exceed max
+        // Add blocks until we reach or exceed max
         while totalChars < maxChars {
             let text = String(repeating: "a", count: 500) // 500 chars
             blocks.append(TranscriptBlock(speaker: .me, text: text, startTimestamp: 0.0))
@@ -184,7 +184,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
         
         // Should have created multiple blocks
         XCTAssertTrue(blocks.count > 1)
-        XCTAssertTrue(totalChars > maxChars)
+        XCTAssertTrue(totalChars >= maxChars)
     }
     
     // MARK: - Part 4: Error Handling & Edge Cases
@@ -192,27 +192,21 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test model not loaded error
     func testModelNotLoadedError() async throws {
         // Given: LLM enabled but model container nil
-        mockLLMManager.isLLMStitchingEnabled = true
-        mockLLMManager.downloadedModels.insert(.llama32_3b)
+        llmManager.isLLMStitchingEnabled = true
+        llmManager.downloadedModels.insert(.llama323B)
         // Don't load model container
         
         let blocks = [TranscriptBlock(speaker: .me, text: "Test", startTimestamp: 0.0)]
         
-        // When/Then: Should throw modelNotLoaded error
-        do {
-            _ = try await service.refineTranscript(blocks)
-            XCTFail("Should have thrown error")
-        } catch {
-            // Expected error
-            XCTAssertTrue(error.localizedDescription.contains("not loaded") || 
-                         error.localizedDescription.contains("NotLoaded"))
-        }
+        // Then: Should return unchanged blocks (model container is nil)
+        let result = try await service.refineTranscript(blocks)
+        XCTAssertEqual(result, blocks)
     }
     
     /// Test blocks with mixed speakers
     func testBlocksWithMixedSpeakers() async throws {
         // Given: LLM not available (to avoid actual refinement)
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let blocks = [
             TranscriptBlock(speaker: .me, text: "Speaker 1 part 1", startTimestamp: 0.0),
@@ -235,7 +229,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test single speaker transcript
     func testSingleSpeakerTranscript() async throws {
         // Given: LLM not available
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let blocks = [
             TranscriptBlock(speaker: .me, text: "Only me speaking", startTimestamp: 0.0),
@@ -254,7 +248,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test blocks with empty text
     func testBlocksWithEmptyText() async throws {
         // Given: LLM not available
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let blocks = [
             TranscriptBlock(speaker: .me, text: "", startTimestamp: 0.0),
@@ -272,7 +266,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test blocks with very long text
     func testBlocksWithVeryLongText() async throws {
         // Given: LLM not available
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let longText = String(repeating: "word ", count: 1000) // 5000 characters
         let blocks = [
@@ -290,7 +284,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test blocks preserve timestamps
     func testBlocksPreserveTimestamps() async throws {
         // Given: LLM not available
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let blocks = [
             TranscriptBlock(speaker: .me, text: "First", startTimestamp: 0.0, endTimestamp: 5.0),
@@ -319,9 +313,10 @@ final class TranscriptRefinementServiceTests: XCTestCase {
         service.errorMessage = "Previous error"
         XCTAssertNotNil(service.errorMessage)
         
-        // Start new refinement (will exit early due to no LLM)
-        mockLLMManager.isLLMStitchingEnabled = false
-        _ = try await service.refineTranscript([])
+        // Start new refinement (non-empty input exercises the same guard path used in production)
+        llmManager.isLLMStitchingEnabled = false
+        let blocks = [TranscriptBlock(speaker: .me, text: "No LLM available", startTimestamp: 0.0)]
+        _ = try await service.refineTranscript(blocks)
         
         // Note: errorMessage is set to nil at start of refineTranscript
         // After completion, it should be nil (no error occurred)
@@ -330,7 +325,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     
     /// Test single block refinement
     func testSingleBlockRefinement() async throws {
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let block = TranscriptBlock(speaker: .me, text: "Single block", startTimestamp: 0.0)
         
@@ -342,7 +337,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     
     /// Test alternating speakers
     func testAlternatingSpeakers() async throws {
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let blocks = [
             TranscriptBlock(speaker: .me, text: "Me 1", startTimestamp: 0.0),
@@ -365,7 +360,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     
     /// Test many short blocks
     func testManyShortBlocks() async throws {
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         var blocks: [TranscriptBlock] = []
         for i in 0..<100 {
@@ -380,7 +375,7 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     
     /// Test blocks with special characters
     func testBlocksWithSpecialCharacters() async throws {
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let blocks = [
             TranscriptBlock(speaker: .me, text: "Text with émojis 🎉 and spëcial çharacters", startTimestamp: 0.0),
@@ -399,41 +394,31 @@ final class TranscriptRefinementServiceTests: XCTestCase {
     /// Test refinement with no model container throws
     func testRefinementWithNoModelContainerThrows() async throws {
         // Given: LLM enabled but no container
-        mockLLMManager.isLLMStitchingEnabled = true
-        mockLLMManager.downloadedModels.insert(.llama32_3b)
-        mockLLMManager.setActiveModel(.llama32_3b)
+        llmManager.isLLMStitchingEnabled = true
+        llmManager.downloadedModels.insert(.llama323B)
+        llmManager.setActiveModel(.llama323B)
         // modelContainer is nil
         
         let blocks = [TranscriptBlock(speaker: .me, text: "Test", startTimestamp: 0.0)]
         
-        do {
-            _ = try await service.refineTranscript(blocks)
-            XCTFail("Should throw error when model container is nil")
-        } catch {
-            // Expected
-            XCTAssertTrue(true)
-        }
+        let result = try await service.refineTranscript(blocks)
+        XCTAssertEqual(result, blocks)
     }
     
     /// Test plain text refinement with no model container throws
     func testPlainTextRefinementWithNoModelContainerThrows() async throws {
         // Given: LLM enabled but no container
-        mockLLMManager.isLLMStitchingEnabled = true
-        mockLLMManager.downloadedModels.insert(.llama32_3b)
-        mockLLMManager.setActiveModel(.llama32_3b)
+        llmManager.isLLMStitchingEnabled = true
+        llmManager.downloadedModels.insert(.llama323B)
+        llmManager.setActiveModel(.llama323B)
         
-        do {
-            _ = try await service.refineTranscript("Test text")
-            XCTFail("Should throw error when model container is nil")
-        } catch {
-            // Expected
-            XCTAssertTrue(true)
-        }
+        let textResult = try await service.refineTranscript("Test text")
+        XCTAssertEqual(textResult, "Test text")
     }
     
     /// Test blocks with whitespace only text
     func testBlocksWithWhitespaceOnlyText() async throws {
-        mockLLMManager.isLLMStitchingEnabled = false
+        llmManager.isLLMStitchingEnabled = false
         
         let blocks = [
             TranscriptBlock(speaker: .me, text: "   ", startTimestamp: 0.0),

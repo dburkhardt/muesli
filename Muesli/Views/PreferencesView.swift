@@ -228,11 +228,65 @@ struct GeneralPreferencesTab: View {
                 }
                 
                 Text(
-                    "Live mode transcribes during recording. " +
-                    "Post-processing waits until the recording ends for potentially better accuracy."
+                    "Live mode transcribes during recording and uses compute while the meeting is active. " +
+                    "Post-processing defers transcription until after recording stops, which saves compute during the meeting."
                 )
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            
+            Section("Transcription Quality") {
+                Toggle(isOn: $prefs.isLiveStabilizerEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Live transcript stabilization")
+                        Text("Suppress duplicate overlap text and show a tentative draft tail during recording.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                Toggle(isOn: $prefs.isSecondPassASREnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Finalize transcript after recording")
+                        Text("Runs a second-pass ASR over saved audio for higher quality final transcript.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                Toggle(isOn: $prefs.isAutoReprocessAfterMeetingEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Reprocess after every meeting")
+                        Text("Automatically reprocesses completed meetings using your selected reprocess model.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                Toggle(isOn: $prefs.isAutoRefineEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Auto-refine with AI (experimental)")
+                        Text("Applies constrained LLM cleanup after second-pass ASR.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                LabeledContent("Second-pass model") {
+                    Picker(selection: $prefs.secondPassModelPreference) {
+                        Text("Best available").tag(PreferencesManager.SecondPassModelPreference.bestAvailable)
+                        Text("Same as live model").tag(PreferencesManager.SecondPassModelPreference.sameAsLive)
+                        Text("Best available (no downgrade)").tag(PreferencesManager.SecondPassModelPreference.bestAvailableNoDowngrade)
+                        Text("Specific model").tag(PreferencesManager.SecondPassModelPreference.specific)
+                    } label: {
+                        EmptyView()
+                    }
+                    .frame(maxWidth: 280)
+                }
             }
             
             Section("Audio") {
@@ -263,21 +317,44 @@ struct GeneralPreferencesTab: View {
                 }
                 #endif
                 
+                Toggle(isOn: $prefs.saveRawMicrophoneAudio) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Save raw microphone audio")
+                        Text("Also save the unprocessed microphone recording (raw_microphone.caf). The default microphone.caf uses echo-canceled audio for better transcription quality.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
                 LabeledContent("Audio Chunk Duration") {
                     Text(String(format: "%.1f seconds", prefs.audioChunkDuration))
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
                 
-                Slider(value: $prefs.audioChunkDuration, in: 2.0...10.0, step: 0.5)
+                Slider(value: $prefs.audioChunkDuration, in: 2.0...30.0, step: 0.5)
                 
                 Text(
                     "Shorter chunks provide faster transcription but may reduce accuracy. " +
-                    "Longer chunks improve accuracy but increase latency. " +
+                    "Longer chunks (15-30s) significantly improve accuracy by giving Whisper more context. " +
                     "Changes apply to new recordings only."
                 )
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                
+            }
+            
+            Section("Devices") {
+                Toggle(isOn: $prefs.showContinuityCameraDevices) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show Continuity Camera Devices")
+                        Text("Show iPhone and iPad microphones connected via Continuity Camera in the device list.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
             }
         }
         .formStyle(.grouped)
