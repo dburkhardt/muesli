@@ -156,6 +156,9 @@ final class MuesliViewModel {
     
     /// Recording controller - owns all recording lifecycle logic
     private let recordingController: RecordingController
+
+    /// Active manual reprocessing tasks keyed by meeting id.
+    private var reprocessingTasks: [UUID: Task<Void, Never>] = [:]
     
     /// Whether echo cancellation is enabled (delegates to PreferencesManager)
     var isEchoCancellationEnabled: Bool {
@@ -944,8 +947,16 @@ final class MuesliViewModel {
         // Cancel any running second-pass so user intent takes precedence
         // without ANE contention or transcript.md write races.
         recordingController.cancelSecondPassIfRunning()
-        
-        Task {
+
+        reprocessingTasks[meeting.id]?.cancel()
+        let task = Task { @MainActor in
+            defer {
+                self.reprocessingTasks[meeting.id] = nil
+                meeting.isReprocessing = false
+                meeting.reprocessingProgress = 0.0
+                meeting.reprocessingStartTime = nil
+            }
+
             meeting.isReprocessing = true
             meeting.reprocessingProgress = 0.0
             meeting.reprocessingStartTime = Date()
@@ -962,14 +973,22 @@ final class MuesliViewModel {
                 
                 // Reload transcript from disk to refresh the UI
                 await loadTranscript(for: meeting)
+            } catch is CancellationError {
+                logger.info("Reprocessing cancelled for '\(meeting.title)'")
             } catch {
                 logger.error("Reprocessing failed: \(error.localizedDescription)")
             }
-            
-            meeting.isReprocessing = false
-            meeting.reprocessingProgress = 0.0
-            meeting.reprocessingStartTime = nil
         }
+        reprocessingTasks[meeting.id] = task
+    }
+
+    /// Cancel active reprocessing for a meeting (manual + auto paths).
+    func cancelReprocessing(for meeting: MeetingHistoryItem) {
+        reprocessingTasks.removeValue(forKey: meeting.id)?.cancel()
+        transcriptionCoordinator.cancelAutoReprocess(for: meeting)
+        meeting.isReprocessing = false
+        meeting.reprocessingProgress = 0.0
+        meeting.reprocessingStartTime = nil
     }
     
     /// Bulk reprocess selected meetings with a specific model
@@ -991,7 +1010,12 @@ final class MuesliViewModel {
         meeting.isReprocessing = true
         meeting.reprocessingProgress = 0.0
         meeting.reprocessingStartTime = Date()
-        
+        defer {
+            meeting.isReprocessing = false
+            meeting.reprocessingProgress = 0.0
+            meeting.reprocessingStartTime = nil
+        }
+
         do {
             try await transcriptionCoordinator.reprocessTranscript(
                 for: meeting,
@@ -1001,16 +1025,12 @@ final class MuesliViewModel {
                     meeting.reprocessingProgress = progress
                 }
             }
-            
-            // Reload transcript from disk
             await loadTranscript(for: meeting)
+        } catch is CancellationError {
+            logger.info("Bulk reprocessing cancelled for '\(meeting.title)'")
         } catch {
             logger.error("Reprocessing failed: \(error.localizedDescription)")
         }
-        
-        meeting.isReprocessing = false
-        meeting.reprocessingProgress = 0.0
-        meeting.reprocessingStartTime = nil
     }
     
     // MARK: - Model Switching (delegates to TranscriptionCoordinator)

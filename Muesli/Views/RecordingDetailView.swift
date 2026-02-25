@@ -565,7 +565,11 @@ struct RecordingDetailView: View {
     private func processingIndicators(for meeting: MeetingHistoryItem) -> some View {
         // 1. Current meeting reprocessing (second-pass ASR)
         if meeting.isReprocessing, let startTime = meeting.reprocessingStartTime {
-            FloatingProcessingIndicator(phase: .reprocessing, startTime: startTime)
+            FloatingProcessingIndicator(
+                phase: .reprocessing,
+                startTime: startTime,
+                onCancel: { viewModel.cancelReprocessing(for: meeting) }
+            )
         }
         
         // 2. Current meeting refinement (LLM polish)

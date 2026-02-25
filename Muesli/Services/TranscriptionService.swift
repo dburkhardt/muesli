@@ -1415,6 +1415,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         // Transcribe system audio if available (with chunking and deduplication)
         if let systemURL = systemAudioURL {
+            try Task.checkCancellation()
             if let samples = await loadAudioFile(url: systemURL) {
                 let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
                 logger.info("Post-processing system audio: \(samples.count) samples (\(duration)s)")
@@ -1438,26 +1439,28 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         }
         
         // Transcribe mic audio if available (with chunking and deduplication)
-        if let micURL = micAudioURL,
-           let samples = await loadAudioFile(url: micURL) {
-            let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
-            logger.info("Post-processing mic audio: \(samples.count) samples (\(duration)s)")
-            
-            let chunks = splitIntoChunks(
-                samples: samples,
-                chunkDuration: chunkDuration,
-                overlap: overlap
-            )
-            
-            logger.info("Split mic audio into \(chunks.count) chunks")
-            
-            try await processChunksWithDeduplication(
-                chunks: chunks,
-                speaker: .me,
-                chunkDuration: chunkDuration,
-                overlap: overlap,
-                whisperKit: whisperKit
-            )
+        if let micURL = micAudioURL {
+            try Task.checkCancellation()
+            if let samples = await loadAudioFile(url: micURL) {
+                let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
+                logger.info("Post-processing mic audio: \(samples.count) samples (\(duration)s)")
+                
+                let chunks = splitIntoChunks(
+                    samples: samples,
+                    chunkDuration: chunkDuration,
+                    overlap: overlap
+                )
+                
+                logger.info("Split mic audio into \(chunks.count) chunks")
+                
+                try await processChunksWithDeduplication(
+                    chunks: chunks,
+                    speaker: .me,
+                    chunkDuration: chunkDuration,
+                    overlap: overlap,
+                    whisperKit: whisperKit
+                )
+            }
         }
     }
     
@@ -1502,6 +1505,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             "effectiveDuration=\(effectiveChunkDuration)s") }
         
         for (index, chunk) in chunks.enumerated() {
+            try Task.checkCancellation()
             let options = buildDecodingOptions()
             let results = try await whisperKit.transcribe(audioArray: chunk.samples, decodeOptions: options)
             

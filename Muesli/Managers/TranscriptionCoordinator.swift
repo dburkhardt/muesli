@@ -83,6 +83,9 @@ final class TranscriptionCoordinator {
     
     /// Directories with an active second-pass ASR task (prevents concurrent auto-reprocess)
     private var activeSecondPassDirectories: Set<URL> = []
+
+    /// Active auto-reprocess tasks keyed by meeting id (supports user cancellation)
+    private var autoReprocessTasks: [UUID: Task<Void, Never>] = [:]
     
     /// Effective model used by live transcription in the current recording session.
     /// This may differ from modelManager.activeModel when fallback is used.
@@ -582,14 +585,19 @@ final class TranscriptionCoordinator {
         
         meeting.isReprocessing = true
         meeting.reprocessingStartTime = Date()
-        
-        Task { @MainActor in
+
+        autoReprocessTasks[meeting.id]?.cancel()
+        let task = Task { @MainActor in
+            defer { self.autoReprocessTasks[meeting.id] = nil }
             let modelStateResult = await prepareModel()
             
             if modelStateResult.isReady {
                 do {
+                    try Task.checkCancellation()
                     try await reprocessTranscript(for: meeting, using: activeModel)
                     logger.info("Auto-reprocess completed for '\(meeting.title)'")
+                } catch is CancellationError {
+                    logger.info("Auto-reprocess cancelled by user for '\(meeting.title)'")
                 } catch {
                     logger.error("Auto-reprocess failed: \(error.localizedDescription)")
                 }
@@ -600,6 +608,14 @@ final class TranscriptionCoordinator {
             meeting.isReprocessing = false
             meeting.reprocessingStartTime = nil
         }
+        autoReprocessTasks[meeting.id] = task
+    }
+
+    /// Cancel auto-reprocessing for a meeting, if a task is currently active.
+    func cancelAutoReprocess(for meeting: MeetingHistoryItem) {
+        guard let task = autoReprocessTasks.removeValue(forKey: meeting.id) else { return }
+        task.cancel()
+        logger.info("Cancelled auto-reprocess for '\(meeting.title)'")
     }
     
     // MARK: - Reprocessing (for completed meetings)
@@ -774,6 +790,8 @@ final class TranscriptionCoordinator {
         using modelSize: ModelManager.ModelSize,
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
+        try Task.checkCancellation()
+
         // Get model path
         guard let modelPath = modelManager.pathForModel(modelSize) else {
             throw NSError(domain: "TranscriptionCoordinator", code: 1,
@@ -794,6 +812,7 @@ final class TranscriptionCoordinator {
         let tempService = TranscriptionService()
         try await tempService.initialize(modelPath: modelPath)
         tempService.setTranscriptionMode(.postProcessing)
+        try Task.checkCancellation()
         
         // Get audio file URLs
         let systemAudioURL = meeting.directory.appendingPathComponent("audio.caf")
@@ -816,6 +835,7 @@ final class TranscriptionCoordinator {
             micAudioURL: micExists ? micAudioURL : nil,
             startTime: meeting.date
         )
+        try Task.checkCancellation()
         
         // Log reprocess completion
         Task { await DiagnosticLogger.shared.log(.transcription,
@@ -825,6 +845,7 @@ final class TranscriptionCoordinator {
         // and merge segments into blocks with word limits
         let processor = TranscriptProcessor()
         for segment in segments.sorted(by: { $0.timestamp < $1.timestamp }) {
+            try Task.checkCancellation()
             processor.processSegment(segment)
         }
         processor.finalize()
