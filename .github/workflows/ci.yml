@@ -495,6 +495,76 @@ jobs:
           [ $FAIL -ne 0 ] && exit 1
           echo "✅ All AEC policy guards passed"
 
+      - name: Build PR preview DMG (pull_request only)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+
+          # Get version from Version.xcconfig
+          VERSION=$(grep "MARKETING_VERSION" Version.xcconfig | cut -d '=' -f2 | xargs)
+          echo "Version: ${VERSION}"
+
+          # Locate the app built in the previous step
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/Muesli-*/Build/Products/Release/Muesli.app -maxdepth 0 -type d 2>/dev/null | head -1)
+          if [ ! -d "${APP_PATH}" ]; then
+            echo "❌ App bundle not found for DMG packaging"
+            exit 1
+          fi
+          echo "App path: ${APP_PATH}"
+
+          # Install create-dmg
+          brew install create-dmg
+
+          # Assemble a staging directory
+          STAGING=$(mktemp -d)
+          cp -R "${APP_PATH}" "${STAGING}/"
+
+          DMG_NAME="Muesli-v${VERSION}-pr${{ github.event.number }}-preview.dmg"
+
+          create-dmg \
+            --volname "Muesli" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 128 \
+            --icon "Muesli.app" 200 190 \
+            --hide-extension "Muesli.app" \
+            --app-drop-link 600 185 \
+            --no-internet-enable \
+            "${DMG_NAME}" \
+            "${STAGING}"
+
+          rm -rf "${STAGING}"
+
+          SIZE_MB=$(du -m "${DMG_NAME}" | cut -f1)
+          SHA=$(shasum -a 256 "${DMG_NAME}" | awk '{print $1}')
+          echo "✅ PR preview DMG created: ${DMG_NAME} (${SIZE_MB}MB)"
+          echo "SHA-256: ${SHA}"
+
+          # Stash path for upload step
+          echo "DMG_NAME=${DMG_NAME}" >> "$GITHUB_ENV"
+
+          {
+            echo "## PR Preview DMG"
+            echo ""
+            echo "**File:** \`${DMG_NAME}\`"
+            echo "**Size:** ${SIZE_MB} MB"
+            echo "**SHA-256:** \`${SHA}\`"
+            echo ""
+            echo "> ⚠️ Unsigned build — right-click → Open to bypass Gatekeeper on first launch."
+            echo ""
+            echo "Download from the **Artifacts** section of this workflow run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload PR preview DMG artifact
+        if: github.event_name == 'pull_request'
+        # actions/upload-artifact v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: pr-preview-dmg-${{ github.event.number }}-${{ github.sha }}
+          path: ${{ env.DMG_NAME }}
+          retention-days: 14
+          if-no-files-found: warn
+
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
