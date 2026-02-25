@@ -16,12 +16,22 @@ final class RecordingControllerTests: XCTestCase {
         "secondPassSpecificModel",
     ]
     
+    private static let testOutputDirectory =
+        FileManager.default.temporaryDirectory.appendingPathComponent("MuesliTests_RecordingController")
+
     override func setUp() {
         super.setUp()
         Self.resetReprocessWorkflowDefaults()
+        
+        // Set test output directory to avoid writing to real user directories
+        UserDefaults.standard.set(Self.testOutputDirectory.path, forKey: "outputDirectory")
     }
     
     override func tearDown() {
+        // Clean up test directories
+        try? FileManager.default.removeItem(at: Self.testOutputDirectory)
+        UserDefaults.standard.removeObject(forKey: "outputDirectory")
+        
         Self.resetReprocessWorkflowDefaults()
         super.tearDown()
     }

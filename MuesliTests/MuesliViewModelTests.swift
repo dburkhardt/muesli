@@ -42,6 +42,9 @@ final class MuesliViewModelTests: XCTestCase {
     }
     
     override func tearDown() async throws {
+        // Clean up test directories
+        try? FileManager.default.removeItem(at: Self.testOutputDirectory)
+        
         // Clean up test UserDefaults
         testDefaults?.removePersistentDomain(forName: testSuiteName)
         
