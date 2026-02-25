@@ -474,6 +474,7 @@ final class RecordingController {
         case .notAvailable:
             session.isModelLoading = false
             session.isRecordingOnly = true
+            session.effectiveLiveModel = nil
             // Continue recording without transcription
             
         case .loading:
@@ -482,6 +483,7 @@ final class RecordingController {
             
         case .ready:
             session.isModelLoading = false
+            session.effectiveLiveModel = transcriptionCoordinator.effectiveLiveModelForSession
             transcriptionCoordinator.setTranscriptHandler { [weak session] segment in
                 Task { @MainActor in
                     session?.appendTranscriptSegment(segment)
@@ -501,6 +503,7 @@ final class RecordingController {
         case .failed(let error):
             session.isModelLoading = false
             session.isRecordingOnly = true
+            session.effectiveLiveModel = nil
             // Log error but continue recording audio
             logger.error("Model loading failed: \(error), continuing audio-only recording")
             
@@ -666,7 +669,7 @@ final class RecordingController {
         session.state = .stopping
         session.stopDisplayTimer()
         
-        var secondPassLaunched = false
+        var automaticFinalizationLaunched = false
         var hasAudioFiles = false
         
         do {
@@ -712,12 +715,26 @@ final class RecordingController {
             hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
                             FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
             
-            if preferencesManager.isSecondPassASREnabled,
-               hasAudioFiles,
-               (session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0) >= AudioConfiguration.secondPassMinDurationSeconds {
+            let recordingDuration = session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+            let meetsDurationRequirement = recordingDuration >= AudioConfiguration.secondPassMinDurationSeconds
+            
+            if hasAudioFiles,
+               preferencesManager.isSecondPassASREnabled,
+               meetsDurationRequirement {
+                session.effectiveLiveModel = transcriptionCoordinator.effectiveLiveModelForSession ?? session.effectiveLiveModel
                 transcriptionCoordinator.markSecondPassActive(for: directory)
                 launchSecondPassFinalization(for: session, directory: directory)
-                secondPassLaunched = true
+                automaticFinalizationLaunched = true
+            } else {
+                if !hasAudioFiles {
+                    logger.info("Skipping automatic finalization: no audio files")
+                } else if !preferencesManager.isSecondPassASREnabled {
+                    logger.info("Skipping automatic finalization: preference disabled")
+                } else {
+                    logger.info(
+                        "Skipping automatic finalization: recording too short (\(String(format: "%.1f", recordingDuration))s < \(String(format: "%.1f", AudioConfiguration.secondPassMinDurationSeconds))s)"
+                    )
+                }
             }
             
             // Export meeting to exports directory (if enabled)
@@ -736,27 +753,18 @@ final class RecordingController {
         // objects, orphaning the selectedMeeting reference.
         onSessionCompleted?(session, session.outputDirectory)
         
-        // Auto-reprocess completed meetings when enabled.
-        // Runs AFTER onSessionCompleted so the canonical MeetingHistoryItem
-        // (the same instance the UI observes) exists in meetingHistory.
-        //
-        // Second-pass finalization is a superset of auto-reprocessing: it re-transcribes
-        // from saved audio with a (potentially larger) model. When it launches, skip
-        // auto-reprocess to avoid ANE resource contention and transcript.md write races.
-        // This also covers empty-transcript rescue — second-pass will produce the
-        // transcript even when the live model wasn't ready during recording.
-        // If second-pass fails, launchSecondPassFinalization's catch path fires
-        // onAutoReprocessRequested as recovery.
+        // Empty-transcript rescue runs AFTER onSessionCompleted so the canonical
+        // MeetingHistoryItem exists in meetingHistory.
+        // Automatic finalization is the primary path; rescue only runs if it did
+        // not launch and the transcript is empty.
         let hasEmptyTranscript = session.transcriptBlocks.isEmpty
-        let shouldAutoReprocess = preferencesManager.isAutoReprocessAfterMeetingEnabled || hasEmptyTranscript
         
         if let directory = session.outputDirectory {
-            if hasAudioFiles && shouldAutoReprocess && !secondPassLaunched {
-                let triggerReason = hasEmptyTranscript ? "empty transcript" : "preference enabled"
-                logger.info("Auto-triggering reprocessing (\(triggerReason))")
+            if hasAudioFiles && hasEmptyTranscript && !automaticFinalizationLaunched {
+                logger.info("Auto-triggering reprocessing (empty transcript rescue)")
                 onAutoReprocessRequested?(directory)
-            } else if secondPassLaunched && shouldAutoReprocess {
-                logger.info("Skipping auto-reprocess: second-pass finalization already launched")
+            } else if hasEmptyTranscript && automaticFinalizationLaunched {
+                logger.info("Skipping empty-transcript rescue: automatic finalization already launched")
             }
         }
         
@@ -796,7 +804,8 @@ final class RecordingController {
                 let blocks = try await self.transcriptionCoordinator.runSecondPassASR(
                     in: directory,
                     recordingStartTime: meetingDate,
-                    preference: self.preferencesManager.secondPassModelPreference
+                    preference: self.preferencesManager.secondPassModelPreference,
+                    liveModel: session.effectiveLiveModel
                 )
                 try Task.checkCancellation()
                 

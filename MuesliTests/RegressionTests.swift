@@ -494,6 +494,62 @@ final class RegressionTests: XCTestCase {
         )
     }
     
+    /// Regression test: stop flow uses one automatic finalization path.
+    /// Bug: legacy dual toggles created overlapping post-stop workflows.
+    func testStopRecordingUsesUnifiedAutomaticFinalizationGate() throws {
+        let source = try recordingControllerSource()
+        
+        XCTAssertTrue(
+            source.contains("if hasAudioFiles,") &&
+            source.contains("preferencesManager.isSecondPassASREnabled,") &&
+            source.contains("recordingDuration >= AudioConfiguration.secondPassMinDurationSeconds"),
+            "stopRecordingAsync should gate automatic finalization by unified toggle + audio files + min duration"
+        )
+        
+        XCTAssertFalse(
+            source.contains("isAutoReprocessAfterMeetingEnabled"),
+            "Legacy auto-reprocess preference should not be used in stopRecordingAsync"
+        )
+    }
+    
+    /// Regression test: empty-transcript rescue is independent and runs only when needed.
+    func testStopRecordingEmptyTranscriptRescueCondition() throws {
+        let source = try recordingControllerSource()
+        
+        XCTAssertTrue(
+            source.contains("if hasAudioFiles && hasEmptyTranscript && !automaticFinalizationLaunched"),
+            "Empty-transcript rescue should run only when finalization did not launch"
+        )
+        XCTAssertFalse(
+            source.contains("shouldAutoReprocess"),
+            "Legacy shouldAutoReprocess branch should be removed after consolidation"
+        )
+    }
+    
+    /// Regression test: second-pass finalization receives the effective live model.
+    func testSecondPassFinalizationPassesEffectiveLiveModel() throws {
+        let source = try recordingControllerSource()
+        
+        XCTAssertTrue(
+            source.contains("liveModel: session.effectiveLiveModel"),
+            "runSecondPassASR should receive session.effectiveLiveModel for sameAsLive correctness"
+        )
+    }
+    
+    /// Regression test: auto-reprocess callback stays wired through ViewModel canonical meeting resolution.
+    func testAutoReprocessCallbackRoutesThroughViewModelMeetingResolution() throws {
+        let source = try muesliViewModelSource()
+        
+        XCTAssertTrue(
+            source.contains("self.recordingController.onAutoReprocessRequested"),
+            "ViewModel should register onAutoReprocessRequested callback"
+        )
+        XCTAssertTrue(
+            source.contains("self.transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)"),
+            "Callback should route to autoReprocessWhenReady with canonical meeting instance"
+        )
+    }
+    
     /// Regression test: Mic audio RMS should be measurable (not all zeros)
     /// Bug: Logs showed mic audio RMS was consistently 0.0 with all-zero samples.
     /// Fix: AVAudioEngine provides actual audio data with measurable RMS.
@@ -521,6 +577,13 @@ final class RegressionTests: XCTestCase {
         let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
         let controllerURL = repoRoot.appendingPathComponent("Muesli/Controllers/RecordingController.swift")
         return try String(contentsOf: controllerURL, encoding: .utf8)
+    }
+    
+    private func muesliViewModelSource() throws -> String {
+        let testsFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
+        let viewModelURL = repoRoot.appendingPathComponent("Muesli/ViewModels/MuesliViewModel.swift")
+        return try String(contentsOf: viewModelURL, encoding: .utf8)
     }
     
     // MARK: - Window Management Regression Tests (Bug Fix: Jan 15, 2026)
@@ -1804,6 +1867,11 @@ final class RegressionTests: XCTestCase {
         // Session should be ready (using the fallback model)
         XCTAssertTrue(state.isReady,
             "prepareModel() should succeed using fallback model when preferred is compiling")
+        XCTAssertEqual(
+            coordinator.effectiveLiveModelForSession,
+            .small,
+            "Fallback session should track the effective live model used for transcription"
+        )
 
         // User preference must NOT have changed
         XCTAssertEqual(mockModelManager.activeModel, .large,

@@ -36,6 +36,11 @@ final class PreferencesManagerTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.transcriptionMode)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.echoCancellationEnabled)
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassASREnabled)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassModelPreference)
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.reprocessWorkflowMigrationDone)
+        UserDefaults.standard.removeObject(forKey: "autoReprocessAfterMeetingEnabled")
+        UserDefaults.standard.removeObject(forKey: "secondPassSpecificModel")
         UserDefaults.standard.removeObject(forKey: AppStorageKeys.audioChunkDuration)
         UserDefaults.standard.removeObject(forKey: PreferencesManager.migrationCheckedKey)
     }
@@ -425,6 +430,148 @@ final class PreferencesManagerTests: XCTestCase {
         let newManager = PreferencesManager()
         
         XCTAssertEqual(newManager.outputDirectory, customPath)
+    }
+    
+    // MARK: - Reprocess Workflow Migration Tests
+    
+    func testReprocessWorkflowMigration_Matrix() async {
+        typealias SB = PreferencesManager.StoredBool
+        typealias Decision = PreferencesManager.ReprocessWorkflowMigrationDecision
+        
+        let cases: [(SB, SB, String?, Decision, String)] = [
+            (
+                .unset,
+                .unset,
+                nil,
+                Decision(
+                    unifiedSecondPassEnabled: true,
+                    mappedModelPreference: .sameAsLive,
+                    hadUnknownModelPreference: false
+                ),
+                "unset_secondPass_unset_auto_nil_pref"
+            ),
+            (
+                .value(false),
+                .value(false),
+                nil,
+                Decision(
+                    unifiedSecondPassEnabled: false,
+                    mappedModelPreference: .sameAsLive,
+                    hadUnknownModelPreference: false
+                ),
+                "both_false_nil_pref"
+            ),
+            (
+                .value(true),
+                .value(false),
+                nil,
+                Decision(
+                    unifiedSecondPassEnabled: true,
+                    mappedModelPreference: .bestAvailable,
+                    hadUnknownModelPreference: false
+                ),
+                "secondPass_true_auto_false_nil_pref"
+            ),
+            (
+                .value(false),
+                .value(true),
+                nil,
+                Decision(
+                    unifiedSecondPassEnabled: true,
+                    mappedModelPreference: .sameAsLive,
+                    hadUnknownModelPreference: false
+                ),
+                "secondPass_false_auto_true_nil_pref"
+            ),
+            (
+                .value(true),
+                .value(true),
+                "bestAvailableNoDowngrade",
+                Decision(
+                    unifiedSecondPassEnabled: true,
+                    mappedModelPreference: .bestAvailable,
+                    hadUnknownModelPreference: false
+                ),
+                "bestAvailableNoDowngrade_maps_to_bestAvailable"
+            ),
+            (
+                .value(true),
+                .value(true),
+                "specific",
+                Decision(
+                    unifiedSecondPassEnabled: true,
+                    mappedModelPreference: .sameAsLive,
+                    hadUnknownModelPreference: false
+                ),
+                "specific_maps_to_sameAsLive"
+            )
+        ]
+        
+        for (legacySecondPass, legacyAuto, raw, expected, label) in cases {
+            let result = PreferencesManager.resolveReprocessWorkflowMigration(
+                legacySecondPass: legacySecondPass,
+                legacyAutoReprocess: legacyAuto,
+                legacyModelPreferenceRaw: raw
+            )
+            XCTAssertEqual(result, expected, label)
+        }
+    }
+    
+    func testReprocessWorkflowMigration_UnknownValueMapsToSameAsLive() async {
+        let result = PreferencesManager.resolveReprocessWorkflowMigration(
+            legacySecondPass: .value(true),
+            legacyAutoReprocess: .value(false),
+            legacyModelPreferenceRaw: "unexpected-value"
+        )
+        
+        XCTAssertEqual(result.mappedModelPreference, .sameAsLive)
+        XCTAssertTrue(result.hadUnknownModelPreference)
+    }
+    
+    func testReprocessWorkflowMigration_Integration_CleansLegacyKeys() async {
+        // Given: legacy values prior to consolidation
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
+        UserDefaults.standard.set(true, forKey: "autoReprocessAfterMeetingEnabled")
+        UserDefaults.standard.set("specific", forKey: AppStorageKeys.secondPassModelPreference)
+        UserDefaults.standard.set(ModelManager.ModelSize.large.rawValue, forKey: "secondPassSpecificModel")
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.reprocessWorkflowMigrationDone)
+        
+        // When: manager initializes and runs migration
+        let migratedManager = PreferencesManager()
+        
+        // Then: unified toggle and mapped model are stored, legacy keys removed
+        XCTAssertTrue(migratedManager.isSecondPassASREnabled)
+        XCTAssertEqual(migratedManager.secondPassModelPreference, .sameAsLive)
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: AppStorageKeys.reprocessWorkflowMigrationDone))
+        XCTAssertNil(UserDefaults.standard.object(forKey: "autoReprocessAfterMeetingEnabled"))
+        XCTAssertNil(UserDefaults.standard.object(forKey: "secondPassSpecificModel"))
+    }
+    
+    func testReprocessWorkflowMigration_IsIdempotent() async {
+        // Given: migration has already run and user changed settings afterward
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.reprocessWorkflowMigrationDone)
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
+        UserDefaults.standard.set(
+            PreferencesManager.SecondPassModelPreference.bestAvailable.rawValue,
+            forKey: AppStorageKeys.secondPassModelPreference
+        )
+        
+        // Legacy keys should be ignored once migration flag is set
+        UserDefaults.standard.set(true, forKey: "autoReprocessAfterMeetingEnabled")
+        UserDefaults.standard.set(ModelManager.ModelSize.large.rawValue, forKey: "secondPassSpecificModel")
+        
+        let manager = PreferencesManager()
+        
+        XCTAssertFalse(manager.isSecondPassASREnabled)
+        XCTAssertEqual(manager.secondPassModelPreference, .bestAvailable)
+    }
+    
+    func testReprocessWorkflowDefaults_FreshInstall() async {
+        clearUserDefaults()
+        let manager = PreferencesManager()
+        
+        XCTAssertTrue(manager.isSecondPassASREnabled)
+        XCTAssertEqual(manager.secondPassModelPreference, .sameAsLive)
     }
     
     // MARK: - TranscriptionMode Conversion Extension Tests

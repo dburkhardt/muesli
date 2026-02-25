@@ -21,7 +21,10 @@ final class MuesliViewModelTests: XCTestCase {
     /// Keys that need to be cleaned up after tests
     private static let userDefaultsKeysToClean = [
         "outputDirectory", "hasCompletedOnboarding", "transcriptionMode",
-        "echoCancellationEnabled", "launchAtLogin"
+        "echoCancellationEnabled", "launchAtLogin",
+        "secondPassASREnabled", "secondPassModelPreference",
+        "reprocessWorkflowMigrationDone",
+        "autoReprocessAfterMeetingEnabled", "secondPassSpecificModel"
     ]
     
     // MARK: - Setup / Teardown

@@ -12,6 +12,14 @@ final class PreferencesManager {
     
     private let logger = Logger(subsystem: "com.muesli.app", category: "PreferencesManager")
     
+    // MARK: - Legacy Keys
+    
+    /// Legacy key removed after automatic finalization workflow consolidation.
+    private static let legacyAutoReprocessAfterMeetingEnabledKey = "autoReprocessAfterMeetingEnabled"
+    
+    /// Legacy key used only by removed `.specific` second-pass preference.
+    private static let legacySecondPassSpecificModelKey = "secondPassSpecificModel"
+    
     // MARK: - Output Directory
     
     /// Output directory for recordings
@@ -107,8 +115,6 @@ final class PreferencesManager {
     enum SecondPassModelPreference: String, CaseIterable {
         case bestAvailable
         case sameAsLive
-        case bestAvailableNoDowngrade
-        case specific
     }
     
     /// Toggle for deterministic live overlap deduplication.
@@ -126,11 +132,11 @@ final class PreferencesManager {
     }
     
     /// Toggle for post-stop second-pass final transcription.
-    /// Default false for staged rollout safety.
+    /// Default true after consolidation so automatic finalization is on by default.
     var isSecondPassASREnabled: Bool {
         get {
             if UserDefaults.standard.object(forKey: AppStorageKeys.secondPassASREnabled) == nil {
-                return false
+                return true
             }
             return UserDefaults.standard.bool(forKey: AppStorageKeys.secondPassASREnabled)
         }
@@ -152,39 +158,15 @@ final class PreferencesManager {
         }
     }
     
-    /// Toggle for automatic post-meeting reprocessing.
-    /// Default true so completed meetings are reprocessed unless user opts out.
-    var isAutoReprocessAfterMeetingEnabled: Bool {
-        get {
-            if UserDefaults.standard.object(forKey: AppStorageKeys.autoReprocessAfterMeetingEnabled) == nil {
-                return true
-            }
-            return UserDefaults.standard.bool(forKey: AppStorageKeys.autoReprocessAfterMeetingEnabled)
-        }
-        set {
-            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.autoReprocessAfterMeetingEnabled)
-        }
-    }
-    
     /// Strategy for picking the second-pass model.
     var secondPassModelPreference: SecondPassModelPreference {
         get {
             let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassModelPreference)
-                ?? SecondPassModelPreference.bestAvailable.rawValue
-            return SecondPassModelPreference(rawValue: raw) ?? .bestAvailable
+                ?? SecondPassModelPreference.sameAsLive.rawValue
+            return SecondPassModelPreference(rawValue: raw) ?? .sameAsLive
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: AppStorageKeys.secondPassModelPreference)
-        }
-    }
-    
-    /// Explicit model raw value used when secondPassModelPreference == .specific.
-    var secondPassSpecificModelRawValue: String? {
-        get {
-            UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel)
-        }
-        set {
-            UserDefaults.standard.set(newValue, forKey: AppStorageKeys.secondPassSpecificModel)
         }
     }
     
@@ -430,10 +412,70 @@ final class PreferencesManager {
             migrationAlreadyDone: false
         ).effectiveValue
     }
+    
+    // MARK: - Reprocess Workflow Migration
+    
+    /// Decision object returned by the reprocess-workflow migration resolver.
+    struct ReprocessWorkflowMigrationDecision: Equatable {
+        let unifiedSecondPassEnabled: Bool
+        let mappedModelPreference: SecondPassModelPreference
+        let hadUnknownModelPreference: Bool
+    }
+    
+    /// Pure migration resolver that maps legacy settings to the consolidated workflow.
+    static func resolveReprocessWorkflowMigration(
+        legacySecondPass: StoredBool,
+        legacyAutoReprocess: StoredBool,
+        legacyModelPreferenceRaw: String?
+    ) -> ReprocessWorkflowMigrationDecision {
+        let legacySecondPassEnabled: Bool = switch legacySecondPass {
+        case .unset: false
+        case .value(let stored): stored
+        }
+        
+        let legacyAutoReprocessEnabled: Bool = switch legacyAutoReprocess {
+        case .unset: true
+        case .value(let stored): stored
+        }
+        
+        let unifiedSecondPassEnabled = legacySecondPassEnabled || legacyAutoReprocessEnabled
+        
+        let mappedModelPreference: SecondPassModelPreference
+        let hadUnknownModelPreference: Bool
+        
+        switch legacyModelPreferenceRaw {
+        case SecondPassModelPreference.bestAvailable.rawValue:
+            mappedModelPreference = .bestAvailable
+            hadUnknownModelPreference = false
+        case SecondPassModelPreference.sameAsLive.rawValue:
+            mappedModelPreference = .sameAsLive
+            hadUnknownModelPreference = false
+        case "bestAvailableNoDowngrade":
+            mappedModelPreference = .bestAvailable
+            hadUnknownModelPreference = false
+        case "specific":
+            mappedModelPreference = .sameAsLive
+            hadUnknownModelPreference = false
+        case nil:
+            mappedModelPreference = legacySecondPassEnabled ? .bestAvailable : .sameAsLive
+            hadUnknownModelPreference = false
+        default:
+            mappedModelPreference = .sameAsLive
+            hadUnknownModelPreference = true
+        }
+        
+        return ReprocessWorkflowMigrationDecision(
+            unifiedSecondPassEnabled: unifiedSecondPassEnabled,
+            mappedModelPreference: mappedModelPreference,
+            hadUnknownModelPreference: hadUnknownModelPreference
+        )
+    }
 
     // MARK: - Initialization
 
     init() {
+        migrateReprocessWorkflowIfNeeded()
+        
         let storedPref = StoredBool(forKey: AppStorageKeys.echoCancellationEnabled)
         let migrationDone = UserDefaults.standard.object(forKey: AppStorageKeys.aecAlwaysOnMigrationDone) != nil
             && UserDefaults.standard.bool(forKey: AppStorageKeys.aecAlwaysOnMigrationDone)
@@ -474,6 +516,45 @@ final class PreferencesManager {
 
         // Perform storage migration if needed
         migrateStorageLocationIfNeeded()
+    }
+    
+    /// One-time migration that consolidates legacy automatic reprocess settings into
+    /// the unified second-pass finalization toggle + two-option model strategy.
+    private func migrateReprocessWorkflowIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: AppStorageKeys.reprocessWorkflowMigrationDone) == false else {
+            return
+        }
+        
+        let legacySecondPass = StoredBool(forKey: AppStorageKeys.secondPassASREnabled, defaults: defaults)
+        let legacyAutoReprocess = StoredBool(forKey: Self.legacyAutoReprocessAfterMeetingEnabledKey, defaults: defaults)
+        let legacyModelPreferenceRaw = defaults.string(forKey: AppStorageKeys.secondPassModelPreference)
+        
+        let decision = Self.resolveReprocessWorkflowMigration(
+            legacySecondPass: legacySecondPass,
+            legacyAutoReprocess: legacyAutoReprocess,
+            legacyModelPreferenceRaw: legacyModelPreferenceRaw
+        )
+        
+        defaults.set(decision.unifiedSecondPassEnabled, forKey: AppStorageKeys.secondPassASREnabled)
+        defaults.set(decision.mappedModelPreference.rawValue, forKey: AppStorageKeys.secondPassModelPreference)
+        
+        // Cleanup removed legacy keys after migration has been written.
+        defaults.removeObject(forKey: Self.legacyAutoReprocessAfterMeetingEnabledKey)
+        defaults.removeObject(forKey: Self.legacySecondPassSpecificModelKey)
+        
+        defaults.set(true, forKey: AppStorageKeys.reprocessWorkflowMigrationDone)
+        
+        let rawPref = legacyModelPreferenceRaw ?? "nil"
+        let message = "PREFS_MIGRATED_REPROCESS_CONSOLIDATED: secondPass=\(legacySecondPass.description) autoReprocess=\(legacyAutoReprocess.description) modelPref=\(rawPref) -> unified=\(decision.unifiedSecondPassEnabled) mappedModel=\(decision.mappedModelPreference.rawValue)"
+        logger.info("\(message)")
+        Task {
+            await DiagnosticLogger.shared.log(.stabilizer, message)
+        }
+        
+        if decision.hadUnknownModelPreference {
+            logger.warning("Unknown legacy second-pass model preference '\(rawPref, privacy: .public)'; mapped to sameAsLive")
+        }
     }
 
     deinit {

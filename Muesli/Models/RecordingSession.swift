@@ -109,6 +109,10 @@ final class RecordingSession: Identifiable {
     /// Whether recording without transcription (no model available)
     var isRecordingOnly: Bool = false
     
+    /// Effective live transcription model used during this session.
+    /// Captures fallback model usage when the preferred active model isn't ready.
+    var effectiveLiveModel: ModelManager.ModelSize?
+    
     /// Description of the audio source for UI display
     let audioSourceDescription: String = "All System Audio"
     

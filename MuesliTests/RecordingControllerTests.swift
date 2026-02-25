@@ -534,10 +534,12 @@ final class RecordingControllerTests: XCTestCase {
 
     /// Verifies that isFinalizingTranscript is false on a freshly stopped session when second-pass is disabled.
     func testFinalizingFlagClearedWhenSecondPassDisabled() async {
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
+        defer { UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassASREnabled) }
         let controller = await createTestController()
         let session = controller.createSession()
 
-        // Flags default to false, so second pass is skipped and flag is never set
+        // Second-pass explicitly disabled, so finalization should be skipped.
         XCTAssertFalse(session.isFinalizingTranscript)
         session.meetingTitle = "Test Meeting"
         controller.startRecording(for: session)

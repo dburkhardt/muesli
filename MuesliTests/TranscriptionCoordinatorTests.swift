@@ -282,6 +282,33 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertEqual(switchedTo, .medium)
     }
     
+    /// Ensure fallback sessions track the actual live model used for transcription.
+    @MainActor
+    func testPrepareModelTracksEffectiveLiveModelForFallbackSession() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Preferred model is busy; fallback model is ready.
+        mockModelManager.downloadStates[.large] = .compiling
+        mockModelManager.downloadedModels.insert(.large)
+        mockModelManager.mockModelPaths[.large] = mockModelManager.modelDirectory.appendingPathComponent("large")
+        mockModelManager.activeModel = .large
+        mockModelManager.addDownloadedModel(.small, setActive: false)
+        
+        let state = await sut.prepareModel()
+        
+        XCTAssertTrue(state.isReady)
+        XCTAssertEqual(
+            sut.effectiveLiveModelForSession,
+            .small,
+            "Effective live model should capture the fallback model used by the session"
+        )
+    }
+    
     /// Test model preparation retry limit enforcement
     @MainActor
     func testPrepareModelRetryLimitEnforcement() async {
@@ -341,6 +368,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         } else {
             XCTFail("Expected notAvailable state after reset, got \(sut.modelState)")
         }
+        XCTAssertNil(sut.effectiveLiveModelForSession, "Reset should clear tracked effective live model")
     }
     
     /// Test model switch callback invocation

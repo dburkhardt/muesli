@@ -16,7 +16,7 @@ Muesli detects slow model loading and provides:
 
 1. **Visual feedback** - Updated UI placeholders and indicators
 2. **Warning notification** - Explains the one-time setup
-3. **Auto-reprocessing** - Recovers recordings that complete before the model is ready
+3. **Empty-transcript rescue reprocessing** - Recovers recordings that complete before the model is ready
 
 ## Architecture
 
@@ -26,7 +26,7 @@ Muesli detects slow model loading and provides:
 |-----------|---------------|
 | `TranscriptionCoordinator` | Detects slow loads, manages timing state, triggers warnings |
 | `MuesliViewModel` | Exposes `isSlowModelLoad` to views |
-| `RecordingController` | Triggers auto-reprocessing for empty transcripts |
+| `RecordingController` | Runs automatic finalization and triggers empty-transcript rescue when needed |
 | `RecordingIndicator` | Shows contextual tooltips |
 | `RecordingDetailView` | Shows detailed placeholder messages |
 | `WarningManager` | Displays non-blocking warning banner |
@@ -113,7 +113,7 @@ stateDiagram-v2
     }
 ```
 
-### Auto-Reprocessing Flow
+### Empty-Transcript Rescue Flow
 
 ```mermaid
 flowchart TD
@@ -213,10 +213,10 @@ Production uses the default 10-second threshold. Tests can use shorter values (e
 
 If a user stops recording before the model finishes loading:
 
-1. Audio files are saved (audio.caf, microphone.caf)
-2. Transcript file is created (empty or minimal)
-3. System detects: `hasAudioFiles && hasEmptyTranscript`
-4. `autoReprocessWhenReady()` is called
+1. Audio files are saved (`audio.caf`, `microphone.caf`)
+2. Automatic finalization is attempted when enabled and duration/audio gates pass
+3. If finalization does not launch and transcript is empty, system detects: `hasAudioFiles && hasEmptyTranscript`
+4. `autoReprocessWhenReady()` is called as rescue
 5. Meeting shows "Reprocessing..." spinner in UI
 6. When model is ready, transcript is generated from saved audio
 
@@ -266,7 +266,7 @@ The `MockTranscriptionService` supports an `initializationDelay` property to sim
 ## Related Files
 
 - `Muesli/Managers/TranscriptionCoordinator.swift` - Core detection logic
-- `Muesli/Controllers/RecordingController.swift` - Auto-reprocess trigger
+- `Muesli/Controllers/RecordingController.swift` - Automatic finalization + empty-transcript rescue trigger
 - `Muesli/ViewModels/MuesliViewModel.swift` - State exposure
 - `Muesli/Views/RecordingDetailView.swift` - UI feedback
 - `Muesli/Views/Components/RecordingIndicator.swift` - Indicator tooltips
