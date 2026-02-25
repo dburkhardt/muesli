@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
   workflow_dispatch:
     inputs:
       version:
@@ -17,6 +25,11 @@ on:
         type: string
       skip_notarization:
         description: 'Skip signing/notarization (unsigned debug prerelease only)'
+        required: false
+        default: 'false'
+        type: string
+      is_preview:
+        description: 'Build preview artifact (no GitHub Release)'
         required: false
         default: 'false'
         type: string
@@ -65,38 +78,80 @@ jobs:
 
           EVENT="${{ github.event_name }}"
           SKIP="${{ github.event.inputs.skip_notarization || 'false' }}"
+          IS_PREVIEW_INPUT="${{ github.event.inputs.is_preview || 'false' }}"
           MODE="signed"
 
-          if [ "$EVENT" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            MODE="signed"
-            if [ "$SKIP" = "true" ]; then
-              echo "::error::Unsigned mode is forbidden for tag-triggered releases."
-              exit 1
-            fi
-          elif [ "$EVENT" = "workflow_dispatch" ]; then
-            if [ "$SKIP" = "true" ]; then
-              MODE="unsigned"
-            else
+          case "$EVENT" in
+            push)
+              if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
+                echo "::error::Push-triggered releases require refs/tags/v*."
+                exit 1
+              fi
+              if [ "$SKIP" = "true" ]; then
+                echo "::error::Unsigned mode is forbidden for tag-triggered releases."
+                exit 1
+              fi
               MODE="signed"
-            fi
-          else
-            echo "::error::Unsupported release event: ${EVENT}"
-            exit 1
-          fi
+              ;;
+            workflow_dispatch)
+              if [ "$IS_PREVIEW_INPUT" = "true" ]; then
+                MODE="preview"
+              elif [ "$SKIP" = "true" ]; then
+                MODE="unsigned"
+              else
+                MODE="signed"
+              fi
+              ;;
+            pull_request)
+              MODE="preview"
+              ;;
+            *)
+              echo "::error::Unsupported release event: ${EVENT}"
+              exit 1
+              ;;
+          esac
 
           if [ "$MODE" = "unsigned" ] && [ "$EVENT" != "workflow_dispatch" ]; then
             echo "::error::Unsigned releases are only allowed on workflow_dispatch."
             exit 1
           fi
 
-          if [ "$MODE" = "signed" ]; then
-            echo "signed_required=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "signed_required=false" >> "$GITHUB_OUTPUT"
+          HAS_SIGNING_SECRETS=true
+          if [ -z "$SIGNING_CERT_P12" ] || [ -z "$SIGNING_CERT_PASSWORD" ] || [ -z "$NOTARIZE_APPLE_ID" ] || [ -z "$NOTARIZE_TEAM_ID" ] || [ -z "$NOTARIZE_APP_PASSWORD" ]; then
+            HAS_SIGNING_SECRETS=false
           fi
+
+          SIGNED_REQUIRED=false
+          SIGN_AND_NOTARIZE=false
+          CREATE_GITHUB_RELEASE=false
+
+          case "$MODE" in
+            signed)
+              SIGNED_REQUIRED=true
+              SIGN_AND_NOTARIZE=true
+              CREATE_GITHUB_RELEASE=true
+              ;;
+            unsigned)
+              SIGNED_REQUIRED=false
+              SIGN_AND_NOTARIZE=false
+              CREATE_GITHUB_RELEASE=true
+              ;;
+            preview)
+              SIGNED_REQUIRED=false
+              if [ "$HAS_SIGNING_SECRETS" = "true" ]; then
+                SIGN_AND_NOTARIZE=true
+              fi
+              CREATE_GITHUB_RELEASE=false
+              ;;
+          esac
+
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "signed_required=$SIGNED_REQUIRED" >> "$GITHUB_OUTPUT"
+          echo "sign_and_notarize=$SIGN_AND_NOTARIZE" >> "$GITHUB_OUTPUT"
+          echo "create_github_release=$CREATE_GITHUB_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "has_signing_secrets=$HAS_SIGNING_SECRETS" >> "$GITHUB_OUTPUT"
           echo "event=$EVENT" >> "$GITHUB_OUTPUT"
-          echo "✅ Release mode: $MODE"
+          echo "✅ Release mode: $MODE (sign_and_notarize=${SIGN_AND_NOTARIZE})"
 
       - name: Download Metal Toolchain
         run: xcodebuild -downloadComponent MetalToolchain
@@ -310,12 +365,20 @@ jobs:
             brew install fileicon
           fi
 
-      - name: Extract version from tag or input
+      - name: Extract version from tag, PR, or input
         id: version
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+
+          if [ "${{ steps.policy.outputs.mode }}" = "preview" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_VERSION=$(grep "MARKETING_VERSION" Version.xcconfig | cut -d '=' -f2 | xargs)
+            VERSION="${BASE_VERSION}-pr${{ github.event.number }}-preview"
+            echo "Using PR preview version: ${VERSION}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ github.event.inputs.version }}"
+            if [ "${{ steps.policy.outputs.mode }}" = "preview" ]; then
+              VERSION="${VERSION}-preview-${GITHUB_SHA::7}"
+            fi
             echo "Using version from manual input: ${VERSION}"
           else
             VERSION="${GITHUB_REF#refs/tags/v}"
@@ -340,9 +403,14 @@ jobs:
           fi
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          if [ "${{ steps.policy.outputs.create_github_release }}" = "true" ]; then
+            echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=preview-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Update Version.xcconfig
+        if: steps.policy.outputs.mode != 'preview'
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
@@ -350,7 +418,7 @@ jobs:
           grep -q "MARKETING_VERSION = ${VERSION}" Version.xcconfig
 
       - name: Preflight - Verify signing secrets
-        if: steps.policy.outputs.signed_required == 'true'
+        if: steps.policy.outputs.sign_and_notarize == 'true'
         run: |
           set -euo pipefail
           MISSING=""
@@ -366,7 +434,7 @@ jobs:
           echo "✅ All signing secrets present"
 
       - name: Setup code signing certificates
-        if: steps.policy.outputs.signed_required == 'true'
+        if: steps.policy.outputs.sign_and_notarize == 'true'
         run: |
           set -euo pipefail
           KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
@@ -424,7 +492,7 @@ jobs:
           echo "size=${DMG_SIZE}" >> "$GITHUB_OUTPUT"
 
       - name: Sign and notarize DMG (required for signed mode)
-        if: steps.policy.outputs.signed_required == 'true'
+        if: steps.policy.outputs.sign_and_notarize == 'true'
         run: |
           set -euo pipefail
           DMG_FILE="${{ steps.build.outputs.dmg_file }}"
@@ -450,6 +518,7 @@ jobs:
           xcrun stapler validate "$DMG_FILE"
 
       - name: Generate changelog with git-cliff
+        if: steps.policy.outputs.create_github_release == 'true'
         id: git_cliff
         continue-on-error: true
         run: |
@@ -466,6 +535,7 @@ jobs:
           fi
 
       - name: Generate release notes
+        if: steps.policy.outputs.create_github_release == 'true'
         id: release_notes
         run: |
           set -euo pipefail
@@ -540,12 +610,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Generate artifact attestation
+        if: steps.policy.outputs.create_github_release == 'true'
         # actions/attest-build-provenance v3
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
           subject-path: ${{ steps.build.outputs.dmg_file }}
 
       - name: Create GitHub Release
+        if: steps.policy.outputs.create_github_release == 'true'
         id: create_release
         # softprops/action-gh-release v2
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b
@@ -559,24 +631,44 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Upload preview DMG artifact
+        if: steps.policy.outputs.mode == 'preview'
+        # actions/upload-artifact v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: pr-preview-dmg-${{ github.event_name == 'pull_request' && github.event.number || 'manual' }}-${{ github.sha }}
+          path: ${{ steps.build.outputs.dmg_file }}
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Summary
         if: always()
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
-          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
-          echo "## 🎉 Release Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "## 🎉 Build Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Mode:** ${{ steps.policy.outputs.mode }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Version:** ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Tag:** ${TAG}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **DMG:** ${{ steps.build.outputs.dmg_file }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Size:** ${{ steps.build.outputs.size }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Checksum:** \`${{ steps.build.outputs.checksum }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Release URL:** ${RELEASE_URL}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "### Post-release docs update (manual)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Update \`docs/download.html\` in a separate docs PR." >> "$GITHUB_STEP_SUMMARY"
-          echo "- Follow the AGENTS.md runbook section: \"Manual docs/download update runbook\"." >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "🔗 [View Release](${RELEASE_URL})" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.policy.outputs.mode }}" = "preview" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            if [ "${{ steps.policy.outputs.sign_and_notarize }}" = "true" ]; then
+              echo "✅ Preview DMG is signed and notarized." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "⚠️ Preview DMG is unsigned (release secrets unavailable)." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "Download from the **Artifacts** section of this workflow run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+            echo "- **Tag:** ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Release URL:** ${RELEASE_URL}" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Post-release docs update (manual)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Update \`docs/download.html\` in a separate docs PR." >> "$GITHUB_STEP_SUMMARY"
+            echo "- Follow the AGENTS.md runbook section: \"Manual docs/download update runbook\"." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "🔗 [View Release](${RELEASE_URL})" >> "$GITHUB_STEP_SUMMARY"
+          fi
