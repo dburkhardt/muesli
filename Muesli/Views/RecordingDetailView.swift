@@ -563,15 +563,22 @@ struct RecordingDetailView: View {
     
     @ViewBuilder
     private func processingIndicators(for meeting: MeetingHistoryItem) -> some View {
-        // 1. Current meeting reprocessing (second-pass ASR)
-        if meeting.isReprocessing, let startTime = meeting.reprocessingStartTime {
-            let cancelAction: (() -> Void)? = viewModel.isReprocessingCancellable(for: meeting)
+        // 1. Current meeting reprocessing (second-pass ASR / auto-reprocess / manual reprocess)
+        if let processingState = viewModel.processingState(for: meeting) {
+            let cancelAction: (() -> Void)? = processingState.cancellable
                 ? { viewModel.cancelReprocessing(for: meeting) }
                 : nil
             FloatingProcessingIndicator(
                 phase: .reprocessing,
-                startTime: startTime,
+                startTime: processingState.startedAt,
                 onCancel: cancelAction
+            )
+        } else if meeting.isReprocessing, let startTime = meeting.reprocessingStartTime {
+            // Fallback for transient UI states while coordinator state is propagating.
+            FloatingProcessingIndicator(
+                phase: .reprocessing,
+                startTime: startTime,
+                onCancel: { viewModel.cancelReprocessing(for: meeting) }
             )
         }
         
@@ -887,7 +894,7 @@ struct RecordingDetailView: View {
                         }
                     }
                 }
-                .disabled(meeting.isReprocessing)
+                .disabled(viewModel.isMeetingProcessing(for: meeting))
             }
             
             Divider()

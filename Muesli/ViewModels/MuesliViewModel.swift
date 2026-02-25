@@ -1087,7 +1087,20 @@ final class MuesliViewModel {
 
     /// Whether the current reprocessing phase supports cancellation from the UI.
     func isReprocessingCancellable(for meeting: MeetingHistoryItem) -> Bool {
-        transcriptionCoordinator.processingState(for: meeting.directory)?.cancellable ?? true
+        if let state = transcriptionCoordinator.processingState(for: meeting.directory) {
+            return state.cancellable
+        }
+        return meeting.isReprocessing
+    }
+
+    /// Canonical processing state for a meeting, if any.
+    func processingState(for meeting: MeetingHistoryItem) -> TranscriptionCoordinator.MeetingProcessingState? {
+        transcriptionCoordinator.processingState(for: meeting.directory)
+    }
+
+    /// Whether any background transcript processing is active for this meeting.
+    func isMeetingProcessing(for meeting: MeetingHistoryItem) -> Bool {
+        processingState(for: meeting) != nil || meeting.isReprocessing
     }
     
     // MARK: - Model Switching (delegates to TranscriptionCoordinator)
