@@ -8,6 +8,29 @@ import XCTest
 final class RecordingControllerTests: XCTestCase {
     // MARK: - Test Setup
     
+    private static let userDefaultsKeysToClean = [
+        AppStorageKeys.secondPassASREnabled,
+        AppStorageKeys.secondPassModelPreference,
+        AppStorageKeys.reprocessWorkflowMigrationDone,
+        "autoReprocessAfterMeetingEnabled",
+        "secondPassSpecificModel",
+    ]
+    
+    override func setUp() {
+        super.setUp()
+        Self.resetReprocessWorkflowDefaults()
+    }
+    
+    override func tearDown() {
+        Self.resetReprocessWorkflowDefaults()
+        super.tearDown()
+    }
+    
+    private static func resetReprocessWorkflowDefaults() {
+        let defaults = UserDefaults.standard
+        userDefaultsKeysToClean.forEach { defaults.removeObject(forKey: $0) }
+    }
+    
     private func createTestController() async -> RecordingController {
         let (controller, _) = await createTestControllerWithMocks()
         return controller
@@ -534,8 +557,11 @@ final class RecordingControllerTests: XCTestCase {
 
     /// Verifies that isFinalizingTranscript is false on a freshly stopped session when second-pass is disabled.
     func testFinalizingFlagClearedWhenSecondPassDisabled() async {
+        // Also disable the legacy auto-reprocess key so the migration path (if it runs)
+        // cannot re-enable second-pass finalization.
+        UserDefaults.standard.set(false, forKey: "autoReprocessAfterMeetingEnabled")
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.reprocessWorkflowMigrationDone)
         UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
-        defer { UserDefaults.standard.removeObject(forKey: AppStorageKeys.secondPassASREnabled) }
         let controller = await createTestController()
         let session = controller.createSession()
 
