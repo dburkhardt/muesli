@@ -635,7 +635,7 @@ jobs:
         # actions/upload-artifact v4
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: pr-preview-dmg-${{ github.event_name == 'pull_request' && github.event.number || 'manual' }}
+          name: pr-preview-dmg-${{ steps.version.outputs.version }}-${{ github.event_name == 'pull_request' && github.event.number || 'manual' }}
           path: ${{ steps.build.outputs.dmg_file }}
           retention-days: 14
           if-no-files-found: error
