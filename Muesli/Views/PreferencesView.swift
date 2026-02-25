@@ -257,31 +257,33 @@ struct GeneralPreferencesTab: View {
                 .toggleStyle(.switch)
 
                 if prefs.isSecondPassASREnabled {
-                    LabeledContent("Finalization model") {
-                        Picker(selection: $prefs.secondPassModelPreference) {
-                            Text("Same as live model").tag(PreferencesManager.SecondPassModelPreference.sameAsLive)
-                            Text("Best available").tag(PreferencesManager.SecondPassModelPreference.bestAvailable)
-                        } label: {
-                            EmptyView()
-                        }
-                        .frame(maxWidth: 280)
-                    }
-                    .padding(.leading, 18)
-                    
-                    Text("Best available prefers the highest-quality downloaded model.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 18)
-                    
-                    Toggle(isOn: $prefs.isAutoRefineEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Auto-refine with AI (experimental)")
-                            Text("Applies constrained LLM cleanup after second-pass ASR.")
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            LabeledContent("Finalization model") {
+                                Picker(selection: $prefs.secondPassModelPreference) {
+                                    Text("Same as live model").tag(PreferencesManager.SecondPassModelPreference.sameAsLive)
+                                    Text("Best available").tag(PreferencesManager.SecondPassModelPreference.bestAvailable)
+                                } label: {
+                                    EmptyView()
+                                }
+                                .frame(maxWidth: 280)
+                            }
+
+                            Text("Best available prefers the highest-quality downloaded model.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+
+                        Toggle(isOn: $prefs.isAutoRefineEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Auto-refine with AI (experimental)")
+                                Text("Applies constrained LLM cleanup after second-pass ASR.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
                     }
-                    .toggleStyle(.switch)
                     .padding(.leading, 18)
                 }
             }
