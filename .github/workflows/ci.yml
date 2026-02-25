@@ -73,6 +73,9 @@ jobs:
         if: steps.cache-webrtc.outputs.cache-hit != 'true'
         run: brew install meson ninja pkg-config
 
+      - name: Install xcbeautify
+        run: brew install xcbeautify
+
       - name: Build WebRTC XCFramework
         if: steps.cache-webrtc.outputs.cache-hit != 'true'
         run: ./scripts/build-webrtc-aec.sh
@@ -108,7 +111,7 @@ jobs:
             -skip-testing:MuesliTests/TapAudioCaptureServicePermissionTests \
             -skip-testing:MuesliTests/EchoCancellationServiceWebRTCTests \
             -skip-testing:MuesliTests/EchoCancellationServiceNLMSTests/testConcurrentAccess \
-            test | tee stable-test.log | xcpretty
+            test | tee stable-test.log | xcbeautify --renderer github-actions
 
       - name: Append failed stable tests to summary
         if: failure()
@@ -225,6 +228,9 @@ jobs:
         if: steps.cache-webrtc-quarantined.outputs.cache-hit != 'true'
         run: brew install meson ninja pkg-config
 
+      - name: Install xcbeautify
+        run: brew install xcbeautify
+
       - name: Build WebRTC XCFramework
         if: steps.cache-webrtc-quarantined.outputs.cache-hit != 'true'
         run: ./scripts/build-webrtc-aec.sh
@@ -247,7 +253,7 @@ jobs:
             -only-testing:MuesliTests/CoreAudioTapHardwareTests \
             -only-testing:MuesliTests/TapAudioCaptureServicePermissionTests \
             -only-testing:MuesliTests/EchoCancellationServiceWebRTCTests \
-            test | tee quarantined-test.log | xcpretty
+            test | tee quarantined-test.log | xcbeautify --renderer github-actions
 
       - name: Append quarantined test failures to summary
         if: always()
@@ -394,6 +400,9 @@ jobs:
         if: steps.cache-webrtc-release.outputs.cache-hit != 'true'
         run: brew install meson ninja pkg-config
 
+      - name: Install xcbeautify
+        run: brew install xcbeautify
+
       - name: Build WebRTC XCFramework
         if: steps.cache-webrtc-release.outputs.cache-hit != 'true'
         run: ./scripts/build-webrtc-aec.sh
@@ -444,7 +453,7 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            build | xcpretty
+            build | xcbeautify --renderer github-actions
 
       - name: Verify app bundle
         run: |

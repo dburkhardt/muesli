@@ -173,8 +173,7 @@ jobs:
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
         with:
           path: |
-            .build
-            ~/Library/Developer/Xcode/DerivedData
+            ~/Library/Developer/Xcode/DerivedData/Muesli-*/SourcePackages
           key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
