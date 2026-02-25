@@ -91,6 +91,22 @@ final class AudioConfigurationTests: XCTestCase {
         XCTAssertEqual(AudioConfiguration.vadThreshold, 0.01)
     }
 
+    func testBoundaryVADConfiguration() {
+        XCTAssertEqual(AudioConfiguration.strictMinimumSamples, 16_000)
+        XCTAssertEqual(AudioConfiguration.boundaryMinimumSamples, 8_000)
+        XCTAssertEqual(AudioConfiguration.boundaryVadThreshold, 0.005)
+        XCTAssertEqual(AudioConfiguration.strictSignificantRatio, 0.1)
+        XCTAssertEqual(AudioConfiguration.boundarySignificantRatio, 0.05)
+    }
+
+    func testBoundaryRetentionConfiguration() {
+        XCTAssertEqual(AudioConfiguration.boundaryRetainedTailSamples, 80_000)
+        XCTAssertEqual(AudioConfiguration.boundaryMaxRetentionSamples, 480_000)
+        XCTAssertEqual(AudioConfiguration.boundaryMaxRetryCountPerWindow, 2)
+        XCTAssertEqual(AudioConfiguration.boundaryMinAdvanceSamples, 8_000)
+        XCTAssertTrue(AudioConfiguration.enableLiveBoundaryFallback)
+    }
+
     // MARK: - Error Recovery Tests
 
     func testMaxConsecutiveAudioErrors() {

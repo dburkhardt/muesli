@@ -89,6 +89,36 @@ enum AudioConfiguration {
     
     /// RMS threshold for voice activity detection (-40dB equivalent)
     static let vadThreshold: Float = 0.01
+
+    /// Minimum sample count for strict VAD mode (1 second at 16kHz)
+    static let strictMinimumSamples: Int = 16_000
+
+    /// Minimum sample count for boundary VAD mode (0.5 seconds at 16kHz)
+    static let boundaryMinimumSamples: Int = 8_000
+
+    /// RMS threshold for boundary VAD fallback mode
+    static let boundaryVadThreshold: Float = 0.005
+
+    /// Required significant-energy ratio for strict VAD mode
+    static let strictSignificantRatio: Float = 0.1
+
+    /// Required significant-energy ratio for boundary VAD fallback mode
+    static let boundarySignificantRatio: Float = 0.05
+
+    /// Maximum tail retained after a failed boundary silence flush (5 seconds)
+    static let boundaryRetainedTailSamples: Int = 80_000
+
+    /// Hard cap for boundary retention window (30 seconds)
+    static let boundaryMaxRetentionSamples: Int = 480_000
+
+    /// Maximum non-progress retries for the same boundary window before forced eviction
+    static let boundaryMaxRetryCountPerWindow: Int = 2
+
+    /// Minimum samples to force-evict when retry cap is exceeded
+    static let boundaryMinAdvanceSamples: Int = 8_000
+
+    /// Feature toggle for strict->boundary fallback in live stabilizer mode
+    static let enableLiveBoundaryFallback: Bool = true
     
     // MARK: - Live Stabilizer
     
