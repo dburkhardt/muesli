@@ -121,10 +121,9 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
         // Create AudioProcessing instance first, then apply config
         try {
             _apm = CreateApm();
-            // Bundled webrtc-audio-processing v2.x does not expose the legacy
-            // external delay estimator mode. set_stream_delay_ms is still callable,
-            // but is treated as an advisory hint path in current testing.
-            _externalDelayEnabled.store(false);
+            // In v2.x, external delay is managed via set_stream_delay_ms()
+            // The old EchoCanceller3Config::delay.use_external_delay_estimator is not available
+            _externalDelayEnabled.store(true);
             
             if (!_apm) {
                 _lastError = WebRTCAECErrorInitFailed;
@@ -290,7 +289,7 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
 #if WEBRTC_AVAILABLE
     // Recreate AudioProcessing instance and apply config using v2.x API
     _apm = CreateApm();
-    _externalDelayEnabled.store(false);
+    _externalDelayEnabled.store(true);
     if (_apm) {
         webrtc::AudioProcessing::Config config;
         config.echo_canceller.enabled = true;

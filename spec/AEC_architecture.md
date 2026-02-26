@@ -444,22 +444,6 @@ _apm->ApplyConfig(config);
 - This means aligned-feed mode (where Swift pre-aligns frames) removes the timing signal AEC3 needs
 - Workaround: Let render arrive naturally before capture to preserve timing information
 
-### Current Runtime Hinting Behavior (2026-02-26)
-
-- `WEBRTC_AEC3_CONFIG` logs `externalDelayEstimator=false` at startup on this build.
-- In this artifact, `set_stream_delay_ms()` is treated as a no-op for convergence, so `AECProcessor` keeps
-  `streamDelayRaw` and `streamDelaySource` for telemetry but does not commit `streamDelayMs` into the applied
-  bridge state.
-- `AEC_TELEMETRY` and `DELAY_AUDIT` should therefore be interpreted as:
-  - `streamDelayRaw`: raw hint emitted by `AudioSynchronizer` (`coarse`, `seeded`, or `none`)
-  - `streamDelay`: actual bridge-applied stream delay (or `-1` when estimator path is inactive)
-  - `streamDelaySource`: hint provenance used in the selection pass
-  - `externalDelayEstimator`: whether the path is active
-- `DELAY_MISMATCH` policy on this branch:
-  - `DELAY_MISMATCH_WARN`: `abs(bridgeDelayMs - syncDelayMs) > 20ms` sustained for `>3s` while RMS healthy
-  - `DELAY_MISMATCH_FAIL`: `abs(bridgeDelayMs - syncDelayMs) > 80ms` sustained for `>5s` while RMS healthy
-  - `DELAY_MISMATCH_CLEARED`: emitted on recovery from warned/failed state
-
 ### Hybrid Synchronization Architecture (Legacy ScreenCaptureKit)
 
 **Note**: This section describes the legacy ScreenCaptureKit synchronization. With Core Audio taps, the `AudioSynchronizer` handles alignment instead.
@@ -662,10 +646,7 @@ The current WebRTC XCFramework cannot enable the external delay estimator, so th
 3. **Check convergence metrics**:
    - `WEBRTC_CAPTURE_SENT` delay should move away from 0 ms.
    - ERLE should increase above ~10 dB during steady playback.
-5. **Track hint-path behavior**:
-   - If `externalDelayEstimator=true`: `AECStats.streamDelay` should mirror clamped applied delays (`0...500ms`).
-   - If `externalDelayEstimator=false`: `AECStats.streamDelay` remains `-1`, while `streamDelayRaw` still tracks requested values.
-6. **If still flat**:
+4. **If still flat**:
    - Upgrade the WebRTC XCFramework (headers + binaries) to support external delay.
    - Or add a small fixed capture delay buffer to stabilize render lead without external delay.
 
