@@ -121,12 +121,6 @@ final class AudioWorker {
     static let testRenderSilenceExtendedFrames = renderSilenceExtendedFrames
     #endif
 
-    /// Stream delay smoothing config for AEC3 hints.
-    private static let streamDelayEwmaAlpha: Double = 0.2
-    private static let streamDelayMaxStepMs: Double = 8.0
-    private var smoothedStreamDelayMs: Double = 0
-    private var hasSmoothedStreamDelay = false
-
     /// Circular buffer for processing time history (O(1) insert, no heap allocs after init).
     private let processingTimeHistorySize = 100
     private var processingTimesRing: [Double]
@@ -250,8 +244,6 @@ final class AudioWorker {
         renderSilenceFrozen = false
         loggedSilenceFreeze = false
         loggedSilenceExtended = false
-        smoothedStreamDelayMs = 0
-        hasSmoothedStreamDelay = false
         processingTimesWriteIndex = 0
         processingTimesCount = 0
 
@@ -410,7 +402,7 @@ final class AudioWorker {
                 let coarseDelayMs = synchronizer.coarseDelayMs
                 let seededDelayMs = synchronizer.seededDelayMs
                 let streamDelayHintMs = coarseDelayMs > 0 ? coarseDelayMs : max(seededDelayMs, 0)
-                let boundedStreamDelayMs = smoothedDelayHintMs(streamDelayHintMs)
+                let boundedStreamDelayMs = min(max(streamDelayHintMs, 0), 500)
                 let delaySet = aecProcessor.setStreamDelayMs(boundedStreamDelayMs)
                 if !delaySet {
                     lock.lock()
@@ -485,22 +477,6 @@ final class AudioWorker {
             captureRmsAccumulator = 0
             rmsFrameCount = 0
         }
-    }
-
-    private func smoothedDelayHintMs(_ rawDelayMs: Int) -> Int {
-        let bounded = min(max(rawDelayMs, 0), 500)
-        let raw = Double(bounded)
-        if !hasSmoothedStreamDelay {
-            hasSmoothedStreamDelay = true
-            smoothedStreamDelayMs = raw
-            return bounded
-        }
-
-        let ewma = (Self.streamDelayEwmaAlpha * raw) + ((1 - Self.streamDelayEwmaAlpha) * smoothedStreamDelayMs)
-        let delta = ewma - smoothedStreamDelayMs
-        let clampedDelta = max(-Self.streamDelayMaxStepMs, min(Self.streamDelayMaxStepMs, delta))
-        smoothedStreamDelayMs = min(500, max(0, smoothedStreamDelayMs + clampedDelta))
-        return Int(smoothedStreamDelayMs.rounded())
     }
 
     /// Compute RMS amplitude of a mono Float32 frame.

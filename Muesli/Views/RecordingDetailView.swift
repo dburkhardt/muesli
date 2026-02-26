@@ -600,7 +600,6 @@ struct RecordingDetailView: View {
             FloatingProcessingIndicator(
                 phase: .reprocessing,
                 startTime: processingState.startedAt,
-                statusText: processingState.displayStatus,
                 onCancel: cancelAction
             )
         } else if meeting.isReprocessing, let startTime = meeting.reprocessingStartTime {

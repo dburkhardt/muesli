@@ -59,14 +59,6 @@ final class RecordingController {
         let shouldLaunchSecondPass: Bool
         let skipReason: AutomaticFinalizationSkipReason?
     }
-
-    /// Timing diagnostics for stop-flow phases.
-    private struct StopPhaseTiming: Sendable {
-        var stopCaptureMs: Int = 0
-        var stopTranscriptionMs: Int = 0
-        var stopWritingMs: Int = 0
-        var totalMs: Int = 0
-    }
     
     // MARK: - Audio Level Throttling
     
@@ -707,37 +699,18 @@ final class RecordingController {
     private func stopRecordingAsync(for session: RecordingSession) async {
         session.state = .stopping
         session.stopDisplayTimer()
-        session.isFinalizingTranscript = true
-        let stopStartedAt = Date()
-        var stopTiming = StopPhaseTiming()
         
         do {
-            let captureStartedAt = Date()
             try await audioCaptureService.stopCapture()
-            stopTiming.stopCaptureMs = Int(Date().timeIntervalSince(captureStartedAt) * 1000)
-
-            let shouldUseDeferredFlush = preferencesManager.isSecondPassASREnabled &&
-                transcriptionCoordinator.transcriptionMode == .live
-            let transcriptionStartedAt = Date()
-            let flushResult = await transcriptionCoordinator.stopTranscription(
-                maxFlushDuration: shouldUseDeferredFlush ? 1.5 : nil,
-                allowDeferredFlush: shouldUseDeferredFlush
-            )
-            stopTiming.stopTranscriptionMs = Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000)
-            logger.info(
-                "Stop flush result: completedFullFlush=\(flushResult.completedFullFlush), flushDurationMs=\(flushResult.flushDurationMs), remainingSamples=\(flushResult.remainingBufferedSamples)"
-            )
+            await transcriptionCoordinator.stopTranscription()
 
             // Stop file writing and get output directory
             let directory: URL
             do {
-                let writingStartedAt = Date()
                 directory = try await fileOutputService.stopWriting()
-                stopTiming.stopWritingMs = Int(Date().timeIntervalSince(writingStartedAt) * 1000)
             } catch {
                 session.showError(.outputDirectoryCreationFailed)
                 session.state = .completed
-                session.isFinalizingTranscript = false
                 activeSession = nil
                 resetMuteState()
                 return
@@ -770,15 +743,6 @@ final class RecordingController {
             await completeStopFlow(for: session, directory: directory)
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
-        }
-
-        session.isFinalizingTranscript = false
-        stopTiming.totalMs = Int(Date().timeIntervalSince(stopStartedAt) * 1000)
-        Task {
-            await DiagnosticLogger.shared.log(
-                .stabilizer,
-                "stopTiming: stopCaptureMs=\(stopTiming.stopCaptureMs), stopTranscriptionMs=\(stopTiming.stopTranscriptionMs), stopWritingMs=\(stopTiming.stopWritingMs), totalMs=\(stopTiming.totalMs)"
-            )
         }
 
         activeSession = nil
@@ -846,11 +810,6 @@ final class RecordingController {
         directory: URL,
         interruptionMessage: String? = nil
     ) async {
-        transcriptionCoordinator.beginProcessingState(
-            for: directory,
-            phase: .finalizingLive,
-            cancellable: false
-        )
         let finalizationState = await runAutomaticFinalizationIfEligible(for: session, directory: directory)
 
         session.state = .completed
@@ -878,14 +837,6 @@ final class RecordingController {
             onAutoReprocessRequested?(directory)
         } else if hasEmptyTranscript && finalizationState.automaticFinalizationLaunched {
             logger.info("Skipping empty-transcript rescue: automatic finalization already launched")
-        }
-
-        if !finalizationState.automaticFinalizationLaunched {
-            transcriptionCoordinator.clearProcessingState(
-                for: directory,
-                phase: .finalizingLive,
-                reason: "liveFinalizationComplete"
-            )
         }
     }
     
@@ -1155,35 +1106,19 @@ final class RecordingController {
             session.state = .stopping
             session.stopDisplayTimer()
         }
-        session.isFinalizingTranscript = true
-        let stopStartedAt = Date()
-        var stopTiming = StopPhaseTiming()
         
         do {
             // Interruption has already terminated the source stream, so this path
             // intentionally does NOT call audioCaptureService.stopCapture().
-            let shouldUseDeferredFlush = preferencesManager.isSecondPassASREnabled &&
-                transcriptionCoordinator.transcriptionMode == .live
-            let transcriptionStartedAt = Date()
-            let flushResult = await transcriptionCoordinator.stopTranscription(
-                maxFlushDuration: shouldUseDeferredFlush ? 1.5 : nil,
-                allowDeferredFlush: shouldUseDeferredFlush
-            )
-            stopTiming.stopTranscriptionMs = Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000)
-            logger.info(
-                "Interrupted stop flush result: completedFullFlush=\(flushResult.completedFullFlush), flushDurationMs=\(flushResult.flushDurationMs), remainingSamples=\(flushResult.remainingBufferedSamples)"
-            )
+            await transcriptionCoordinator.stopTranscription()
 
             // Stop file writing and get output directory
             let directory: URL
             do {
-                let writingStartedAt = Date()
                 directory = try await fileOutputService.stopWriting()
-                stopTiming.stopWritingMs = Int(Date().timeIntervalSince(writingStartedAt) * 1000)
             } catch {
                 session.state = .completed
                 session.showError(.outputDirectoryCreationFailed)
-                session.isFinalizingTranscript = false
                 activeSession = nil
                 resetMuteState()
                 // Reset isActivelyRecording so permission re-probing is not permanently suppressed.
@@ -1221,15 +1156,6 @@ final class RecordingController {
             )
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
-        }
-
-        session.isFinalizingTranscript = false
-        stopTiming.totalMs = Int(Date().timeIntervalSince(stopStartedAt) * 1000)
-        Task {
-            await DiagnosticLogger.shared.log(
-                .stabilizer,
-                "interruptedStopTiming: stopTranscriptionMs=\(stopTiming.stopTranscriptionMs), stopWritingMs=\(stopTiming.stopWritingMs), totalMs=\(stopTiming.totalMs)"
-            )
         }
 
         activeSession = nil

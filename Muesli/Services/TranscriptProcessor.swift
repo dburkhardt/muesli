@@ -306,9 +306,6 @@ final class TranscriptProcessor {
         if let lastBlock = blocks.last,
            lastBlock.speaker == speaker,
            lastBlock.wordCount < maxWordsPerBlock {
-            if shouldSuppressRepeatedAppend(newText: text, existingText: lastBlock.text) {
-                return
-            }
             // Same speaker and under word limit - append
             blocks[blocks.count - 1].append(text, endTimestamp: timestamp)
             
@@ -325,32 +322,5 @@ final class TranscriptProcessor {
             )
             blocks.append(newBlock)
         }
-    }
-
-    private func shouldSuppressRepeatedAppend(newText: String, existingText: String) -> Bool {
-        let normalizedNew = normalizedForRepeatCheck(newText)
-        guard normalizedNew.count >= 15 else { return false }
-
-        let trailingSentence = existingText
-            .components(separatedBy: CharacterSet(charactersIn: ".!?"))
-            .last?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? existingText
-        let normalizedTrailing = normalizedForRepeatCheck(trailingSentence)
-        let normalizedExisting = normalizedForRepeatCheck(existingText)
-
-        if normalizedNew == normalizedTrailing || normalizedNew == normalizedExisting {
-            return true
-        }
-        if normalizedTrailing.contains(normalizedNew) || normalizedNew.contains(normalizedTrailing) {
-            return normalizedTrailing.count >= 15
-        }
-        return false
-    }
-
-    private func normalizedForRepeatCheck(_ text: String) -> String {
-        text.lowercased()
-            .replacingOccurrences(of: "[^a-z0-9\\s]", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
