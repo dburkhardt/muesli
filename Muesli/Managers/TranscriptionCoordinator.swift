@@ -72,6 +72,10 @@ final class TranscriptionCoordinator {
     
     /// Called when a meeting is updated (for export service integration)
     var onMeetingUpdated: ((MeetingHistoryItem) -> Void)?
+
+    /// Called whenever processing state entries are added/updated/removed.
+    /// Used by the ViewModel to force UI invalidation for floating indicators.
+    var onProcessingStatesChanged: (() -> Void)?
     
     // MARK: - Live Refinement
     
@@ -502,6 +506,7 @@ final class TranscriptionCoordinator {
         logger.info(
             "processingState:set phase=\(phase.rawValue) dir=\(directory.lastPathComponent) cancellable=\(cancellable)"
         )
+        onProcessingStatesChanged?()
     }
 
     /// Clear active processing state for a directory.
@@ -520,6 +525,7 @@ final class TranscriptionCoordinator {
         logger.info(
             "processingState:clear phase=\(current.phase.rawValue) dir=\(directory.lastPathComponent) reason=\(reason ?? "none")"
         )
+        onProcessingStatesChanged?()
     }
     
     /// Set transcript handler for receiving segments

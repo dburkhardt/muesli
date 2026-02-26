@@ -195,6 +195,10 @@ final class MuesliViewModel {
     var isModelSwitching: Bool {
         transcriptionCoordinator.isModelSwitching
     }
+
+    /// Monotonic token bumped whenever coordinator processing state changes.
+    /// Views read through this token so floating indicators reliably re-render.
+    private var processingStateTick: UInt64 = 0
     
     // MARK: - Active Session Tracking
     // NOTE: Delegates to RecordingController - do not manage session state here
@@ -588,6 +592,12 @@ final class MuesliViewModel {
                     self.logger.error("Failed to re-export meeting: \(error.localizedDescription)")
                 }
             }
+        }
+
+        self.transcriptionCoordinator.onProcessingStatesChanged = { [weak self] in
+            guard let self else { return }
+            self.processingStateTick &+= 1
+            self.rehydrateMeetingProcessingState()
         }
         
         // Set up callback for refinement updates (for export)
@@ -1095,17 +1105,20 @@ final class MuesliViewModel {
 
     /// Canonical processing state for a meeting, if any.
     func processingState(for meeting: MeetingHistoryItem) -> TranscriptionCoordinator.MeetingProcessingState? {
-        transcriptionCoordinator.processingState(for: meeting.directory)
+        _ = processingStateTick
+        return transcriptionCoordinator.processingState(for: meeting.directory)
     }
 
     /// Canonical processing state for a directory, if any.
     func processingState(for directory: URL) -> TranscriptionCoordinator.MeetingProcessingState? {
-        transcriptionCoordinator.processingState(for: directory)
+        _ = processingStateTick
+        return transcriptionCoordinator.processingState(for: directory)
     }
 
     /// Snapshot of all active processing states keyed by canonical directory path.
     func allActiveProcessingStates() -> [String: TranscriptionCoordinator.MeetingProcessingState] {
-        transcriptionCoordinator.allActiveProcessingStates()
+        _ = processingStateTick
+        return transcriptionCoordinator.allActiveProcessingStates()
     }
 
     /// Whether any background transcript processing is active for this meeting.

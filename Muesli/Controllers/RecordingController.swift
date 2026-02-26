@@ -704,11 +704,30 @@ final class RecordingController {
         return AutomaticFinalizationDecision(shouldLaunchSecondPass: true, skipReason: nil)
     }
 
+    private func beginFinalizingLiveState(
+        for session: RecordingSession,
+        directory overrideDirectory: URL? = nil
+    ) -> URL? {
+        guard let directory = overrideDirectory ?? session.outputDirectory else { return nil }
+        if let existing = transcriptionCoordinator.processingState(for: directory),
+           existing.phase == .finalizingLive {
+            return directory
+        }
+        transcriptionCoordinator.beginProcessingState(
+            for: directory,
+            phase: .finalizingLive,
+            startedAt: session.finalizationStartTime ?? Date(),
+            cancellable: false
+        )
+        return directory
+    }
+
     private func stopRecordingAsync(for session: RecordingSession) async {
         session.state = .stopping
         session.stopDisplayTimer()
         session.isFinalizingTranscript = true
         session.finalizationStartTime = Date()
+        var finalizingDirectory = beginFinalizingLiveState(for: session)
         let stopStartedAt = Date()
         var stopTiming = StopPhaseTiming()
         
@@ -724,6 +743,13 @@ final class RecordingController {
                 directory = try await fileOutputService.stopWriting()
                 stopTiming.stopWritingMs = Int(Date().timeIntervalSince(writingStartedAt) * 1000)
             } catch {
+                if let finalizingDirectory {
+                    transcriptionCoordinator.clearProcessingState(
+                        for: finalizingDirectory,
+                        phase: .finalizingLive,
+                        reason: "stopFailedNoOutputDirectory"
+                    )
+                }
                 session.showError(.outputDirectoryCreationFailed)
                 session.state = .completed
                 session.isFinalizingTranscript = false
@@ -734,6 +760,7 @@ final class RecordingController {
             }
             
             session.outputDirectory = directory
+            finalizingDirectory = beginFinalizingLiveState(for: session, directory: directory) ?? finalizingDirectory
             let stopPolicy = stopFinalizationPolicy(for: session, directory: directory)
             let shouldUseBoundedFlush = stopPolicy.decision.shouldLaunchSecondPass &&
                 transcriptionCoordinator.transcriptionMode == .live
@@ -778,6 +805,13 @@ final class RecordingController {
                 didStopWithIncompleteBoundedFlush: shouldUseBoundedFlush && !flushResult.completedFullFlush
             )
         } catch {
+            if let finalizingDirectory {
+                transcriptionCoordinator.clearProcessingState(
+                    for: finalizingDirectory,
+                    phase: .finalizingLive,
+                    reason: "stopFlowFailed"
+                )
+            }
             session.showError(.transcriptSaveFailed(underlying: error))
         }
 
@@ -873,11 +907,6 @@ final class RecordingController {
         hasAudioFiles: Bool,
         didStopWithIncompleteBoundedFlush: Bool
     ) async {
-        transcriptionCoordinator.beginProcessingState(
-            for: directory,
-            phase: .finalizingLive,
-            cancellable: false
-        )
         let finalizationState = await runAutomaticFinalizationIfEligible(
             for: session,
             directory: directory,
@@ -1200,6 +1229,7 @@ final class RecordingController {
         }
         session.isFinalizingTranscript = true
         session.finalizationStartTime = Date()
+        var finalizingDirectory = beginFinalizingLiveState(for: session)
         let stopStartedAt = Date()
         var stopTiming = StopPhaseTiming()
         
@@ -1213,6 +1243,13 @@ final class RecordingController {
                 directory = try await fileOutputService.stopWriting()
                 stopTiming.stopWritingMs = Int(Date().timeIntervalSince(writingStartedAt) * 1000)
             } catch {
+                if let finalizingDirectory {
+                    transcriptionCoordinator.clearProcessingState(
+                        for: finalizingDirectory,
+                        phase: .finalizingLive,
+                        reason: "interruptedStopFailedNoOutputDirectory"
+                    )
+                }
                 session.state = .completed
                 session.showError(.outputDirectoryCreationFailed)
                 session.isFinalizingTranscript = false
@@ -1225,6 +1262,7 @@ final class RecordingController {
             }
             
             session.outputDirectory = directory
+            finalizingDirectory = beginFinalizingLiveState(for: session, directory: directory) ?? finalizingDirectory
             let stopPolicy = stopFinalizationPolicy(for: session, directory: directory)
             let shouldUseBoundedFlush = stopPolicy.decision.shouldLaunchSecondPass &&
                 transcriptionCoordinator.transcriptionMode == .live
@@ -1269,6 +1307,13 @@ final class RecordingController {
                 didStopWithIncompleteBoundedFlush: shouldUseBoundedFlush && !flushResult.completedFullFlush
             )
         } catch {
+            if let finalizingDirectory {
+                transcriptionCoordinator.clearProcessingState(
+                    for: finalizingDirectory,
+                    phase: .finalizingLive,
+                    reason: "interruptedStopFlowFailed"
+                )
+            }
             session.showError(.transcriptSaveFailed(underlying: error))
         }
 
