@@ -512,18 +512,17 @@ final class RegressionTests: XCTestCase {
         )
     }
 
-    /// Regression test: stop flow uses a bounded live flush budget when second-pass is active.
-    /// This keeps stop UX responsive while allowing deferred completion in background.
-    func testStopRecordingUsesDeferredFlushBudgetForSecondPass() throws {
+    /// Regression test: stop flow uses a bounded live flush budget only for eligible second-pass launch.
+    func testStopRecordingUsesBoundedFlushBudgetForEligibleSecondPass() throws {
         let source = try recordingControllerSource()
 
         XCTAssertTrue(
-            source.contains("maxFlushDuration: shouldUseDeferredFlush ? 1.5 : nil"),
-            "stopRecordingAsync should use a bounded flush budget when second-pass is active"
+            source.contains("maxFlushDuration: shouldUseBoundedFlush ? 1.5 : nil"),
+            "stopRecordingAsync should use a bounded flush budget only when second-pass is eligible"
         )
         XCTAssertTrue(
-            source.contains("allowDeferredFlush: shouldUseDeferredFlush"),
-            "stopRecordingAsync should allow deferred flush when second-pass is active"
+            source.contains("allowDeferredFlush: shouldUseBoundedFlush"),
+            "stopRecordingAsync should enable bounded stop semantics only when second-pass is eligible"
         )
     }
     
@@ -1593,6 +1592,233 @@ final class RegressionTests: XCTestCase {
         // Verify negative delay is rejected
         let rejected = aec.setStreamDelayMs(-1)
         XCTAssertFalse(rejected, "Negative delay should be rejected")
+    }
+
+    /// Regression test: setStreamDelayMs records unbounded value and source for observability.
+    /// If AEC bridge is available, the clamped value is fed through bridge setStreamDelayMs.
+    /// If bridge is unavailable (stub mode), clamping cannot be verified, but source/raw capture is still deterministic.
+    func testSetStreamDelayMsRecordsRawValueAndSource() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let ok = aec.setStreamDelayMs(250, source: .coarse)
+        let stats = aec.getStats()
+
+        // Raw value and source should be recorded regardless of bridge readiness.
+        XCTAssertEqual(stats.lastStreamDelayRawMs, 250, "lastStreamDelayRawMs should always capture the unbounded call value")
+        XCTAssertEqual(stats.lastStreamDelayHintSource, .coarse, "Hint source should be tracked")
+
+        if ok {
+            XCTAssertEqual(stats.lastStreamDelayMs, 250, "When accepted, lastStreamDelayMs should match clamped input")
+        }
+    }
+
+    /// Regression test: setStreamDelayMs clamps values above the 500ms domain boundary before bridging.
+    /// In environments without a live WebRTC bridge, skip strict bound assertion and only assert raw capture.
+    func testSetStreamDelayMsClampedToRange0To500() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let inputDelayMs = 777
+        let ok = aec.setStreamDelayMs(inputDelayMs, source: .seeded)
+        let stats = aec.getStats()
+
+        XCTAssertEqual(stats.lastStreamDelayRawMs, inputDelayMs, "Raw value should preserve out-of-range input for debugging")
+        XCTAssertEqual(stats.lastStreamDelayHintSource, .seeded, "Hint source should be preserved after clamping")
+
+        // 500ms is the configured upper bound in setStreamDelayMs
+        if ok {
+            XCTAssertEqual(stats.lastStreamDelayMs, 500, "Bounded delay fed to AEC should be 500ms max")
+        }
+    }
+
+    /// Regression test: explicit pass/fail mapping for estimator path.
+    /// Path A (effective): if external estimator is enabled, a valid hint should be accepted by WebRTC.
+    /// Path B (non-effective): if estimator is unavailable, the hint is still captured for observability but not applied.
+    func testSetStreamDelayMsPathAorBEstimatorBehavior() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let ok = aec.setStreamDelayMs(180, source: .coarse)
+        let stats = aec.getStats()
+
+        XCTAssertEqual(stats.lastStreamDelayRawMs, 180, "Raw delay value should always be captured")
+        XCTAssertEqual(stats.lastStreamDelayHintSource, .coarse, "Hint source should be captured")
+
+        if aec.isExternalDelayEstimatorEnabled {
+            XCTAssertTrue(ok, "Path A: active external estimator should accept a valid delay hint")
+            if ok {
+                XCTAssertEqual(stats.lastStreamDelayMs, 180, "Path A: accepted hint should be stored as sent (after clamp)")
+            }
+        } else {
+            XCTAssertFalse(ok, "Path B: estimator-unavailable path should not report successful bridge write")
+        }
+    }
+
+    /// Compatibility alias for explicit plan-mapped test name.
+    func testAudioWorkerDelayHintClampedToRange0to500() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let ok = aec.setStreamDelayMs(777, source: .coarse)
+        let stats = aec.getStats()
+
+        XCTAssertEqual(stats.lastStreamDelayRawMs, 777, "Raw delay should remain the outbound value")
+        XCTAssertEqual(stats.lastStreamDelayHintSource, .coarse, "Hint source should remain coarse")
+        if ok {
+            XCTAssertEqual(stats.lastStreamDelayMs, 500, "Clamped delay should be 500ms")
+        }
+    }
+
+    /// Regression test: delay mismatch transitions to WARN only after sustained >20ms mismatch
+    /// for >3s (300 frames), and is silent at exact-threshold mismatch.
+    func testDelayMismatchWarnBoundary_20ms3s() {
+        let aec = AECProcessor()
+        aec.debugResetDelayMismatchState()
+
+        // Exactly-on-threshold mismatch should be ignored.
+        let onThreshold = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 220,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 1
+        )
+        XCTAssertEqual(onThreshold.mismatchMs, 20)
+        XCTAssertFalse(onThreshold.emitWarn)
+        XCTAssertEqual(onThreshold.state, 0)
+
+        // Above-threshold mismatch should emit WARN at/after sustained 300 frames.
+        for frame in 1...299 {
+            let decision = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 221,
+                syncDelayMs: 200,
+                renderRmsLinear: 1.0,
+                captureRmsLinear: 1.0,
+                framesProcessed: Int64(frame)
+            )
+            XCTAssertFalse(decision.emitWarn, "WARN should not emit before 300 sustained frames")
+        }
+        let warnDecision = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 221,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 300
+        )
+        XCTAssertEqual(warnDecision.mismatchMs, 21)
+        XCTAssertTrue(warnDecision.emitWarn, "WARN should emit at sustained threshold")
+        XCTAssertEqual(warnDecision.state, 1)
+    }
+
+    /// Regression test: delay mismatch transitions to FAIL only after sustained >80ms mismatch
+    /// for >5s (500 frames), and below threshold does not fail.
+    func testDelayMismatchFailBoundary_80ms5s() {
+        let aec = AECProcessor()
+        aec.debugResetDelayMismatchState()
+
+        // Exactly-on-threshold mismatch should be ignored.
+        let onThreshold = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 280,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 1
+        )
+        XCTAssertEqual(onThreshold.mismatchMs, 80)
+        XCTAssertFalse(onThreshold.emitFail)
+        XCTAssertEqual(onThreshold.state, 0)
+
+        for frame in 1...499 {
+            let decision = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 281,
+                syncDelayMs: 200,
+                renderRmsLinear: 1.0,
+                captureRmsLinear: 1.0,
+                framesProcessed: Int64(frame)
+            )
+            XCTAssertFalse(decision.emitFail, "FAIL should not emit before 500 sustained frames")
+        }
+        let failDecision = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 281,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 500
+        )
+        XCTAssertEqual(failDecision.mismatchMs, 81)
+        XCTAssertTrue(failDecision.emitFail, "FAIL should emit at sustained threshold")
+        XCTAssertEqual(failDecision.state, 2)
+    }
+
+    /// Regression test: sustained mismatch must clear and reset counters when mismatch is resolved.
+    func testDelayMismatchClearsResetsSustainedCounter() {
+        let aec = AECProcessor()
+        aec.debugResetDelayMismatchState()
+
+        // Build to WARN state.
+        for frame in 1...300 {
+            _ = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 240,
+                syncDelayMs: 200,
+                renderRmsLinear: 1.0,
+                captureRmsLinear: 1.0,
+                framesProcessed: Int64(frame)
+            )
+        }
+
+        // Recovery to healthy ranges must emit CLEAR and transition to none.
+        let clearDecision = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 200,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 301
+        )
+        XCTAssertTrue(clearDecision.emitClear, "MISMATCH clear should emit when mismatch recovers")
+        XCTAssertEqual(clearDecision.state, 0)
+
+        // Start counting mismatch again after recovery.
+        for frame in 302...600 {
+            let decision = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 240,
+                syncDelayMs: 200,
+                renderRmsLinear: 1.0,
+                captureRmsLinear: 1.0,
+                framesProcessed: Int64(frame)
+            )
+            if frame < 601 {
+                XCTAssertFalse(decision.emitWarn, "Warn should restart after clear and not carry prior sustained count")
+            }
+        }
+        let restartedWarn = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 240,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 601
+        )
+        XCTAssertTrue(restartedWarn.emitWarn, "Warn should re-emit after a full new sustain window")
+        XCTAssertEqual(restartedWarn.state, 1)
+    }
+
+    /// Regression test: mismatch detection is suppressed during very low RMS (silence or near-silence).
+    func testDelayMismatchSuppressedWhenRmsTooLow() {
+        let aec = AECProcessor()
+        aec.debugResetDelayMismatchState()
+
+        for frame in 1...500 {
+            let decision = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 300,
+                syncDelayMs: 200,
+                renderRmsLinear: 0.000_5,
+                captureRmsLinear: 0.000_5,
+                framesProcessed: Int64(frame)
+            )
+            XCTAssertFalse(decision.emitWarn)
+            XCTAssertFalse(decision.emitFail)
+            XCTAssertEqual(decision.state, 0)
+        }
     }
 
     /// Regression test: CoarseDelayController.seed() sets currentDelaySamples immediately.

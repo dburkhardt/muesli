@@ -446,7 +446,7 @@ final class TranscriptionCoordinator {
     /// Stop transcription and process remaining audio.
     /// - Parameters:
     ///   - maxFlushDuration: Optional max wait budget for final live flush.
-    ///   - allowDeferredFlush: Allow flush completion in background after budget.
+    ///   - allowDeferredFlush: Allow bounded stop to return incomplete flush on timeout.
     @discardableResult
     func stopTranscription(
         maxFlushDuration: TimeInterval? = nil,

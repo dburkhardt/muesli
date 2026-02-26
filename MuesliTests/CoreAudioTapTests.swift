@@ -560,6 +560,33 @@ final class CoreAudioTapTests: XCTestCase {
         }
         XCTAssertGreaterThan(lastDelayMs, 0, "AudioWorker should feed non-zero synchronizer delay hint to AEC")
     }
+
+    func testAudioWorkerUsesCoarseDelayWhenAvailable() {
+        let selection = AudioWorker.selectStreamDelayHint(
+            coarseDelayMs: 175,
+            seededDelayMs: 80
+        )
+        XCTAssertEqual(selection.delayMs, 175, "Coarse delay should take precedence when available")
+        XCTAssertEqual(selection.source, .coarse)
+    }
+
+    func testAudioWorkerFallsBackToSeededDelayWhenCoarseZero() {
+        let selection = AudioWorker.selectStreamDelayHint(
+            coarseDelayMs: 0,
+            seededDelayMs: 80
+        )
+        XCTAssertEqual(selection.delayMs, 80, "Seeded delay should be used when coarse delay is not available")
+        XCTAssertEqual(selection.source, .seeded)
+    }
+
+    func testAudioWorkerDelayHintSelectsNoneWhenUnavailable() {
+        let selection = AudioWorker.selectStreamDelayHint(
+            coarseDelayMs: 0,
+            seededDelayMs: -1
+        )
+        XCTAssertEqual(selection.delayMs, 0, "When no delay estimates are available, hint should be zero")
+        XCTAssertEqual(selection.source, .none)
+    }
 }
 
 // MARK: - TapAudioCaptureService Permission Tests

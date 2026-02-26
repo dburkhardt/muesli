@@ -358,7 +358,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     /// Stop transcription processing.
     /// - Parameters:
     ///   - maxFlushDuration: Optional maximum wait for final buffer flush. `nil` waits for full completion.
-    ///   - allowDeferredFlush: If true, flush can continue in background after the timeout is reached.
+    ///   - allowDeferredFlush: If true, stop can return early when timeout is reached.
     @discardableResult
     func stopTranscription(
         maxFlushDuration: TimeInterval? = nil,
@@ -401,16 +401,14 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             if completedWithinBudget {
                 didCompleteFlush = true
             } else if allowDeferredFlush {
+                flushTask.cancel()
                 didCompleteFlush = false
                 let remaining = currentBufferedSampleCount()
                 Task {
                     await DiagnosticLogger.shared.log(
                         .transcription,
-                        "STOP_FLUSH_DEFERRED: budgetMs=\(Int(maxFlushDuration * 1000)), remainingSamples=\(remaining)"
+                        "STOP_FLUSH_BOUNDED_TIMEOUT: budgetMs=\(Int(maxFlushDuration * 1000)), remainingSamples=\(remaining)"
                     )
-                }
-                Task.detached(priority: .utility) {
-                    await flushTask.value
                 }
             } else {
                 await flushTask.value
@@ -726,6 +724,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
 
     private func processRemainingAudio() async {
         guard isInitialized || transcriptionExecutorOverride != nil else { return }
+        guard !Task.isCancelled else { return }
 
         let now = Date()
         let snapshots: [BoundarySnapshot] = bufferState.withLock { state in
@@ -772,6 +771,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
 
         var transcriptions: [PendingTranscription] = []
         for snapshot in snapshots {
+            guard !Task.isCancelled else { return }
             let decision = makeBoundaryDecision(
                 for: snapshot.samples,
                 allowFallback: shouldAttemptBoundaryFallback,
@@ -792,6 +792,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         }
 
         for pending in transcriptions {
+            guard !Task.isCancelled else { return }
             if let resultText = await executeTranscription(
                 pending.samples,
                 speaker: pending.speaker,
@@ -818,10 +819,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     }
 
     private func performFinalFlush() async {
+        guard !Task.isCancelled else { return }
         await processRemainingAudio()
+        guard !Task.isCancelled else { return }
         logBoundaryDiagnosticsSummary()
 
         if let stabilizer = liveStabilizer {
+            guard !Task.isCancelled else { return }
             let output = await stabilizer.flushAll()
             for segment in output.committedSegments {
                 transcriptHandler?(segment)
@@ -1279,6 +1283,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 cumulativeSampleOffset,
                 previousText
             )?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !Task.isCancelled else { return nil }
             guard let text, !text.isEmpty else { return nil }
             await emitTranscribedText(
                 text: text,
@@ -1289,6 +1294,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         }
 
         guard let whisperKit else { return nil }
+        guard !Task.isCancelled else { return nil }
         return await transcribeChunk(
             samples,
             speaker: speaker,

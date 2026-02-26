@@ -71,6 +71,42 @@ final class RecordingControllerTests: XCTestCase {
         )
         return (controller, audioCaptureService)
     }
+
+    private func createTestControllerWithMockTranscriptionService() async -> (
+        RecordingController,
+        MockAudioCaptureService,
+        MockTranscriptionService
+    ) {
+        let audioCaptureService = MockAudioCaptureService()
+        let fileOutputService = FileOutputService()
+        let mockTranscriptionService = MockTranscriptionService()
+        let modelManager = MockModelManager()
+        let transcriptionCoordinator = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: modelManager
+        )
+        let preferencesManager = PreferencesManager()
+        let microphoneManager = MicrophoneManager()
+
+        let controller = RecordingController(
+            audioCaptureService: audioCaptureService,
+            fileOutputService: fileOutputService,
+            transcriptionService: TranscriptionService(),
+            transcriptionCoordinator: transcriptionCoordinator,
+            preferencesManager: preferencesManager,
+            microphoneManager: microphoneManager,
+            exportService: ExportService()
+        )
+        return (controller, audioCaptureService, mockTranscriptionService)
+    }
+
+    private func ensurePrimaryAudioFileExists(for session: RecordingSession) {
+        guard let directory = session.outputDirectory else { return }
+        let audioURL = directory.appendingPathComponent("audio.caf")
+        if !FileManager.default.fileExists(atPath: audioURL.path) {
+            _ = FileManager.default.createFile(atPath: audioURL.path, contents: Data([0x00]))
+        }
+    }
     
     // MARK: - Session Creation Tests
     
@@ -684,6 +720,92 @@ final class RecordingControllerTests: XCTestCase {
             recordingDuration: minDuration + 0.1
         )
         XCTAssertEqual(launchDecision, expectedLaunch)
+    }
+
+    func testStopRecordingUsesFullFlushWhenSecondPassDecisionSkips() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, _, mockTranscriptionService) = await createTestControllerWithMockTranscriptionService()
+        let session = controller.createSession()
+        session.meetingTitle = "Short Meeting"
+
+        let completionExpectation = expectation(description: "Stop completes")
+        controller.onSessionCompleted = { _, _ in
+            completionExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(for: .milliseconds(200))
+        ensurePrimaryAudioFileExists(for: session)
+        // Keep duration below threshold so automatic second-pass is ineligible.
+        session.recordingStartTime = Date()
+
+        controller.stopRecording(for: session)
+        await fulfillment(of: [completionExpectation], timeout: 3.0)
+
+        XCTAssertEqual(mockTranscriptionService.lastStopMaxFlushDuration, nil)
+        XCTAssertFalse(mockTranscriptionService.lastStopAllowDeferredFlush)
+    }
+
+    func testInterruptionUsesBoundedFlushWhenSecondPassDecisionLaunches() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, mockCapture, mockTranscriptionService) = await createTestControllerWithMockTranscriptionService()
+        let session = controller.createSession()
+        session.meetingTitle = "Interrupted Long Meeting"
+
+        let completionExpectation = expectation(description: "Interrupted stop completes")
+        controller.onSessionCompleted = { _, _ in
+            completionExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(for: .milliseconds(200))
+        ensurePrimaryAudioFileExists(for: session)
+        session.recordingStartTime = Date().addingTimeInterval(-(AudioConfiguration.secondPassMinDurationSeconds + 2.0))
+
+        await mockCapture.simulateInterruption(nil)
+        await fulfillment(of: [completionExpectation], timeout: 3.0)
+
+        XCTAssertEqual(mockTranscriptionService.lastStopMaxFlushDuration ?? 0, 1.5, accuracy: 0.001)
+        XCTAssertTrue(mockTranscriptionService.lastStopAllowDeferredFlush)
+    }
+
+    func testSecondPassFailureForcesAutoReprocessAfterIncompleteBoundedFlush() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, _, mockTranscriptionService) = await createTestControllerWithMockTranscriptionService()
+        mockTranscriptionService.stopTranscriptionResult = .init(
+            completedFullFlush: false,
+            flushDurationMs: 1500,
+            remainingBufferedSamples: 4800
+        )
+
+        let session = controller.createSession()
+        session.meetingTitle = "Force Recovery Meeting"
+        session.appendTranscriptSegment(
+            .init(text: "existing transcript", timestamp: 0.0, speaker: .me)
+        )
+
+        let completionExpectation = expectation(description: "Stop completes")
+        let autoReprocessExpectation = expectation(description: "Auto-reprocess forced")
+        controller.onSessionCompleted = { _, _ in
+            completionExpectation.fulfill()
+        }
+        controller.onAutoReprocessRequested = { _ in
+            autoReprocessExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(for: .milliseconds(200))
+        ensurePrimaryAudioFileExists(for: session)
+        session.recordingStartTime = Date().addingTimeInterval(-(AudioConfiguration.secondPassMinDurationSeconds + 2.0))
+
+        controller.stopRecording(for: session)
+        await fulfillment(of: [completionExpectation, autoReprocessExpectation], timeout: 4.0)
+
+        XCTAssertEqual(mockTranscriptionService.lastStopMaxFlushDuration ?? 0, 1.5, accuracy: 0.001)
+        XCTAssertTrue(mockTranscriptionService.lastStopAllowDeferredFlush)
     }
 
     func testInterruptionPathSkipsStopCapture() async {

@@ -716,18 +716,6 @@ final class RecordingController {
             try await audioCaptureService.stopCapture()
             stopTiming.stopCaptureMs = Int(Date().timeIntervalSince(captureStartedAt) * 1000)
 
-            let shouldUseDeferredFlush = preferencesManager.isSecondPassASREnabled &&
-                transcriptionCoordinator.transcriptionMode == .live
-            let transcriptionStartedAt = Date()
-            let flushResult = await transcriptionCoordinator.stopTranscription(
-                maxFlushDuration: shouldUseDeferredFlush ? 1.5 : nil,
-                allowDeferredFlush: shouldUseDeferredFlush
-            )
-            stopTiming.stopTranscriptionMs = Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000)
-            logger.info(
-                "Stop flush result: completedFullFlush=\(flushResult.completedFullFlush), flushDurationMs=\(flushResult.flushDurationMs), remainingSamples=\(flushResult.remainingBufferedSamples)"
-            )
-
             // Stop file writing and get output directory
             let directory: URL
             do {
@@ -744,6 +732,19 @@ final class RecordingController {
             }
             
             session.outputDirectory = directory
+            let stopPolicy = stopFinalizationPolicy(for: session, directory: directory)
+            let shouldUseBoundedFlush = stopPolicy.decision.shouldLaunchSecondPass &&
+                transcriptionCoordinator.transcriptionMode == .live
+
+            let transcriptionStartedAt = Date()
+            let flushResult = await transcriptionCoordinator.stopTranscription(
+                maxFlushDuration: shouldUseBoundedFlush ? 1.5 : nil,
+                allowDeferredFlush: shouldUseBoundedFlush
+            )
+            stopTiming.stopTranscriptionMs = Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000)
+            logger.info(
+                "Stop flush result: completedFullFlush=\(flushResult.completedFullFlush), flushDurationMs=\(flushResult.flushDurationMs), remainingSamples=\(flushResult.remainingBufferedSamples), boundedFlush=\(shouldUseBoundedFlush)"
+            )
             
             // Handle post-processing transcription if needed
             if transcriptionCoordinator.transcriptionMode == .postProcessing {
@@ -767,7 +768,13 @@ final class RecordingController {
                 // Continue - we have audio files even if transcript save failed
             }
 
-            await completeStopFlow(for: session, directory: directory)
+            await completeStopFlow(
+                for: session,
+                directory: directory,
+                automaticFinalizationDecision: stopPolicy.decision,
+                hasAudioFiles: stopPolicy.hasAudioFiles,
+                didStopWithIncompleteBoundedFlush: shouldUseBoundedFlush && !flushResult.completedFullFlush
+            )
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))
         }
@@ -794,6 +801,20 @@ final class RecordingController {
             FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
     }
 
+    private func stopFinalizationPolicy(
+        for session: RecordingSession,
+        directory: URL
+    ) -> (hasAudioFiles: Bool, decision: AutomaticFinalizationDecision) {
+        let hasAudioFiles = hasAudioFiles(in: directory)
+        let duration = recordingDuration(for: session)
+        let decision = Self.automaticFinalizationDecision(
+            hasAudioFiles: hasAudioFiles,
+            secondPassEnabled: preferencesManager.isSecondPassASREnabled,
+            recordingDuration: duration
+        )
+        return (hasAudioFiles, decision)
+    }
+
     private func logAutomaticFinalizationSkip(
         reason: AutomaticFinalizationSkipReason,
         recordingDuration: TimeInterval
@@ -812,24 +833,24 @@ final class RecordingController {
 
     private func runAutomaticFinalizationIfEligible(
         for session: RecordingSession,
-        directory: URL
+        directory: URL,
+        decision: AutomaticFinalizationDecision,
+        hasAudioFiles: Bool,
+        didStopWithIncompleteBoundedFlush: Bool
     ) async -> (hasAudioFiles: Bool, automaticFinalizationLaunched: Bool) {
-        let hasAudioFiles = hasAudioFiles(in: directory)
-        let duration = recordingDuration(for: session)
-        let decision = Self.automaticFinalizationDecision(
-            hasAudioFiles: hasAudioFiles,
-            secondPassEnabled: preferencesManager.isSecondPassASREnabled,
-            recordingDuration: duration
-        )
-
         var automaticFinalizationLaunched = false
         if decision.shouldLaunchSecondPass {
             session.effectiveLiveModel = transcriptionCoordinator.effectiveLiveModelForSession ?? session.effectiveLiveModel
             transcriptionCoordinator.markSecondPassActive(for: directory)
-            launchSecondPassFinalization(for: session, directory: directory)
+            launchSecondPassFinalization(
+                for: session,
+                directory: directory,
+                forceRecoveryOnFailure: didStopWithIncompleteBoundedFlush
+            )
             automaticFinalizationLaunched = true
             logger.debug("Deferring immediate export until second-pass finalization completes")
         } else if let reason = decision.skipReason {
+            let duration = recordingDuration(for: session)
             logAutomaticFinalizationSkip(reason: reason, recordingDuration: duration)
         }
 
@@ -844,14 +865,23 @@ final class RecordingController {
     private func completeStopFlow(
         for session: RecordingSession,
         directory: URL,
-        interruptionMessage: String? = nil
+        interruptionMessage: String? = nil,
+        automaticFinalizationDecision: AutomaticFinalizationDecision,
+        hasAudioFiles: Bool,
+        didStopWithIncompleteBoundedFlush: Bool
     ) async {
         transcriptionCoordinator.beginProcessingState(
             for: directory,
             phase: .finalizingLive,
             cancellable: false
         )
-        let finalizationState = await runAutomaticFinalizationIfEligible(for: session, directory: directory)
+        let finalizationState = await runAutomaticFinalizationIfEligible(
+            for: session,
+            directory: directory,
+            decision: automaticFinalizationDecision,
+            hasAudioFiles: hasAudioFiles,
+            didStopWithIncompleteBoundedFlush: didStopWithIncompleteBoundedFlush
+        )
 
         session.state = .completed
         // Interruption may end the live capture stream, but history resume affordance
@@ -889,7 +919,11 @@ final class RecordingController {
         }
     }
     
-    private func launchSecondPassFinalization(for session: RecordingSession, directory: URL) {
+    private func launchSecondPassFinalization(
+        for session: RecordingSession,
+        directory: URL,
+        forceRecoveryOnFailure: Bool
+    ) {
         let title = session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle
         let meetingDate = session.recordingStartTime ?? Date()
         let liveModelAtStop = session.effectiveLiveModel
@@ -971,14 +1005,18 @@ final class RecordingController {
                     "secondPass:failed dir=\(directory.lastPathComponent) error=\(error.localizedDescription)"
                 )
                 
-                // Fallback: if second-pass failed and transcript is empty, trigger
-                // auto-reprocess as recovery so the user doesn't get a blank transcript.
+                // Fallback: if second-pass failed and transcript is empty, or if
+                // bounded flush was incomplete, trigger auto-reprocess recovery.
                 let transcriptURL = directory.appendingPathComponent("transcript.md")
                 let transcriptExists = FileManager.default.fileExists(atPath: transcriptURL.path)
                 let transcriptEmpty = transcriptExists && ((try? String(contentsOf: transcriptURL))?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                if !transcriptExists || transcriptEmpty {
+                if forceRecoveryOnFailure || !transcriptExists || transcriptEmpty {
                     await MainActor.run {
-                        self.logger.info("Second-pass failed with empty transcript; falling back to auto-reprocess")
+                        if forceRecoveryOnFailure {
+                            self.logger.info("Second-pass failed after incomplete bounded flush; forcing auto-reprocess recovery")
+                        } else {
+                            self.logger.info("Second-pass failed with empty transcript; falling back to auto-reprocess")
+                        }
                         self.onAutoReprocessRequested?(directory)
                     }
                 }
@@ -1162,18 +1200,6 @@ final class RecordingController {
         do {
             // Interruption has already terminated the source stream, so this path
             // intentionally does NOT call audioCaptureService.stopCapture().
-            let shouldUseDeferredFlush = preferencesManager.isSecondPassASREnabled &&
-                transcriptionCoordinator.transcriptionMode == .live
-            let transcriptionStartedAt = Date()
-            let flushResult = await transcriptionCoordinator.stopTranscription(
-                maxFlushDuration: shouldUseDeferredFlush ? 1.5 : nil,
-                allowDeferredFlush: shouldUseDeferredFlush
-            )
-            stopTiming.stopTranscriptionMs = Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000)
-            logger.info(
-                "Interrupted stop flush result: completedFullFlush=\(flushResult.completedFullFlush), flushDurationMs=\(flushResult.flushDurationMs), remainingSamples=\(flushResult.remainingBufferedSamples)"
-            )
-
             // Stop file writing and get output directory
             let directory: URL
             do {
@@ -1192,6 +1218,19 @@ final class RecordingController {
             }
             
             session.outputDirectory = directory
+            let stopPolicy = stopFinalizationPolicy(for: session, directory: directory)
+            let shouldUseBoundedFlush = stopPolicy.decision.shouldLaunchSecondPass &&
+                transcriptionCoordinator.transcriptionMode == .live
+
+            let transcriptionStartedAt = Date()
+            let flushResult = await transcriptionCoordinator.stopTranscription(
+                maxFlushDuration: shouldUseBoundedFlush ? 1.5 : nil,
+                allowDeferredFlush: shouldUseBoundedFlush
+            )
+            stopTiming.stopTranscriptionMs = Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000)
+            logger.info(
+                "Interrupted stop flush result: completedFullFlush=\(flushResult.completedFullFlush), flushDurationMs=\(flushResult.flushDurationMs), remainingSamples=\(flushResult.remainingBufferedSamples), boundedFlush=\(shouldUseBoundedFlush)"
+            )
             
             if transcriptionCoordinator.transcriptionMode == .postProcessing {
                 await handlePostProcessingTranscription(for: session, directory: directory)
@@ -1217,7 +1256,10 @@ final class RecordingController {
             await completeStopFlow(
                 for: session,
                 directory: directory,
-                interruptionMessage: interruptionMessage
+                interruptionMessage: interruptionMessage,
+                automaticFinalizationDecision: stopPolicy.decision,
+                hasAudioFiles: stopPolicy.hasAudioFiles,
+                didStopWithIncompleteBoundedFlush: shouldUseBoundedFlush && !flushResult.completedFullFlush
             )
         } catch {
             session.showError(.transcriptSaveFailed(underlying: error))

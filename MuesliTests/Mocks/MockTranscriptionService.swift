@@ -23,6 +23,11 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         code: 2,
         userInfo: [NSLocalizedDescriptionKey: "Mock post-processing error"]
     )
+    var stopTranscriptionResult = TranscriptionService.StopFlushResult(
+        completedFullFlush: true,
+        flushDurationMs: 0,
+        remainingBufferedSamples: 0
+    )
     
     /// Simulated delay during initialization (for testing slow model loading)
     var initializationDelay: TimeInterval = 0
@@ -94,11 +99,7 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         lastStopMaxFlushDuration = maxFlushDuration
         lastStopAllowDeferredFlush = allowDeferredFlush
         isTranscribing = false
-        return TranscriptionService.StopFlushResult(
-            completedFullFlush: true,
-            flushDurationMs: 0,
-            remainingBufferedSamples: 0
-        )
+        return stopTranscriptionResult
     }
     
     func appendSystemAudio(_ samples: [Float]) {
@@ -161,6 +162,11 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         postProcessingCallCount = 0
         setTranscriptHandlerCallCount = 0
         setDraftHandlerCallCount = 0
+        stopTranscriptionResult = TranscriptionService.StopFlushResult(
+            completedFullFlush: true,
+            flushDurationMs: 0,
+            remainingBufferedSamples: 0
+        )
         lastModelPath = nil
         lastRecordingStartTime = nil
         lastStopMaxFlushDuration = nil

@@ -22,6 +22,35 @@ enum AECMode: Equatable {
 
 // MARK: - AEC Statistics
 
+/// Delay-hint source used for setStreamDelayMs.
+/// This is propagated from AudioWorker's synchronizer strategy so we can
+/// track whether coarse delay, seeded fallback, or no delay hint was used.
+enum AECStreamDelayHintSource: Int {
+    case unknown = 0
+    case coarse
+    case seeded
+    case none
+    
+    var label: String {
+        switch self {
+        case .unknown:
+            return "unknown"
+        case .coarse:
+            return "coarse"
+        case .seeded:
+            return "seeded"
+        case .none:
+            return "none"
+        }
+    }
+}
+
+private enum DelayMismatchTier {
+    case none
+    case warn
+    case fail
+}
+
 /// Statistics from AEC processing
 struct AECStats {
     var erleDb: Float = 0
@@ -36,6 +65,11 @@ struct AECStats {
     var captureRmsLinear: Float = 0
     /// Last delay value fed to AEC3 via setStreamDelayMs (ms). -1 if never set.
     var lastStreamDelayMs: Int = -1
+    /// Last unbounded stream delay hint passed into AECProcessor (ms), before clamp.
+    /// -1 when never set.
+    var lastStreamDelayRawMs: Int = -1
+    /// Last stream-delay hint source used when calling setStreamDelayMs.
+    var lastStreamDelayHintSource: AECStreamDelayHintSource = .unknown
 }
 
 // MARK: - AEC Processor
@@ -67,6 +101,19 @@ final class AECProcessor {
 
     /// Sustained delay-mismatch tracking for DELAY_MISMATCH warning.
     private var delayMismatchStartFrame: Int64 = -1
+    /// Sustained delay-mismatch tracking for DELAY_MISMATCH_FAIL.
+    private var delayMismatchFailStartFrame: Int64 = -1
+    /// Current mismatch state to emit DELAY_MISMATCH_CLEARED when recovered.
+    private var delayMismatchState: DelayMismatchTier = .none
+    
+    private struct DelayMismatchDecision {
+        let emitWarn: Bool
+        let emitFail: Bool
+        let emitClear: Bool
+        let mismatchMs: Int
+        let warnSustainedFrames: Int64
+        let failSustainedFrames: Int64
+    }
 
     private struct State: @unchecked Sendable {
         var bridge: WebRTCAECBridge?
@@ -150,9 +197,10 @@ final class AECProcessor {
         }
 
         let logSessionID = self.sessionID
+        let estimatorEnabled = isExternalDelayEstimatorEnabled
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "session=\(logSessionID) AEC_CONFIG: mode=\(logMode), topology=\(topology)")
+                "session=\(logSessionID) AEC_CONFIG: mode=\(logMode), topology=\(topology), externalDelayEstimator=\(estimatorEnabled)")
         }
     }
     
@@ -339,13 +387,19 @@ final class AECProcessor {
     /// it assumes delay=0 and cannot converge regardless of signal quality.
     /// - Parameter delayMs: Coarse delay from AudioSynchronizer (render-lead based)
     @discardableResult
-    func setStreamDelayMs(_ delayMs: Int) -> Bool {
+    func setStreamDelayMs(
+        _ delayMs: Int,
+        source: AECStreamDelayHintSource = .unknown
+    ) -> Bool {
         guard delayMs >= 0 else { return false }
+        let boundedDelayMs = min(max(delayMs, 0), 500)
         return stateLock.withLock { state -> Bool in
+            state.stats.lastStreamDelayRawMs = delayMs
+            state.stats.lastStreamDelayHintSource = source
             guard let bridge = state.bridge, bridge.isReady else { return false }
-            let ok = bridge.setStreamDelayMs(Int32(delayMs))
+            let ok = bridge.setStreamDelayMs(Int32(boundedDelayMs))
             if ok {
-                state.stats.lastStreamDelayMs = delayMs
+                state.stats.lastStreamDelayMs = boundedDelayMs
             }
             return ok
         }
@@ -365,6 +419,8 @@ final class AECProcessor {
         // emits early AEC_TELEMETRY at ~1s/~2s regardless of prior sessions.
         lastTelemetryFrameCount = 0
         delayMismatchStartFrame = -1
+        delayMismatchFailStartFrame = -1
+        delayMismatchState = .none
 
         logger.info("AEC reset")
 
@@ -389,6 +445,13 @@ final class AECProcessor {
     }
 
     // MARK: - Periodic Telemetry
+
+    /// Whether the loaded WebRTC bridge advertises external delay support.
+    var isExternalDelayEstimatorEnabled: Bool {
+        stateLock.withLock { state in
+            state.bridge?.externalDelayEstimatorEnabled ?? false
+        }
+    }
 
     /// Interval counter for telemetry logging (tracks capture frames processed).
     /// Internal (not private) so AudioWorker can read it to detect when a log was emitted.
@@ -444,6 +507,9 @@ final class AECProcessor {
         var msg = "session=\(sessionID) AEC_TELEMETRY: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
         msg += ", delay=\(stats.delayMs)ms"
         msg += ", streamDelay=\(stats.lastStreamDelayMs)ms"
+        msg += ", streamDelayRaw=\(stats.lastStreamDelayRawMs)ms"
+        msg += ", streamDelaySource=\(stats.lastStreamDelayHintSource.label)"
+        msg += ", externalDelayEstimator=\(isExternalDelayEstimatorEnabled)"
         msg += ", mode=\(stats.currentMode)"
         msg += ", processed=\(stats.framesProcessed)"
         msg += ", skipped=\(stats.framesSkipped)"
@@ -464,36 +530,55 @@ final class AECProcessor {
 
         // DELAY_AUDIT: compare bridge delay vs synchronizer delay
         let bridgeDelayMs = stats.delayMs
+        let streamDelayMs = stats.lastStreamDelayMs
+        let streamDelaySource = stats.lastStreamDelayHintSource.label
         let delta = bridgeDelayMs - syncDelayMs
-        let auditMsg = "session=\(sessionID) DELAY_AUDIT: bridgeDelayMs=\(bridgeDelayMs)"
+        let auditMsg = "session=\(sessionID) DELAY_AUDIT: streamDelayMs=\(streamDelayMs)"
+            + ", streamDelaySource=\(streamDelaySource)"
+            + ", bridgeDelayMs=\(bridgeDelayMs)"
             + ", synchronizerDelayMs=\(syncDelayMs)"
             + ", delta=\(delta)ms"
         Task {
             await DiagnosticLogger.shared.log(.aec, auditMsg)
         }
 
-        // DELAY_MISMATCH: warn when |sync - bridge| > 20ms sustained for >3s with healthy RMS
-        let mismatchThresholdMs = 20
-        let mismatchSustainedFrames: Int64 = 300  // ~3 seconds at 100 frames/sec
-        let hasHealthyRms = renderRmsLinear > 0.001 && captureRmsLinear > 0.001
-        if abs(delta) > mismatchThresholdMs && hasHealthyRms {
-            if delayMismatchStartFrame < 0 {
-                delayMismatchStartFrame = stats.framesProcessed
+        let mismatchDecision = evaluateDelayMismatch(
+            bridgeDelayMs: bridgeDelayMs,
+            syncDelayMs: syncDelayMs,
+            renderRmsLinear: renderRmsLinear,
+            captureRmsLinear: captureRmsLinear,
+            framesProcessed: stats.framesProcessed
+        )
+
+        if mismatchDecision.emitWarn {
+            let warnMsg = "session=\(sessionID) DELAY_MISMATCH_WARN: |sync-bridge|=\(mismatchDecision.mismatchMs)ms"
+                + " sustained \(String(format: "%.1f", Double(mismatchDecision.warnSustainedFrames) / 100.0))s"
+                + ", bridgeDelayMs=\(bridgeDelayMs)"
+                + ", synchronizerDelayMs=\(syncDelayMs)"
+                + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
+                + ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
+            Task {
+                await DiagnosticLogger.shared.log(.aec, warnMsg)
             }
-            let sustained = stats.framesProcessed - delayMismatchStartFrame
-            if sustained >= mismatchSustainedFrames {
-                let warnMsg = "session=\(sessionID) DELAY_MISMATCH: |sync-bridge|=\(abs(delta))ms"
-                    + " sustained \(String(format: "%.1f", Double(sustained) / 100.0))s"
-                    + ", bridgeDelayMs=\(bridgeDelayMs)"
-                    + ", synchronizerDelayMs=\(syncDelayMs)"
-                    + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
-                    + ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
-                Task {
-                    await DiagnosticLogger.shared.log(.aec, warnMsg)
-                }
+        }
+
+        if mismatchDecision.emitFail {
+            let failMsg = "session=\(sessionID) DELAY_MISMATCH_FAIL: |sync-bridge|=\(mismatchDecision.mismatchMs)ms"
+                + " sustained \(String(format: "%.1f", Double(mismatchDecision.failSustainedFrames) / 100.0))s"
+                + ", bridgeDelayMs=\(bridgeDelayMs)"
+                + ", synchronizerDelayMs=\(syncDelayMs)"
+                + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
+                + ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
+            Task {
+                await DiagnosticLogger.shared.log(.aec, failMsg)
             }
-        } else {
-            delayMismatchStartFrame = -1
+        }
+
+        if mismatchDecision.emitClear {
+            let clearMsg = "session=\(sessionID) DELAY_MISMATCH_CLEARED: currentDelta=\(mismatchDecision.mismatchMs)ms"
+            Task {
+                await DiagnosticLogger.shared.log(.aec, clearMsg)
+            }
         }
 
         // Detect stable-but-non-converging condition:
@@ -531,6 +616,104 @@ final class AECProcessor {
     }
     
     // MARK: - Private Implementation
+    
+    /// Evaluate the delay mismatch policy without side effects beyond state updates.
+    /// - Returns: Whether WARN/FAIL/CLEARED telemetry should be emitted for this frame.
+    private func evaluateDelayMismatch(
+        bridgeDelayMs: Int,
+        syncDelayMs: Int,
+        renderRmsLinear: Float,
+        captureRmsLinear: Float,
+        framesProcessed: Int64
+    ) -> DelayMismatchDecision {
+        let mismatchWarnThresholdMs = 20
+        let mismatchFailThresholdMs = 80
+        let mismatchWarnFrames: Int64 = 300  // ~3 seconds at 100 frames/sec
+        let mismatchFailFrames: Int64 = 500  // ~5 seconds at 100 frames/sec
+        let hasHealthyRms = renderRmsLinear > 0.001 && captureRmsLinear > 0.001
+        let mismatchMs = abs(syncDelayMs - bridgeDelayMs)
+        let isWarnCondition = mismatchMs > mismatchWarnThresholdMs &&
+            mismatchMs < mismatchFailThresholdMs &&
+            hasHealthyRms
+        let isFailCondition = mismatchMs > mismatchFailThresholdMs && hasHealthyRms
+        let previousMismatchState = delayMismatchState
+        var warnSustainedFrames: Int64 = 0
+        var failSustainedFrames: Int64 = 0
+        var nextMismatchState: DelayMismatchTier = .none
+
+        if isWarnCondition {
+            if delayMismatchStartFrame < 0 {
+                delayMismatchStartFrame = framesProcessed
+            }
+            warnSustainedFrames = (framesProcessed - delayMismatchStartFrame) + 1
+            nextMismatchState = .warn
+        } else {
+            delayMismatchStartFrame = -1
+        }
+
+        if isFailCondition {
+            if delayMismatchFailStartFrame < 0 {
+                delayMismatchFailStartFrame = framesProcessed
+            }
+            failSustainedFrames = (framesProcessed - delayMismatchFailStartFrame) + 1
+            nextMismatchState = .fail
+        } else {
+            delayMismatchFailStartFrame = -1
+        }
+
+        let emitWarn = isWarnCondition && warnSustainedFrames >= mismatchWarnFrames
+        let emitFail = isFailCondition && failSustainedFrames >= mismatchFailFrames
+        let emitClear = previousMismatchState != .none && nextMismatchState == .none
+        delayMismatchState = nextMismatchState
+
+        return DelayMismatchDecision(
+            emitWarn: emitWarn,
+            emitFail: emitFail,
+            emitClear: emitClear,
+            mismatchMs: mismatchMs,
+            warnSustainedFrames: warnSustainedFrames,
+            failSustainedFrames: failSustainedFrames
+        )
+    }
+
+    #if DEBUG
+    /// Debug-only evaluator for deterministic mismatch policy tests.
+    func debugEvaluateDelayMismatch(
+        bridgeDelayMs: Int,
+        syncDelayMs: Int,
+        renderRmsLinear: Float,
+        captureRmsLinear: Float,
+        framesProcessed: Int64
+    ) -> (emitWarn: Bool, emitFail: Bool, emitClear: Bool, state: Int, mismatchMs: Int) {
+        let result = evaluateDelayMismatch(
+            bridgeDelayMs: bridgeDelayMs,
+            syncDelayMs: syncDelayMs,
+            renderRmsLinear: renderRmsLinear,
+            captureRmsLinear: captureRmsLinear,
+            framesProcessed: framesProcessed
+        )
+        let state: Int
+        switch delayMismatchState {
+        case .none: state = 0
+        case .warn: state = 1
+        case .fail: state = 2
+        }
+        return (
+            emitWarn: result.emitWarn,
+            emitFail: result.emitFail,
+            emitClear: result.emitClear,
+            state: state,
+            mismatchMs: result.mismatchMs
+        )
+    }
+
+    /// Reset delay mismatch tracking for deterministic tests.
+    func debugResetDelayMismatchState() {
+        delayMismatchStartFrame = -1
+        delayMismatchFailStartFrame = -1
+        delayMismatchState = .none
+    }
+    #endif
     
     /// Initialize the WebRTC AEC bridge
     private func initializeAEC() {

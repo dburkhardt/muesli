@@ -153,6 +153,24 @@ final class AudioWorker {
         logger.info("AudioWorker initialized")
     }
 
+    /// Select the stream delay hint to pass into AEC3.
+    /// - Parameters:
+    ///   - coarseDelayMs: Latest coarse delay estimate (ms), preferred when >0.
+    ///   - seededDelayMs: Seeded fallback delay estimate (ms), used when coarse is unavailable.
+    /// - Returns: Delay hint in ms and the source used.
+    static func selectStreamDelayHint(
+        coarseDelayMs: Int,
+        seededDelayMs: Int
+    ) -> (delayMs: Int, source: AECStreamDelayHintSource) {
+        if coarseDelayMs > 0 {
+            return (coarseDelayMs, .coarse)
+        } else if seededDelayMs >= 0 {
+            return (max(seededDelayMs, 0), .seeded)
+        } else {
+            return (0, .none)
+        }
+    }
+
     deinit {
         stop()
     }
@@ -397,13 +415,16 @@ final class AudioWorker {
             let processedCapture: [Float]
             if aecEnabled {
                 // Feed AEC3 the synchronizer-derived render lead as stream delay hint.
-                // Prefer coarseDelayMs once available; fall back to seededDelayMs during
-                // early stabilization so delay hint is non-zero as soon as possible.
-                let coarseDelayMs = synchronizer.coarseDelayMs
-                let seededDelayMs = synchronizer.seededDelayMs
-                let streamDelayHintMs = coarseDelayMs > 0 ? coarseDelayMs : max(seededDelayMs, 0)
-                let boundedStreamDelayMs = min(max(streamDelayHintMs, 0), 500)
-                let delaySet = aecProcessor.setStreamDelayMs(boundedStreamDelayMs)
+                let delaySelection = Self.selectStreamDelayHint(
+                    coarseDelayMs: synchronizer.coarseDelayMs,
+                    seededDelayMs: synchronizer.seededDelayMs
+                )
+                let streamDelayHintMs = delaySelection.delayMs
+                let streamDelaySource = delaySelection.source
+                let delaySet = aecProcessor.setStreamDelayMs(
+                    streamDelayHintMs,
+                    source: streamDelaySource
+                )
                 if !delaySet {
                     lock.lock()
                     stats.framesMissed += 1

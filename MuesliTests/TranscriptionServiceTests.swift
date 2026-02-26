@@ -436,6 +436,60 @@ final class TranscriptionServiceTests: XCTestCase {
         // Then: Should complete gracefully
         XCTAssertNotNil(service, "Service should wait for completion")
     }
+
+    func testStopTranscriptionBoundedFlushReturnsIncompleteWithoutLateEmission() async {
+        var receivedSegments: [TranscriptionService.TranscriptSegment] = []
+        service.setTranscriptHandler { receivedSegments.append($0) }
+        service.testingSetVADEvaluator { samples, mode in
+            Self.makeDecision(mode: mode, passed: true, reason: .strictPassed, samples: samples)
+        }
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                return "late tail"
+            } catch {
+                return nil
+            }
+        }
+
+        service.startTranscription(recordingStartTime: Date())
+        service.appendSystemAudio(Array(repeating: 0.2, count: 12_000))
+
+        let flushResult = await service.stopTranscription(
+            maxFlushDuration: 0.02,
+            allowDeferredFlush: true
+        )
+
+        XCTAssertFalse(flushResult.completedFullFlush)
+        XCTAssertGreaterThan(flushResult.remainingBufferedSamples, 0)
+
+        try? await Task.sleep(for: .milliseconds(400))
+        XCTAssertTrue(receivedSegments.isEmpty, "No segments should emit after bounded stop returns")
+    }
+
+    func testStopTranscriptionFullFlushWaitsAndEmitsRemainingAudio() async {
+        var receivedSegments: [TranscriptionService.TranscriptSegment] = []
+        service.setTranscriptHandler { receivedSegments.append($0) }
+        service.testingSetVADEvaluator { samples, mode in
+            Self.makeDecision(mode: mode, passed: true, reason: .strictPassed, samples: samples)
+        }
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in
+            try? await Task.sleep(for: .milliseconds(120))
+            return "final tail"
+        }
+
+        service.startTranscription(recordingStartTime: Date())
+        service.appendSystemAudio(Array(repeating: 0.2, count: 12_000))
+
+        let startedAt = Date()
+        let flushResult = await service.stopTranscription()
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        XCTAssertTrue(flushResult.completedFullFlush)
+        XCTAssertGreaterThanOrEqual(elapsed, 0.1)
+        XCTAssertEqual(receivedSegments.count, 1)
+        XCTAssertEqual(receivedSegments.first?.text, "final tail")
+    }
     
     // MARK: - Post-Processing Mode Tests
     
