@@ -111,10 +111,6 @@ struct RecordingDetailView: View {
                     
                     // Header with title and recording indicator
                     headerView(session: session)
-
-                    if session.state == .stopping {
-                        stoppingStatusBanner(isFinalizing: session.isFinalizingTranscript)
-                    }
                     
                     // Transcript content - different view for resumed vs new recordings
                     if let parentMeeting = session.parentMeeting {
@@ -129,18 +125,25 @@ struct RecordingDetailView: View {
                     .padding(.bottom, 16)
             }
             
-            if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
-               let startTime = viewModel.refinementCoordinator.refinementStartTime,
-               viewModel.refinementCoordinator.isRefining {
-                FloatingProcessingIndicator(
-                    phase: .refining,
-                    startTime: startTime,
-                    onTap: { historyManager.selectMeeting(refinedMeeting) }
-                )
-                .padding(.trailing, 16)
-                .padding(.bottom, 80)
-                .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
+            VStack(spacing: 8) {
+                if session.state == .stopping {
+                    stoppingFloatingIndicator(session: session)
+                }
+
+                if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+                   let startTime = viewModel.refinementCoordinator.refinementStartTime,
+                   viewModel.refinementCoordinator.isRefining {
+                    FloatingProcessingIndicator(
+                        phase: .refining,
+                        startTime: startTime,
+                        onTap: { historyManager.selectMeeting(refinedMeeting) }
+                    )
+                }
             }
+            .padding(.trailing, 16)
+            .padding(.bottom, 80)
+            .animation(.easeInOut(duration: 0.3), value: session.state == .stopping)
+            .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
         }
     }
     
@@ -486,23 +489,6 @@ struct RecordingDetailView: View {
         .disabled(session.state == .stopping)
     }
 
-    private func stoppingStatusBanner(isFinalizing: Bool) -> some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text(isFinalizing ? "Finalizing transcript..." : "Stopping recording...")
-                .font(.system(size: 12, weight: .medium))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background {
-            Capsule()
-                .fill(.regularMaterial)
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 8)
-    }
-    
     // MARK: - Recording Content
     
     private func recordingContentView(session: RecordingSession) -> some View {
@@ -588,6 +574,20 @@ struct RecordingDetailView: View {
         }
     }
 
+    private func stoppingFloatingIndicator(session: RecordingSession) -> some View {
+        let processingState: TranscriptionCoordinator.MeetingProcessingState? = {
+            guard let directory = session.outputDirectory else { return nil }
+            return viewModel.processingState(for: directory)
+        }()
+
+        return FloatingProcessingIndicator(
+            phase: .reprocessing,
+            startTime: processingState?.startedAt ?? session.finalizationStartTime ?? Date(),
+            statusText: processingState?.displayStatus ??
+                (session.isFinalizingTranscript ? "Finalizing transcript..." : "Stopping recording...")
+        )
+    }
+
     // MARK: - Historical Meeting View with Floating Indicator
     
     @ViewBuilder
@@ -659,6 +659,17 @@ struct RecordingDetailView: View {
             .animation(.easeInOut(duration: 0.3), value: meeting.isReprocessing)
             .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
         }
+    }
+
+    private var globalProcessingIndicator: (MeetingHistoryItem?, TranscriptionCoordinator.MeetingProcessingState)? {
+        let processingStates = viewModel.allActiveProcessingStates()
+            .sorted { $0.value.startedAt < $1.value.startedAt }
+        guard let active = processingStates.first else { return nil }
+
+        let meeting = historyManager.meetingHistory.first {
+            $0.directory.standardizedFileURL.path == active.key
+        }
+        return (meeting, active.value)
     }
     
     // MARK: - Historical Meeting View
@@ -827,17 +838,38 @@ struct RecordingDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             
-            if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
-               let startTime = viewModel.refinementCoordinator.refinementStartTime,
-               viewModel.refinementCoordinator.isRefining {
-                FloatingProcessingIndicator(
-                    phase: .refining,
-                    startTime: startTime,
-                    onTap: { historyManager.selectMeeting(refinedMeeting) }
-                )
-                .padding(16)
-                .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
+            VStack(spacing: 8) {
+                if let (meeting, state) = globalProcessingIndicator {
+                    let cancelAction: (() -> Void)? = {
+                        guard state.cancellable, let meeting else { return nil }
+                        return { viewModel.cancelReprocessing(for: meeting) }
+                    }()
+                    let tapAction: (() -> Void)? = {
+                        guard let meeting else { return nil }
+                        return { historyManager.selectMeeting(meeting) }
+                    }()
+                    FloatingProcessingIndicator(
+                        phase: .reprocessing,
+                        startTime: state.startedAt,
+                        statusText: state.displayStatus,
+                        onTap: tapAction,
+                        onCancel: cancelAction
+                    )
+                }
+
+                if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
+                   let startTime = viewModel.refinementCoordinator.refinementStartTime,
+                   viewModel.refinementCoordinator.isRefining {
+                    FloatingProcessingIndicator(
+                        phase: .refining,
+                        startTime: startTime,
+                        onTap: { historyManager.selectMeeting(refinedMeeting) }
+                    )
+                }
             }
+            .padding(16)
+            .animation(.easeInOut(duration: 0.3), value: globalProcessingIndicator != nil)
+            .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
         }
     }
     

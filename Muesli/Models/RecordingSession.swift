@@ -159,6 +159,9 @@ final class RecordingSession: Identifiable {
     
     /// Whether the transcript is being finalized via second-pass ASR
     var isFinalizingTranscript: Bool = false
+
+    /// Start time for stop/finalization processing UI.
+    var finalizationStartTime: Date?
     
     /// Update the live draft text and speaker shown during recording
     func updateLiveDraft(_ text: String, speaker: TranscriptBlock.Speaker) {
@@ -305,6 +308,7 @@ final class RecordingSession: Identifiable {
         liveDraftText = nil
         liveDraftSpeaker = nil
         isFinalizingTranscript = false
+        finalizationStartTime = nil
     }
     
     // MARK: - Error Handling

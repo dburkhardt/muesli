@@ -1098,6 +1098,16 @@ final class MuesliViewModel {
         transcriptionCoordinator.processingState(for: meeting.directory)
     }
 
+    /// Canonical processing state for a directory, if any.
+    func processingState(for directory: URL) -> TranscriptionCoordinator.MeetingProcessingState? {
+        transcriptionCoordinator.processingState(for: directory)
+    }
+
+    /// Snapshot of all active processing states keyed by canonical directory path.
+    func allActiveProcessingStates() -> [String: TranscriptionCoordinator.MeetingProcessingState] {
+        transcriptionCoordinator.allActiveProcessingStates()
+    }
+
     /// Whether any background transcript processing is active for this meeting.
     func isMeetingProcessing(for meeting: MeetingHistoryItem) -> Bool {
         processingState(for: meeting) != nil || meeting.isReprocessing

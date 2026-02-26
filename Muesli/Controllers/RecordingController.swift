@@ -708,6 +708,7 @@ final class RecordingController {
         session.state = .stopping
         session.stopDisplayTimer()
         session.isFinalizingTranscript = true
+        session.finalizationStartTime = Date()
         let stopStartedAt = Date()
         var stopTiming = StopPhaseTiming()
         
@@ -726,6 +727,7 @@ final class RecordingController {
                 session.showError(.outputDirectoryCreationFailed)
                 session.state = .completed
                 session.isFinalizingTranscript = false
+                session.finalizationStartTime = nil
                 activeSession = nil
                 resetMuteState()
                 return
@@ -780,6 +782,7 @@ final class RecordingController {
         }
 
         session.isFinalizingTranscript = false
+        session.finalizationStartTime = nil
         stopTiming.totalMs = Int(Date().timeIntervalSince(stopStartedAt) * 1000)
         Task {
             await DiagnosticLogger.shared.log(
@@ -943,6 +946,7 @@ final class RecordingController {
         
         secondPassFinalizationTask?.cancel()
         session.isFinalizingTranscript = true
+        session.finalizationStartTime = session.finalizationStartTime ?? Date()
         Task {
             await DiagnosticLogger.shared.log(.stabilizer, "secondPass:scheduled dir=\(directory.lastPathComponent)")
         }
@@ -953,6 +957,7 @@ final class RecordingController {
                     // Fallback clear in case the task exits before runSecondPassASR reaches its internal defer.
                     transcriptionCoordinator.clearSecondPassActive(for: directory)
                     session?.isFinalizingTranscript = false
+                    session?.finalizationStartTime = nil
                     self?.onRefreshHistory?()
                 }
             }
@@ -1194,6 +1199,7 @@ final class RecordingController {
             session.stopDisplayTimer()
         }
         session.isFinalizingTranscript = true
+        session.finalizationStartTime = Date()
         let stopStartedAt = Date()
         var stopTiming = StopPhaseTiming()
         
@@ -1210,6 +1216,7 @@ final class RecordingController {
                 session.state = .completed
                 session.showError(.outputDirectoryCreationFailed)
                 session.isFinalizingTranscript = false
+                session.finalizationStartTime = nil
                 activeSession = nil
                 resetMuteState()
                 // Reset isActivelyRecording so permission re-probing is not permanently suppressed.
@@ -1266,6 +1273,7 @@ final class RecordingController {
         }
 
         session.isFinalizingTranscript = false
+        session.finalizationStartTime = nil
         stopTiming.totalMs = Int(Date().timeIntervalSince(stopStartedAt) * 1000)
         Task {
             await DiagnosticLogger.shared.log(
