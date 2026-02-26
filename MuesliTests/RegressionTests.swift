@@ -582,6 +582,33 @@ final class RegressionTests: XCTestCase {
             "TranscriptionCoordinator should define finalizingLive processing phase"
         )
     }
+
+    /// Regression test: processing indicators are driven by an observable snapshot mirror,
+    /// not a dummy read tick that can be optimized away.
+    func testProcessingIndicatorUsesSnapshotMirrorInViewModel() throws {
+        let source = try muesliViewModelSource()
+
+        XCTAssertTrue(
+            source.contains("private var processingStatesSnapshot"),
+            "ViewModel should keep an observable processing-state snapshot"
+        )
+        XCTAssertTrue(
+            source.contains("processingStatesSnapshot = transcriptionCoordinator.allActiveProcessingStates()"),
+            "Snapshot should refresh from coordinator state"
+        )
+        XCTAssertTrue(
+            source.contains("onProcessingStatesChanged"),
+            "ViewModel should react to coordinator processing-state callbacks"
+        )
+        XCTAssertTrue(
+            source.contains("processingStatesSnapshot[canonicalDirectoryKey(meeting.directory)]"),
+            "Indicator lookup should read from the observable snapshot map"
+        )
+        XCTAssertFalse(
+            source.contains("processingStateTick"),
+            "Legacy tick-based invalidation should not be used"
+        )
+    }
     
     /// Regression test: Mic audio RMS should be measurable (not all zeros)
     /// Bug: Logs showed mic audio RMS was consistently 0.0 with all-zero samples.

@@ -196,9 +196,9 @@ final class MuesliViewModel {
         transcriptionCoordinator.isModelSwitching
     }
 
-    /// Monotonic token bumped whenever coordinator processing state changes.
-    /// Views read through this token so floating indicators reliably re-render.
-    private var processingStateTick: UInt64 = 0
+    /// ViewModel-owned mirror of coordinator processing state.
+    /// Keeping this as observable stored state ensures indicator UI updates reliably.
+    private var processingStatesSnapshot: [String: TranscriptionCoordinator.MeetingProcessingState] = [:]
     
     // MARK: - Active Session Tracking
     // NOTE: Delegates to RecordingController - do not manage session state here
@@ -440,12 +440,16 @@ final class MuesliViewModel {
         return meetingHistory.first(where: { canonicalDirectoryKey($0.directory) == key })
     }
 
-    /// Re-project coordinator-owned processing state onto refreshed meeting instances.
+    /// Refresh the local mirror of coordinator processing states.
+    private func refreshProcessingStateSnapshot() {
+        processingStatesSnapshot = transcriptionCoordinator.allActiveProcessingStates()
+    }
+
+    /// Re-project processing state onto refreshed meeting instances.
     private func rehydrateMeetingProcessingState() {
-        let processingStates = transcriptionCoordinator.allActiveProcessingStates()
         for meeting in meetingHistory {
             let key = canonicalDirectoryKey(meeting.directory)
-            if let state = processingStates[key] {
+            if let state = processingStatesSnapshot[key] {
                 meeting.isReprocessing = true
                 meeting.reprocessingStartTime = state.startedAt
             } else {
@@ -459,6 +463,7 @@ final class MuesliViewModel {
     /// Refresh history and restore transient processing state for newly reloaded items.
     private func refreshMeetingHistoryAndRehydrateProcessingState(selecting directory: URL? = nil) {
         historyManager.refreshMeetingHistory()
+        refreshProcessingStateSnapshot()
         rehydrateMeetingProcessingState()
         if let directory, let meeting = resolveMeeting(for: directory) {
             selectedMeeting = meeting
@@ -595,10 +600,13 @@ final class MuesliViewModel {
         }
 
         self.transcriptionCoordinator.onProcessingStatesChanged = { [weak self] in
-            guard let self else { return }
-            self.processingStateTick &+= 1
-            self.rehydrateMeetingProcessingState()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.refreshProcessingStateSnapshot()
+                self.rehydrateMeetingProcessingState()
+            }
         }
+        refreshProcessingStateSnapshot()
         
         // Set up callback for refinement updates (for export)
         // NOTE: Must be set AFTER recordingController is initialized
@@ -1097,7 +1105,7 @@ final class MuesliViewModel {
 
     /// Whether the current reprocessing phase supports cancellation from the UI.
     func isReprocessingCancellable(for meeting: MeetingHistoryItem) -> Bool {
-        if let state = transcriptionCoordinator.processingState(for: meeting.directory) {
+        if let state = processingState(for: meeting) {
             return state.cancellable
         }
         return meeting.isReprocessing
@@ -1105,20 +1113,17 @@ final class MuesliViewModel {
 
     /// Canonical processing state for a meeting, if any.
     func processingState(for meeting: MeetingHistoryItem) -> TranscriptionCoordinator.MeetingProcessingState? {
-        _ = processingStateTick
-        return transcriptionCoordinator.processingState(for: meeting.directory)
+        processingStatesSnapshot[canonicalDirectoryKey(meeting.directory)]
     }
 
     /// Canonical processing state for a directory, if any.
     func processingState(for directory: URL) -> TranscriptionCoordinator.MeetingProcessingState? {
-        _ = processingStateTick
-        return transcriptionCoordinator.processingState(for: directory)
+        processingStatesSnapshot[canonicalDirectoryKey(directory)]
     }
 
     /// Snapshot of all active processing states keyed by canonical directory path.
     func allActiveProcessingStates() -> [String: TranscriptionCoordinator.MeetingProcessingState] {
-        _ = processingStateTick
-        return transcriptionCoordinator.allActiveProcessingStates()
+        processingStatesSnapshot
     }
 
     /// Whether any background transcript processing is active for this meeting.
