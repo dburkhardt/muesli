@@ -130,6 +130,10 @@ struct RecordingDetailView: View {
                     stoppingFloatingIndicator(session: session)
                 }
 
+                if session.state != .stopping {
+                    globalReprocessingIndicator()
+                }
+
                 if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
                    let startTime = viewModel.refinementCoordinator.refinementStartTime,
                    viewModel.refinementCoordinator.isRefining {
@@ -143,6 +147,7 @@ struct RecordingDetailView: View {
             .padding(.trailing, 16)
             .padding(.bottom, 80)
             .animation(.easeInOut(duration: 0.3), value: session.state == .stopping)
+            .animation(.easeInOut(duration: 0.3), value: hasGlobalReprocessingIndicator())
             .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
         }
     }
@@ -634,11 +639,18 @@ struct RecordingDetailView: View {
     }
     
     private func historicalMeetingViewWithIndicator(meeting: MeetingHistoryItem) -> some View {
-        ZStack(alignment: .bottomTrailing) {
+        let hasMeetingReprocessing = viewModel.processingState(for: meeting) != nil ||
+            (meeting.isReprocessing && meeting.reprocessingStartTime != nil)
+
+        return ZStack(alignment: .bottomTrailing) {
             historicalMeetingView(meeting: meeting)
             
             VStack(spacing: 8) {
                 processingIndicators(for: meeting)
+
+                if !hasMeetingReprocessing {
+                    globalReprocessingIndicator(excluding: meeting.directory)
+                }
                 
                 // Show floating indicator when there's an active recording
                 if viewModel.isViewingPastMeetingWhileRecording,
@@ -657,19 +669,56 @@ struct RecordingDetailView: View {
             }
             .padding(16)
             .animation(.easeInOut(duration: 0.3), value: meeting.isReprocessing)
+            .animation(.easeInOut(duration: 0.3), value: hasGlobalReprocessingIndicator(excluding: meeting.directory))
             .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
         }
     }
 
-    private var globalProcessingIndicator: (MeetingHistoryItem?, TranscriptionCoordinator.MeetingProcessingState)? {
+    private func canonicalDirectoryPath(_ directory: URL) -> String {
+        directory.standardizedFileURL.path
+    }
+
+    private func globalProcessingIndicator(
+        excluding directory: URL? = nil
+    ) -> (MeetingHistoryItem?, TranscriptionCoordinator.MeetingProcessingState)? {
+        let excludedPath = directory.map(canonicalDirectoryPath)
         let processingStates = viewModel.allActiveProcessingStates()
             .sorted { $0.value.startedAt < $1.value.startedAt }
-        guard let active = processingStates.first else { return nil }
+        let nextActive = processingStates.first { state in
+            guard let excludedPath else { return true }
+            return state.key != excludedPath
+        }
+        guard let active = nextActive else { return nil }
 
         let meeting = historyManager.meetingHistory.first {
-            $0.directory.standardizedFileURL.path == active.key
+            canonicalDirectoryPath($0.directory) == active.key
         }
         return (meeting, active.value)
+    }
+
+    private func hasGlobalReprocessingIndicator(excluding directory: URL? = nil) -> Bool {
+        globalProcessingIndicator(excluding: directory) != nil
+    }
+
+    @ViewBuilder
+    private func globalReprocessingIndicator(excluding directory: URL? = nil) -> some View {
+        if let (meeting, state) = globalProcessingIndicator(excluding: directory) {
+            let cancelAction: (() -> Void)? = {
+                guard state.cancellable, let meeting else { return nil }
+                return { viewModel.cancelReprocessing(for: meeting) }
+            }()
+            let tapAction: (() -> Void)? = {
+                guard let meeting else { return nil }
+                return { historyManager.selectMeeting(meeting) }
+            }()
+            FloatingProcessingIndicator(
+                phase: .reprocessing,
+                startTime: state.startedAt,
+                statusText: state.displayStatus,
+                onTap: tapAction,
+                onCancel: cancelAction
+            )
+        }
     }
     
     // MARK: - Historical Meeting View
@@ -839,23 +888,7 @@ struct RecordingDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             
             VStack(spacing: 8) {
-                if let (meeting, state) = globalProcessingIndicator {
-                    let cancelAction: (() -> Void)? = {
-                        guard state.cancellable, let meeting else { return nil }
-                        return { viewModel.cancelReprocessing(for: meeting) }
-                    }()
-                    let tapAction: (() -> Void)? = {
-                        guard let meeting else { return nil }
-                        return { historyManager.selectMeeting(meeting) }
-                    }()
-                    FloatingProcessingIndicator(
-                        phase: .reprocessing,
-                        startTime: state.startedAt,
-                        statusText: state.displayStatus,
-                        onTap: tapAction,
-                        onCancel: cancelAction
-                    )
-                }
+                globalReprocessingIndicator()
 
                 if let refinedMeeting = viewModel.refinementCoordinator.meetingBeingRefined,
                    let startTime = viewModel.refinementCoordinator.refinementStartTime,
@@ -868,7 +901,7 @@ struct RecordingDetailView: View {
                 }
             }
             .padding(16)
-            .animation(.easeInOut(duration: 0.3), value: globalProcessingIndicator != nil)
+            .animation(.easeInOut(duration: 0.3), value: hasGlobalReprocessingIndicator())
             .animation(.easeInOut(duration: 0.3), value: viewModel.refinementCoordinator.isRefining)
         }
     }
