@@ -414,7 +414,7 @@ struct FloatingProcessingIndicator: View {
     }
     
     var body: some View {
-        let content = HStack(spacing: 8) {
+        HStack(spacing: 8) {
             Image(systemName: phase.icon)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(phase.tint)
@@ -448,9 +448,6 @@ struct FloatingProcessingIndicator: View {
                 .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            onTap?()
-        }
         .modifier(
             ProcessingIndicatorAnimations(
                 phase: phase,
@@ -459,6 +456,9 @@ struct FloatingProcessingIndicator: View {
                 now: $now
             )
         )
+        .onTapGesture {
+            onTap?()
+        }
     }
 }
 

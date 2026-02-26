@@ -1490,55 +1490,93 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         let chunkDuration = AudioConfiguration.postProcessingChunkDuration
         let overlap = AudioConfiguration.postProcessingOverlapDuration
-        
-        // Transcribe system audio if available (with chunking and deduplication)
+
+        try Task.checkCancellation()
+        var systemSamples: [Float]?
         if let systemURL = systemAudioURL {
-            try Task.checkCancellation()
-            if let samples = await loadAudioFile(url: systemURL) {
-                let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
-                logger.info("Post-processing system audio: \(samples.count) samples (\(duration)s)")
-                
-                let chunks = splitIntoChunks(
-                    samples: samples,
-                    chunkDuration: chunkDuration,
-                    overlap: overlap
-                )
-                
-                logger.info("Split system audio into \(chunks.count) chunks")
-                
-                try await processChunksWithDeduplication(
-                    chunks: chunks,
-                    speaker: .them,
-                    chunkDuration: chunkDuration,
-                    overlap: overlap,
-                    whisperKit: whisperKit
-                )
+            systemSamples = await loadAudioFile(url: systemURL)
+        }
+        try Task.checkCancellation()
+        var micSamples: [Float]?
+        if let micURL = micAudioURL {
+            micSamples = await loadAudioFile(url: micURL)
+        }
+
+        let systemDurationSeconds = systemSamples.map { Double($0.count) / Double(self.sampleRate) }
+        let micDurationSeconds = micSamples.map { Double($0.count) / Double(self.sampleRate) }
+        let alignmentThresholdSeconds: TimeInterval = 2.0
+        let micTimelineOffsetSeconds: TimeInterval = {
+            guard let systemDurationSeconds, let micDurationSeconds else { return 0.0 }
+            let durationGap = systemDurationSeconds - micDurationSeconds
+            // If mic capture starts later than system capture, align by shared stop time.
+            // This prevents end-of-meeting mic speech from being sorted into the middle.
+            if durationGap > alignmentThresholdSeconds {
+                return durationGap
             }
+            return 0.0
+        }()
+        // #region agent log
+        AgentDebugRuntimeLogger.log(
+            runId: "post-fix-order-1",
+            hypothesisId: "O5",
+            location: "TranscriptionService.swift:transcribePostProcessing",
+            message: "Post-processing channel alignment decision",
+            data: [
+                "hasSystemAudio": systemSamples != nil,
+                "hasMicAudio": micSamples != nil,
+                "systemDurationSeconds": systemDurationSeconds ?? -1.0,
+                "micDurationSeconds": micDurationSeconds ?? -1.0,
+                "alignmentThresholdSeconds": alignmentThresholdSeconds,
+                "micTimelineOffsetSeconds": micTimelineOffsetSeconds
+            ]
+        )
+        // #endregion
+
+        // Transcribe system audio if available (with chunking and deduplication)
+        if let systemSamples {
+            let duration = String(format: "%.1f", Double(systemSamples.count) / Double(self.sampleRate))
+            logger.info("Post-processing system audio: \(systemSamples.count) samples (\(duration)s)")
+            
+            let chunks = splitIntoChunks(
+                samples: systemSamples,
+                chunkDuration: chunkDuration,
+                overlap: overlap
+            )
+            
+            logger.info("Split system audio into \(chunks.count) chunks")
+            
+            try await processChunksWithDeduplication(
+                chunks: chunks,
+                speaker: .them,
+                chunkDuration: chunkDuration,
+                overlap: overlap,
+                whisperKit: whisperKit
+            )
         }
         
         // Transcribe mic audio if available (with chunking and deduplication)
-        if let micURL = micAudioURL {
-            try Task.checkCancellation()
-            if let samples = await loadAudioFile(url: micURL) {
-                let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
-                logger.info("Post-processing mic audio: \(samples.count) samples (\(duration)s)")
-                
-                let chunks = splitIntoChunks(
-                    samples: samples,
-                    chunkDuration: chunkDuration,
-                    overlap: overlap
-                )
-                
-                logger.info("Split mic audio into \(chunks.count) chunks")
-                
-                try await processChunksWithDeduplication(
-                    chunks: chunks,
-                    speaker: .me,
-                    chunkDuration: chunkDuration,
-                    overlap: overlap,
-                    whisperKit: whisperKit
-                )
+        if let micSamples {
+            let duration = String(format: "%.1f", Double(micSamples.count) / Double(self.sampleRate))
+            logger.info("Post-processing mic audio: \(micSamples.count) samples (\(duration)s)")
+            
+            let chunks = splitIntoChunks(
+                samples: micSamples,
+                chunkDuration: chunkDuration,
+                overlap: overlap
+            )
+            let alignedMicChunks = chunks.map { chunk in
+                (samples: chunk.samples, timestamp: chunk.timestamp + micTimelineOffsetSeconds)
             }
+            
+            logger.info("Split mic audio into \(chunks.count) chunks")
+            
+            try await processChunksWithDeduplication(
+                chunks: alignedMicChunks,
+                speaker: .me,
+                chunkDuration: chunkDuration,
+                overlap: overlap,
+                whisperKit: whisperKit
+            )
         }
     }
     
@@ -1576,6 +1614,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Counters for summary logging
         var emittedCount = 0
         var skippedCount = 0
+        var fallbackEmittedCount = 0
+        var segmentEmittedCount = 0
+        var firstEmittedTimestamp: TimeInterval?
+        var lastEmittedTimestamp: TimeInterval?
         
         // Log dedup start
         Task { await DiagnosticLogger.shared.log(.transcription,
@@ -1607,6 +1649,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                         )
                         transcriptHandler?(segment)
                         emittedCount += 1
+                        fallbackEmittedCount += 1
+                        if firstEmittedTimestamp == nil {
+                            firstEmittedTimestamp = chunk.timestamp
+                        }
+                        lastEmittedTimestamp = chunk.timestamp
                         // Pre-capture values for Sendable closure
                         let logTs = chunk.timestamp
                         let logText = String(segment.text.prefix(30))
@@ -1646,6 +1693,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                             )
                             transcriptHandler?(transcriptSegment)
                             emittedCount += 1
+                            segmentEmittedCount += 1
+                            if firstEmittedTimestamp == nil {
+                                firstEmittedTimestamp = absoluteStart
+                            }
+                            lastEmittedTimestamp = absoluteStart
                             // Pre-capture values for Sendable closure
                             let logEmitTs = absoluteStart
                             let logEmitText = String(segmentText.prefix(30))
@@ -1685,6 +1737,24 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         let logSkipped = skippedCount
         Task { await DiagnosticLogger.shared.log(.transcription,
             "Dedup complete: speaker=\(logSpeaker), emitted=\(logEmitted), skipped=\(logSkipped)") }
+        // #region agent log
+        AgentDebugRuntimeLogger.log(
+            runId: "post-fix-order-1",
+            hypothesisId: "O6",
+            location: "TranscriptionService.swift:processChunksWithDeduplication",
+            message: "Post-processing dedup output range",
+            data: [
+                "speaker": speaker.rawValue,
+                "chunksCount": chunks.count,
+                "emittedCount": emittedCount,
+                "skippedCount": skippedCount,
+                "fallbackEmittedCount": fallbackEmittedCount,
+                "segmentEmittedCount": segmentEmittedCount,
+                "firstEmittedTimestamp": firstEmittedTimestamp ?? -1.0,
+                "lastEmittedTimestamp": lastEmittedTimestamp ?? -1.0
+            ]
+        )
+        // #endregion
     }
     
     /// Split audio samples into chunks with overlap for post-processing

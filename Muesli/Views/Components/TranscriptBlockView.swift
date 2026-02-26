@@ -46,16 +46,8 @@ struct TranscriptBlockView: View {
         .background(backgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(
-            // Subtle left accent bar
             RoundedRectangle(cornerRadius: 10)
-                .stroke(speakerAccentColor.opacity(0.3), lineWidth: 1)
-                .mask(
-                    HStack {
-                        Rectangle()
-                            .frame(width: 3)
-                        Spacer()
-                    }
-                )
+                .stroke(borderColor, lineWidth: 1)
         )
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
@@ -81,6 +73,15 @@ struct TranscriptBlockView: View {
             return Color.secondary
         case .me:
             return Color.blue
+        }
+    }
+
+    private var borderColor: Color {
+        switch block.speaker {
+        case .them:
+            return Color.secondary.opacity(0.14)
+        case .me:
+            return Color.blue.opacity(0.22)
         }
     }
 }

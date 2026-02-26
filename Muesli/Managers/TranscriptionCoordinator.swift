@@ -791,7 +791,47 @@ final class TranscriptionCoordinator {
         }.value
 
         let processor = TranscriptProcessor()
-        for segment in segments.sorted(by: { $0.timestamp < $1.timestamp }) {
+        let sortedSegments = stableSortSegmentsByTimestamp(segments)
+        let preview = sortedSegments.prefix(10).map { segment in
+            let speaker = segment.speaker.rawValue
+            let ts = String(format: "%.2f", segment.timestamp)
+            let text = String(segment.text.prefix(32))
+            return "\(ts)|\(speaker)|\(text)"
+        }
+        let themTimestamps = sortedSegments
+            .filter { $0.speaker == .them }
+            .map(\.timestamp)
+        let meTimestamps = sortedSegments
+            .filter { $0.speaker == .me }
+            .map(\.timestamp)
+        var timestampBuckets: [Int: [TranscriptionService.TranscriptSegment]] = [:]
+        for segment in sortedSegments {
+            let bucket = Int((segment.timestamp * 1000.0).rounded())
+            timestampBuckets[bucket, default: []].append(segment)
+        }
+        let collisionBuckets = timestampBuckets.values.filter { $0.count > 1 }
+        let mixedSpeakerCollisionBuckets = collisionBuckets.filter { bucket in
+            Set(bucket.map { $0.speaker.rawValue }).count > 1
+        }
+        // #region agent log
+        AgentDebugRuntimeLogger.log(
+            runId: "post-fix-order-1",
+            hypothesisId: "O3",
+            location: "TranscriptionCoordinator.swift:runSecondPassASR",
+            message: "Second-pass segment ordering summary",
+            data: [
+                "segmentCount": sortedSegments.count,
+                "collisionBucketCount": collisionBuckets.count,
+                "mixedSpeakerCollisionBucketCount": mixedSpeakerCollisionBuckets.count,
+                "themFirstTimestamp": themTimestamps.min() ?? -1.0,
+                "themLastTimestamp": themTimestamps.max() ?? -1.0,
+                "meFirstTimestamp": meTimestamps.min() ?? -1.0,
+                "meLastTimestamp": meTimestamps.max() ?? -1.0,
+                "preview": preview
+            ]
+        )
+        // #endregion
+        for segment in sortedSegments {
             processor.processSegment(segment)
         }
         processor.finalize()
@@ -902,6 +942,24 @@ final class TranscriptionCoordinator {
         guard start < end else { return nil }
         return Int(name[start..<end])
     }
+
+    /// Deterministically sort transcript segments by timestamp while preserving source
+    /// order for equal timestamps.
+    private func stableSortSegmentsByTimestamp(
+        _ segments: [TranscriptionService.TranscriptSegment]
+    ) -> [TranscriptionService.TranscriptSegment] {
+        let tieTolerance: TimeInterval = 0.001
+        return segments
+            .enumerated()
+            .sorted { lhs, rhs in
+                let delta = lhs.element.timestamp - rhs.element.timestamp
+                if abs(delta) > tieTolerance {
+                    return delta < 0
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+    }
     
     /// Reprocess a completed meeting's audio with a different model
     ///
@@ -973,7 +1031,7 @@ final class TranscriptionCoordinator {
         // Use TranscriptProcessor to filter artifacts (e.g., [BLANK_AUDIO], hallucinations)
         // and merge segments into blocks with word limits
         let processor = TranscriptProcessor()
-        for segment in segments.sorted(by: { $0.timestamp < $1.timestamp }) {
+        for segment in stableSortSegmentsByTimestamp(segments) {
             try Task.checkCancellation()
             processor.processSegment(segment)
         }

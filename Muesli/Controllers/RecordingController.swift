@@ -1001,6 +1001,23 @@ final class RecordingController {
                     liveModel: liveModelAtStop
                 )
                 try Task.checkCancellation()
+                let orderingPreview = blocks.prefix(10).map { block in
+                    let ts = String(format: "%.2f", block.startTimestamp)
+                    let text = String(block.text.prefix(32))
+                    return "\(ts)|\(block.speaker.rawValue)|\(text)"
+                }
+                // #region agent log
+                AgentDebugRuntimeLogger.log(
+                    runId: "post-fix-order-1",
+                    hypothesisId: "O4",
+                    location: "RecordingController.swift:launchSecondPassFinalization",
+                    message: "Second-pass block ordering preview",
+                    data: [
+                        "blockCount": blocks.count,
+                        "preview": orderingPreview
+                    ]
+                )
+                // #endregion
                 
                 try self.fileOutputService.saveTranscriptBlocks(
                     blocks,
