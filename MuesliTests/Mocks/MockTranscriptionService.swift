@@ -83,9 +83,18 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         isTranscribing = true
     }
     
-    func stopTranscription() async {
+    @discardableResult
+    func stopTranscription(
+        maxFlushDuration: TimeInterval?,
+        allowDeferredFlush: Bool
+    ) async -> TranscriptionService.StopFlushResult {
         stopTranscriptionCallCount += 1
         isTranscribing = false
+        return TranscriptionService.StopFlushResult(
+            completedFullFlush: true,
+            flushDurationMs: 0,
+            remainingBufferedSamples: 0
+        )
     }
     
     func appendSystemAudio(_ samples: [Float]) {

@@ -43,6 +43,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Callback for transcription warnings (message, details)
     typealias TranscriptionWarningHandler = @Sendable (String, String) -> Void
+
+    /// Summary of stop-time buffer flush behavior.
+    struct StopFlushResult: Sendable {
+        let completedFullFlush: Bool
+        let flushDurationMs: Int
+        let remainingBufferedSamples: Int
+    }
     
     /// Information about audio chunks to process
     private struct ChunkInfo {
@@ -226,6 +233,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     // VAD configuration
     private let vadThreshold: Float = AudioConfiguration.vadThreshold
+
+    // Post-processing low-activity mic gating (helps avoid false "Me" transcripts in silent sessions).
+    private let micLowActivityRatioThreshold: Float = 0.015
+    private let micLowActivityDbThreshold: Float = -45.0
     
     // MARK: - Initialization
     
@@ -348,8 +359,15 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         }
     }
     
-    /// Stop transcription processing
-    func stopTranscription() async {
+    /// Stop transcription processing.
+    /// - Parameters:
+    ///   - maxFlushDuration: Optional maximum wait for final buffer flush. `nil` waits for full completion.
+    ///   - allowDeferredFlush: If true, flush can continue in background after the timeout is reached.
+    @discardableResult
+    func stopTranscription(
+        maxFlushDuration: TimeInterval? = nil,
+        allowDeferredFlush: Bool = false
+    ) async -> StopFlushResult {
         // Signal the processing loop to stop (it checks isProcessing each iteration)
         bufferState.withLock { state in
             state.isProcessing = false
@@ -361,21 +379,58 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             await task.value  // Wait for task to complete instead of cancelling
         }
         processingTask = nil
-        
-        // Process any remaining audio
-        await processRemainingAudio()
-        logBoundaryDiagnosticsSummary()
-        
-        if let stabilizer = liveStabilizer {
-            let output = await stabilizer.flushAll()
-            for segment in output.committedSegments {
-                transcriptHandler?(segment)
+
+        let flushStart = Date()
+        let didCompleteFlush: Bool
+        if let maxFlushDuration, maxFlushDuration > 0 {
+            let flushTask = Task { [weak self] in
+                await self?.performFinalFlush()
             }
-            if let draft = output.draftUpdate {
-                draftHandler?(draft.text, draft.speaker)
+            let completedWithinBudget = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    await flushTask.value
+                    return true
+                }
+                group.addTask {
+                    try? await Task.sleep(
+                        nanoseconds: UInt64(maxFlushDuration * 1_000_000_000)
+                    )
+                    return false
+                }
+                let first = await group.next() ?? true
+                group.cancelAll()
+                return first
             }
+
+            if completedWithinBudget {
+                didCompleteFlush = true
+            } else if allowDeferredFlush {
+                didCompleteFlush = false
+                let remaining = currentBufferedSampleCount()
+                Task {
+                    await DiagnosticLogger.shared.log(
+                        .transcription,
+                        "STOP_FLUSH_DEFERRED: budgetMs=\(Int(maxFlushDuration * 1000)), remainingSamples=\(remaining)"
+                    )
+                }
+                Task.detached(priority: .utility) {
+                    await flushTask.value
+                }
+            } else {
+                await flushTask.value
+                didCompleteFlush = true
+            }
+        } else {
+            await performFinalFlush()
+            didCompleteFlush = true
         }
-        liveStabilizer = nil
+
+        let durationMs = Int(Date().timeIntervalSince(flushStart) * 1000)
+        return StopFlushResult(
+            completedFullFlush: didCompleteFlush,
+            flushDurationMs: durationMs,
+            remainingBufferedSamples: currentBufferedSampleCount()
+        )
     }
     
     // MARK: - Audio Input
@@ -758,6 +813,28 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 }
             }
         }
+    }
+
+    private func currentBufferedSampleCount() -> Int {
+        bufferState.withLock { state in
+            state.systemAudioBuffer.count + state.micAudioBuffer.count
+        }
+    }
+
+    private func performFinalFlush() async {
+        await processRemainingAudio()
+        logBoundaryDiagnosticsSummary()
+
+        if let stabilizer = liveStabilizer {
+            let output = await stabilizer.flushAll()
+            for segment in output.committedSegments {
+                transcriptHandler?(segment)
+            }
+            if let draft = output.draftUpdate {
+                draftHandler?(draft.text, draft.speaker)
+            }
+        }
+        liveStabilizer = nil
     }
 
     private func makeBoundaryDecision(
@@ -1443,6 +1520,20 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             if let samples = await loadAudioFile(url: micURL) {
                 let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
                 logger.info("Post-processing mic audio: \(samples.count) samples (\(duration)s)")
+                let micActivity = evaluateSampleActivity(samples)
+                logger.info(
+                    "Post-processing mic activity: ratio=\(String(format: "%.4f", micActivity.activeRatio)), rmsDb=\(String(format: "%.1f", micActivity.rmsDb))"
+                )
+
+                if micActivity.activeRatio < micLowActivityRatioThreshold &&
+                    micActivity.rmsDb < micLowActivityDbThreshold {
+                    Task { await DiagnosticLogger.shared.log(
+                        .transcription,
+                        "MIC_LOW_ACTIVITY_SKIP: ratio=\(String(format: "%.4f", micActivity.activeRatio)), rmsDb=\(String(format: "%.1f", micActivity.rmsDb))"
+                    ) }
+                    logger.info("Skipping mic post-processing due to low activity")
+                    return
+                }
                 
                 let chunks = splitIntoChunks(
                     samples: samples,
@@ -1461,6 +1552,80 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 )
             }
         }
+    }
+
+    private struct ActivityStats {
+        let activeRatio: Float
+        let rmsDb: Float
+    }
+
+    private struct EmittedLexicalSignature {
+        let timestamp: TimeInterval
+        let normalizedText: String
+    }
+
+    private func evaluateSampleActivity(_ samples: [Float]) -> ActivityStats {
+        guard !samples.isEmpty else {
+            return ActivityStats(activeRatio: 0, rmsDb: -96.0)
+        }
+        let sumSquares = samples.reduce(0.0) { $0 + ($1 * $1) }
+        let rms = sqrt(sumSquares / Float(samples.count))
+        let rmsDb = rms > 0 ? 20 * log10(rms) : -96.0
+        let activeThreshold: Float = 0.004
+        let activeCount = samples.filter { abs($0) > activeThreshold }.count
+        let activeRatio = Float(activeCount) / Float(samples.count)
+        return ActivityStats(activeRatio: activeRatio, rmsDb: rmsDb)
+    }
+
+    private func stripWhisperTokens(from text: String) -> String {
+        guard let tokenRegex = try? NSRegularExpression(
+            pattern: "<\\|[^|>]+\\|>",
+            options: []
+        ) else {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let range = NSRange(text.startIndex..., in: text)
+        let stripped = tokenRegex.stringByReplacingMatches(
+            in: text,
+            options: [],
+            range: range,
+            withTemplate: ""
+        )
+        return stripped
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizeForLexicalDedup(_ text: String) -> String {
+        text.lowercased()
+            .replacingOccurrences(
+                of: "[^a-z0-9\\s]",
+                with: "",
+                options: .regularExpression
+            )
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func lexicalSimilarity(_ lhs: String, _ rhs: String) -> Double {
+        if lhs == rhs { return 1.0 }
+        let lhsWords = lhs.split(separator: " ").map(String.init)
+        let rhsWords = rhs.split(separator: " ").map(String.init)
+        if lhsWords.isEmpty || rhsWords.isEmpty { return 0.0 }
+
+        if lhsWords.count >= 4 && rhsWords.count >= 4 && (lhs.contains(rhs) || rhs.contains(lhs)) {
+            return 0.95
+        }
+
+        var lhsCounts: [String: Int] = [:]
+        var rhsCounts: [String: Int] = [:]
+        for word in lhsWords { lhsCounts[word, default: 0] += 1 }
+        for word in rhsWords { rhsCounts[word, default: 0] += 1 }
+
+        let intersection = lhsCounts.reduce(0) { partial, pair in
+            partial + min(pair.value, rhsCounts[pair.key] ?? 0)
+        }
+        return (2.0 * Double(intersection)) / Double(lhsWords.count + rhsWords.count)
     }
     
     /// Process audio chunks with timestamp-based deduplication
@@ -1497,6 +1662,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Counters for summary logging
         var emittedCount = 0
         var skippedCount = 0
+        var recentEmitted: [EmittedLexicalSignature] = []
+        let lexicalWindowSeconds: TimeInterval = 8.0
+        let lexicalSimilarityThreshold = 0.90
+        let maxRecentSignatures = 12
         
         // Log dedup start
         Task { await DiagnosticLogger.shared.log(.transcription,
@@ -1521,13 +1690,33 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 if result.segments.isEmpty {
                     // Only emit if this chunk's content starts at or after coverage boundary
                     if chunk.timestamp >= coverageBoundary - tolerance {
+                        let cleanedText = stripWhisperTokens(from: result.text)
+                        guard !cleanedText.isEmpty else { continue }
+                        let normalized = normalizeForLexicalDedup(cleanedText)
+                        let lexicalDuplicate = recentEmitted.contains(where: { sig in
+                            abs(sig.timestamp - chunk.timestamp) <= lexicalWindowSeconds &&
+                                lexicalSimilarity(sig.normalizedText, normalized) >= lexicalSimilarityThreshold
+                        })
+                        if lexicalDuplicate {
+                            skippedCount += 1
+                            let logTs = chunk.timestamp
+                            Task { await DiagnosticLogger.shared.log(
+                                .transcription,
+                                "SKIP[lexical:fallback]: ts=\(logTs)"
+                            ) }
+                            continue
+                        }
                         let segment = TranscriptSegment(
-                            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                            text: cleanedText,
                             timestamp: chunk.timestamp,
                             speaker: speaker
                         )
                         transcriptHandler?(segment)
                         emittedCount += 1
+                        recentEmitted.append(.init(timestamp: chunk.timestamp, normalizedText: normalized))
+                        if recentEmitted.count > maxRecentSignatures {
+                            recentEmitted.removeFirst(recentEmitted.count - maxRecentSignatures)
+                        }
                         // Pre-capture values for Sendable closure
                         let logTs = chunk.timestamp
                         let logText = String(segment.text.prefix(30))
@@ -1544,7 +1733,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 } else {
                     // Use segment-level timestamps for precise deduplication
                     for seg in result.segments {
-                        let segmentText = seg.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let segmentText = stripWhisperTokens(from: seg.text)
                         guard !segmentText.isEmpty else { continue }
                         
                         // Calculate absolute timestamp (chunk start + segment offset within chunk)
@@ -1560,6 +1749,20 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                         
                         // Only emit segments that start at or after coverage boundary
                         if absoluteStart >= coverageBoundary - tolerance {
+                            let normalized = normalizeForLexicalDedup(segmentText)
+                            let lexicalDuplicate = recentEmitted.contains(where: { sig in
+                                abs(sig.timestamp - absoluteStart) <= lexicalWindowSeconds &&
+                                    lexicalSimilarity(sig.normalizedText, normalized) >= lexicalSimilarityThreshold
+                            })
+                            if lexicalDuplicate {
+                                skippedCount += 1
+                                let logSkipTs = absoluteStart
+                                Task { await DiagnosticLogger.shared.log(
+                                    .transcription,
+                                    "SKIP[lexical:segment]: ts=\(logSkipTs)"
+                                ) }
+                                continue
+                            }
                             let transcriptSegment = TranscriptSegment(
                                 text: segmentText,
                                 timestamp: absoluteStart,
@@ -1567,6 +1770,10 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                             )
                             transcriptHandler?(transcriptSegment)
                             emittedCount += 1
+                            recentEmitted.append(.init(timestamp: absoluteStart, normalizedText: normalized))
+                            if recentEmitted.count > maxRecentSignatures {
+                                recentEmitted.removeFirst(recentEmitted.count - maxRecentSignatures)
+                            }
                             // Pre-capture values for Sendable closure
                             let logEmitTs = absoluteStart
                             let logEmitText = String(segmentText.prefix(30))

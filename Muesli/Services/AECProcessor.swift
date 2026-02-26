@@ -36,6 +36,8 @@ struct AECStats {
     var captureRmsLinear: Float = 0
     /// Last delay value fed to AEC3 via setStreamDelayMs (ms). -1 if never set.
     var lastStreamDelayMs: Int = -1
+    /// Number of delay reseeds applied due to sustained mismatch.
+    var delayReseedCount: Int = 0
 }
 
 // MARK: - AEC Processor
@@ -67,6 +69,8 @@ final class AECProcessor {
 
     /// Sustained delay-mismatch tracking for DELAY_MISMATCH warning.
     private var delayMismatchStartFrame: Int64 = -1
+    /// Last frame where a reseed was applied (prevents repeated rapid reseeds).
+    private var lastDelayReseedFrame: Int64 = -1
 
     private struct State: @unchecked Sendable {
         var bridge: WebRTCAECBridge?
@@ -365,6 +369,7 @@ final class AECProcessor {
         // emits early AEC_TELEMETRY at ~1s/~2s regardless of prior sessions.
         lastTelemetryFrameCount = 0
         delayMismatchStartFrame = -1
+        lastDelayReseedFrame = -1
 
         logger.info("AEC reset")
 
@@ -444,6 +449,7 @@ final class AECProcessor {
         var msg = "session=\(sessionID) AEC_TELEMETRY: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
         msg += ", delay=\(stats.delayMs)ms"
         msg += ", streamDelay=\(stats.lastStreamDelayMs)ms"
+        msg += ", reseeds=\(stats.delayReseedCount)"
         msg += ", mode=\(stats.currentMode)"
         msg += ", processed=\(stats.framesProcessed)"
         msg += ", skipped=\(stats.framesSkipped)"
@@ -494,6 +500,34 @@ final class AECProcessor {
             }
         } else {
             delayMismatchStartFrame = -1
+        }
+
+        // Reseed stream delay when mismatch stays high for long enough.
+        let reseedThresholdMs = 60
+        let reseedSustainedFrames: Int64 = 800  // ~8 seconds
+        if abs(delta) > reseedThresholdMs && hasHealthyRms, delayMismatchStartFrame >= 0 {
+            let sustained = stats.framesProcessed - delayMismatchStartFrame
+            let reseedCooldownFrames: Int64 = 1000  // ~10 seconds
+            let canReseed = sustained >= reseedSustainedFrames &&
+                (lastDelayReseedFrame < 0 || (stats.framesProcessed - lastDelayReseedFrame) >= reseedCooldownFrames)
+            if canReseed, syncDelayMs >= 0 {
+                let reseedOk = setStreamDelayMs(syncDelayMs)
+                if reseedOk {
+                    lastDelayReseedFrame = stats.framesProcessed
+                    let reseedCount = stateLock.withLock { state -> Int in
+                        state.stats.delayReseedCount += 1
+                        return state.stats.delayReseedCount
+                    }
+                    let reseedMsg = "session=\(sessionID) AEC_DELAY_RESEED: oldBridgeDelayMs=\(bridgeDelayMs)"
+                        + ", newStreamDelayMs=\(syncDelayMs)"
+                        + ", mismatchMs=\(abs(delta))"
+                        + ", sustainedFrames=\(sustained)"
+                        + ", reseedCount=\(reseedCount)"
+                    Task {
+                        await DiagnosticLogger.shared.log(.aec, reseedMsg)
+                    }
+                }
+            }
         }
 
         // Detect stable-but-non-converging condition:

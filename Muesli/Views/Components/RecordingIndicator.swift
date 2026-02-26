@@ -398,6 +398,7 @@ struct FloatingProcessingIndicator: View {
     
     let phase: Phase
     let startTime: Date
+    var statusText: String?
     var onTap: (() -> Void)?
     var onCancel: (() -> Void)?
     
@@ -420,7 +421,7 @@ struct FloatingProcessingIndicator: View {
                 .rotationEffect(.degrees(rotationDegrees))
                 .opacity(phase == .reprocessing ? 1.0 : (isPulsing ? 1.0 : 0.5))
             
-            Text(phase.label)
+            Text(statusText ?? phase.label)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
