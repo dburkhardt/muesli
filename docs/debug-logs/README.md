@@ -32,6 +32,7 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### February
 
+- [2026-02-26: Issue #41 AEC Delay Path Stabilization](2026-02-26_issue-41-aec-delay-stabilization.md) - Delay hints are now explicitly separated into raw intent vs applied bridge state, with regression coverage for active/no-op external delay estimator paths
 - [2026-02-26: Stop Finalization UX Restoration After Revert](2026-02-26_stop-finalization-ux-restoration.md) - Restored bounded stop flush, explicit `finalizingLive` processing phase, and phase-specific indicator messaging after revert `1fe2214`
 - [2026-02-25: Stop UI Hang + AEC Delay-Hint Regression](2026-02-25_stop-ui-hang-and-aec-delay-hint-regression.md) - Stop appeared stalled without clear end-state indicator; restored off-main post-processing flow and synchronizer-derived AEC delay hints
 - [2026-02-25: Second-Pass Finalization Stop-Flow Latency and Session Lifetime Race](2026-02-25_second-pass-finalization-stopflow-latency.md) - Stop path awaited export during active second-pass and could exit early if session deallocated before task start

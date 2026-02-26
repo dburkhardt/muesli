@@ -582,7 +582,7 @@ final class RegressionTests: XCTestCase {
             "TranscriptionCoordinator should define finalizingLive processing phase"
         )
     }
-    
+
     /// Regression test: Mic audio RMS should be measurable (not all zeros)
     /// Bug: Logs showed mic audio RMS was consistently 0.0 with all-zero samples.
     /// Fix: AVAudioEngine provides actual audio data with measurable RMS.
@@ -625,7 +625,7 @@ final class RegressionTests: XCTestCase {
         let coordinatorURL = repoRoot.appendingPathComponent("Muesli/Managers/TranscriptionCoordinator.swift")
         return try String(contentsOf: coordinatorURL, encoding: .utf8)
     }
-    
+
     // MARK: - Window Management Regression Tests (Bug Fix: Jan 15, 2026)
     
     /// Regression test: Main window hidden during onboarding
@@ -1570,9 +1570,10 @@ final class RegressionTests: XCTestCase {
             "lastTelemetryFrameCount should start at 0")
     }
 
-    /// Regression test: setStreamDelayMs records the delay in stats.lastStreamDelayMs.
-    /// This is the observability fix for P2 — logs must show the delay being fed to AEC3
-    /// so a future failure session can confirm whether the delay was correct.
+    /// Regression test: setStreamDelayMs records the delay in stats.lastStreamDelayMs
+    /// when the estimator path is active.
+    /// This is the observability fix for P2 — logs must show whether the delay is
+    /// actually being fed to AEC3.
     func testSetStreamDelayMsRecordedInStats() {
         let aec = AECProcessor()
         aec.configure(topology: .speakerphone)
@@ -1581,12 +1582,15 @@ final class RegressionTests: XCTestCase {
         let testDelayMs = 175
         let ok = aec.setStreamDelayMs(testDelayMs)
 
-        // setStreamDelayMs may return false if WebRTC bridge isn't available in test environment,
-        // but if it returns true the stats must reflect the value.
-        if ok {
+        // setStreamDelayMs may return false if WebRTC bridge isn't available in test environment.
+        if ok && aec.isExternalDelayEstimatorEnabled {
             let stats = aec.getStats()
             XCTAssertEqual(stats.lastStreamDelayMs, testDelayMs,
                 "lastStreamDelayMs should equal the value passed to setStreamDelayMs")
+        } else {
+            let stats = aec.getStats()
+            XCTAssertEqual(stats.lastStreamDelayMs, -1,
+                "When estimator path is inactive, stats should indicate no applied stream delay")
         }
 
         // Verify negative delay is rejected
@@ -1595,8 +1599,8 @@ final class RegressionTests: XCTestCase {
     }
 
     /// Regression test: setStreamDelayMs records unbounded value and source for observability.
-    /// If AEC bridge is available, the clamped value is fed through bridge setStreamDelayMs.
-    /// If bridge is unavailable (stub mode), clamping cannot be verified, but source/raw capture is still deterministic.
+    /// If estimator is active, the clamped value is fed to the bridge; if not, capture
+    /// remains raw-only for diagnostics.
     func testSetStreamDelayMsRecordsRawValueAndSource() {
         let aec = AECProcessor()
         aec.configure(topology: .speakerphone)
@@ -1608,8 +1612,10 @@ final class RegressionTests: XCTestCase {
         XCTAssertEqual(stats.lastStreamDelayRawMs, 250, "lastStreamDelayRawMs should always capture the unbounded call value")
         XCTAssertEqual(stats.lastStreamDelayHintSource, .coarse, "Hint source should be tracked")
 
-        if ok {
+        if ok && aec.isExternalDelayEstimatorEnabled {
             XCTAssertEqual(stats.lastStreamDelayMs, 250, "When accepted, lastStreamDelayMs should match clamped input")
+        } else {
+            XCTAssertEqual(stats.lastStreamDelayMs, -1, "When estimator is inactive, streamDelay should stay unset")
         }
     }
 
@@ -1627,13 +1633,15 @@ final class RegressionTests: XCTestCase {
         XCTAssertEqual(stats.lastStreamDelayHintSource, .seeded, "Hint source should be preserved after clamping")
 
         // 500ms is the configured upper bound in setStreamDelayMs
-        if ok {
+        if ok && aec.isExternalDelayEstimatorEnabled {
             XCTAssertEqual(stats.lastStreamDelayMs, 500, "Bounded delay fed to AEC should be 500ms max")
+        } else {
+            XCTAssertEqual(stats.lastStreamDelayMs, -1, "When estimator is inactive, streamDelay should stay unset")
         }
     }
 
     /// Regression test: explicit pass/fail mapping for estimator path.
-    /// Path A (effective): if external estimator is enabled, a valid hint should be accepted by WebRTC.
+    /// Path A (effective): if external estimator is enabled, a valid hint should be applied.
     /// Path B (non-effective): if estimator is unavailable, the hint is still captured for observability but not applied.
     func testSetStreamDelayMsPathAorBEstimatorBehavior() {
         let aec = AECProcessor()
@@ -1651,7 +1659,8 @@ final class RegressionTests: XCTestCase {
                 XCTAssertEqual(stats.lastStreamDelayMs, 180, "Path A: accepted hint should be stored as sent (after clamp)")
             }
         } else {
-            XCTAssertFalse(ok, "Path B: estimator-unavailable path should not report successful bridge write")
+            XCTAssertTrue(ok, "Path B: estimator-unavailable path should still accept and continue as no-op")
+            XCTAssertEqual(stats.lastStreamDelayMs, -1, "Path B: inactive estimator should not write applied stream delay")
         }
     }
 
@@ -1665,8 +1674,10 @@ final class RegressionTests: XCTestCase {
 
         XCTAssertEqual(stats.lastStreamDelayRawMs, 777, "Raw delay should remain the outbound value")
         XCTAssertEqual(stats.lastStreamDelayHintSource, .coarse, "Hint source should remain coarse")
-        if ok {
+        if ok && aec.isExternalDelayEstimatorEnabled {
             XCTAssertEqual(stats.lastStreamDelayMs, 500, "Clamped delay should be 500ms")
+        } else {
+            XCTAssertEqual(stats.lastStreamDelayMs, -1, "No estimator path should leave applied delay unset")
         }
     }
 
