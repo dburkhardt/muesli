@@ -641,6 +641,7 @@ struct RecordingDetailView: View {
     private func historicalMeetingViewWithIndicator(meeting: MeetingHistoryItem) -> some View {
         let hasMeetingReprocessing = viewModel.processingState(for: meeting) != nil ||
             (meeting.isReprocessing && meeting.reprocessingStartTime != nil)
+        let isStoppingActiveSession = viewModel.activeRecordingSession?.state == .stopping
 
         return ZStack(alignment: .bottomTrailing) {
             historicalMeetingView(meeting: meeting)
@@ -648,13 +649,14 @@ struct RecordingDetailView: View {
             VStack(spacing: 8) {
                 processingIndicators(for: meeting)
 
-                if !hasMeetingReprocessing {
+                if !hasMeetingReprocessing && !isStoppingActiveSession {
                     globalReprocessingIndicator(excluding: meeting.directory)
                 }
                 
                 // Show floating indicator when there's an active recording
                 if viewModel.isViewingPastMeetingWhileRecording,
-                   let activeSession = viewModel.activeRecordingSession {
+                   let activeSession = viewModel.activeRecordingSession,
+                   activeSession.state != .stopping {
                     FloatingRecordingIndicator(
                         elapsedTime: activeSession.elapsedTimeString,
                         isInitializing: activeSession.isInitializing,
@@ -850,9 +852,17 @@ struct RecordingDetailView: View {
             
             // Floating control pane: Active recording controls or resume/refinement controls
             if let activeSession = viewModel.activeRecordingSession, !activeSession.isCompleted {
-                // Show recording controls when actively recording (including resumed recordings)
-                floatingControlBar(session: activeSession)
-                    .padding(.bottom, 16)
+                if activeSession.state == .stopping {
+                    // Match activeRecordingView behavior: replace controls while finalizing.
+                    stoppingFloatingIndicator(session: activeSession)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    // Show recording controls when actively recording (including resumed recordings).
+                    floatingControlBar(session: activeSession)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             } else {
                 // Show resume control pane for all saved meetings
                 // ResumeControlPane handles: refinement loading, toggle, and resume button
@@ -860,6 +870,7 @@ struct RecordingDetailView: View {
                     .padding(.bottom, 16)
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: viewModel.activeRecordingSession?.state == .stopping)
     }
     
     // MARK: - Empty Detail View
