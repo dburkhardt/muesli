@@ -43,6 +43,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Callback for transcription warnings (message, details)
     typealias TranscriptionWarningHandler = @Sendable (String, String) -> Void
+
+    /// Summary of stop-time buffer flush behavior.
+    struct StopFlushResult: Sendable {
+        let completedFullFlush: Bool
+        let flushDurationMs: Int
+        let remainingBufferedSamples: Int
+    }
     
     /// Information about audio chunks to process
     private struct ChunkInfo {
@@ -348,8 +355,15 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         }
     }
     
-    /// Stop transcription processing
-    func stopTranscription() async {
+    /// Stop transcription processing.
+    /// - Parameters:
+    ///   - maxFlushDuration: Optional maximum wait for final buffer flush. `nil` waits for full completion.
+    ///   - allowDeferredFlush: If true, flush can continue in background after the timeout is reached.
+    @discardableResult
+    func stopTranscription(
+        maxFlushDuration: TimeInterval? = nil,
+        allowDeferredFlush: Bool = false
+    ) async -> StopFlushResult {
         // Signal the processing loop to stop (it checks isProcessing each iteration)
         bufferState.withLock { state in
             state.isProcessing = false
@@ -361,21 +375,58 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             await task.value  // Wait for task to complete instead of cancelling
         }
         processingTask = nil
-        
-        // Process any remaining audio
-        await processRemainingAudio()
-        logBoundaryDiagnosticsSummary()
-        
-        if let stabilizer = liveStabilizer {
-            let output = await stabilizer.flushAll()
-            for segment in output.committedSegments {
-                transcriptHandler?(segment)
+
+        let flushStart = Date()
+        let didCompleteFlush: Bool
+        if let maxFlushDuration, maxFlushDuration > 0 {
+            let flushTask = Task { [weak self] in
+                await self?.performFinalFlush()
             }
-            if let draft = output.draftUpdate {
-                draftHandler?(draft.text, draft.speaker)
+            let completedWithinBudget = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    await flushTask.value
+                    return true
+                }
+                group.addTask {
+                    try? await Task.sleep(
+                        nanoseconds: UInt64(maxFlushDuration * 1_000_000_000)
+                    )
+                    return false
+                }
+                let first = await group.next() ?? true
+                group.cancelAll()
+                return first
             }
+
+            if completedWithinBudget {
+                didCompleteFlush = true
+            } else if allowDeferredFlush {
+                didCompleteFlush = false
+                let remaining = currentBufferedSampleCount()
+                Task {
+                    await DiagnosticLogger.shared.log(
+                        .transcription,
+                        "STOP_FLUSH_DEFERRED: budgetMs=\(Int(maxFlushDuration * 1000)), remainingSamples=\(remaining)"
+                    )
+                }
+                Task.detached(priority: .utility) {
+                    await flushTask.value
+                }
+            } else {
+                await flushTask.value
+                didCompleteFlush = true
+            }
+        } else {
+            await performFinalFlush()
+            didCompleteFlush = true
         }
-        liveStabilizer = nil
+
+        let durationMs = Int(Date().timeIntervalSince(flushStart) * 1000)
+        return StopFlushResult(
+            completedFullFlush: didCompleteFlush,
+            flushDurationMs: durationMs,
+            remainingBufferedSamples: currentBufferedSampleCount()
+        )
     }
     
     // MARK: - Audio Input
@@ -758,6 +809,28 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 }
             }
         }
+    }
+
+    private func currentBufferedSampleCount() -> Int {
+        bufferState.withLock { state in
+            state.systemAudioBuffer.count + state.micAudioBuffer.count
+        }
+    }
+
+    private func performFinalFlush() async {
+        await processRemainingAudio()
+        logBoundaryDiagnosticsSummary()
+
+        if let stabilizer = liveStabilizer {
+            let output = await stabilizer.flushAll()
+            for segment in output.committedSegments {
+                transcriptHandler?(segment)
+            }
+            if let draft = output.draftUpdate {
+                draftHandler?(draft.text, draft.speaker)
+            }
+        }
+        liveStabilizer = nil
     }
 
     private func makeBoundaryDecision(

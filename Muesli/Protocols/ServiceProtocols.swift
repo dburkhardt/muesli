@@ -15,10 +15,21 @@ protocol TranscriptionServiceProtocol: Sendable {
     func setTranscriptHandler(_ handler: @escaping TranscriptionService.TranscriptHandler)
     func setDraftHandler(_ handler: @escaping TranscriptionDraftHandler)
     func startTranscription(recordingStartTime: Date)
-    func stopTranscription() async
+    @discardableResult
+    func stopTranscription(
+        maxFlushDuration: TimeInterval?,
+        allowDeferredFlush: Bool
+    ) async -> TranscriptionService.StopFlushResult
     func appendSystemAudio(_ samples: [Float])
     func appendMicrophoneAudio(_ samples: [Float])
     func transcribePostProcessing(systemAudioURL: URL?, micAudioURL: URL?, startTime: Date) async throws
+}
+
+extension TranscriptionServiceProtocol {
+    /// Backward-compatible convenience overload that waits for a full flush.
+    func stopTranscription() async {
+        _ = await stopTranscription(maxFlushDuration: nil, allowDeferredFlush: false)
+    }
 }
 
 // MARK: - FileOutputServiceProtocol

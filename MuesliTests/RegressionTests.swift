@@ -500,9 +500,9 @@ final class RegressionTests: XCTestCase {
         let source = try recordingControllerSource()
         
         XCTAssertTrue(
-            source.contains("if hasAudioFiles,") &&
-            source.contains("preferencesManager.isSecondPassASREnabled,") &&
-            source.contains("recordingDuration >= AudioConfiguration.secondPassMinDurationSeconds"),
+            source.contains("let decision = Self.automaticFinalizationDecision(") &&
+            source.contains("secondPassEnabled: preferencesManager.isSecondPassASREnabled") &&
+            source.contains("recordingDuration: duration"),
             "stopRecordingAsync should gate automatic finalization by unified toggle + audio files + min duration"
         )
         
@@ -511,13 +511,28 @@ final class RegressionTests: XCTestCase {
             "Legacy auto-reprocess preference should not be used in stopRecordingAsync"
         )
     }
+
+    /// Regression test: stop flow uses a bounded live flush budget when second-pass is active.
+    /// This keeps stop UX responsive while allowing deferred completion in background.
+    func testStopRecordingUsesDeferredFlushBudgetForSecondPass() throws {
+        let source = try recordingControllerSource()
+
+        XCTAssertTrue(
+            source.contains("maxFlushDuration: shouldUseDeferredFlush ? 1.5 : nil"),
+            "stopRecordingAsync should use a bounded flush budget when second-pass is active"
+        )
+        XCTAssertTrue(
+            source.contains("allowDeferredFlush: shouldUseDeferredFlush"),
+            "stopRecordingAsync should allow deferred flush when second-pass is active"
+        )
+    }
     
     /// Regression test: empty-transcript rescue is independent and runs only when needed.
     func testStopRecordingEmptyTranscriptRescueCondition() throws {
         let source = try recordingControllerSource()
         
         XCTAssertTrue(
-            source.contains("if hasAudioFiles && hasEmptyTranscript && !automaticFinalizationLaunched"),
+            source.contains("if finalizationState.hasAudioFiles && hasEmptyTranscript && !finalizationState.automaticFinalizationLaunched"),
             "Empty-transcript rescue should run only when finalization did not launch"
         )
         XCTAssertFalse(
@@ -531,7 +546,11 @@ final class RegressionTests: XCTestCase {
         let source = try recordingControllerSource()
         
         XCTAssertTrue(
-            source.contains("liveModel: session.effectiveLiveModel"),
+            source.contains("let liveModelAtStop = session.effectiveLiveModel"),
+            "second-pass launch should snapshot the effective live model at stop time"
+        )
+        XCTAssertTrue(
+            source.contains("liveModel: liveModelAtStop"),
             "runSecondPassASR should receive session.effectiveLiveModel for sameAsLive correctness"
         )
     }
@@ -547,6 +566,21 @@ final class RegressionTests: XCTestCase {
         XCTAssertTrue(
             source.contains("self.transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)"),
             "Callback should route to autoReprocessWhenReady with canonical meeting instance"
+        )
+    }
+
+    /// Regression test: stop flow exposes explicit finalizing phase for processing indicator lifecycle.
+    func testStopFlowUsesFinalizingLiveProcessingPhase() throws {
+        let controllerSource = try recordingControllerSource()
+        let coordinatorSource = try transcriptionCoordinatorSource()
+
+        XCTAssertTrue(
+            controllerSource.contains("phase: .finalizingLive"),
+            "RecordingController should set/clear the finalizingLive processing phase during stop flow"
+        )
+        XCTAssertTrue(
+            coordinatorSource.contains("case finalizingLive"),
+            "TranscriptionCoordinator should define finalizingLive processing phase"
         )
     }
     
@@ -584,6 +618,13 @@ final class RegressionTests: XCTestCase {
         let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
         let viewModelURL = repoRoot.appendingPathComponent("Muesli/ViewModels/MuesliViewModel.swift")
         return try String(contentsOf: viewModelURL, encoding: .utf8)
+    }
+
+    private func transcriptionCoordinatorSource() throws -> String {
+        let testsFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
+        let coordinatorURL = repoRoot.appendingPathComponent("Muesli/Managers/TranscriptionCoordinator.swift")
+        return try String(contentsOf: coordinatorURL, encoding: .utf8)
     }
     
     // MARK: - Window Management Regression Tests (Bug Fix: Jan 15, 2026)

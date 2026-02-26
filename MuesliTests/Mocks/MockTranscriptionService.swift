@@ -38,6 +38,8 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     var setTranscriptHandlerCallCount: Int = 0
     var lastModelPath: URL?
     var lastRecordingStartTime: Date?
+    var lastStopMaxFlushDuration: TimeInterval?
+    var lastStopAllowDeferredFlush: Bool = false
     
     // MARK: - Handlers
     
@@ -83,9 +85,20 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         isTranscribing = true
     }
     
-    func stopTranscription() async {
+    @discardableResult
+    func stopTranscription(
+        maxFlushDuration: TimeInterval?,
+        allowDeferredFlush: Bool
+    ) async -> TranscriptionService.StopFlushResult {
         stopTranscriptionCallCount += 1
+        lastStopMaxFlushDuration = maxFlushDuration
+        lastStopAllowDeferredFlush = allowDeferredFlush
         isTranscribing = false
+        return TranscriptionService.StopFlushResult(
+            completedFullFlush: true,
+            flushDurationMs: 0,
+            remainingBufferedSamples: 0
+        )
     }
     
     func appendSystemAudio(_ samples: [Float]) {
@@ -150,6 +163,8 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         setDraftHandlerCallCount = 0
         lastModelPath = nil
         lastRecordingStartTime = nil
+        lastStopMaxFlushDuration = nil
+        lastStopAllowDeferredFlush = false
         transcriptHandler = nil
         draftHandler = nil
     }

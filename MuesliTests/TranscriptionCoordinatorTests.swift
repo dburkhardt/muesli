@@ -948,6 +948,42 @@ final class TranscriptionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testFinalizingLiveProcessingStateHasExpectedStatusText() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-finalizing-live-\(UUID().uuidString)")
+        sut.beginProcessingState(for: directory, phase: .finalizingLive, cancellable: false)
+
+        let state = sut.processingState(for: directory)
+        XCTAssertEqual(state?.phase, .finalizingLive)
+        XCTAssertEqual(state?.displayStatus, "Finalizing live transcript...")
+        XCTAssertEqual(state?.cancellable, false)
+    }
+
+    @MainActor
+    func testStopTranscriptionForwardsFlushBudget() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        _ = await sut.stopTranscription(maxFlushDuration: 1.5, allowDeferredFlush: true)
+
+        XCTAssertEqual(mockTranscriptionService.stopTranscriptionCallCount, 1)
+        XCTAssertNotNil(mockTranscriptionService.lastStopMaxFlushDuration)
+        XCTAssertEqual(mockTranscriptionService.lastStopMaxFlushDuration ?? 0, 1.5, accuracy: 0.001)
+        XCTAssertTrue(mockTranscriptionService.lastStopAllowDeferredFlush)
+    }
+
+    @MainActor
     func testProcessingStateLookupUsesCanonicalDirectoryPath() {
         let mockTranscriptionService = MockTranscriptionService()
         let mockModelManager = MockModelManager()

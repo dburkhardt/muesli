@@ -32,9 +32,23 @@ final class TranscriptionCoordinator {
 
     /// High-level processing phase shown in meeting UI.
     enum ProcessingPhase: String, Sendable {
+        case finalizingLive
         case secondPass
         case autoReprocess
         case manualReprocess
+
+        var displayStatus: String {
+            switch self {
+            case .finalizingLive:
+                return "Finalizing live transcript..."
+            case .secondPass:
+                return "Reprocessing..."
+            case .autoReprocess:
+                return "Reprocessing..."
+            case .manualReprocess:
+                return "Reprocessing..."
+            }
+        }
     }
 
     /// Canonical processing state keyed by meeting directory path.
@@ -42,6 +56,10 @@ final class TranscriptionCoordinator {
         let phase: ProcessingPhase
         let startedAt: Date
         let cancellable: Bool
+
+        var displayStatus: String {
+            phase.displayStatus
+        }
     }
     
     // MARK: - Dependencies
@@ -425,14 +443,25 @@ final class TranscriptionCoordinator {
         transcriptionService.startTranscription(recordingStartTime: recordingStartTime)
     }
     
-    /// Stop transcription and process remaining audio
-    func stopTranscription() async {
-        await transcriptionService.stopTranscription()
+    /// Stop transcription and process remaining audio.
+    /// - Parameters:
+    ///   - maxFlushDuration: Optional max wait budget for final live flush.
+    ///   - allowDeferredFlush: Allow flush completion in background after budget.
+    @discardableResult
+    func stopTranscription(
+        maxFlushDuration: TimeInterval? = nil,
+        allowDeferredFlush: Bool = false
+    ) async -> TranscriptionService.StopFlushResult {
+        let flushResult = await transcriptionService.stopTranscription(
+            maxFlushDuration: maxFlushDuration,
+            allowDeferredFlush: allowDeferredFlush
+        )
         clearBuffers()
         
         // Clear handler to break retain cycle
         transcriptionService.setTranscriptHandler { _ in }
         transcriptionService.setDraftHandler { _, _ in }
+        return flushResult
     }
     
     deinit {
