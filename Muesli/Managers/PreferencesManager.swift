@@ -457,7 +457,7 @@ final class PreferencesManager {
             mappedModelPreference = .sameAsLive
             hadUnknownModelPreference = false
         case nil:
-            mappedModelPreference = legacySecondPassEnabled ? .bestAvailable : .sameAsLive
+            mappedModelPreference = unifiedSecondPassEnabled ? .bestAvailable : .sameAsLive
             hadUnknownModelPreference = false
         default:
             mappedModelPreference = .sameAsLive

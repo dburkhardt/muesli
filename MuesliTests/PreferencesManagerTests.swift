@@ -445,7 +445,7 @@ final class PreferencesManagerTests: XCTestCase {
                 nil,
                 Decision(
                     unifiedSecondPassEnabled: true,
-                    mappedModelPreference: .sameAsLive,
+                    mappedModelPreference: .bestAvailable,
                     hadUnknownModelPreference: false
                 ),
                 "unset_secondPass_unset_auto_nil_pref"
@@ -478,7 +478,7 @@ final class PreferencesManagerTests: XCTestCase {
                 nil,
                 Decision(
                     unifiedSecondPassEnabled: true,
-                    mappedModelPreference: .sameAsLive,
+                    mappedModelPreference: .bestAvailable,
                     hadUnknownModelPreference: false
                 ),
                 "secondPass_false_auto_true_nil_pref"
@@ -571,7 +571,7 @@ final class PreferencesManagerTests: XCTestCase {
         let manager = PreferencesManager()
         
         XCTAssertTrue(manager.isSecondPassASREnabled)
-        XCTAssertEqual(manager.secondPassModelPreference, .sameAsLive)
+        XCTAssertEqual(manager.secondPassModelPreference, .bestAvailable)
     }
     
     // MARK: - TranscriptionMode Conversion Extension Tests
