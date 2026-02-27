@@ -120,9 +120,12 @@ struct RecordingDetailView: View {
                     }
                 }
                 
-                // Floating control bar at bottom
-                floatingControlBar(session: session)
-                    .padding(.bottom, 16)
+                // Hide controls immediately after stop; show post-processing in lower-right.
+                if session.state != .stopping {
+                    floatingControlBar(session: session)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             
             VStack(spacing: 8) {
@@ -475,19 +478,11 @@ struct RecordingDetailView: View {
                 viewModel.stopRecording(for: session)
             },
             label: {
-                if session.state == .stopping {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white)
-                        .frame(width: 24, height: 24)
-                        .background(Circle().fill(.orange))
-                } else {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 24, height: 24)
-                        .background(Circle().fill(.red))
-                }
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(.red))
             }
         )
         .buttonStyle(.plain)
@@ -588,8 +583,7 @@ struct RecordingDetailView: View {
         return FloatingProcessingIndicator(
             phase: .reprocessing,
             startTime: processingState?.startedAt ?? session.finalizationStartTime ?? Date(),
-            statusText: processingState?.displayStatus ??
-                (session.isFinalizingTranscript ? "Finalizing transcript..." : "Stopping recording...")
+            statusText: processingState?.displayStatus ?? "Stopping recording..."
         )
     }
 
@@ -648,6 +642,10 @@ struct RecordingDetailView: View {
             
             VStack(spacing: 8) {
                 processingIndicators(for: meeting)
+
+                if isStoppingActiveSession, let activeSession = viewModel.activeRecordingSession {
+                    stoppingFloatingIndicator(session: activeSession)
+                }
 
                 if !hasMeetingReprocessing && !isStoppingActiveSession {
                     globalReprocessingIndicator(excluding: meeting.directory)
@@ -852,12 +850,7 @@ struct RecordingDetailView: View {
             
             // Floating control pane: Active recording controls or resume/refinement controls
             if let activeSession = viewModel.activeRecordingSession, !activeSession.isCompleted {
-                if activeSession.state == .stopping {
-                    // Match activeRecordingView behavior: replace controls while finalizing.
-                    stoppingFloatingIndicator(session: activeSession)
-                        .padding(.bottom, 16)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
+                if activeSession.state != .stopping {
                     // Show recording controls when actively recording (including resumed recordings).
                     floatingControlBar(session: activeSession)
                         .padding(.bottom, 16)
