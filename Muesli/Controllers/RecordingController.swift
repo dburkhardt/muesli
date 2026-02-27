@@ -95,6 +95,25 @@ final class RecordingController {
     nonisolated var isMicrophoneMutedSafe: Bool {
         isMicrophoneMutedLock.withLock { $0 }
     }
+
+    // #region agent log
+    private struct AgentMicDebugTelemetry {
+        var lastProcessedLogTime: TimeInterval = 0
+        var lastRawLogTime: TimeInterval = 0
+        var processedBufferCount: Int = 0
+        var processedWhileMutedCount: Int = 0
+        var transcriptionFramesDroppedWhileMuted: Int = 0
+    }
+
+    private let agentMicDebugTelemetryLock = OSAllocatedUnfairLock(
+        initialState: AgentMicDebugTelemetry()
+    )
+
+    nonisolated(unsafe) private static let agentDebugSessionID = "b2fd5b"
+    nonisolated(unsafe) private static let agentDebugRunID = "aec-coarsedelay-nodeadband-1"
+    nonisolated(unsafe) private static let agentDebugLogPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug-b2fd5b.log"
+    nonisolated(unsafe) private static let agentDebugQueue = DispatchQueue(label: "com.muesli.agent.debug.b2fd5b")
+    // #endregion
     
     // MARK: - Callbacks
     
@@ -202,9 +221,11 @@ final class RecordingController {
         let fileService = self.fileOutputService
         let transcriptionCoordinator = self.transcriptionCoordinator
         let audioCaptureServiceRef = self.audioCaptureService
+        let preferencesManager = self.preferencesManager
 
         // Capture locks directly to avoid @MainActor isolation in callback
         let muteLock = self.isMicrophoneMutedLock
+        let agentTelemetryLock = self.agentMicDebugTelemetryLock
         let ingestionQueue = DispatchQueue(label: "com.muesli.app.transcription.ingestion", qos: .userInitiated)
         let micBatchBuffer = OSAllocatedUnfairLock(initialState: [Float]())
         let renderBatchBuffer = OSAllocatedUnfairLock(initialState: [Float]())
@@ -225,11 +246,74 @@ final class RecordingController {
                             buffer,
                             fileService: fileService
                         )
+
+                        // #region agent log
+                        let isMicMutedForFileWrite = muteLock.withLock { $0 }
+                        let shouldEmitProcessedLog = agentTelemetryLock.withLock { state in
+                            state.processedBufferCount += 1
+                            if isMicMutedForFileWrite {
+                                state.processedWhileMutedCount += 1
+                            }
+                            let now = Date().timeIntervalSince1970
+                            if now - state.lastProcessedLogTime >= 1 {
+                                state.lastProcessedLogTime = now
+                                return true
+                            }
+                            return false
+                        }
+
+                        if shouldEmitProcessedLog,
+                           var metrics = RecordingController.extractPCMStats(from: buffer) {
+                            let counters = agentTelemetryLock.withLock { state -> (Int, Int, Int) in
+                                let snapshot = (
+                                    state.processedBufferCount,
+                                    state.processedWhileMutedCount,
+                                    state.transcriptionFramesDroppedWhileMuted
+                                )
+                                state.processedBufferCount = 0
+                                state.processedWhileMutedCount = 0
+                                state.transcriptionFramesDroppedWhileMuted = 0
+                                return snapshot
+                            }
+                            metrics["isMicMuted"] = isMicMutedForFileWrite
+                            metrics["aecEnabledPreference"] = preferencesManager.echoCancellationEnabledForAudioCallback
+                            metrics["processedBuffersSeenInWindow"] = counters.0
+                            metrics["processedBuffersSeenWhileMuted"] = counters.1
+                            metrics["transcriptionFramesDroppedWhileMuted"] = counters.2
+                            RecordingController.agentDebugLog(
+                                hypothesisId: "H1",
+                                location: "RecordingController.swift:ensureAudioHandlersConfigured(bufferHandler:.microphone)",
+                                message: "Processed microphone buffer routed to file output",
+                                data: metrics
+                            )
+                        }
+                        // #endregion
                     case .rawMicrophone:
                         try RecordingController.handleRawMicrophoneAudioBuffer(
                             buffer,
                             fileService: fileService
                         )
+
+                        // #region agent log
+                        let shouldEmitRawLog = agentTelemetryLock.withLock { state in
+                            let now = Date().timeIntervalSince1970
+                            if now - state.lastRawLogTime >= 1 {
+                                state.lastRawLogTime = now
+                                return true
+                            }
+                            return false
+                        }
+
+                        if shouldEmitRawLog,
+                           let metrics = RecordingController.extractPCMStats(from: buffer) {
+                            RecordingController.agentDebugLog(
+                                hypothesisId: "H2",
+                                location: "RecordingController.swift:ensureAudioHandlersConfigured(bufferHandler:.rawMicrophone)",
+                                message: "Raw microphone buffer telemetry baseline",
+                                data: metrics
+                            )
+                        }
+                        // #endregion
                     }
 
                     // Reset error counter on success
@@ -284,7 +368,14 @@ final class RecordingController {
             ingestionQueue.async {
                 guard self != nil else { return }
                 let isMicMuted = muteLock.withLock { $0 }
-                guard !isMicMuted else { return }
+                guard !isMicMuted else {
+                    // #region agent log
+                    _ = agentTelemetryLock.withLock { state in
+                        state.transcriptionFramesDroppedWhileMuted += 1
+                    }
+                    // #endregion
+                    return
+                }
 
                 let batch: [Float]? = micBatchBuffer.withLock { buffer in
                     buffer.append(contentsOf: frame.samples)
@@ -456,6 +547,19 @@ final class RecordingController {
             // Configure microphone preference before starting capture
             // Pass selected mic device to audio capture service for AVAudioEngine capture
             let selectedMicID = microphoneManager.selectedDeviceID
+            let defaultMic = microphoneManager.currentDefaultDevice
+            // #region agent log
+            RecordingController.agentDebugLog(
+                hypothesisId: "N2",
+                location: "RecordingController.swift:startRecordingAsync",
+                message: "Recording start microphone selection snapshot",
+                data: [
+                    "selectedMicID": selectedMicID ?? "nil",
+                    "defaultMicID": defaultMic?.id ?? "nil",
+                    "defaultMicName": defaultMic?.name ?? "unknown",
+                ]
+            )
+            // #endregion
             await audioCaptureService.setMicrophoneDevice(selectedMicID)
 
             // CRITICAL: Ensure audio handlers are configured BEFORE starting capture
@@ -1001,23 +1105,6 @@ final class RecordingController {
                     liveModel: liveModelAtStop
                 )
                 try Task.checkCancellation()
-                let orderingPreview = blocks.prefix(10).map { block in
-                    let ts = String(format: "%.2f", block.startTimestamp)
-                    let text = String(block.text.prefix(32))
-                    return "\(ts)|\(block.speaker.rawValue)|\(text)"
-                }
-                // #region agent log
-                AgentDebugRuntimeLogger.log(
-                    runId: "post-fix-order-1",
-                    hypothesisId: "O4",
-                    location: "RecordingController.swift:launchSecondPassFinalization",
-                    message: "Second-pass block ordering preview",
-                    data: [
-                        "blockCount": blocks.count,
-                        "preview": orderingPreview
-                    ]
-                )
-                // #endregion
                 
                 try self.fileOutputService.saveTranscriptBlocks(
                     blocks,
@@ -1434,6 +1521,19 @@ final class RecordingController {
             
             // Pass selected mic device to audio capture service for AVAudioEngine capture
             let selectedMicID = microphoneManager.selectedDeviceID
+            let defaultMic = microphoneManager.currentDefaultDevice
+            // #region agent log
+            RecordingController.agentDebugLog(
+                hypothesisId: "N2",
+                location: "RecordingController.swift:resumeRecordingAsync",
+                message: "Resume recording microphone selection snapshot",
+                data: [
+                    "selectedMicID": selectedMicID ?? "nil",
+                    "defaultMicID": defaultMic?.id ?? "nil",
+                    "defaultMicName": defaultMic?.name ?? "unknown",
+                ]
+            )
+            // #endregion
             await audioCaptureService.setMicrophoneDevice(selectedMicID)
             
             // CRITICAL: Ensure audio handlers are configured BEFORE starting capture
@@ -1550,11 +1650,138 @@ final class RecordingController {
         session.isMicrophoneMuted.toggle()
         let mutedState = session.isMicrophoneMuted
         isMicrophoneMutedLock.withLock { $0 = mutedState }
+
+        // #region agent log
+        RecordingController.agentDebugLog(
+            hypothesisId: "H1",
+            location: "RecordingController.swift:toggleMicrophoneMute",
+            message: "Microphone mute state changed",
+            data: [
+                "isMicrophoneMuted": mutedState,
+                "hasActiveSession": activeSession != nil,
+            ]
+        )
+        // #endregion
     }
     
     private func resetMuteState() {
         isMicrophoneMutedLock.withLock { $0 = false }
     }
+
+    // #region agent log
+    private static nonisolated func extractPCMStats(from buffer: CMSampleBuffer) -> [String: Any]? {
+        guard let formatDescription = CMSampleBufferGetFormatDescription(buffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription),
+              let blockBuffer = CMSampleBufferGetDataBuffer(buffer) else {
+            return nil
+        }
+
+        var totalLength: Int = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
+        let status = CMBlockBufferGetDataPointer(
+            blockBuffer,
+            atOffset: 0,
+            lengthAtOffsetOut: nil,
+            totalLengthOut: &totalLength,
+            dataPointerOut: &dataPointer
+        )
+        guard status == kCMBlockBufferNoErr, let dataPointer else { return nil }
+
+        let channels = max(1, Int(asbd.pointee.mChannelsPerFrame))
+        let sampleRate = asbd.pointee.mSampleRate
+        let bitsPerChannel = Int(asbd.pointee.mBitsPerChannel)
+        let isFloat = (asbd.pointee.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let clipThreshold: Float = 0.98
+        let maxAnalyzedSamples = max(1, channels * 4800)
+        var analyzedSamples = 0
+        var clippedSamples = 0
+        var sumSquares: Double = 0
+        var peak: Float = 0
+
+        if isFloat && bitsPerChannel == 32 {
+            let totalSamples = totalLength / MemoryLayout<Float>.size
+            analyzedSamples = min(totalSamples, maxAnalyzedSamples)
+            let pointer = UnsafeRawPointer(dataPointer).bindMemory(to: Float.self, capacity: analyzedSamples)
+            for index in 0..<analyzedSamples {
+                let sample = pointer[index]
+                let magnitude = abs(sample)
+                sumSquares += Double(sample * sample)
+                if magnitude > peak { peak = magnitude }
+                if magnitude >= clipThreshold { clippedSamples += 1 }
+            }
+        } else if !isFloat && bitsPerChannel == 16 {
+            let totalSamples = totalLength / MemoryLayout<Int16>.size
+            analyzedSamples = min(totalSamples, maxAnalyzedSamples)
+            let pointer = UnsafeRawPointer(dataPointer).bindMemory(to: Int16.self, capacity: analyzedSamples)
+            for index in 0..<analyzedSamples {
+                let sample = Float(pointer[index]) / Float(Int16.max)
+                let magnitude = abs(sample)
+                sumSquares += Double(sample * sample)
+                if magnitude > peak { peak = magnitude }
+                if magnitude >= clipThreshold { clippedSamples += 1 }
+            }
+        } else {
+            return nil
+        }
+
+        guard analyzedSamples > 0 else { return nil }
+        let rms = sqrt(sumSquares / Double(analyzedSamples))
+        let clipRatio = Double(clippedSamples) / Double(analyzedSamples)
+
+        return [
+            "sampleRate": sampleRate,
+            "channels": channels,
+            "bitsPerChannel": bitsPerChannel,
+            "isFloat": isFloat,
+            "analyzedSamples": analyzedSamples,
+            "rms": rms,
+            "peak": peak,
+            "clipRatioAt0p98": clipRatio,
+        ]
+    }
+
+    private static nonisolated func agentDebugLog(
+        hypothesisId: String,
+        location: String,
+        message: String,
+        data: [String: Any]
+    ) {
+        let payload: [String: Any] = [
+            "sessionId": agentDebugSessionID,
+            "runId": agentDebugRunID,
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+        ]
+
+        guard JSONSerialization.isValidJSONObject(payload) else { return }
+
+        agentDebugQueue.async {
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+                  var line = String(data: jsonData, encoding: .utf8) else {
+                return
+            }
+            line.append("\n")
+            let url = URL(fileURLWithPath: agentDebugLogPath)
+
+            if let handle = try? FileHandle(forWritingTo: url) {
+                do {
+                    try handle.seekToEnd()
+                    if let lineData = line.data(using: .utf8) {
+                        try handle.write(contentsOf: lineData)
+                    }
+                    try handle.close()
+                } catch {
+                    try? handle.close()
+                }
+            } else {
+                try? line.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+    // #endregion
 
     // MARK: - Microphone Device Selection
     

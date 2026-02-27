@@ -414,18 +414,18 @@ final class AudioWorker {
             let processStart = DispatchTime.now()
             let processedCapture: [Float]
             if aecEnabled {
-                // Pass 0 as the stream delay hint to AEC3.
-                //
-                // The synchronizer's coarseDelayMs measures the render-ring priming lead
-                // (~130-175ms) — a pipeline buffering artifact, not the acoustic echo path
-                // delay (typically 5-30ms). Passing the priming lead to set_stream_delay_ms()
-                // causes AEC3's adaptive filter to misalign by ~150ms, preventing convergence.
-                //
-                // With delay=0, AEC3 uses its own internal cross-correlation estimator to find
-                // the true acoustic lag. The render priming lead still ensures render frames
-                // arrive before capture frames for correct temporal alignment — we just don't
-                // misreport pipeline depth as acoustic delay.
-                let delaySet = aecProcessor.setStreamDelayMs(0, source: .none)
+                // Pass the synchronizer's coarse delay as the stream delay hint.
+                // The synchronizer's coarse delay measures the pipeline buffering lead
+                // (typically ~100-200ms). WebRTC AEC3 needs this hint because its
+                // internal filter is only 150ms long. If the physical acoustic delay
+                // plus the pipeline lead exceeds 150ms, it cannot cancel the echo
+                // unless we shift the render buffer by passing this hint.
+                // We pass it on every frame to keep the WebRTC internal state machine updated.
+                let delayHint = Self.selectStreamDelayHint(
+                    coarseDelayMs: synchronizer.coarseDelayMs,
+                    seededDelayMs: synchronizer.seededDelayMs
+                )
+                let delaySet = aecProcessor.setStreamDelayMs(delayHint.delayMs, source: delayHint.source)
                 if !delaySet {
                     lock.lock()
                     stats.framesMissed += 1

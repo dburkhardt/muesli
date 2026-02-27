@@ -230,7 +230,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     private var agentForwardAECLogState = AgentForwardAECLogState()
 
     nonisolated(unsafe) private static let agentDebugSessionID = "b2fd5b"
-    nonisolated(unsafe) private static let agentDebugRunID = "aec-v0.6.0-restore-1"
+    nonisolated(unsafe) private static let agentDebugRunID = "aec-coarsedelay-nodeadband-1"
     nonisolated(unsafe) private static let agentDebugLogPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug-b2fd5b.log"
     nonisolated(unsafe) private static let agentDebugQueue = DispatchQueue(label: "com.muesli.agent.debug.tapcapture.b2fd5b")
     // #endregion
