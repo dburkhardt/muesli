@@ -396,6 +396,7 @@ final class AECProcessor {
         return stateLock.withLock { state -> Bool in
             state.stats.lastStreamDelayRawMs = delayMs
             state.stats.lastStreamDelayHintSource = source
+            
             guard let bridge = state.bridge, bridge.isReady else { return false }
             let ok = bridge.setStreamDelayMs(Int32(boundedDelayMs))
             if ok {

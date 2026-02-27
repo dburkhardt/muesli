@@ -414,17 +414,18 @@ final class AudioWorker {
             let processStart = DispatchTime.now()
             let processedCapture: [Float]
             if aecEnabled {
-                // Feed AEC3 the synchronizer-derived render lead as stream delay hint.
-                let delaySelection = Self.selectStreamDelayHint(
-                    coarseDelayMs: synchronizer.coarseDelayMs,
-                    seededDelayMs: synchronizer.seededDelayMs
-                )
-                let streamDelayHintMs = delaySelection.delayMs
-                let streamDelaySource = delaySelection.source
-                let delaySet = aecProcessor.setStreamDelayMs(
-                    streamDelayHintMs,
-                    source: streamDelaySource
-                )
+                // Pass 0 as the stream delay hint to AEC3.
+                //
+                // The synchronizer's coarseDelayMs measures the render-ring priming lead
+                // (~130-175ms) — a pipeline buffering artifact, not the acoustic echo path
+                // delay (typically 5-30ms). Passing the priming lead to set_stream_delay_ms()
+                // causes AEC3's adaptive filter to misalign by ~150ms, preventing convergence.
+                //
+                // With delay=0, AEC3 uses its own internal cross-correlation estimator to find
+                // the true acoustic lag. The render priming lead still ensures render frames
+                // arrive before capture frames for correct temporal alignment — we just don't
+                // misreport pipeline depth as acoustic delay.
+                let delaySet = aecProcessor.setStreamDelayMs(0, source: .none)
                 if !delaySet {
                     lock.lock()
                     stats.framesMissed += 1

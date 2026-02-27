@@ -197,6 +197,43 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// Current session ID for log correlation (short 8-char UUID prefix)
     private var currentSessionID: String = "none"
+    /// AVAudioEngine microphone tap buffer size (frames in source sample-rate domain).
+    private static let microphoneTapBufferSizeFrames: AVAudioFrameCount = 4096
+
+    // #region agent log
+    private struct AgentMicSignalTelemetry {
+        var lastPeriodicLogTime: TimeInterval = 0
+        var callbackCount: Int = 0
+        var truncationAlertEmitted: Bool = false
+        var overshootAlertEmitted: Bool = false
+    }
+
+    private struct AgentMicRouteSnapshot {
+        var requestedUID: String = "nil"
+        var engineUID: String = "unknown"
+        var explicitlySet: Bool = false
+        var hardwareSampleRate: Double = 0
+        var tapSampleRate: Double = 0
+    }
+
+    private struct AgentForwardAECLogState {
+        var lastLogTime: TimeInterval = 0
+        var forwardedFrameCount: Int = 0
+    }
+
+    private nonisolated(unsafe) let agentMicSignalTelemetryLock = OSAllocatedUnfairLock(
+        initialState: AgentMicSignalTelemetry()
+    )
+    private nonisolated(unsafe) let agentMicRouteSnapshotLock = OSAllocatedUnfairLock(
+        initialState: AgentMicRouteSnapshot()
+    )
+    private var agentForwardAECLogState = AgentForwardAECLogState()
+
+    nonisolated(unsafe) private static let agentDebugSessionID = "b2fd5b"
+    nonisolated(unsafe) private static let agentDebugRunID = "aec-v0.6.0-restore-1"
+    nonisolated(unsafe) private static let agentDebugLogPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug-b2fd5b.log"
+    nonisolated(unsafe) private static let agentDebugQueue = DispatchQueue(label: "com.muesli.agent.debug.tapcapture.b2fd5b")
+    // #endregion
 
     // MARK: - Callbacks
 
@@ -734,6 +771,41 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     
     /// Deliver processed mic frame to callbacks (transcription + file output).
     private func deliverProcessedMicFrame(_ frame: AudioFrame) {
+        agentForwardAECLogState.forwardedFrameCount += 1
+        let now = Date().timeIntervalSince1970
+        let shouldEmitAECSnapshot = now - agentForwardAECLogState.lastLogTime >= 1
+        if shouldEmitAECSnapshot {
+            agentForwardAECLogState.lastLogTime = now
+            let aecStats = aecProcessor.getStats()
+            let frameRms = calculateRMSFromArray(frame.samples)
+            let frameStartSeconds = frame.sampleRate > 0
+                ? Double(frame.startSampleIndex) / Double(frame.sampleRate)
+                : 0
+            // #region agent log
+            Self.agentDebugLog(
+                hypothesisId: "W1",
+                location: "TapAudioCaptureService.swift:deliverProcessedMicFrame",
+                message: "AEC snapshot when forwarding mic frame",
+                data: [
+                    "forwardedFrameCount": agentForwardAECLogState.forwardedFrameCount,
+                    "frameCount": frame.frameCount,
+                    "frameStartSeconds": frameStartSeconds,
+                    "frameRms": frameRms,
+                    "syncStable": synchronizer.isStable,
+                    "syncCoarseDelayMs": synchronizer.coarseDelayMs,
+                    "syncSeededDelayMs": synchronizer.seededDelayMs,
+                    "erleDb": aecStats.erleDb,
+                    "bridgeDelayMs": aecStats.delayMs,
+                    "streamDelayMs": aecStats.lastStreamDelayMs,
+                    "streamDelayRawMs": aecStats.lastStreamDelayRawMs,
+                    "streamDelaySource": aecStats.lastStreamDelayHintSource.label,
+                    "adaptationFrozen": aecStats.adaptationFrozen,
+                    "aecMode": String(describing: aecStats.currentMode),
+                ]
+            )
+            // #endregion
+        }
+
         let timestamp = AVAudioTime.seconds(forHostTime: frame.hostTime)
         
         if let buffer = createCMSampleBuffer(
@@ -852,6 +924,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         _ = lastCaptureMetadata.withLock { state in
             state = (hostTime: 0, startSampleIndex: 0)
         }
+        _ = agentMicSignalTelemetryLock.withLock { state in
+            state = AgentMicSignalTelemetry()
+        }
+        agentForwardAECLogState = AgentForwardAECLogState()
     }
 
     /// Create CMSampleBuffer from Float samples (for FileOutputService compatibility)
@@ -964,11 +1040,30 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let inputNode = engine.inputNode
         let actualDeviceID = inputNode.auAudioUnit.deviceID
         let actualUID = (try? CoreAudioHelpers.getDeviceUID(actualDeviceID)) ?? "unknown"
+        let requestedUID = selectedMicrophoneDeviceID ?? "nil"
         logger.info("MIC_ENGINE_DEVICE: \(actualUID) (AudioDeviceID: \(actualDeviceID), explicitlySet: \(deviceWasSet))")
         Task {
             await DiagnosticLogger.shared.log(.aec,
                 "MIC_ENGINE_DEVICE: uid=\(actualUID), audioDeviceID=\(actualDeviceID), explicitlySet=\(deviceWasSet)")
         }
+        _ = agentMicRouteSnapshotLock.withLock { state in
+            state.requestedUID = requestedUID
+            state.engineUID = actualUID
+            state.explicitlySet = deviceWasSet
+        }
+        // #region agent log
+        Self.agentDebugLog(
+            hypothesisId: "N2",
+            location: "TapAudioCaptureService.swift:startMicrophoneCapture",
+            message: "Microphone route snapshot at engine start",
+            data: [
+                "requestedUID": requestedUID,
+                "engineUID": actualUID,
+                "audioDeviceID": actualDeviceID,
+                "explicitlySet": deviceWasSet,
+            ]
+        )
+        // #endregion
 
         let inputFormat = inputNode.inputFormat(forBus: 0)
 
@@ -992,7 +1087,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         // causes zero-frame delivery on some USB devices (e.g., C920 webcam).
         // Resampling to 48kHz for the AEC pipeline is done in handleMicrophoneBuffer.
         if let installException = ObjCTryCatch({
-            inputNodeBox.value.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
+            inputNodeBox.value.installTap(onBus: 0, bufferSize: Self.microphoneTapBufferSizeFrames, format: nil) { [weak self] buffer, time in
                 self?.handleMicrophoneBuffer(buffer, time: time)
             }
         }) {
@@ -1032,7 +1127,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 let fallbackInputNodeBox = UnsafeSynchronousCapture(value: fallbackInputNode)
 
                 if let fallbackInstallException = ObjCTryCatch({
-                    fallbackInputNodeBox.value.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, time in
+                    fallbackInputNodeBox.value.installTap(onBus: 0, bufferSize: Self.microphoneTapBufferSizeFrames, format: nil) { [weak self] buffer, time in
                         self?.handleMicrophoneBuffer(buffer, time: time)
                     }
                 }) {
@@ -1070,6 +1165,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let tapOutputFormat = activeEngine.inputNode.outputFormat(forBus: 0)
         let tapSampleRate = tapOutputFormat.sampleRate
         let tapChannels = tapOutputFormat.channelCount
+        let hardwareRateForLog = derivedHardwareSampleRate
+        _ = agentMicRouteSnapshotLock.withLock { state in
+            state.hardwareSampleRate = hardwareRateForLog
+            state.tapSampleRate = tapSampleRate
+        }
 
         if tapSampleRate != 48000 || tapChannels != 1 {
             let srcFormat = AVAudioFormat(
@@ -1081,7 +1181,23 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 channels: 1
             )!
             micResampler = AVAudioConverter(from: srcFormat, to: dstFormat)
-            let maxOutputFrames = AVAudioFrameCount(4800)
+            let estimatedInputFrames = Int(
+                max(
+                    Double(Self.microphoneTapBufferSizeFrames),
+                    ceil(tapSampleRate * 0.10)
+                )
+            )
+            let estimatedOutputFrames = Int(
+                ceil(
+                    Double(estimatedInputFrames) * 48000.0 / max(tapSampleRate, 1.0)
+                )
+            )
+            let maxOutputFrames = AVAudioFrameCount(
+                max(
+                    estimatedOutputFrames + 1024,
+                    Int(Self.microphoneTapBufferSizeFrames)
+                )
+            )
             micResampleBuffer = AVAudioPCMBuffer(pcmFormat: dstFormat, frameCapacity: maxOutputFrames)
             logger.info("Mic resampler: \(tapSampleRate)Hz \(tapChannels)ch → 48000Hz mono")
         } else {
@@ -1090,9 +1206,14 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
 
         logger.info("Microphone capture started at native \(derivedHardwareSampleRate)Hz, \(derivedHardwareChannels)ch, tapOutput=\(tapSampleRate)Hz \(tapChannels)ch")
+        let finalHardwareSampleRate = derivedHardwareSampleRate
+        let finalHardwareChannels = derivedHardwareChannels
+        let finalTapSampleRate = tapSampleRate
+        let finalTapChannels = tapChannels
+        let finalResamplerEnabled = micResampler != nil
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_SAMPLE_RATE: hardware=\(derivedHardwareSampleRate)Hz, channels=\(derivedHardwareChannels), tapOutput=\(tapSampleRate)Hz/\(tapChannels)ch, aecTarget=48000Hz, resampler=\(self.micResampler != nil)")
+                "MIC_SAMPLE_RATE: hardware=\(finalHardwareSampleRate)Hz, channels=\(finalHardwareChannels), tapOutput=\(finalTapSampleRate)Hz/\(finalTapChannels)ch, aecTarget=48000Hz, resampler=\(finalResamplerEnabled)")
         }
     }
 
@@ -1122,13 +1243,45 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         // Determine samples to push to AEC: either resampled to 48kHz mono, or raw channel 0
         let aecSamples: UnsafeMutablePointer<Float>
-        let aecCount: Int
+        var aecCount: Int
+        var converterStatusRaw: Int = -1
+        var converterStatusLabel = "notUsed"
+        var converterError = "none"
 
-        if let converter = micResampler, let outBuf = micResampleBuffer {
+        if let converter = micResampler {
+            let requiredOutputFrames = AVAudioFrameCount(
+                max(
+                    Int(ceil(Double(frameLength) * 48000.0 / max(buffer.format.sampleRate, 1.0))) + 256,
+                    Int(Self.microphoneTapBufferSizeFrames)
+                )
+            )
+
+            let existingCapacity = micResampleBuffer?.frameCapacity ?? 0
+            if micResampleBuffer == nil || existingCapacity < requiredOutputFrames {
+                micResampleBuffer = AVAudioPCMBuffer(
+                    pcmFormat: converter.outputFormat,
+                    frameCapacity: requiredOutputFrames
+                )
+                // #region agent log
+                Self.agentDebugLog(
+                    hypothesisId: "N4",
+                    location: "TapAudioCaptureService.swift:handleMicrophoneBuffer",
+                    message: "Resampler buffer resized for callback frame",
+                    data: [
+                        "frameLength": frameLength,
+                        "inputSampleRate": buffer.format.sampleRate,
+                        "previousCapacity": Int(existingCapacity),
+                        "requiredCapacity": Int(requiredOutputFrames),
+                    ]
+                )
+                // #endregion
+            }
+
+            if let outBuf = micResampleBuffer {
             outBuf.frameLength = 0
             var error: NSError?
             var consumed = false
-            converter.convert(to: outBuf, error: &error) { _, outStatus in
+            let status = converter.convert(to: outBuf, error: &error) { _, outStatus in
                 if consumed {
                     outStatus.pointee = .noDataNow
                     return nil
@@ -1137,14 +1290,35 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 outStatus.pointee = .haveData
                 return buffer
             }
+            converterStatusRaw = status.rawValue
+            switch status {
+            case .haveData:
+                converterStatusLabel = "haveData"
+            case .inputRanDry:
+                converterStatusLabel = "inputRanDry"
+            case .endOfStream:
+                converterStatusLabel = "endOfStream"
+            case .error:
+                converterStatusLabel = "error"
+            @unknown default:
+                converterStatusLabel = "unknown"
+            }
             if let e = error {
+                converterError = e.localizedDescription
                 // Fallback: use raw channel 0
                 aecSamples = floatChannelData[0]
                 aecCount = frameLength
                 _ = e  // suppress unused warning
             } else {
+                converterError = "none"
                 aecSamples = outBuf.floatChannelData![0]
                 aecCount = Int(outBuf.frameLength)
+            }
+            } else {
+                converterStatusLabel = "noOutputBuffer"
+                // Fallback: use raw channel 0 when output buffer allocation fails.
+                aecSamples = floatChannelData[0]
+                aecCount = frameLength
             }
         } else {
             aecSamples = floatChannelData[0]
@@ -1153,9 +1327,125 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         guard aecCount > 0 else { return }
 
+        let sourceRms = calculateRMS(samples: UnsafePointer(floatChannelData[0]), count: frameLength)
+        let pipelineRms = calculateRMS(samples: UnsafePointer(aecSamples), count: aecCount)
+        let resamplerActive = micResampler != nil
+        let expectedOutputFrames48k = resamplerActive
+            ? Int(round(Double(frameLength) * 48000.0 / max(buffer.format.sampleRate, 1.0)))
+            : frameLength
+        let maxReasonableOutputFrames48k = resamplerActive
+            ? expectedOutputFrames48k + 1024
+            : expectedOutputFrames48k
+        let rawAECCount = aecCount
+        let normalizedAECCount = aecCount
+        let outputToExpectedRatio = expectedOutputFrames48k > 0
+            ? Double(normalizedAECCount) / Double(expectedOutputFrames48k)
+            : 0
+        let routeSnapshot = agentMicRouteSnapshotLock.withLock { state in state }
+        let telemetryDecision = agentMicSignalTelemetryLock.withLock { state -> (Bool, Bool, Bool, Int) in
+            state.callbackCount += 1
+            let now = Date().timeIntervalSince1970
+            let shouldEmitPeriodic = now - state.lastPeriodicLogTime >= 1
+            if shouldEmitPeriodic {
+                state.lastPeriodicLogTime = now
+            }
+            let shouldEmitTruncationAlert = resamplerActive &&
+                outputToExpectedRatio < 0.99 &&
+                !state.truncationAlertEmitted
+            if shouldEmitTruncationAlert {
+                state.truncationAlertEmitted = true
+            }
+            let shouldEmitOvershootAlert = resamplerActive &&
+                rawAECCount > maxReasonableOutputFrames48k &&
+                !state.overshootAlertEmitted
+            if shouldEmitOvershootAlert {
+                state.overshootAlertEmitted = true
+            }
+            return (
+                shouldEmitPeriodic,
+                shouldEmitTruncationAlert,
+                shouldEmitOvershootAlert,
+                state.callbackCount
+            )
+        }
+
+        if telemetryDecision.0 {
+            // #region agent log
+            Self.agentDebugLog(
+                hypothesisId: "N1",
+                location: "TapAudioCaptureService.swift:handleMicrophoneBuffer",
+                message: "Microphone source-level callback telemetry",
+                data: [
+                    "sourceRms": sourceRms,
+                    "pipelineRms": pipelineRms,
+                    "frameLength": frameLength,
+                    "aecCount": normalizedAECCount,
+                    "bufferSampleRate": buffer.format.sampleRate,
+                    "expectedOutputFrames48k": expectedOutputFrames48k,
+                    "maxReasonableOutputFrames48k": maxReasonableOutputFrames48k,
+                    "aecCountRaw": rawAECCount,
+                    "outputToExpectedRatio": outputToExpectedRatio,
+                    "resamplerActive": resamplerActive,
+                    "callbackCount": telemetryDecision.3,
+                    "requestedUID": routeSnapshot.requestedUID,
+                    "engineUID": routeSnapshot.engineUID,
+                    "explicitlySet": routeSnapshot.explicitlySet,
+                    "hardwareSampleRate": routeSnapshot.hardwareSampleRate,
+                    "tapSampleRate": routeSnapshot.tapSampleRate,
+                    "convertStatus": converterStatusLabel,
+                    "convertStatusRaw": converterStatusRaw,
+                    "convertError": converterError,
+                ]
+            )
+            // #endregion
+        }
+
+        if telemetryDecision.1 {
+            // #region agent log
+            Self.agentDebugLog(
+                hypothesisId: "N4",
+                location: "TapAudioCaptureService.swift:handleMicrophoneBuffer",
+                message: "Resampler output shorter than expected for callback frame",
+                data: [
+                    "frameLength": frameLength,
+                    "bufferSampleRate": buffer.format.sampleRate,
+                    "aecCount": normalizedAECCount,
+                    "expectedOutputFrames48k": expectedOutputFrames48k,
+                    "outputToExpectedRatio": outputToExpectedRatio,
+                    "requestedUID": routeSnapshot.requestedUID,
+                    "engineUID": routeSnapshot.engineUID,
+                    "convertStatus": converterStatusLabel,
+                    "convertStatusRaw": converterStatusRaw,
+                ]
+            )
+            // #endregion
+        }
+
+        if telemetryDecision.2 {
+            // #region agent log
+            Self.agentDebugLog(
+                hypothesisId: "N4",
+                location: "TapAudioCaptureService.swift:handleMicrophoneBuffer",
+                message: "Resampler output exceeded expected bounds for callback frame",
+                data: [
+                    "frameLength": frameLength,
+                    "bufferSampleRate": buffer.format.sampleRate,
+                    "aecCountRaw": rawAECCount,
+                    "aecCountNormalized": normalizedAECCount,
+                    "expectedOutputFrames48k": expectedOutputFrames48k,
+                    "maxReasonableOutputFrames48k": maxReasonableOutputFrames48k,
+                    "convertStatus": converterStatusLabel,
+                    "convertStatusRaw": converterStatusRaw,
+                    "requestedUID": routeSnapshot.requestedUID,
+                    "engineUID": routeSnapshot.engineUID,
+                ]
+            )
+            // #endregion
+        }
+
         let startSampleIndex = captureSampleIndexCounter.withLock { index -> Int64 in
             let start = index
-            index += Int64(aecCount)
+            index += Int64(normalizedAECCount)
             return start
         }
 
@@ -1172,20 +1462,20 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         synchronizer.pushCapture(
             samples: aecSamples,
-            count: aecCount,
+            count: normalizedAECCount,
             sampleTime: captureSampleTime,
             hostTime: hostTime
         )
         _ = captureRingForAEC.push(
             samples: aecSamples,
-            count: aecCount,
+            count: normalizedAECCount,
             sampleTime: captureSampleTime,
             hostTime: hostTime
         )
         pushCaptureFrameMetadata(
             hostTime: hostTime,
             startSampleIndex: startSampleIndex,
-            sampleCount: aecCount
+            sampleCount: normalizedAECCount
         )
 
         if micResampler != nil && !hasLoggedResamplerDomain {
@@ -1410,4 +1700,48 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let rms = sqrt(sumSquares / Float(samples.count))
         return min(rms * 16.0, 1.0)  // Scale for UI
     }
+
+    // #region agent log
+    private static nonisolated func agentDebugLog(
+        hypothesisId: String,
+        location: String,
+        message: String,
+        data: [String: Any]
+    ) {
+        let payload: [String: Any] = [
+            "sessionId": agentDebugSessionID,
+            "runId": agentDebugRunID,
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+        ]
+
+        guard JSONSerialization.isValidJSONObject(payload) else { return }
+
+        agentDebugQueue.async {
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+                  var line = String(data: jsonData, encoding: .utf8) else {
+                return
+            }
+            line.append("\n")
+            let url = URL(fileURLWithPath: agentDebugLogPath)
+
+            if let handle = try? FileHandle(forWritingTo: url) {
+                do {
+                    try handle.seekToEnd()
+                    if let lineData = line.data(using: .utf8) {
+                        try handle.write(contentsOf: lineData)
+                    }
+                    try handle.close()
+                } catch {
+                    try? handle.close()
+                }
+            } else {
+                try? line.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+    // #endregion
 }
