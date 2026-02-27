@@ -4,68 +4,6 @@ import os.lock
 import os.log
 import SwiftUI
 
-enum AgentDebugRuntimeLogger {
-    private static let logPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug-08e33f.log"
-    private static let sessionId = "08e33f"
-
-    static func log(
-        runId: String,
-        hypothesisId: String,
-        location: String,
-        message: String,
-        data: [String: Any] = [:]
-    ) {
-        let payload: [String: Any] = [
-            "sessionId": sessionId,
-            "runId": runId,
-            "hypothesisId": hypothesisId,
-            "location": location,
-            "message": message,
-            "data": sanitize(data),
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        guard JSONSerialization.isValidJSONObject(payload),
-              let serialized = try? JSONSerialization.data(withJSONObject: payload),
-              let line = String(data: serialized, encoding: .utf8),
-              let lineData = "\(line)\n".data(using: .utf8) else {
-            return
-        }
-
-        let url = URL(fileURLWithPath: logPath)
-        if FileManager.default.fileExists(atPath: logPath),
-           let handle = try? FileHandle(forWritingTo: url) {
-            defer { try? handle.close() }
-            try? handle.seekToEnd()
-            try? handle.write(contentsOf: lineData)
-        } else {
-            try? lineData.write(to: url, options: .atomic)
-        }
-    }
-
-    private static func sanitize(_ value: Any) -> Any {
-        switch value {
-        case let nested as [String: Any]:
-            return nested.mapValues { sanitize($0) }
-        case let nested as [Any]:
-            return nested.map { sanitize($0) }
-        case let date as Date:
-            return ISO8601DateFormatter().string(from: date)
-        case let value as String:
-            return value
-        case let value as NSNumber:
-            return value
-        case let value as Bool:
-            return value
-        case let value as Int:
-            return value
-        case let value as Double:
-            return value
-        default:
-            return String(describing: value)
-        }
-    }
-}
-
 /// Main ViewModel for the Muesli app
 /// Owns app-level state (permissions, detected apps) and services
 /// Recording sessions are managed separately via RecordingSession objects

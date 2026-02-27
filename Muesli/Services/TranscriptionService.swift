@@ -1515,22 +1515,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             }
             return 0.0
         }()
-        // #region agent log
-        AgentDebugRuntimeLogger.log(
-            runId: "post-fix-order-1",
-            hypothesisId: "O5",
-            location: "TranscriptionService.swift:transcribePostProcessing",
-            message: "Post-processing channel alignment decision",
-            data: [
-                "hasSystemAudio": systemSamples != nil,
-                "hasMicAudio": micSamples != nil,
-                "systemDurationSeconds": systemDurationSeconds ?? -1.0,
-                "micDurationSeconds": micDurationSeconds ?? -1.0,
-                "alignmentThresholdSeconds": alignmentThresholdSeconds,
-                "micTimelineOffsetSeconds": micTimelineOffsetSeconds
-            ]
-        )
-        // #endregion
 
         // Transcribe system audio if available (with chunking and deduplication)
         if let systemSamples {
@@ -1614,10 +1598,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         // Counters for summary logging
         var emittedCount = 0
         var skippedCount = 0
-        var fallbackEmittedCount = 0
-        var segmentEmittedCount = 0
-        var firstEmittedTimestamp: TimeInterval?
-        var lastEmittedTimestamp: TimeInterval?
         
         // Log dedup start
         Task { await DiagnosticLogger.shared.log(.transcription,
@@ -1649,11 +1629,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                         )
                         transcriptHandler?(segment)
                         emittedCount += 1
-                        fallbackEmittedCount += 1
-                        if firstEmittedTimestamp == nil {
-                            firstEmittedTimestamp = chunk.timestamp
-                        }
-                        lastEmittedTimestamp = chunk.timestamp
                         // Pre-capture values for Sendable closure
                         let logTs = chunk.timestamp
                         let logText = String(segment.text.prefix(30))
@@ -1693,11 +1668,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                             )
                             transcriptHandler?(transcriptSegment)
                             emittedCount += 1
-                            segmentEmittedCount += 1
-                            if firstEmittedTimestamp == nil {
-                                firstEmittedTimestamp = absoluteStart
-                            }
-                            lastEmittedTimestamp = absoluteStart
                             // Pre-capture values for Sendable closure
                             let logEmitTs = absoluteStart
                             let logEmitText = String(segmentText.prefix(30))
@@ -1737,24 +1707,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         let logSkipped = skippedCount
         Task { await DiagnosticLogger.shared.log(.transcription,
             "Dedup complete: speaker=\(logSpeaker), emitted=\(logEmitted), skipped=\(logSkipped)") }
-        // #region agent log
-        AgentDebugRuntimeLogger.log(
-            runId: "post-fix-order-1",
-            hypothesisId: "O6",
-            location: "TranscriptionService.swift:processChunksWithDeduplication",
-            message: "Post-processing dedup output range",
-            data: [
-                "speaker": speaker.rawValue,
-                "chunksCount": chunks.count,
-                "emittedCount": emittedCount,
-                "skippedCount": skippedCount,
-                "fallbackEmittedCount": fallbackEmittedCount,
-                "segmentEmittedCount": segmentEmittedCount,
-                "firstEmittedTimestamp": firstEmittedTimestamp ?? -1.0,
-                "lastEmittedTimestamp": lastEmittedTimestamp ?? -1.0
-            ]
-        )
-        // #endregion
     }
     
     /// Split audio samples into chunks with overlap for post-processing

@@ -88,6 +88,23 @@ struct AECStats {
     var captureProcessFail: Int64 = 0
 }
 
+/// Fixed-size Phase 1.5 correlation window summary emitted at 1Hz.
+struct AECPhase15Summary {
+    let windowFrames: Int64
+    let totalFrames: Int64
+    let erleBelow3Frames: Int64
+    let deltaOver100Frames: Int64
+    let coincidentFrames: Int64
+    let erleBelow3Pct: Double
+    let deltaOver100Pct: Double
+    let coincidencePct: Double
+    let deltaBinLt20: Int64
+    let deltaBin20To49: Int64
+    let deltaBin50To99: Int64
+    let deltaBin100To199: Int64
+    let deltaBinGe200: Int64
+}
+
 // MARK: - AEC Processor
 
 /// AEC processor wrapper that integrates with the synchronizer pipeline
@@ -141,6 +158,22 @@ final class AECProcessor {
         /// Pre-allocated silence buffer — fed to AEC3 render path when adaptation is frozen
         /// to starve the adaptive filter without disrupting audio output.
         var silenceBuffer = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+        // Phase 1.5 cumulative counters
+        var phaseTotalFrames: Int64 = 0
+        var phaseErleBelow3Frames: Int64 = 0
+        var phaseDeltaOver100Frames: Int64 = 0
+        var phaseCoincidentFrames: Int64 = 0
+        // Phase 1.5 1-second window counters (100 frames @ 10ms)
+        var phaseWindowFrames: Int64 = 0
+        var phaseWindowErleBelow3Frames: Int64 = 0
+        var phaseWindowDeltaOver100Frames: Int64 = 0
+        var phaseWindowCoincidentFrames: Int64 = 0
+        // Fixed-size delta histogram bins (window scoped)
+        var phaseWindowDeltaBinLt20: Int64 = 0
+        var phaseWindowDeltaBin20To49: Int64 = 0
+        var phaseWindowDeltaBin50To99: Int64 = 0
+        var phaseWindowDeltaBin100To199: Int64 = 0
+        var phaseWindowDeltaBinGe200: Int64 = 0
     }
 
     /// RT-safe state lock for all mutable processor state.
@@ -457,6 +490,7 @@ final class AECProcessor {
             state.isAdaptationFrozen = false
             state.stats = AECStats()
             state.stats.currentMode = state.mode
+            Self.resetPhase15CountersLocked(state: &state)
             return state.stats
         }
 
@@ -501,6 +535,30 @@ final class AECProcessor {
     /// Interval counter for telemetry logging (tracks capture frames processed).
     /// Internal (not private) so AudioWorker can read it to detect when a log was emitted.
     var lastTelemetryFrameCount: Int64 = 0
+
+    private static let phase15WindowFramesTarget: Int64 = 100
+    private static let phase15LowErleThresholdDb: Float = 3.0
+    private static let phase15DeltaThresholdMs: Int = 100
+
+    /// Record one worker-thread Phase 1.5 sample and emit a fixed-size summary at 1Hz.
+    /// This API is worker-only and must not be called from callback/RT paths.
+    func recordPhase15Sample(syncDelayMs: Int) -> AECPhase15Summary? {
+        stateLock.withLock { state -> AECPhase15Summary? in
+            guard state.mode != .off else { return nil }
+
+            if let bridge = state.bridge, bridge.isReady {
+                state.stats.erleDb = bridge.getERLE()
+                state.stats.delayMs = Int(bridge.getDelayMs())
+            }
+
+            return Self.updatePhase15CountersLocked(
+                state: &state,
+                erleDb: state.stats.erleDb,
+                bridgeDelayMs: state.stats.delayMs,
+                syncDelayMs: syncDelayMs
+            )
+        }
+    }
 
     /// Log AEC telemetry at a regular interval (call from worker loop).
     /// Logs ERLE, delay estimate, mode, feed counts, and signal RMS every `intervalFrames` capture frames.
@@ -729,7 +787,115 @@ final class AECProcessor {
         )
     }
 
+    private static func updatePhase15CountersLocked(
+        state: inout State,
+        erleDb: Float,
+        bridgeDelayMs: Int,
+        syncDelayMs: Int
+    ) -> AECPhase15Summary? {
+        let hasValidDelay = bridgeDelayMs >= 0 && syncDelayMs >= 0
+        let deltaMs = hasValidDelay ? abs(bridgeDelayMs - syncDelayMs) : 0
+        let erleLow = erleDb < phase15LowErleThresholdDb
+        let deltaHigh = hasValidDelay && deltaMs > phase15DeltaThresholdMs
+        let coincident = erleLow && deltaHigh
+
+        state.phaseTotalFrames += 1
+        state.phaseWindowFrames += 1
+        if erleLow {
+            state.phaseErleBelow3Frames += 1
+            state.phaseWindowErleBelow3Frames += 1
+        }
+        if deltaHigh {
+            state.phaseDeltaOver100Frames += 1
+            state.phaseWindowDeltaOver100Frames += 1
+        }
+        if coincident {
+            state.phaseCoincidentFrames += 1
+            state.phaseWindowCoincidentFrames += 1
+        }
+
+        if hasValidDelay {
+            switch deltaMs {
+            case ..<20:
+                state.phaseWindowDeltaBinLt20 += 1
+            case 20..<50:
+                state.phaseWindowDeltaBin20To49 += 1
+            case 50..<100:
+                state.phaseWindowDeltaBin50To99 += 1
+            case 100..<200:
+                state.phaseWindowDeltaBin100To199 += 1
+            default:
+                state.phaseWindowDeltaBinGe200 += 1
+            }
+        }
+
+        guard state.phaseWindowFrames >= phase15WindowFramesTarget else { return nil }
+        let windowFrames = max(state.phaseWindowFrames, 1)
+        let erlePct = (Double(state.phaseWindowErleBelow3Frames) / Double(windowFrames)) * 100.0
+        let deltaPct = (Double(state.phaseWindowDeltaOver100Frames) / Double(windowFrames)) * 100.0
+        let coincidencePct = (Double(state.phaseWindowCoincidentFrames) / Double(windowFrames)) * 100.0
+        let summary = AECPhase15Summary(
+            windowFrames: state.phaseWindowFrames,
+            totalFrames: state.phaseTotalFrames,
+            erleBelow3Frames: state.phaseWindowErleBelow3Frames,
+            deltaOver100Frames: state.phaseWindowDeltaOver100Frames,
+            coincidentFrames: state.phaseWindowCoincidentFrames,
+            erleBelow3Pct: erlePct,
+            deltaOver100Pct: deltaPct,
+            coincidencePct: coincidencePct,
+            deltaBinLt20: state.phaseWindowDeltaBinLt20,
+            deltaBin20To49: state.phaseWindowDeltaBin20To49,
+            deltaBin50To99: state.phaseWindowDeltaBin50To99,
+            deltaBin100To199: state.phaseWindowDeltaBin100To199,
+            deltaBinGe200: state.phaseWindowDeltaBinGe200
+        )
+        resetPhase15WindowLocked(state: &state)
+        return summary
+    }
+
+    private static func resetPhase15WindowLocked(state: inout State) {
+        state.phaseWindowFrames = 0
+        state.phaseWindowErleBelow3Frames = 0
+        state.phaseWindowDeltaOver100Frames = 0
+        state.phaseWindowCoincidentFrames = 0
+        state.phaseWindowDeltaBinLt20 = 0
+        state.phaseWindowDeltaBin20To49 = 0
+        state.phaseWindowDeltaBin50To99 = 0
+        state.phaseWindowDeltaBin100To199 = 0
+        state.phaseWindowDeltaBinGe200 = 0
+    }
+
+    private static func resetPhase15CountersLocked(state: inout State) {
+        state.phaseTotalFrames = 0
+        state.phaseErleBelow3Frames = 0
+        state.phaseDeltaOver100Frames = 0
+        state.phaseCoincidentFrames = 0
+        resetPhase15WindowLocked(state: &state)
+    }
+
     #if DEBUG
+    /// Debug-only deterministic injector for Phase 1.5 counters.
+    func debugRecordPhase15Sample(
+        erleDb: Float,
+        bridgeDelayMs: Int,
+        syncDelayMs: Int
+    ) -> AECPhase15Summary? {
+        stateLock.withLock { state -> AECPhase15Summary? in
+            Self.updatePhase15CountersLocked(
+                state: &state,
+                erleDb: erleDb,
+                bridgeDelayMs: bridgeDelayMs,
+                syncDelayMs: syncDelayMs
+            )
+        }
+    }
+
+    func debugResetPhase15Counters() {
+        stateLock.withLock { state in
+            Self.resetPhase15CountersLocked(state: &state)
+        }
+    }
+
     /// Debug-only evaluator for deterministic mismatch policy tests.
     func debugEvaluateDelayMismatch(
         bridgeDelayMs: Int,

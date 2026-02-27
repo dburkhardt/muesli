@@ -587,6 +587,33 @@ final class CoreAudioTapTests: XCTestCase {
         XCTAssertEqual(selection.delayMs, 0, "When no delay estimates are available, hint should be zero")
         XCTAssertEqual(selection.source, .none)
     }
+
+    func testAudioWorkerDelayHintControlHoldsHintDuringUnstableWindows() {
+        let decision = AudioWorker.applyDelayHintControl(
+            requestedDelayMs: 220,
+            source: .coarse,
+            lastAppliedDelayMs: 180,
+            isStable: false,
+            enabled: true
+        )
+        XCTAssertEqual(decision.delayMs, 180, "Unstable windows should hold last applied delay hint")
+        XCTAssertTrue(decision.heldInUnstableWindow, "Decision should mark unstable-window hold")
+        XCTAssertFalse(decision.clamped)
+    }
+
+    func testAudioWorkerDelayHintControlSlewLimitsLargeStableJump() {
+        let decision = AudioWorker.applyDelayHintControl(
+            requestedDelayMs: 220,
+            source: .coarse,
+            lastAppliedDelayMs: 180,
+            isStable: true,
+            enabled: true,
+            slewLimitMsPerFrame: 8
+        )
+        XCTAssertEqual(decision.delayMs, 188, "Stable windows should apply slew-limited delay transitions")
+        XCTAssertTrue(decision.clamped)
+        XCTAssertFalse(decision.heldInUnstableWindow)
+    }
 }
 
 // MARK: - TapAudioCaptureService Permission Tests

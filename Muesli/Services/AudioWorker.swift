@@ -57,6 +57,13 @@ final class AudioWorker {
         var seededSamples: [Int] = []
         var divergenceCount: Int = 0
     }
+
+    private struct DelayHintControlDecision {
+        let delayMs: Int
+        let source: AECStreamDelayHintSource
+        let clamped: Bool
+        let heldInUnstableWindow: Bool
+    }
     // MARK: - Configuration
 
     /// Worker loop interval (5ms)
@@ -150,9 +157,25 @@ final class AudioWorker {
 
     /// Debug-only diagnostics gate for heavier observability.
     private let diagnosticsEnabled: Bool
+    private let diagnosticsVerboseEnabled: Bool
+    private let delayHintControlEnabled: Bool
     private var passThroughWindow = PassThroughWindow()
     private var passThroughSuspiciousSeconds: Int = 0
     private var delayWindow = DelayWindow()
+    private var latestRenderRmsLinear: Float = 0
+    private var phase15RenderRmsAccumulator: Double = 0
+    private var phase15CaptureRmsAccumulator: Double = 0
+    private var phase15RmsFrameCount: Int64 = 0
+    private var phase15PreviousCoarseDelayMs: Int?
+    private var phase15PreviousTimestampSeconds: TimeInterval?
+    private var phase15ConsecutiveCollapseSeconds: Int = 0
+    private var phase15DelayHintClampCount: Int64 = 0
+    private var phase15DelayHintHoldCount: Int64 = 0
+    private var lastAppliedDelayHintMs: Int = -1
+
+    private static let phase15ErleCollapseThresholdDb: Double = 3.0
+    private static let phase15CollapseAlertSeconds = 15
+    private static let delayHintSlewLimitMsPerFrame = 8
 
     // MARK: - Initialization
 
@@ -169,11 +192,15 @@ final class AudioWorker {
         self.popCaptureAECFrame = popCaptureAECFrame
         self.isAECEnabled = isAECEnabled
         self.processingTimesRing = [Double](repeating: 0, count: processingTimeHistorySize)
+        let defaults = UserDefaults.standard
         #if DEBUG
         self.diagnosticsEnabled = true
+        self.diagnosticsVerboseEnabled = (defaults.object(forKey: "AECDiagnosticsVerbose") as? Bool) ?? true
         #else
-        self.diagnosticsEnabled = UserDefaults.standard.bool(forKey: "aecDiagnosticsEnabled")
+        self.diagnosticsEnabled = defaults.bool(forKey: "aecDiagnosticsEnabled")
+        self.diagnosticsVerboseEnabled = defaults.bool(forKey: "AECDiagnosticsVerbose")
         #endif
+        self.delayHintControlEnabled = (defaults.object(forKey: "aecDelayHintControlEnabled") as? Bool) ?? true
 
         assert(renderFrameBuffer.count == Self.frameSizeSamples)
         assert(captureFrameBuffer.count == Self.frameSizeSamples)
@@ -197,6 +224,34 @@ final class AudioWorker {
         } else {
             return (0, .none)
         }
+    }
+
+    static func applyDelayHintControl(
+        requestedDelayMs: Int,
+        source: AECStreamDelayHintSource,
+        lastAppliedDelayMs: Int,
+        isStable: Bool,
+        enabled: Bool,
+        slewLimitMsPerFrame: Int = delayHintSlewLimitMsPerFrame
+    ) -> (delayMs: Int, source: AECStreamDelayHintSource, clamped: Bool, heldInUnstableWindow: Bool) {
+        guard enabled else {
+            return (requestedDelayMs, source, false, false)
+        }
+
+        if !isStable, lastAppliedDelayMs >= 0 {
+            return (lastAppliedDelayMs, source, false, true)
+        }
+
+        guard lastAppliedDelayMs >= 0 else {
+            return (requestedDelayMs, source, false, false)
+        }
+
+        let delta = requestedDelayMs - lastAppliedDelayMs
+        if abs(delta) > slewLimitMsPerFrame {
+            let adjusted = lastAppliedDelayMs + (delta > 0 ? slewLimitMsPerFrame : -slewLimitMsPerFrame)
+            return (adjusted, source, true, false)
+        }
+        return (requestedDelayMs, source, false, false)
     }
 
     deinit {
@@ -227,8 +282,13 @@ final class AudioWorker {
 
         logger.info("AudioWorker started")
 
-        Task {
+        let logDelayHintControlEnabled = delayHintControlEnabled
+        let logDiagnosticsVerboseEnabled = diagnosticsVerboseEnabled
+        let delayHintConfigMessage =
+            "AEC_DELAY_HINT_CONTROL_CONFIG: enabled=\(logDelayHintControlEnabled), slewLimitMsPerFrame=\(Self.delayHintSlewLimitMsPerFrame), diagnosticsVerbose=\(logDiagnosticsVerboseEnabled)"
+        Task.detached(priority: nil) {
             await DiagnosticLogger.shared.log(.aec, "AUDIO_WORKER_START")
+            await DiagnosticLogger.shared.log(.aec, delayHintConfigMessage)
         }
     }
 
@@ -256,11 +316,10 @@ final class AudioWorker {
 
         logger.info("AudioWorker stopped")
 
-        Task {
-            await DiagnosticLogger.shared.log(
-                .aec,
-                "AUDIO_WORKER_STOP: captureFrames=\(logCaptureFrames), renderFrames=\(logRenderFrames), missed=\(logMissed), aecEnabled=\(logAECEnabled)"
-            )
+        let stopMessage =
+            "AUDIO_WORKER_STOP: captureFrames=\(logCaptureFrames), renderFrames=\(logRenderFrames), missed=\(logMissed), aecEnabled=\(logAECEnabled)"
+        Task.detached(priority: nil) {
+            await DiagnosticLogger.shared.log(.aec, stopMessage)
         }
     }
 
@@ -295,6 +354,16 @@ final class AudioWorker {
         passThroughWindow = PassThroughWindow()
         passThroughSuspiciousSeconds = 0
         delayWindow = DelayWindow()
+        latestRenderRmsLinear = 0
+        phase15RenderRmsAccumulator = 0
+        phase15CaptureRmsAccumulator = 0
+        phase15RmsFrameCount = 0
+        phase15PreviousCoarseDelayMs = nil
+        phase15PreviousTimestampSeconds = nil
+        phase15ConsecutiveCollapseSeconds = 0
+        phase15DelayHintClampCount = 0
+        phase15DelayHintHoldCount = 0
+        lastAppliedDelayHintMs = -1
 
         logger.info("AudioWorker reset")
     }
@@ -364,6 +433,7 @@ final class AudioWorker {
                 let renderRms = computeRMS(renderFrameBuffer)
                 renderRmsAccumulator += Double(renderRms)
                 rmsFrameCount += 1
+                latestRenderRmsLinear = renderRms
 
                 // Track render silence for AEC freeze/reset
                 if renderRms < Self.renderSilenceThreshold {
@@ -452,17 +522,33 @@ final class AudioWorker {
                 // plus the pipeline lead exceeds 150ms, it cannot cancel the echo
                 // unless we shift the render buffer by passing this hint.
                 // We pass it on every frame to keep the WebRTC internal state machine updated.
+                let syncCoarseDelayMs = synchronizer.coarseDelayMs
+                let syncSeededDelayMs = synchronizer.seededDelayMs
+                let syncIsStable = synchronizer.isStable
                 let delayHint = Self.selectStreamDelayHint(
-                    coarseDelayMs: synchronizer.coarseDelayMs,
-                    seededDelayMs: synchronizer.seededDelayMs
+                    coarseDelayMs: syncCoarseDelayMs,
+                    seededDelayMs: syncSeededDelayMs
                 )
+                let controlledDelayHint = applyDelayHintControl(
+                    selectedHint: delayHint,
+                    isStable: syncIsStable
+                )
+                if controlledDelayHint.clamped {
+                    phase15DelayHintClampCount += 1
+                }
+                if controlledDelayHint.heldInUnstableWindow {
+                    phase15DelayHintHoldCount += 1
+                }
                 if diagnosticsEnabled {
                     updateDelayWindow(
-                        coarseDelayMs: synchronizer.coarseDelayMs,
-                        seededDelayMs: synchronizer.seededDelayMs
+                        coarseDelayMs: syncCoarseDelayMs,
+                        seededDelayMs: syncSeededDelayMs
                     )
                 }
-                let delaySet = aecProcessor.setStreamDelayMs(delayHint.delayMs, source: delayHint.source)
+                let delaySet = aecProcessor.setStreamDelayMs(
+                    controlledDelayHint.delayMs,
+                    source: controlledDelayHint.source
+                )
                 if !delaySet {
                     lock.lock()
                     stats.framesMissed += 1
@@ -471,8 +557,20 @@ final class AudioWorker {
 
                 processedCapture = aecProcessor.processCaptureFrame(
                     captureFrameBuffer,
-                    isStable: synchronizer.isStable
+                    isStable: syncIsStable
                 )
+
+                // Worker-owned Phase 1.5 correlation accumulation (1Hz snapshots).
+                phase15RenderRmsAccumulator += Double(latestRenderRmsLinear)
+                phase15CaptureRmsAccumulator += Double(captureRms)
+                phase15RmsFrameCount += 1
+                if let phaseSummary = aecProcessor.recordPhase15Sample(syncDelayMs: syncCoarseDelayMs) {
+                    let delayDecomposition = synchronizer.delayDecompositionSnapshot()
+                    emitPhase15Summary(
+                        summary: phaseSummary,
+                        delayDecomposition: delayDecomposition
+                    )
+                }
             } else {
                 // AEC disabled — pass capture through unmodified
                 processedCapture = captureFrameBuffer
@@ -543,6 +641,95 @@ final class AudioWorker {
         if diagnosticsEnabled {
             emitDiagnosticSummariesIfNeeded()
         }
+    }
+
+    private func applyDelayHintControl(
+        selectedHint: (delayMs: Int, source: AECStreamDelayHintSource),
+        isStable: Bool
+    ) -> DelayHintControlDecision {
+        let decision = Self.applyDelayHintControl(
+            requestedDelayMs: selectedHint.delayMs,
+            source: selectedHint.source,
+            lastAppliedDelayMs: lastAppliedDelayHintMs,
+            isStable: isStable,
+            enabled: delayHintControlEnabled,
+            slewLimitMsPerFrame: Self.delayHintSlewLimitMsPerFrame
+        )
+        lastAppliedDelayHintMs = decision.delayMs
+        return DelayHintControlDecision(
+            delayMs: decision.delayMs,
+            source: decision.source,
+            clamped: decision.clamped,
+            heldInUnstableWindow: decision.heldInUnstableWindow
+        )
+    }
+
+    private func emitPhase15Summary(
+        summary: AECPhase15Summary,
+        delayDecomposition: DelayDecompositionSnapshot
+    ) {
+        let rmsFrames = max(phase15RmsFrameCount, 1)
+        let renderRmsLinear = Float(phase15RenderRmsAccumulator / Double(rmsFrames))
+        let captureRmsLinear = Float(phase15CaptureRmsAccumulator / Double(rmsFrames))
+        phase15RenderRmsAccumulator = 0
+        phase15CaptureRmsAccumulator = 0
+        phase15RmsFrameCount = 0
+
+        let renderDb = renderRmsLinear > 0 ? 20.0 * log10(Double(renderRmsLinear)) : -96.0
+        let captureDb = captureRmsLinear > 0 ? 20.0 * log10(Double(captureRmsLinear)) : -96.0
+        let regime = classifyRmsRegime(renderDb: renderDb, captureDb: captureDb)
+        let collapseThisSecond = summary.erleBelow3Pct >= 80.0 && regime == "far_end_dominant"
+        phase15ConsecutiveCollapseSeconds = collapseThisSecond ? (phase15ConsecutiveCollapseSeconds + 1) : 0
+        let collapseAlert = phase15ConsecutiveCollapseSeconds >= Self.phase15CollapseAlertSeconds
+
+        let now = Date().timeIntervalSince1970
+        var coarseSlopeMsPerSec = 0.0
+        if let previousCoarse = phase15PreviousCoarseDelayMs,
+           let previousTime = phase15PreviousTimestampSeconds {
+            let deltaSeconds = now - previousTime
+            if deltaSeconds > 0 {
+                coarseSlopeMsPerSec = Double(delayDecomposition.coarseDelayMs - previousCoarse) / deltaSeconds
+            }
+        }
+        phase15PreviousCoarseDelayMs = delayDecomposition.coarseDelayMs
+        phase15PreviousTimestampSeconds = now
+
+        let summaryLine =
+            "AEC_PHASE15: windowFrames=\(summary.windowFrames), totalFrames=\(summary.totalFrames), erleBelow3Pct=\(String(format: "%.1f", summary.erleBelow3Pct)), deltaOver100Pct=\(String(format: "%.1f", summary.deltaOver100Pct)), coincidencePct=\(String(format: "%.1f", summary.coincidencePct)), regime=\(regime), collapseSeconds=\(phase15ConsecutiveCollapseSeconds), collapseAlert=\(collapseAlert), coarseDelayMs=\(delayDecomposition.coarseDelayMs), seededDelayMs=\(delayDecomposition.seededDelayMs), sourceTag=\(delayDecomposition.sourceTag.rawValue), driftPpm=\(String(format: "%.1f", delayDecomposition.driftPPM)), driftAdjustMsPerSec=\(String(format: "%.3f", delayDecomposition.driftAdjustmentMsPerSec)), effectiveDelayMs=\(String(format: "%.3f", delayDecomposition.effectiveCoarseDelayMs)), coarseSlopeMsPerSec=\(String(format: "%.3f", coarseSlopeMsPerSec)), delayHintClampCount=\(phase15DelayHintClampCount), delayHintHoldCount=\(phase15DelayHintHoldCount)"
+
+        Task.detached(priority: nil) {
+            await DiagnosticLogger.shared.log(.aec, summaryLine)
+        }
+
+        if diagnosticsVerboseEnabled {
+            let csvLine =
+                "AEC_PHASE15_CSV: windowFrames=\(summary.windowFrames),totalFrames=\(summary.totalFrames),erleBelow3Frames=\(summary.erleBelow3Frames),deltaOver100Frames=\(summary.deltaOver100Frames),coincidentFrames=\(summary.coincidentFrames),erleBelow3Pct=\(String(format: "%.3f", summary.erleBelow3Pct)),deltaOver100Pct=\(String(format: "%.3f", summary.deltaOver100Pct)),coincidencePct=\(String(format: "%.3f", summary.coincidencePct)),deltaBinLt20=\(summary.deltaBinLt20),deltaBin20To49=\(summary.deltaBin20To49),deltaBin50To99=\(summary.deltaBin50To99),deltaBin100To199=\(summary.deltaBin100To199),deltaBinGe200=\(summary.deltaBinGe200),regime=\(regime),collapseSeconds=\(phase15ConsecutiveCollapseSeconds),collapseAlert=\(collapseAlert),coarseDelayMs=\(delayDecomposition.coarseDelayMs),seededDelayMs=\(delayDecomposition.seededDelayMs),sourceTag=\(delayDecomposition.sourceTag.rawValue),driftPpm=\(String(format: "%.3f", delayDecomposition.driftPPM)),driftAdjustMsPerSec=\(String(format: "%.6f", delayDecomposition.driftAdjustmentMsPerSec)),effectiveDelayMs=\(String(format: "%.6f", delayDecomposition.effectiveCoarseDelayMs)),coarseSlopeMsPerSec=\(String(format: "%.6f", coarseSlopeMsPerSec)),delayHintClampCount=\(phase15DelayHintClampCount),delayHintHoldCount=\(phase15DelayHintHoldCount)"
+            Task.detached(priority: nil) {
+                await DiagnosticLogger.shared.log(.aec, csvLine)
+            }
+        }
+
+        if collapseAlert {
+            let collapseMessage =
+                "AEC_ERLE_COLLAPSE: regime=\(regime), consecutiveSeconds=\(phase15ConsecutiveCollapseSeconds), erleBelow3Pct=\(String(format: "%.1f", summary.erleBelow3Pct)), deltaOver100Pct=\(String(format: "%.1f", summary.deltaOver100Pct))"
+            Task.detached(priority: nil) {
+                await DiagnosticLogger.shared.log(.aec, collapseMessage)
+            }
+        }
+    }
+
+    private func classifyRmsRegime(renderDb: Double, captureDb: Double) -> String {
+        if renderDb < -60 && captureDb < -60 {
+            return "silence"
+        }
+        let delta = renderDb - captureDb
+        if delta >= 6.0 {
+            return "far_end_dominant"
+        }
+        if delta <= -6.0 {
+            return "near_end_dominant"
+        }
+        return "double_talk_or_balanced"
     }
 
     /// Compute RMS amplitude of a mono Float32 frame.

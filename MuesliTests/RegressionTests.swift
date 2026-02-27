@@ -1848,6 +1848,85 @@ final class RegressionTests: XCTestCase {
         }
     }
 
+    func testPhase15SummaryEmitsAtOneSecondWindowAndResets() {
+        let aec = AECProcessor()
+        aec.debugResetPhase15Counters()
+
+        var summary: AECPhase15Summary?
+        for _ in 0..<99 {
+            summary = aec.debugRecordPhase15Sample(
+                erleDb: 2.5,
+                bridgeDelayMs: 350,
+                syncDelayMs: 200
+            )
+            XCTAssertNil(summary, "Summary should not emit before full 1-second window")
+        }
+
+        summary = aec.debugRecordPhase15Sample(
+            erleDb: 2.5,
+            bridgeDelayMs: 350,
+            syncDelayMs: 200
+        )
+        guard let summary else {
+            XCTFail("Summary should emit at 100 frames")
+            return
+        }
+        XCTAssertEqual(summary.windowFrames, 100)
+        XCTAssertEqual(summary.erleBelow3Frames, 100)
+        XCTAssertEqual(summary.deltaOver100Frames, 100)
+        XCTAssertEqual(summary.coincidentFrames, 100)
+        XCTAssertEqual(summary.erleBelow3Pct, 100.0, accuracy: 0.001)
+        XCTAssertEqual(summary.deltaOver100Pct, 100.0, accuracy: 0.001)
+        XCTAssertEqual(summary.coincidencePct, 100.0, accuracy: 0.001)
+
+        let nextWindow = aec.debugRecordPhase15Sample(
+            erleDb: 6.0,
+            bridgeDelayMs: 200,
+            syncDelayMs: 200
+        )
+        XCTAssertNil(nextWindow, "Window counters should reset after an emitted summary")
+    }
+
+    func testPhase15ThresholdBoundariesAreExclusive() {
+        let aec = AECProcessor()
+        aec.debugResetPhase15Counters()
+
+        var summary: AECPhase15Summary?
+        for _ in 0..<100 {
+            summary = aec.debugRecordPhase15Sample(
+                erleDb: 3.0,
+                bridgeDelayMs: 300,
+                syncDelayMs: 200
+            )
+        }
+        guard let summary else {
+            XCTFail("Summary should emit at 100 frames")
+            return
+        }
+        XCTAssertEqual(summary.erleBelow3Frames, 0, "ERLE threshold should be strict (< 3.0dB)")
+        XCTAssertEqual(summary.deltaOver100Frames, 0, "Delay threshold should be strict (> 100ms)")
+        XCTAssertEqual(summary.coincidentFrames, 0)
+    }
+
+    func testDelayDecompositionSourceTagMapping() {
+        XCTAssertEqual(
+            AudioSynchronizer.delayDecompositionSourceTag(coarseDelayMs: 0, seededDelayMs: -1),
+            .unavailable
+        )
+        XCTAssertEqual(
+            AudioSynchronizer.delayDecompositionSourceTag(coarseDelayMs: 0, seededDelayMs: 120),
+            .seededOnly
+        )
+        XCTAssertEqual(
+            AudioSynchronizer.delayDecompositionSourceTag(coarseDelayMs: 180, seededDelayMs: -1),
+            .coarseOnly
+        )
+        XCTAssertEqual(
+            AudioSynchronizer.delayDecompositionSourceTag(coarseDelayMs: 180, seededDelayMs: 120),
+            .coarseAndSeeded
+        )
+    }
+
     /// Regression test: CoarseDelayController.seed() sets currentDelaySamples immediately.
     /// Bug: Without seed(), coarseDelayMs starts at 0 and slews at ~2ms/sec,
     /// taking ~90 seconds to reach a typical 175ms render lead.

@@ -792,45 +792,6 @@ final class TranscriptionCoordinator {
 
         let processor = TranscriptProcessor()
         let sortedSegments = stableSortSegmentsByTimestamp(segments)
-        let preview = sortedSegments.prefix(10).map { segment in
-            let speaker = segment.speaker.rawValue
-            let ts = String(format: "%.2f", segment.timestamp)
-            let text = String(segment.text.prefix(32))
-            return "\(ts)|\(speaker)|\(text)"
-        }
-        let themTimestamps = sortedSegments
-            .filter { $0.speaker == .them }
-            .map(\.timestamp)
-        let meTimestamps = sortedSegments
-            .filter { $0.speaker == .me }
-            .map(\.timestamp)
-        var timestampBuckets: [Int: [TranscriptionService.TranscriptSegment]] = [:]
-        for segment in sortedSegments {
-            let bucket = Int((segment.timestamp * 1000.0).rounded())
-            timestampBuckets[bucket, default: []].append(segment)
-        }
-        let collisionBuckets = timestampBuckets.values.filter { $0.count > 1 }
-        let mixedSpeakerCollisionBuckets = collisionBuckets.filter { bucket in
-            Set(bucket.map { $0.speaker.rawValue }).count > 1
-        }
-        // #region agent log
-        AgentDebugRuntimeLogger.log(
-            runId: "post-fix-order-1",
-            hypothesisId: "O3",
-            location: "TranscriptionCoordinator.swift:runSecondPassASR",
-            message: "Second-pass segment ordering summary",
-            data: [
-                "segmentCount": sortedSegments.count,
-                "collisionBucketCount": collisionBuckets.count,
-                "mixedSpeakerCollisionBucketCount": mixedSpeakerCollisionBuckets.count,
-                "themFirstTimestamp": themTimestamps.min() ?? -1.0,
-                "themLastTimestamp": themTimestamps.max() ?? -1.0,
-                "meFirstTimestamp": meTimestamps.min() ?? -1.0,
-                "meLastTimestamp": meTimestamps.max() ?? -1.0,
-                "preview": preview
-            ]
-        )
-        // #endregion
         for segment in sortedSegments {
             processor.processSegment(segment)
         }
