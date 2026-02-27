@@ -6,6 +6,14 @@ import os.log
 /// Service responsible for saving audio recordings and transcripts to disk
 /// Uses a combination of actor isolation (for setup/teardown) and manual locking (for real-time buffer writing)
 final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
+    struct StreamWriteCounters: Sendable {
+        var systemAppended: Int64 = 0
+        var microphoneAppended: Int64 = 0
+        var rawMicrophoneAppended: Int64 = 0
+        var systemDropped: Int64 = 0
+        var microphoneDropped: Int64 = 0
+        var rawMicrophoneDropped: Int64 = 0
+    }
     // MARK: - Logging
     
     private let logger = Logger(subsystem: "com.muesli.app", category: "FileOutputService")
@@ -76,13 +84,14 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
     
     // Configurable base output path
     private var customOutputPath: URL?
+    private var streamWriteCounters = StreamWriteCounters()
     
     // Default output path (Application Support - no special permissions required)
     private static let defaultOutputPath: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("Muesli/Recordings", isDirectory: true)
     }()
-    
+
     // Current base output path (custom or default)
     private var baseOutputPath: URL {
         customOutputPath ?? Self.defaultOutputPath
@@ -237,6 +246,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             }
             
             self._isWriting = true
+            self.streamWriteCounters = StreamWriteCounters()
             
             return directory
         } catch {
@@ -269,6 +279,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             
             // Add new buffer to queue
             systemBufferQueue.append(buffer)
+            streamWriteCounters.systemAppended += 1
             
             // Drain queue while writer is ready
             drainBufferQueue(&systemBufferQueue, to: input)
@@ -284,6 +295,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             
             // Add new buffer to queue
             micBufferQueue.append(buffer)
+            streamWriteCounters.microphoneAppended += 1
             
             // Drain queue while writer is ready
             drainBufferQueue(&micBufferQueue, to: input)
@@ -300,6 +312,7 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
             
             // Add new buffer to queue
             rawMicBufferQueue.append(buffer)
+            streamWriteCounters.rawMicrophoneAppended += 1
             
             // Drain queue while writer is ready
             drainBufferQueue(&rawMicBufferQueue, to: input)
@@ -327,6 +340,13 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
         if queue.count > maxQueuedBuffers {
             let dropCount = queue.count - maxQueuedBuffers
             logger.warning("Dropping \(dropCount) audio buffers due to write backpressure")
+            if input === systemAudioInput {
+                streamWriteCounters.systemDropped += Int64(dropCount)
+            } else if input === microphoneInput {
+                streamWriteCounters.microphoneDropped += Int64(dropCount)
+            } else if input === rawMicrophoneInput {
+                streamWriteCounters.rawMicrophoneDropped += Int64(dropCount)
+            }
             
             // Propagate warning to UI
             let details = """
@@ -469,6 +489,13 @@ final class FileOutputService: @unchecked Sendable, FileOutputServiceProtocol {
                 completion(.failure(OutputError.finalizationFailed))
             }
         }
+    }
+
+    /// Snapshot counters used for stop-time output integrity diagnostics.
+    func getStreamWriteCounters() -> StreamWriteCounters {
+        lock.lock()
+        defer { lock.unlock() }
+        return streamWriteCounters
     }
     
     /// Async wrapper for stopWriting

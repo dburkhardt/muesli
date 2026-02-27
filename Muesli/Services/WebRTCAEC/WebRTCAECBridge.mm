@@ -82,6 +82,8 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
     std::atomic<float> _cachedERLE;
     std::atomic<int> _cachedDelayMs;
     std::atomic<bool> _externalDelayEnabled;
+    std::atomic<int> _streamDelaySetCalls;
+    std::atomic<int> _streamDelaySetFailures;
 }
 
 - (nullable instancetype)initWithSampleRate:(int)sampleRate
@@ -116,6 +118,8 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
         _cachedERLE.store(0.0f);
         _cachedDelayMs.store(-1);
         _externalDelayEnabled.store(false);
+        _streamDelaySetCalls.store(0);
+        _streamDelaySetFailures.store(0);
         
 #if WEBRTC_AVAILABLE
         // Create AudioProcessing instance first, then apply config
@@ -268,12 +272,14 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
     if (!_isReady) return NO;
 
     os_unfair_lock_lock(&_lock);
+    _streamDelaySetCalls.fetch_add(1);
 
 #if WEBRTC_AVAILABLE
     int result = _apm->set_stream_delay_ms(delayMs);
     os_unfair_lock_unlock(&_lock);
     if (result != 0) {
         _lastError = WebRTCAECErrorProcessingFailed;
+        _streamDelaySetFailures.fetch_add(1);
         return NO;
     }
     return YES;
@@ -302,6 +308,8 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
     
     _cachedERLE.store(0.0f);
     _cachedDelayMs.store(-1);
+    _streamDelaySetCalls.store(0);
+    _streamDelaySetFailures.store(0);
     
     os_unfair_lock_unlock(&_lock);
     
@@ -319,6 +327,23 @@ inline rtc::scoped_refptr<webrtc::AudioProcessing> CreateApm() {
 
 - (BOOL)externalDelayEstimatorEnabled {
     return _externalDelayEnabled.load();
+}
+
+- (NSString *)capabilityMatrix {
+#if WEBRTC_AVAILABLE
+    NSString *externalDelay = _externalDelayEnabled.load() ? @"true" : @"false";
+    return [NSString stringWithFormat:@"webrtcAvailable=true, externalDelay=%@, frameSize=%d", externalDelay, kFrameSize];
+#else
+    return @"webrtcAvailable=false, externalDelay=false, frameSize=480";
+#endif
+}
+
+- (int)streamDelaySetCalls {
+    return _streamDelaySetCalls.load();
+}
+
+- (int)streamDelaySetFailures {
+    return _streamDelaySetFailures.load();
 }
 
 @end

@@ -40,6 +40,23 @@ struct AudioWorkerStats {
 
 /// High-priority audio worker for non-RT processing.
 final class AudioWorker {
+    private struct PassThroughWindow {
+        var frameCount: Int = 0
+        var sumX: Double = 0
+        var sumY: Double = 0
+        var sumXX: Double = 0
+        var sumYY: Double = 0
+        var sumXY: Double = 0
+        var sumInSq: Double = 0
+        var sumOutSq: Double = 0
+    }
+
+    private struct DelayWindow {
+        var frameCount: Int = 0
+        var coarseSamples: [Int] = []
+        var seededSamples: [Int] = []
+        var divergenceCount: Int = 0
+    }
     // MARK: - Configuration
 
     /// Worker loop interval (5ms)
@@ -131,6 +148,12 @@ final class AudioWorker {
     private var renderFrameBuffer = [Float](repeating: 0, count: 480)
     private var captureFrameBuffer = [Float](repeating: 0, count: 480)
 
+    /// Debug-only diagnostics gate for heavier observability.
+    private let diagnosticsEnabled: Bool
+    private var passThroughWindow = PassThroughWindow()
+    private var passThroughSuspiciousSeconds: Int = 0
+    private var delayWindow = DelayWindow()
+
     // MARK: - Initialization
 
     init(
@@ -146,6 +169,11 @@ final class AudioWorker {
         self.popCaptureAECFrame = popCaptureAECFrame
         self.isAECEnabled = isAECEnabled
         self.processingTimesRing = [Double](repeating: 0, count: processingTimeHistorySize)
+        #if DEBUG
+        self.diagnosticsEnabled = true
+        #else
+        self.diagnosticsEnabled = UserDefaults.standard.bool(forKey: "aecDiagnosticsEnabled")
+        #endif
 
         assert(renderFrameBuffer.count == Self.frameSizeSamples)
         assert(captureFrameBuffer.count == Self.frameSizeSamples)
@@ -264,6 +292,9 @@ final class AudioWorker {
         loggedSilenceExtended = false
         processingTimesWriteIndex = 0
         processingTimesCount = 0
+        passThroughWindow = PassThroughWindow()
+        passThroughSuspiciousSeconds = 0
+        delayWindow = DelayWindow()
 
         logger.info("AudioWorker reset")
     }
@@ -425,6 +456,12 @@ final class AudioWorker {
                     coarseDelayMs: synchronizer.coarseDelayMs,
                     seededDelayMs: synchronizer.seededDelayMs
                 )
+                if diagnosticsEnabled {
+                    updateDelayWindow(
+                        coarseDelayMs: synchronizer.coarseDelayMs,
+                        seededDelayMs: synchronizer.seededDelayMs
+                    )
+                }
                 let delaySet = aecProcessor.setStreamDelayMs(delayHint.delayMs, source: delayHint.source)
                 if !delaySet {
                     lock.lock()
@@ -442,6 +479,9 @@ final class AudioWorker {
             }
             let processEnd = DispatchTime.now()
             let processingTimeMs = Double(processEnd.uptimeNanoseconds - processStart.uptimeNanoseconds) / 1_000_000
+            if diagnosticsEnabled && aecEnabled {
+                updatePassThroughWindow(input: captureFrameBuffer, output: processedCapture)
+            }
 
             captureFedCount += 1
             captureProcessedThisIteration += 1
@@ -499,6 +539,10 @@ final class AudioWorker {
             captureRmsAccumulator = 0
             rmsFrameCount = 0
         }
+
+        if diagnosticsEnabled {
+            emitDiagnosticSummariesIfNeeded()
+        }
     }
 
     /// Compute RMS amplitude of a mono Float32 frame.
@@ -525,5 +569,85 @@ final class AudioWorker {
         }
         stats.avgProcessingTimeMs = sum / Double(processingTimesCount)
         stats.maxProcessingTimeMs = max(stats.maxProcessingTimeMs, timeMs)
+    }
+
+    private func updatePassThroughWindow(input: [Float], output: [Float]) {
+        guard input.count == output.count else { return }
+        for i in 0..<input.count {
+            let x = Double(input[i])
+            let y = Double(output[i])
+            passThroughWindow.sumX += x
+            passThroughWindow.sumY += y
+            passThroughWindow.sumXX += x * x
+            passThroughWindow.sumYY += y * y
+            passThroughWindow.sumXY += x * y
+            passThroughWindow.sumInSq += x * x
+            passThroughWindow.sumOutSq += y * y
+        }
+        passThroughWindow.frameCount += 1
+    }
+
+    private func updateDelayWindow(coarseDelayMs: Int, seededDelayMs: Int) {
+        delayWindow.frameCount += 1
+        delayWindow.coarseSamples.append(coarseDelayMs)
+        delayWindow.seededSamples.append(seededDelayMs)
+        if seededDelayMs >= 0 && abs(coarseDelayMs - seededDelayMs) > 80 {
+            delayWindow.divergenceCount += 1
+        }
+    }
+
+    private func emitDiagnosticSummariesIfNeeded() {
+        let expectedFramesPerSecond = 100
+
+        if passThroughWindow.frameCount >= expectedFramesPerSecond {
+            let n = Double(passThroughWindow.frameCount * Self.frameSizeSamples)
+            let cov = (n * passThroughWindow.sumXY) - (passThroughWindow.sumX * passThroughWindow.sumY)
+            let varX = (n * passThroughWindow.sumXX) - (passThroughWindow.sumX * passThroughWindow.sumX)
+            let varY = (n * passThroughWindow.sumYY) - (passThroughWindow.sumY * passThroughWindow.sumY)
+            let corrDen = sqrt(max(varX, 0) * max(varY, 0))
+            let corr = corrDen > 0 ? cov / corrDen : 0
+            let rmsIn = sqrt(passThroughWindow.sumInSq / n)
+            let rmsOut = sqrt(passThroughWindow.sumOutSq / n)
+            let attenuationDb = (rmsIn > 0 && rmsOut > 0) ? (20 * log10(rmsIn / rmsOut)) : 0
+            let suspicious = corr > 0.95 && attenuationDb < 1.0
+            passThroughSuspiciousSeconds = suspicious ? (passThroughSuspiciousSeconds + 1) : 0
+            let suspiciousSeconds = passThroughSuspiciousSeconds
+            let passThroughMessage =
+                "AEC_PASS_THROUGH_AUDIT: corr=\(String(format: "%.3f", corr)), attenuationDb=\(String(format: "%.2f", attenuationDb)), suspiciousSeconds=\(suspiciousSeconds), alert=\(suspiciousSeconds >= 10)"
+
+            Task {
+                await DiagnosticLogger.shared.log(
+                    .aec,
+                    passThroughMessage
+                )
+            }
+            passThroughWindow = PassThroughWindow()
+        }
+
+        if delayWindow.frameCount >= expectedFramesPerSecond {
+            let coarseP50 = percentile(delayWindow.coarseSamples, percentile: 50)
+            let coarseP95 = percentile(delayWindow.coarseSamples, percentile: 95)
+            let seededP50 = percentile(delayWindow.seededSamples, percentile: 50)
+            let seededP95 = percentile(delayWindow.seededSamples, percentile: 95)
+            let divergenceFrames = delayWindow.divergenceCount
+            let observedFrames = delayWindow.frameCount
+            let delayMessage =
+                "AEC_DELAY_MODEL: coarseP50=\(coarseP50), coarseP95=\(coarseP95), seededP50=\(seededP50), seededP95=\(seededP95), divergenceFrames=\(divergenceFrames), frames=\(observedFrames)"
+            Task {
+                await DiagnosticLogger.shared.log(
+                    .aec,
+                    delayMessage
+                )
+            }
+            delayWindow = DelayWindow()
+        }
+    }
+
+    private func percentile(_ values: [Int], percentile: Int) -> Int {
+        let filtered = values.filter { $0 >= 0 }.sorted()
+        guard !filtered.isEmpty else { return -1 }
+        let p = min(max(percentile, 0), 100)
+        let idx = Int(round((Double(filtered.count - 1) * Double(p)) / 100.0))
+        return filtered[idx]
     }
 }

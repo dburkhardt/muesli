@@ -70,6 +70,22 @@ struct AECStats {
     var lastStreamDelayRawMs: Int = -1
     /// Last stream-delay hint source used when calling setStreamDelayMs.
     var lastStreamDelayHintSource: AECStreamDelayHintSource = .unknown
+    /// Count of delay-set attempts from worker path.
+    var delaySetAttempts: Int64 = 0
+    /// Count of delay-set calls accepted by bridge.
+    var delaySetAccepted: Int64 = 0
+    /// Count of delay-set calls rejected by bridge/not-ready.
+    var delaySetRejected: Int64 = 0
+    /// Count of render skips due to mode off.
+    var skipModeOff: Int64 = 0
+    /// Count of render/capture skips due to bridge not ready.
+    var skipBridgeNotReady: Int64 = 0
+    /// Count of skips due to invalid input frame size.
+    var skipInvalidFrameSize: Int64 = 0
+    /// Count of render feed failures returned by bridge.
+    var renderFeedFail: Int64 = 0
+    /// Count of capture processing failures returned by bridge.
+    var captureProcessFail: Int64 = 0
 }
 
 // MARK: - AEC Processor
@@ -198,9 +214,22 @@ final class AECProcessor {
 
         let logSessionID = self.sessionID
         let estimatorEnabled = isExternalDelayEstimatorEnabled
+        let bridgeSnapshot = stateLock.withLock { state in
+            let ready = state.bridge?.isReady ?? false
+            let frameSize = state.bridge?.frameSize ?? -1
+            let errorCode = state.bridge?.lastError.rawValue ?? -1
+            let matrix = state.bridge?.capabilityMatrix ?? "bridgeUnavailable"
+            let delayCalls = state.bridge?.streamDelaySetCalls ?? 0
+            let delayFails = state.bridge?.streamDelaySetFailures ?? 0
+            return (ready, frameSize, errorCode, matrix, delayCalls, delayFails)
+        }
         Task {
             await DiagnosticLogger.shared.log(.aec,
                 "session=\(logSessionID) AEC_CONFIG: mode=\(logMode), topology=\(topology), externalDelayEstimator=\(estimatorEnabled)")
+            await DiagnosticLogger.shared.log(
+                .aec,
+                "session=\(logSessionID) AEC_BRIDGE_CAPABILITY: ready=\(bridgeSnapshot.0), frameSize=\(bridgeSnapshot.1), lastError=\(bridgeSnapshot.2), externalDelayEstimator=\(estimatorEnabled), matrix=\(bridgeSnapshot.3), delaySetCalls=\(bridgeSnapshot.4), delaySetFailures=\(bridgeSnapshot.5)"
+            )
         }
     }
     
@@ -217,6 +246,7 @@ final class AECProcessor {
             assertionFailure("AEC render frame size invariant violated: \(samples.count) != \(Self.frameSizeSamples)")
             stateLock.withLock { state in
                 state.stats.framesSkipped += 1
+                state.stats.skipInvalidFrameSize += 1
             }
             return false
         }
@@ -224,6 +254,7 @@ final class AECProcessor {
         let result = stateLock.withLock { state -> (feedSucceeded: Bool, shouldLogGatingChange: Bool, logFrozen: Bool, preservedFilterState: Bool, shouldWarn: Bool) in
             guard state.mode != .off else {
                 state.stats.framesSkipped += 1
+                state.stats.skipModeOff += 1
                 return (false, false, false, false, false)
             }
 
@@ -231,6 +262,7 @@ final class AECProcessor {
 
             guard let bridge = state.bridge, bridge.isReady else {
                 state.stats.framesSkipped += 1
+                state.stats.skipBridgeNotReady += 1
                 return (false, changed, frozen, preservedFilterState, false)
             }
 
@@ -250,6 +282,7 @@ final class AECProcessor {
 
             if !feedSucceeded {
                 state.stats.framesSkipped += 1
+                state.stats.renderFeedFail += 1
                 return (false, changed, frozen, preservedFilterState, true)
             }
 
@@ -293,6 +326,7 @@ final class AECProcessor {
             assertionFailure("AEC capture frame size invariant violated: \(captureSamples.count) != \(Self.frameSizeSamples)")
             stateLock.withLock { state in
                 state.stats.framesSkipped += 1
+                state.stats.skipInvalidFrameSize += 1
             }
             return captureSamples
         }
@@ -300,6 +334,7 @@ final class AECProcessor {
         let result = stateLock.withLock { state -> (output: [Float], captureSucceeded: Bool, shouldLogGatingChange: Bool, logFrozen: Bool, preservedFilterState: Bool, shouldWarn: Bool) in
             guard state.mode != .off else {
                 state.stats.framesSkipped += 1
+                state.stats.skipModeOff += 1
                 return (captureSamples, false, false, false, false, false)
             }
 
@@ -307,6 +342,7 @@ final class AECProcessor {
 
             guard let bridge = state.bridge, bridge.isReady else {
                 state.stats.framesSkipped += 1
+                state.stats.skipBridgeNotReady += 1
                 return (captureSamples, false, changed, frozen, preservedFilterState, false)
             }
 
@@ -321,6 +357,7 @@ final class AECProcessor {
 
             if !captureSucceeded {
                 state.stats.framesSkipped += 1
+                state.stats.captureProcessFail += 1
                 return (captureSamples, false, changed, frozen, preservedFilterState, true)
             }
 
@@ -394,13 +431,20 @@ final class AECProcessor {
         guard delayMs >= 0 else { return false }
         let boundedDelayMs = min(max(delayMs, 0), 500)
         return stateLock.withLock { state -> Bool in
+            state.stats.delaySetAttempts += 1
             state.stats.lastStreamDelayRawMs = delayMs
             state.stats.lastStreamDelayHintSource = source
             
-            guard let bridge = state.bridge, bridge.isReady else { return false }
+            guard let bridge = state.bridge, bridge.isReady else {
+                state.stats.delaySetRejected += 1
+                return false
+            }
             let ok = bridge.setStreamDelayMs(Int32(boundedDelayMs))
             if ok {
                 state.stats.lastStreamDelayMs = boundedDelayMs
+                state.stats.delaySetAccepted += 1
+            } else {
+                state.stats.delaySetRejected += 1
             }
             return ok
         }
@@ -515,6 +559,14 @@ final class AECProcessor {
         msg += ", processed=\(stats.framesProcessed)"
         msg += ", skipped=\(stats.framesSkipped)"
         msg += ", frozen=\(stats.adaptationFrozen)"
+        msg += ", delaySetAttempts=\(stats.delaySetAttempts)"
+        msg += ", delaySetAccepted=\(stats.delaySetAccepted)"
+        msg += ", delaySetRejected=\(stats.delaySetRejected)"
+        msg += ", skipModeOff=\(stats.skipModeOff)"
+        msg += ", skipBridgeNotReady=\(stats.skipBridgeNotReady)"
+        msg += ", skipInvalidFrameSize=\(stats.skipInvalidFrameSize)"
+        msg += ", renderFeedFail=\(stats.renderFeedFail)"
+        msg += ", captureProcessFail=\(stats.captureProcessFail)"
         msg += ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
         msg += ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
         msg += ", seededDelay=\(syncSeededDelayMs)ms"

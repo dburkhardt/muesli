@@ -1019,6 +1019,9 @@ final class RecordingController {
             didStopWithIncompleteBoundedFlush: didStopWithIncompleteBoundedFlush
         )
 
+        let writeCounters = fileOutputService.getStreamWriteCounters()
+        scheduleOutputIntegrityAudit(directory: directory, counters: writeCounters)
+
         session.state = .completed
         // Interruption may end the live capture stream, but history resume affordance
         // is determined from saved audio presence (`MeetingHistoryItem.canResume`).
@@ -1053,6 +1056,66 @@ final class RecordingController {
                 reason: "liveFinalizationComplete"
             )
         }
+    }
+
+    private func scheduleOutputIntegrityAudit(
+        directory: URL,
+        counters: FileOutputService.StreamWriteCounters
+    ) {
+        Task.detached(priority: .utility) {
+            await DiagnosticLogger.shared.log(
+                .aec,
+                "OUTPUT_STREAM_COUNTS: systemAppended=\(counters.systemAppended), micAppended=\(counters.microphoneAppended), rawMicAppended=\(counters.rawMicrophoneAppended), systemDropped=\(counters.systemDropped), micDropped=\(counters.microphoneDropped), rawMicDropped=\(counters.rawMicrophoneDropped)"
+            )
+
+            let micURL = directory.appendingPathComponent("microphone.caf")
+            let rawMicURL = directory.appendingPathComponent("raw_microphone.caf")
+            let fileManager = FileManager.default
+            guard fileManager.fileExists(atPath: micURL.path), fileManager.fileExists(atPath: rawMicURL.path) else {
+                await DiagnosticLogger.shared.log(.aec, "OUTPUT_FINGERPRINT: skipped reason=missing_raw_or_processed")
+                return
+            }
+
+            do {
+                let micBytes = try Self.sampleFileBytes(for: micURL, maxWindowBytes: 32 * 1024)
+                let rawBytes = try Self.sampleFileBytes(for: rawMicURL, maxWindowBytes: 32 * 1024)
+                let similarity = Self.byteSimilarity(lhs: micBytes, rhs: rawBytes)
+                await DiagnosticLogger.shared.log(
+                    .aec,
+                    "OUTPUT_FINGERPRINT: micBytes=\(micBytes.count), rawMicBytes=\(rawBytes.count), byteSimilarity=\(String(format: "%.3f", similarity))"
+                )
+            } catch {
+                await DiagnosticLogger.shared.log(.aec, "OUTPUT_FINGERPRINT: failed error=\(error.localizedDescription)")
+            }
+        }
+    }
+
+    private nonisolated static func sampleFileBytes(for url: URL, maxWindowBytes: Int) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        let fileSize = (attrs[.size] as? NSNumber)?.intValue ?? 0
+        if fileSize <= maxWindowBytes * 2 {
+            return try handle.readToEnd() ?? Data()
+        }
+
+        let head = try handle.read(upToCount: maxWindowBytes) ?? Data()
+        try handle.seek(toOffset: UInt64(fileSize - maxWindowBytes))
+        let tail = try handle.read(upToCount: maxWindowBytes) ?? Data()
+        var combined = Data()
+        combined.append(head)
+        combined.append(tail)
+        return combined
+    }
+
+    private nonisolated static func byteSimilarity(lhs: Data, rhs: Data) -> Double {
+        let compared = min(lhs.count, rhs.count)
+        guard compared > 0 else { return 0 }
+        var equalCount = 0
+        for i in 0..<compared where lhs[i] == rhs[i] {
+            equalCount += 1
+        }
+        return Double(equalCount) / Double(compared)
     }
     
     private func launchSecondPassFinalization(

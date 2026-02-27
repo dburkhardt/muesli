@@ -206,6 +206,15 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         var callbackCount: Int = 0
         var truncationAlertEmitted: Bool = false
         var overshootAlertEmitted: Bool = false
+        var minInputFrames: Int = .max
+        var maxInputFrames: Int = 0
+        var minOutputFrames: Int = .max
+        var maxOutputFrames: Int = 0
+        var sumInputFrames: Int64 = 0
+        var sumOutputFrames: Int64 = 0
+        var statusHaveData: Int = 0
+        var statusInputRanDry: Int = 0
+        var statusError: Int = 0
     }
 
     private struct AgentMicRouteSnapshot {
@@ -1338,16 +1347,52 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             : expectedOutputFrames48k
         let rawAECCount = aecCount
         let normalizedAECCount = aecCount
+        let converterStatusLabelSnapshot = converterStatusLabel
+        let converterStatusRawSnapshot = converterStatusRaw
+        let converterErrorSnapshot = converterError
         let outputToExpectedRatio = expectedOutputFrames48k > 0
             ? Double(normalizedAECCount) / Double(expectedOutputFrames48k)
             : 0
         let routeSnapshot = agentMicRouteSnapshotLock.withLock { state in state }
-        let telemetryDecision = agentMicSignalTelemetryLock.withLock { state -> (Bool, Bool, Bool, Int) in
+        let sourceSampleRate = buffer.format.sampleRate
+        let telemetryDecision = agentMicSignalTelemetryLock.withLock { state -> (Bool, Bool, Bool, Int, String?) in
             state.callbackCount += 1
+            state.minInputFrames = min(state.minInputFrames, frameLength)
+            state.maxInputFrames = max(state.maxInputFrames, frameLength)
+            state.minOutputFrames = min(state.minOutputFrames, normalizedAECCount)
+            state.maxOutputFrames = max(state.maxOutputFrames, normalizedAECCount)
+            state.sumInputFrames += Int64(frameLength)
+            state.sumOutputFrames += Int64(normalizedAECCount)
+            switch converterStatusLabelSnapshot {
+            case "haveData":
+                state.statusHaveData += 1
+            case "inputRanDry":
+                state.statusInputRanDry += 1
+            case "error":
+                state.statusError += 1
+            default:
+                break
+            }
             let now = Date().timeIntervalSince1970
             let shouldEmitPeriodic = now - state.lastPeriodicLogTime >= 1
+            var summaryPayload: String? = nil
             if shouldEmitPeriodic {
                 state.lastPeriodicLogTime = now
+                let callbacks = max(state.callbackCount, 1)
+                let minIn = state.minInputFrames == .max ? 0 : state.minInputFrames
+                let minOut = state.minOutputFrames == .max ? 0 : state.minOutputFrames
+                summaryPayload =
+                    "callbacks=\(state.callbackCount), minInputFrames=\(minIn), maxInputFrames=\(state.maxInputFrames), avgInputFrames=\(String(format: "%.1f", Double(state.sumInputFrames) / Double(callbacks))), minOutputFrames=\(minOut), maxOutputFrames=\(state.maxOutputFrames), avgOutputFrames=\(String(format: "%.1f", Double(state.sumOutputFrames) / Double(callbacks))), statusHaveData=\(state.statusHaveData), statusInputRanDry=\(state.statusInputRanDry), statusError=\(state.statusError), sourceSampleRate=\(String(format: "%.1f", sourceSampleRate)), resamplerActive=\(resamplerActive)"
+                state.callbackCount = 0
+                state.minInputFrames = .max
+                state.maxInputFrames = 0
+                state.minOutputFrames = .max
+                state.maxOutputFrames = 0
+                state.sumInputFrames = 0
+                state.sumOutputFrames = 0
+                state.statusHaveData = 0
+                state.statusInputRanDry = 0
+                state.statusError = 0
             }
             let shouldEmitTruncationAlert = resamplerActive &&
                 outputToExpectedRatio < 0.99 &&
@@ -1365,11 +1410,17 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 shouldEmitPeriodic,
                 shouldEmitTruncationAlert,
                 shouldEmitOvershootAlert,
-                state.callbackCount
+                state.callbackCount,
+                summaryPayload
             )
         }
 
         if telemetryDecision.0 {
+            if let summary = telemetryDecision.4 {
+                Task {
+                    await DiagnosticLogger.shared.log(.aec, "MIC_RESAMPLER_SUMMARY: \(summary)")
+                }
+            }
             // #region agent log
             Self.agentDebugLog(
                 hypothesisId: "N1",
@@ -1392,9 +1443,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                     "explicitlySet": routeSnapshot.explicitlySet,
                     "hardwareSampleRate": routeSnapshot.hardwareSampleRate,
                     "tapSampleRate": routeSnapshot.tapSampleRate,
-                    "convertStatus": converterStatusLabel,
-                    "convertStatusRaw": converterStatusRaw,
-                    "convertError": converterError,
+                    "convertStatus": converterStatusLabelSnapshot,
+                    "convertStatusRaw": converterStatusRawSnapshot,
+                    "convertError": converterErrorSnapshot,
                 ]
             )
             // #endregion
@@ -1414,8 +1465,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                     "outputToExpectedRatio": outputToExpectedRatio,
                     "requestedUID": routeSnapshot.requestedUID,
                     "engineUID": routeSnapshot.engineUID,
-                    "convertStatus": converterStatusLabel,
-                    "convertStatusRaw": converterStatusRaw,
+                    "convertStatus": converterStatusLabelSnapshot,
+                    "convertStatusRaw": converterStatusRawSnapshot,
                 ]
             )
             // #endregion
@@ -1434,8 +1485,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                     "aecCountNormalized": normalizedAECCount,
                     "expectedOutputFrames48k": expectedOutputFrames48k,
                     "maxReasonableOutputFrames48k": maxReasonableOutputFrames48k,
-                    "convertStatus": converterStatusLabel,
-                    "convertStatusRaw": converterStatusRaw,
+                    "convertStatus": converterStatusLabelSnapshot,
+                    "convertStatusRaw": converterStatusRawSnapshot,
                     "requestedUID": routeSnapshot.requestedUID,
                     "engineUID": routeSnapshot.engineUID,
                 ]
