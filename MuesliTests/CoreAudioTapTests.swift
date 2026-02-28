@@ -658,6 +658,36 @@ final class CoreAudioTapTests: XCTestCase {
         XCTAssertEqual(adjusted.source, .none)
     }
 
+    func testAudioWorkerBtRecoveryTriggersAfterSustainedLowAttenuation() {
+        let shouldRecover = AudioWorker.shouldTriggerBtRecovery(
+            btExternalMicProfileActive: true,
+            startupGateState: .fullAdaptation,
+            lowAttenuationSeconds: 20,
+            attemptCount: 0
+        )
+        XCTAssertTrue(shouldRecover, "BT recovery should trigger after sustained low attenuation in full adaptation")
+    }
+
+    func testAudioWorkerBtRecoveryRequiresFullAdaptationState() {
+        let shouldRecover = AudioWorker.shouldTriggerBtRecovery(
+            btExternalMicProfileActive: true,
+            startupGateState: .waitingDelayReady,
+            lowAttenuationSeconds: 30,
+            attemptCount: 0
+        )
+        XCTAssertFalse(shouldRecover, "Recovery should stay off until startup gate reaches full adaptation")
+    }
+
+    func testAudioWorkerBtRecoveryHonorsAttemptLimit() {
+        let shouldRecover = AudioWorker.shouldTriggerBtRecovery(
+            btExternalMicProfileActive: true,
+            startupGateState: .fullAdaptation,
+            lowAttenuationSeconds: 30,
+            attemptCount: 1
+        )
+        XCTAssertFalse(shouldRecover, "Recovery should not retrigger once max per-route attempts are consumed")
+    }
+
     func testAudioWorkerStartupGateTransitionsToDelayReadyAfterRenderWarmup() {
         let transition = AudioWorker.transitionStartupGateState(
             currentState: .waitingRenderReady,
@@ -751,6 +781,16 @@ final class CoreAudioTapTests: XCTestCase {
             defaultCapacity,
             "BT profile should reduce converter output capacity margin to avoid bursty frame output"
         )
+    }
+
+    func testTapMicResamplerChannelMapPinsFirstChannelForMultiChannelInput() {
+        let channelMap = TapAudioCaptureService.microphoneResamplerChannelMapForTapChannels(2)
+        XCTAssertEqual(channelMap, [NSNumber(value: 0)])
+    }
+
+    func testTapMicResamplerChannelMapUsesChannelZeroForMonoInput() {
+        let channelMap = TapAudioCaptureService.microphoneResamplerChannelMapForTapChannels(1)
+        XCTAssertEqual(channelMap, [NSNumber(value: 0)])
     }
 
     func testPhase15RenderRmsUsesLatestWhenRenderUpdated() {

@@ -190,6 +190,8 @@ final class AudioWorker {
     private var passThroughWindow = PassThroughWindow()
     private var passThroughSuspiciousSeconds: Int = 0
     private var passThroughLowAttenuationSeconds: Int = 0
+    private var btDelayBiasDisabledForRouteRecovery: Bool = false
+    private var btRecoveryAttemptCount: Int = 0
     private var delayWindow = DelayWindow()
     private var latestRenderRmsLinear: Float = 0
     private var phase15RenderRmsAccumulator: Double = 0
@@ -206,6 +208,8 @@ final class AudioWorker {
     private static let phase15ErleCollapseThresholdDb: Double = 3.0
     private static let phase15CollapseAlertSeconds = 15
     private static let delayHintSlewLimitMsPerFrame = 8
+    private static let btRecoveryLowAttenuationSecondsThreshold = 20
+    private static let btRecoveryMaxAttemptsPerRoute = 1
 
     // MARK: - Initialization
 
@@ -286,6 +290,20 @@ final class AudioWorker {
         }
         let adjusted = min(max(selectedHint.delayMs + biasMs, 0), 500)
         return (adjusted, selectedHint.source)
+    }
+
+    static func shouldTriggerBtRecovery(
+        btExternalMicProfileActive: Bool,
+        startupGateState: AudioWorkerStartupGateState,
+        lowAttenuationSeconds: Int,
+        attemptCount: Int,
+        minLowAttenuationSeconds: Int = btRecoveryLowAttenuationSecondsThreshold,
+        maxAttemptsPerRoute: Int = btRecoveryMaxAttemptsPerRoute
+    ) -> Bool {
+        guard btExternalMicProfileActive else { return false }
+        guard startupGateState == .fullAdaptation else { return false }
+        guard attemptCount < maxAttemptsPerRoute else { return false }
+        return lowAttenuationSeconds >= minLowAttenuationSeconds
     }
 
     static func applyDelayHintControl(
@@ -396,11 +414,13 @@ final class AudioWorker {
         let logStartupEnabled = btStartupGateEnabled
         let logBtProfileActive = isBtExternalMicProfileActive()
         let logBtDelayHintBiasMs = btDelayHintBiasMs
+        let logBtDelayBiasDisabledForRouteRecovery = btDelayBiasDisabledForRouteRecovery
+        let logBtRecoveryAttemptCount = btRecoveryAttemptCount
         let logRouteEpochID = startupGateRouteEpoch
         let delayHintConfigMessage =
             "AEC_DELAY_HINT_CONTROL_CONFIG: enabled=\(logDelayHintControlEnabled), slewLimitMsPerFrame=\(Self.delayHintSlewLimitMsPerFrame), btDelayHintBiasMs=\(logBtDelayHintBiasMs), diagnosticsVerbose=\(logDiagnosticsVerboseEnabled)"
         let flagsSnapshotMessage =
-            "AEC_FLAGS_SNAPSHOT: aecTelemetryVersion=2, routeEpochId=\(logRouteEpochID), btExternalMicProfile=\(logBtProfileActive), delayHintControlEnabled=\(logDelayHintControlEnabled), btDelayHintBiasMs=\(logBtDelayHintBiasMs), btStartupGateEnabled=\(logStartupEnabled), startupRenderReadyFrames=\(startupGateConfig.renderReadyFrames), startupDelayReadyFrames=\(startupGateConfig.delayReadyFrames), startupTimeoutMs=\(startupGateConfig.timeoutMs), startupRenderThresholdLinear=\(String(format: "%.5f", startupGateConfig.renderThresholdLinear)), startupGateState=\(logStartupState), startupGateReleaseReason=\(logStartupReason)"
+            "AEC_FLAGS_SNAPSHOT: aecTelemetryVersion=2, routeEpochId=\(logRouteEpochID), btExternalMicProfile=\(logBtProfileActive), delayHintControlEnabled=\(logDelayHintControlEnabled), btDelayHintBiasMs=\(logBtDelayHintBiasMs), btDelayBiasDisabledForRouteRecovery=\(logBtDelayBiasDisabledForRouteRecovery), btRecoveryAttemptCount=\(logBtRecoveryAttemptCount), btStartupGateEnabled=\(logStartupEnabled), startupRenderReadyFrames=\(startupGateConfig.renderReadyFrames), startupDelayReadyFrames=\(startupGateConfig.delayReadyFrames), startupTimeoutMs=\(startupGateConfig.timeoutMs), startupRenderThresholdLinear=\(String(format: "%.5f", startupGateConfig.renderThresholdLinear)), startupGateState=\(logStartupState), startupGateReleaseReason=\(logStartupReason)"
         Task.detached(priority: nil) {
             await DiagnosticLogger.shared.log(.aec, "AUDIO_WORKER_START")
             await DiagnosticLogger.shared.log(.aec, flagsSnapshotMessage)
@@ -470,6 +490,8 @@ final class AudioWorker {
         passThroughWindow = PassThroughWindow()
         passThroughSuspiciousSeconds = 0
         passThroughLowAttenuationSeconds = 0
+        btDelayBiasDisabledForRouteRecovery = false
+        btRecoveryAttemptCount = 0
         delayWindow = DelayWindow()
         latestRenderRmsLinear = 0
         startupGateState = .inactive
@@ -669,10 +691,11 @@ final class AudioWorker {
                     coarseDelayMs: syncCoarseDelayMs,
                     seededDelayMs: syncSeededDelayMs
                 )
+                let activeBtDelayHintBiasMs = btDelayBiasDisabledForRouteRecovery ? 0 : btDelayHintBiasMs
                 let btDelayHint = Self.applyBtProfileDelayBias(
                     selectedHint: delayHint,
                     btExternalMicProfileActive: isBtExternalMicProfileActive(),
-                    biasMs: btDelayHintBiasMs
+                    biasMs: activeBtDelayHintBiasMs
                 )
                 let controlledDelayHint = applyDelayHintControl(
                     selectedHint: btDelayHint,
@@ -801,6 +824,10 @@ final class AudioWorker {
     }
 
     private func resetStartupGateForCurrentRoute(reason: String) {
+        if reason == "route_epoch_changed" || reason == "worker_start" {
+            btDelayBiasDisabledForRouteRecovery = false
+            btRecoveryAttemptCount = 0
+        }
         startupGateRouteEpoch = routeEpochProvider()
         startupGateRenderReadyStreak = 0
         startupGateDelayReadyStreak = 0
@@ -1053,6 +1080,31 @@ final class AudioWorker {
                     .aec,
                     passThroughMessage
                 )
+            }
+
+            let shouldTriggerBtRecovery = Self.shouldTriggerBtRecovery(
+                btExternalMicProfileActive: isBtExternalMicProfileActive(),
+                startupGateState: startupGateState,
+                lowAttenuationSeconds: lowAttenuationSeconds,
+                attemptCount: btRecoveryAttemptCount
+            )
+            if shouldTriggerBtRecovery {
+                btRecoveryAttemptCount += 1
+                btDelayBiasDisabledForRouteRecovery = true
+                lastAppliedDelayHintMs = -1
+                lastAppliedDelayHintSource = .unknown
+                let attempt = btRecoveryAttemptCount
+                let routeEpoch = startupGateRouteEpoch
+                let previousBiasMs = btDelayHintBiasMs
+                let startupState = startupGateState.rawValue
+                resetStartupGateForCurrentRoute(reason: "bt_nonconverging_recovery")
+                aecProcessor.reset()
+                Task.detached(priority: nil) {
+                    await DiagnosticLogger.shared.log(
+                        .aec,
+                        "AEC_BT_RECOVERY: attempt=\(attempt), reason=low_attenuation_nonconverging, routeEpochId=\(routeEpoch), startupGateState=\(startupState), lowAttenuationSeconds=\(lowAttenuationSeconds), previousBtDelayHintBiasMs=\(previousBiasMs), btDelayBiasDisabledForRouteRecovery=true"
+                    )
+                }
             }
             passThroughWindow = PassThroughWindow()
         }

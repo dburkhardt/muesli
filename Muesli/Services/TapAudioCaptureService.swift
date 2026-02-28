@@ -1288,6 +1288,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 channels: 1
             )!
             micResampler = AVAudioConverter(from: srcFormat, to: dstFormat)
+            micResampler?.channelMap = Self.microphoneResamplerChannelMapForTapChannels(tapChannels)
             let estimatedInputFrames = Int(
                 max(
                     Double(tapBufferSizeFrames),
@@ -1317,6 +1318,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let finalResamplerEnabled = micResampler != nil
         let finalTapBufferFrames = tapBufferSizeFrames
         let finalResamplerPrimeMethod: String
+        let finalResamplerChannelMap: String
         if let converter = micResampler {
             switch converter.primeMethod {
             case .pre:
@@ -1328,12 +1330,17 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             @unknown default:
                 finalResamplerPrimeMethod = "unknown"
             }
+            let channelMap = converter.channelMap
+            finalResamplerChannelMap = channelMap.isEmpty
+                ? "default"
+                : channelMap.map(\.stringValue).joined(separator: ",")
         } else {
             finalResamplerPrimeMethod = "notUsed"
+            finalResamplerChannelMap = "notUsed"
         }
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_SAMPLE_RATE: hardware=\(finalHardwareSampleRate)Hz, channels=\(finalHardwareChannels), tapOutput=\(finalTapSampleRate)Hz/\(finalTapChannels)ch, tapBufferFrames=\(finalTapBufferFrames), aecTarget=48000Hz, resampler=\(finalResamplerEnabled), resamplerPrimeMethod=\(finalResamplerPrimeMethod)")
+                "MIC_SAMPLE_RATE: hardware=\(finalHardwareSampleRate)Hz, channels=\(finalHardwareChannels), tapOutput=\(finalTapSampleRate)Hz/\(finalTapChannels)ch, tapBufferFrames=\(finalTapBufferFrames), aecTarget=48000Hz, resampler=\(finalResamplerEnabled), resamplerPrimeMethod=\(finalResamplerPrimeMethod), resamplerChannelMap=\(finalResamplerChannelMap)")
         }
     }
 
@@ -1869,6 +1876,14 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         btExternalMicProfileActive
             ? microphoneTapBufferSizeFramesBtProfile
             : microphoneTapBufferSizeFrames
+    }
+
+    nonisolated static func microphoneResamplerChannelMapForTapChannels(
+        _ tapChannels: AVAudioChannelCount
+    ) -> [NSNumber] {
+        // Pin to channel 0 for webcam/array mics to avoid implicit downmix artifacts.
+        // For mono input this is equivalent to default behavior.
+        return [NSNumber(value: 0)]
     }
 
     nonisolated static func microphoneResamplerOutputFrameCapacity(
