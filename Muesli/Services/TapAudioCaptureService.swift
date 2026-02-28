@@ -199,6 +199,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     private var currentSessionID: String = "none"
     /// Snapshot of active input/output route metadata for diagnostics and BT-profile gating.
     private var currentRouteSnapshot: AudioRouteSnapshot?
+    /// Input UID used by the last fully-applied route epoch.
+    private var lastAppliedInputRouteUID: String?
     /// Coalesced route-change epoch ID (increments on first event in an epoch).
     private var routeChangeEpochID: Int = 0
     /// Number of raw route change events observed within the active epoch.
@@ -410,6 +412,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         // Detect route + topology snapshot before pipeline reset so startup logs include
         // deterministic transport/UID metadata.
         currentRouteSnapshot = CoreAudioHelpers.currentRouteSnapshot()
+        lastAppliedInputRouteUID = currentRouteSnapshot?.inputUID
         let selectedMicLikelyExternal = isSelectedMicrophoneLikelyExternal()
         if let snapshot = currentRouteSnapshot {
             topologyMode = snapshot.topologyMode
@@ -674,6 +677,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         resetAECRingsAndCounters()
         preAggregateDefaultInputDeviceID = nil
         currentRouteSnapshot = nil
+        lastAppliedInputRouteUID = nil
         _ = routeEpochState.withLock { state in
             state = 0
         }
@@ -1901,6 +1905,51 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         return AVAudioFrameCount(max(expectedOutputFrames + margin, minimumCapacity))
     }
 
+    nonisolated static func microphoneRouteRebindDecision(
+        previousAppliedInputUID: String?,
+        refreshedInputUID: String?,
+        selectedMicrophoneUID: String?,
+        hasActiveMicrophoneEngine: Bool,
+        hasSeenCaptureAudio: Bool
+    ) -> (shouldRebind: Bool, reason: String) {
+        guard hasActiveMicrophoneEngine else {
+            return (false, "no_active_engine")
+        }
+
+        // Route churn before the first mic callback is the strongest predictor of
+        // "mic appears muted" failures on BT+webcam paths. Force a clean rebind.
+        guard hasSeenCaptureAudio else {
+            return (true, "startup_no_capture_audio")
+        }
+
+        func normalizedUID(_ uid: String?) -> String? {
+            guard let raw = uid?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty else {
+                return nil
+            }
+            return raw
+        }
+
+        let previousUID = normalizedUID(previousAppliedInputUID)
+        let nextUID = normalizedUID(refreshedInputUID)
+        let selectedUID = normalizedUID(selectedMicrophoneUID)
+
+        if let previousUID, let nextUID, previousUID != nextUID {
+            return (true, "input_uid_changed")
+        }
+
+        if let selectedUID {
+            guard let nextUID else {
+                return (true, "selected_uid_missing_from_route")
+            }
+            if nextUID != selectedUID {
+                return (true, "selected_uid_mismatch")
+            }
+        }
+
+        return (false, "no_rebind_needed")
+    }
+
     /// Handle audio route change (device switch)
     private func handleRouteChange() {
         let now = Date()
@@ -1961,6 +2010,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         guard routeChangeEpochID == epochID else { return }
 
         let eventCount = routeChangeEventCountInEpoch
+        let previousAppliedInputUID = lastAppliedInputRouteUID
         let refreshedRoute = CoreAudioHelpers.currentRouteSnapshot()
         if let refreshedRoute {
             currentRouteSnapshot = refreshedRoute
@@ -1989,6 +2039,56 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         aecProcessor.reset()
         resetAECRingsAndCounters()
 
+        let refreshedInputUID = refreshedRoute?.inputUID
+        let hasSeenCaptureAudio = captureStartupState.withLock { state in
+            state.firstCaptureAudioLogged
+        }
+        let rebindDecision = Self.microphoneRouteRebindDecision(
+            previousAppliedInputUID: previousAppliedInputUID,
+            refreshedInputUID: refreshedInputUID,
+            selectedMicrophoneUID: selectedMicrophoneDeviceID,
+            hasActiveMicrophoneEngine: microphoneEngine != nil,
+            hasSeenCaptureAudio: hasSeenCaptureAudio
+        )
+        var micRebindStatus = "not_needed"
+        if rebindDecision.shouldRebind {
+            micRebindStatus = "attempting"
+            let route = currentRouteSnapshot
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_ROUTE_REBIND: routeEpochId=\(epochID), status=starting, reason=\(rebindDecision.reason), previousInputUID=\(previousAppliedInputUID ?? "unknown"), refreshedInputUID=\(refreshedInputUID ?? "unknown"), selectedUID=\(self.selectedMicrophoneDeviceID ?? "nil"), outputUID=\(route?.outputUID ?? "unknown"), outputTransport=\(route?.outputTransport.rawValue ?? "unknown"), inputTransport=\(route?.inputTransport.rawValue ?? "unknown")")
+            }
+
+            stopMicrophoneCapture()
+            _ = captureStartupState.withLock { state in
+                state.sessionStartWallClock = CFAbsoluteTimeGetCurrent()
+                state.firstCaptureAudioLogged = false
+            }
+
+            do {
+                try startMicrophoneCapture()
+                micRebindStatus = "success"
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "MIC_ROUTE_REBIND: routeEpochId=\(epochID), status=success, reason=\(rebindDecision.reason)")
+                }
+            } catch {
+                micRebindStatus = "failed"
+                logger.error("MIC_ROUTE_REBIND failed for epoch \(epochID): \(error.localizedDescription)")
+                warningHandler?(
+                    .microphone,
+                    "Microphone route recovery failed",
+                    "Microphone input did not recover after an audio route change. Error: \(error.localizedDescription)",
+                    false
+                )
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "MIC_ROUTE_REBIND: routeEpochId=\(epochID), status=failed, reason=\(rebindDecision.reason), error=\(error.localizedDescription)")
+                }
+            }
+        }
+        lastAppliedInputRouteUID = refreshedInputUID
+
         routeChangeCoalesceTask = nil
         routeChangeEpochFirstEventAt = nil
         routeChangeEventCountInEpoch = 0
@@ -1996,7 +2096,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let route = currentRouteSnapshot
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "ROUTE_CHANGE_APPLIED: routeEpochId=\(epochID), eventsCoalesced=\(eventCount), topology=\(self.topologyMode), btExternalMicProfile=\(btProfileActive), outputUID=\(route?.outputUID ?? "unknown"), outputTransport=\(route?.outputTransport.rawValue ?? "unknown"), inputUID=\(route?.inputUID ?? "unknown"), inputTransport=\(route?.inputTransport.rawValue ?? "unknown")")
+                "ROUTE_CHANGE_APPLIED: routeEpochId=\(epochID), eventsCoalesced=\(eventCount), topology=\(self.topologyMode), btExternalMicProfile=\(btProfileActive), outputUID=\(route?.outputUID ?? "unknown"), outputTransport=\(route?.outputTransport.rawValue ?? "unknown"), inputUID=\(route?.inputUID ?? "unknown"), inputTransport=\(route?.inputTransport.rawValue ?? "unknown"), previousAppliedInputUID=\(previousAppliedInputUID ?? "unknown"), micRebindStatus=\(micRebindStatus), micRebindReason=\(rebindDecision.reason)")
         }
     }
 

@@ -793,6 +793,66 @@ final class CoreAudioTapTests: XCTestCase {
         XCTAssertEqual(channelMap, [NSNumber(value: 0)])
     }
 
+    func testMicrophoneRouteRebindDecisionTriggersDuringStartupWithoutCaptureAudio() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "08-FF-44-49-A4-D3:input",
+            refreshedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            selectedMicrophoneUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            hasActiveMicrophoneEngine: true,
+            hasSeenCaptureAudio: false
+        )
+        XCTAssertTrue(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "startup_no_capture_audio")
+    }
+
+    func testMicrophoneRouteRebindDecisionTriggersWhenInputUIDChanges() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "08-FF-44-49-A4-D3:input",
+            refreshedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            selectedMicrophoneUID: nil,
+            hasActiveMicrophoneEngine: true,
+            hasSeenCaptureAudio: true
+        )
+        XCTAssertTrue(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "input_uid_changed")
+    }
+
+    func testMicrophoneRouteRebindDecisionTriggersOnSelectedUIDMismatch() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "08-FF-44-49-A4-D3:input",
+            refreshedInputUID: "08-FF-44-49-A4-D3:input",
+            selectedMicrophoneUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            hasActiveMicrophoneEngine: true,
+            hasSeenCaptureAudio: true
+        )
+        XCTAssertTrue(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "selected_uid_mismatch")
+    }
+
+    func testMicrophoneRouteRebindDecisionSkipsWhenRouteStable() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            refreshedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            selectedMicrophoneUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            hasActiveMicrophoneEngine: true,
+            hasSeenCaptureAudio: true
+        )
+        XCTAssertFalse(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "no_rebind_needed")
+    }
+
+    func testMicrophoneRouteRebindDecisionSkipsWithoutActiveEngine() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "08-FF-44-49-A4-D3:input",
+            refreshedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            selectedMicrophoneUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            hasActiveMicrophoneEngine: false,
+            hasSeenCaptureAudio: false
+        )
+        XCTAssertFalse(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "no_active_engine")
+    }
+
     func testPhase15RenderRmsUsesLatestWhenRenderUpdated() {
         let renderRms = AudioWorker.phase15RenderRmsForFrame(
             latestRenderRmsLinear: 0.25,
