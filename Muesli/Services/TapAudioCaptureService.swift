@@ -224,6 +224,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// AVAudioEngine microphone tap buffer size (frames in source sample-rate domain).
     private static let microphoneTapBufferSizeFrames: AVAudioFrameCount = 4096
+    /// Tighter tap buffer for BT-output + external-mic routes to reduce startup/steady-state latency.
+    private static let microphoneTapBufferSizeFramesBtProfile: AVAudioFrameCount = 2048
 
     // #region agent log
     private struct AgentMicSignalTelemetry {
@@ -451,9 +453,14 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             state.sessionStartWallClock = CFAbsoluteTimeGetCurrent()
             state.firstCaptureAudioLogged = false
         }
+        let btProfileActiveForSessionStart = btExternalMicProfileState.withLock { state in state }
         synchronizer.resetForNewSession()
         aecProcessor.reset()
-        synchronizer.configure(topologyMode: topologyMode, sessionID: currentSessionID)
+        synchronizer.configure(
+            topologyMode: topologyMode,
+            sessionID: currentSessionID,
+            isBtExternalMicProfile: btProfileActiveForSessionStart
+        )
         aecProcessor.configure(topology: topologyMode, sessionID: currentSessionID, synchronizer: synchronizer)
         resetAECRingsAndCounters()
 
@@ -1178,12 +1185,16 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         var derivedHardwareChannels = hardwareChannels
         microphoneSampleRate = derivedHardwareSampleRate
         let inputNodeBox = UnsafeSynchronousCapture(value: inputNode)
+        let btExternalMicProfileActive = btExternalMicProfileState.withLock { state in state }
+        let tapBufferSizeFrames = Self.microphoneTapBufferFramesForProfile(
+            btExternalMicProfileActive: btExternalMicProfileActive
+        )
 
         // Use nil format (device's native output format) — explicit 48kHz format
         // causes zero-frame delivery on some USB devices (e.g., C920 webcam).
         // Resampling to 48kHz for the AEC pipeline is done in handleMicrophoneBuffer.
         if let installException = ObjCTryCatch({
-            inputNodeBox.value.installTap(onBus: 0, bufferSize: Self.microphoneTapBufferSizeFrames, format: nil) { [weak self] buffer, time in
+            inputNodeBox.value.installTap(onBus: 0, bufferSize: tapBufferSizeFrames, format: nil) { [weak self] buffer, time in
                 self?.handleMicrophoneBuffer(buffer, time: time)
             }
         }) {
@@ -1223,7 +1234,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 let fallbackInputNodeBox = UnsafeSynchronousCapture(value: fallbackInputNode)
 
                 if let fallbackInstallException = ObjCTryCatch({
-                    fallbackInputNodeBox.value.installTap(onBus: 0, bufferSize: Self.microphoneTapBufferSizeFrames, format: nil) { [weak self] buffer, time in
+                    fallbackInputNodeBox.value.installTap(onBus: 0, bufferSize: tapBufferSizeFrames, format: nil) { [weak self] buffer, time in
                         self?.handleMicrophoneBuffer(buffer, time: time)
                     }
                 }) {
@@ -1279,20 +1290,17 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             micResampler = AVAudioConverter(from: srcFormat, to: dstFormat)
             let estimatedInputFrames = Int(
                 max(
-                    Double(Self.microphoneTapBufferSizeFrames),
+                    Double(tapBufferSizeFrames),
                     ceil(tapSampleRate * 0.10)
                 )
             )
-            let estimatedOutputFrames = Int(
-                ceil(
-                    Double(estimatedInputFrames) * 48000.0 / max(tapSampleRate, 1.0)
-                )
-            )
-            let maxOutputFrames = AVAudioFrameCount(
-                max(
-                    estimatedOutputFrames + 1024,
-                    Int(Self.microphoneTapBufferSizeFrames)
-                )
+            if btExternalMicProfileActive {
+                micResampler?.primeMethod = .none
+            }
+            let maxOutputFrames = Self.microphoneResamplerOutputFrameCapacity(
+                inputFrameCount: estimatedInputFrames,
+                inputSampleRate: tapSampleRate,
+                btExternalMicProfileActive: btExternalMicProfileActive
             )
             micResampleBuffer = AVAudioPCMBuffer(pcmFormat: dstFormat, frameCapacity: maxOutputFrames)
             logger.info("Mic resampler: \(tapSampleRate)Hz \(tapChannels)ch → 48000Hz mono")
@@ -1307,9 +1315,25 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let finalTapSampleRate = tapSampleRate
         let finalTapChannels = tapChannels
         let finalResamplerEnabled = micResampler != nil
+        let finalTapBufferFrames = tapBufferSizeFrames
+        let finalResamplerPrimeMethod: String
+        if let converter = micResampler {
+            switch converter.primeMethod {
+            case .pre:
+                finalResamplerPrimeMethod = "pre"
+            case .normal:
+                finalResamplerPrimeMethod = "normal"
+            case .none:
+                finalResamplerPrimeMethod = "none"
+            @unknown default:
+                finalResamplerPrimeMethod = "unknown"
+            }
+        } else {
+            finalResamplerPrimeMethod = "notUsed"
+        }
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_SAMPLE_RATE: hardware=\(finalHardwareSampleRate)Hz, channels=\(finalHardwareChannels), tapOutput=\(finalTapSampleRate)Hz/\(finalTapChannels)ch, aecTarget=48000Hz, resampler=\(finalResamplerEnabled)")
+                "MIC_SAMPLE_RATE: hardware=\(finalHardwareSampleRate)Hz, channels=\(finalHardwareChannels), tapOutput=\(finalTapSampleRate)Hz/\(finalTapChannels)ch, tapBufferFrames=\(finalTapBufferFrames), aecTarget=48000Hz, resampler=\(finalResamplerEnabled), resamplerPrimeMethod=\(finalResamplerPrimeMethod)")
         }
     }
 
@@ -1343,13 +1367,13 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         var converterStatusRaw: Int = -1
         var converterStatusLabel = "notUsed"
         var converterError = "none"
+        let btExternalMicProfileActive = btExternalMicProfileState.withLock { state in state }
 
         if let converter = micResampler {
-            let requiredOutputFrames = AVAudioFrameCount(
-                max(
-                    Int(ceil(Double(frameLength) * 48000.0 / max(buffer.format.sampleRate, 1.0))) + 256,
-                    Int(Self.microphoneTapBufferSizeFrames)
-                )
+            let requiredOutputFrames = Self.microphoneResamplerOutputFrameCapacity(
+                inputFrameCount: frameLength,
+                inputSampleRate: buffer.format.sampleRate,
+                btExternalMicProfileActive: btExternalMicProfileActive
             )
 
             let existingCapacity = micResampleBuffer?.frameCapacity ?? 0
@@ -1839,6 +1863,29 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         return min(coalesceWindowMs, remainingToMax)
     }
 
+    nonisolated static func microphoneTapBufferFramesForProfile(
+        btExternalMicProfileActive: Bool
+    ) -> AVAudioFrameCount {
+        btExternalMicProfileActive
+            ? microphoneTapBufferSizeFramesBtProfile
+            : microphoneTapBufferSizeFrames
+    }
+
+    nonisolated static func microphoneResamplerOutputFrameCapacity(
+        inputFrameCount: Int,
+        inputSampleRate: Double,
+        btExternalMicProfileActive: Bool
+    ) -> AVAudioFrameCount {
+        let expectedOutputFrames = Int(
+            ceil(Double(max(inputFrameCount, 1)) * 48000.0 / max(inputSampleRate, 1.0))
+        )
+        let margin = btExternalMicProfileActive ? 256 : 1024
+        let minimumCapacity = btExternalMicProfileActive
+            ? Int(microphoneTapBufferSizeFramesBtProfile)
+            : Int(microphoneTapBufferSizeFrames)
+        return AVAudioFrameCount(max(expectedOutputFrames + margin, minimumCapacity))
+    }
+
     /// Handle audio route change (device switch)
     private func handleRouteChange() {
         let now = Date()
@@ -1916,7 +1963,12 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             }
         }
 
-        synchronizer.configure(topologyMode: topologyMode, sessionID: currentSessionID)
+        let btProfileActive = btExternalMicProfileState.withLock { state in state }
+        synchronizer.configure(
+            topologyMode: topologyMode,
+            sessionID: currentSessionID,
+            isBtExternalMicProfile: btProfileActive
+        )
         aecProcessor.configure(topology: topologyMode, sessionID: currentSessionID, synchronizer: synchronizer)
         synchronizer.reset()
         aecProcessor.reset()
@@ -1927,7 +1979,6 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         routeChangeEventCountInEpoch = 0
 
         let route = currentRouteSnapshot
-        let btProfileActive = btExternalMicProfileState.withLock { state in state }
         Task {
             await DiagnosticLogger.shared.log(.aec,
                 "ROUTE_CHANGE_APPLIED: routeEpochId=\(epochID), eventsCoalesced=\(eventCount), topology=\(self.topologyMode), btExternalMicProfile=\(btProfileActive), outputUID=\(route?.outputUID ?? "unknown"), outputTransport=\(route?.outputTransport.rawValue ?? "unknown"), inputUID=\(route?.inputUID ?? "unknown"), inputTransport=\(route?.inputTransport.rawValue ?? "unknown")")

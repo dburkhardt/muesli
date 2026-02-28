@@ -192,12 +192,17 @@ final class AudioSynchronizer {
     // MARK: - Public API
     
     /// Configure for device topology
-    func configure(topologyMode: DeviceTopologyMode, sessionID: String = "none") {
+    func configure(
+        topologyMode: DeviceTopologyMode,
+        sessionID: String = "none",
+        isBtExternalMicProfile: Bool = false
+    ) {
         stateLock.lock()
         defer { stateLock.unlock() }
 
         self.topologyMode = topologyMode
         self.sessionID = sessionID
+        delayController.setBluetoothExternalMicProfile(isBtExternalMicProfile)
         
         // In headset mode, use more conservative settings
         if topologyMode == .headset {
@@ -210,7 +215,7 @@ final class AudioSynchronizer {
         
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "SYNC_CONFIG: topology=\(topologyMode)")
+                "SYNC_CONFIG: topology=\(topologyMode), btExternalMicProfile=\(isBtExternalMicProfile)")
         }
     }
     

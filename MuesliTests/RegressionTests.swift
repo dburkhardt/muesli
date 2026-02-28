@@ -458,8 +458,8 @@ final class RegressionTests: XCTestCase {
     func testStartMicrophoneCaptureWrapsInstallTapCallsInObjCTryCatch() throws {
         let source = try tapAudioCaptureServiceSource()
 
-        let primaryPattern = #"if let installException = ObjCTryCatch\(\{\s*[A-Za-z0-9_\.]+\.installTap\(onBus:\s*0,\s*bufferSize:\s*4096,\s*format:\s*nil\)"#
-        let fallbackPattern = #"if let fallbackInstallException = ObjCTryCatch\(\{\s*[A-Za-z0-9_\.]+\.installTap\(onBus:\s*0,\s*bufferSize:\s*4096,\s*format:\s*nil\)"#
+        let primaryPattern = #"if let installException = ObjCTryCatch\(\{\s*[A-Za-z0-9_\.]+\.installTap\(onBus:\s*0,\s*bufferSize:\s*[A-Za-z0-9_\.]+,\s*format:\s*nil\)"#
+        let fallbackPattern = #"if let fallbackInstallException = ObjCTryCatch\(\{\s*[A-Za-z0-9_\.]+\.installTap\(onBus:\s*0,\s*bufferSize:\s*[A-Za-z0-9_\.]+,\s*format:\s*nil\)"#
 
         XCTAssertNotNil(
             source.range(of: primaryPattern, options: .regularExpression),

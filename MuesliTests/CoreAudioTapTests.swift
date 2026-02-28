@@ -176,6 +176,25 @@ final class CoreAudioTapTests: XCTestCase {
         
         controller.unfreezeAdaptation()
     }
+
+    func testCoarseDelayControllerBluetoothProfileLowersDeadband() {
+        let defaultProfileController = CoarseDelayController()
+        defaultProfileController.update(observedDelaySamples: 500)
+        XCTAssertEqual(
+            defaultProfileController.currentDelaySamples,
+            0,
+            "Default profile should ignore 500-sample updates inside 15ms deadband"
+        )
+
+        let btProfileController = CoarseDelayController()
+        btProfileController.setBluetoothExternalMicProfile(true)
+        btProfileController.update(observedDelaySamples: 500)
+        XCTAssertGreaterThan(
+            btProfileController.currentDelaySamples,
+            0,
+            "BT profile should react to 500-sample updates due to tighter deadband"
+        )
+    }
     
     // MARK: - DriftTracker Tests
     
@@ -619,6 +638,26 @@ final class CoreAudioTapTests: XCTestCase {
         XCTAssertFalse(decision.heldInUnstableWindow)
     }
 
+    func testAudioWorkerBtProfileDelayBiasAppliesToDelayHint() {
+        let adjusted = AudioWorker.applyBtProfileDelayBias(
+            selectedHint: (delayMs: 200, source: .coarse),
+            btExternalMicProfileActive: true,
+            biasMs: 80
+        )
+        XCTAssertEqual(adjusted.delayMs, 280)
+        XCTAssertEqual(adjusted.source, .coarse)
+    }
+
+    func testAudioWorkerBtProfileDelayBiasDoesNotChangeNoneSource() {
+        let adjusted = AudioWorker.applyBtProfileDelayBias(
+            selectedHint: (delayMs: 0, source: .none),
+            btExternalMicProfileActive: true,
+            biasMs: 80
+        )
+        XCTAssertEqual(adjusted.delayMs, 0)
+        XCTAssertEqual(adjusted.source, .none)
+    }
+
     func testAudioWorkerStartupGateTransitionsToDelayReadyAfterRenderWarmup() {
         let transition = AudioWorker.transitionStartupGateState(
             currentState: .waitingRenderReady,
@@ -681,6 +720,37 @@ final class CoreAudioTapTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1004.2)
         )
         XCTAssertEqual(delayPastCap, 0, "Delay should clamp to zero once max coalescing window is exceeded")
+    }
+
+    func testTapMicBufferSizingUsesBtProfileSpecificValues() {
+        let defaultTapFrames = TapAudioCaptureService.microphoneTapBufferFramesForProfile(
+            btExternalMicProfileActive: false
+        )
+        let btTapFrames = TapAudioCaptureService.microphoneTapBufferFramesForProfile(
+            btExternalMicProfileActive: true
+        )
+        XCTAssertEqual(defaultTapFrames, 4096)
+        XCTAssertEqual(btTapFrames, 2048)
+    }
+
+    func testTapMicResamplerCapacityUsesTighterBtMargin() {
+        let defaultCapacity = TapAudioCaptureService.microphoneResamplerOutputFrameCapacity(
+            inputFrameCount: 4410,
+            inputSampleRate: 44_100,
+            btExternalMicProfileActive: false
+        )
+        let btCapacity = TapAudioCaptureService.microphoneResamplerOutputFrameCapacity(
+            inputFrameCount: 4410,
+            inputSampleRate: 44_100,
+            btExternalMicProfileActive: true
+        )
+        XCTAssertEqual(defaultCapacity, 5824)
+        XCTAssertEqual(btCapacity, 5056)
+        XCTAssertLessThan(
+            btCapacity,
+            defaultCapacity,
+            "BT profile should reduce converter output capacity margin to avoid bursty frame output"
+        )
     }
 
     func testPhase15RenderRmsUsesLatestWhenRenderUpdated() {

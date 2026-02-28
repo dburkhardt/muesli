@@ -178,6 +178,7 @@ final class AudioWorker {
     private let diagnosticsEnabled: Bool
     private let diagnosticsVerboseEnabled: Bool
     private let delayHintControlEnabled: Bool
+    private let btDelayHintBiasMs: Int
     private let btStartupGateEnabled: Bool
     private let startupGateConfig: StartupGateConfig
     private var startupGateState: AudioWorkerStartupGateState = .inactive
@@ -234,6 +235,7 @@ final class AudioWorker {
         self.diagnosticsVerboseEnabled = defaults.bool(forKey: "AECDiagnosticsVerbose")
         #endif
         self.delayHintControlEnabled = (defaults.object(forKey: "aecDelayHintControlEnabled") as? Bool) ?? true
+        self.btDelayHintBiasMs = max(0, (defaults.object(forKey: "aecBtHardeningDelayHintBiasMs") as? Int) ?? 80)
         self.btStartupGateEnabled = (defaults.object(forKey: "aecBtHardeningStartupGateEnabled") as? Bool) ?? true
         let startupRenderReadyFrames = (defaults.object(forKey: "aecBtHardeningStartupRenderReadyFrames") as? Int) ?? 5
         let startupDelayReadyFrames = (defaults.object(forKey: "aecBtHardeningStartupDelayReadyFrames") as? Int) ?? 10
@@ -269,6 +271,21 @@ final class AudioWorker {
         } else {
             return (0, .none)
         }
+    }
+
+    static func applyBtProfileDelayBias(
+        selectedHint: (delayMs: Int, source: AECStreamDelayHintSource),
+        btExternalMicProfileActive: Bool,
+        biasMs: Int
+    ) -> (delayMs: Int, source: AECStreamDelayHintSource) {
+        guard btExternalMicProfileActive, biasMs > 0 else {
+            return selectedHint
+        }
+        guard selectedHint.source != .none else {
+            return selectedHint
+        }
+        let adjusted = min(max(selectedHint.delayMs + biasMs, 0), 500)
+        return (adjusted, selectedHint.source)
     }
 
     static func applyDelayHintControl(
@@ -378,11 +395,12 @@ final class AudioWorker {
         let logStartupReason = startupGateReleaseReason
         let logStartupEnabled = btStartupGateEnabled
         let logBtProfileActive = isBtExternalMicProfileActive()
+        let logBtDelayHintBiasMs = btDelayHintBiasMs
         let logRouteEpochID = startupGateRouteEpoch
         let delayHintConfigMessage =
-            "AEC_DELAY_HINT_CONTROL_CONFIG: enabled=\(logDelayHintControlEnabled), slewLimitMsPerFrame=\(Self.delayHintSlewLimitMsPerFrame), diagnosticsVerbose=\(logDiagnosticsVerboseEnabled)"
+            "AEC_DELAY_HINT_CONTROL_CONFIG: enabled=\(logDelayHintControlEnabled), slewLimitMsPerFrame=\(Self.delayHintSlewLimitMsPerFrame), btDelayHintBiasMs=\(logBtDelayHintBiasMs), diagnosticsVerbose=\(logDiagnosticsVerboseEnabled)"
         let flagsSnapshotMessage =
-            "AEC_FLAGS_SNAPSHOT: aecTelemetryVersion=2, routeEpochId=\(logRouteEpochID), btExternalMicProfile=\(logBtProfileActive), delayHintControlEnabled=\(logDelayHintControlEnabled), btStartupGateEnabled=\(logStartupEnabled), startupRenderReadyFrames=\(startupGateConfig.renderReadyFrames), startupDelayReadyFrames=\(startupGateConfig.delayReadyFrames), startupTimeoutMs=\(startupGateConfig.timeoutMs), startupRenderThresholdLinear=\(String(format: "%.5f", startupGateConfig.renderThresholdLinear)), startupGateState=\(logStartupState), startupGateReleaseReason=\(logStartupReason)"
+            "AEC_FLAGS_SNAPSHOT: aecTelemetryVersion=2, routeEpochId=\(logRouteEpochID), btExternalMicProfile=\(logBtProfileActive), delayHintControlEnabled=\(logDelayHintControlEnabled), btDelayHintBiasMs=\(logBtDelayHintBiasMs), btStartupGateEnabled=\(logStartupEnabled), startupRenderReadyFrames=\(startupGateConfig.renderReadyFrames), startupDelayReadyFrames=\(startupGateConfig.delayReadyFrames), startupTimeoutMs=\(startupGateConfig.timeoutMs), startupRenderThresholdLinear=\(String(format: "%.5f", startupGateConfig.renderThresholdLinear)), startupGateState=\(logStartupState), startupGateReleaseReason=\(logStartupReason)"
         Task.detached(priority: nil) {
             await DiagnosticLogger.shared.log(.aec, "AUDIO_WORKER_START")
             await DiagnosticLogger.shared.log(.aec, flagsSnapshotMessage)
@@ -651,8 +669,13 @@ final class AudioWorker {
                     coarseDelayMs: syncCoarseDelayMs,
                     seededDelayMs: syncSeededDelayMs
                 )
-                let controlledDelayHint = applyDelayHintControl(
+                let btDelayHint = Self.applyBtProfileDelayBias(
                     selectedHint: delayHint,
+                    btExternalMicProfileActive: isBtExternalMicProfileActive(),
+                    biasMs: btDelayHintBiasMs
+                )
+                let controlledDelayHint = applyDelayHintControl(
+                    selectedHint: btDelayHint,
                     isStable: adaptationStable
                 )
                 if controlledDelayHint.clamped {
