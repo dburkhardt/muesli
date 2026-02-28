@@ -853,6 +853,62 @@ final class CoreAudioTapTests: XCTestCase {
         XCTAssertEqual(decision.reason, "no_active_engine")
     }
 
+    func testMicSilentRecoveryTriggersForSustainedDigitalSilence() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicSilentRecovery(
+            btExternalMicProfileActive: true,
+            sourceRms: 0,
+            pipelineRms: 0,
+            consecutiveSilentCallbacks: 40,
+            attemptsInCurrentRoute: 0,
+            isRecoveryInFlight: false
+        )
+        XCTAssertTrue(shouldRecover)
+    }
+
+    func testMicSilentRecoveryDoesNotTriggerForNonZeroSignal() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicSilentRecovery(
+            btExternalMicProfileActive: true,
+            sourceRms: 0.01,
+            pipelineRms: 0.01,
+            consecutiveSilentCallbacks: 100,
+            attemptsInCurrentRoute: 0,
+            isRecoveryInFlight: false
+        )
+        XCTAssertFalse(shouldRecover)
+    }
+
+    func testMicSilentRecoveryHonorsAttemptLimit() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicSilentRecovery(
+            btExternalMicProfileActive: true,
+            sourceRms: 0,
+            pipelineRms: 0,
+            consecutiveSilentCallbacks: 100,
+            attemptsInCurrentRoute: 2,
+            isRecoveryInFlight: false
+        )
+        XCTAssertFalse(shouldRecover)
+    }
+
+    func testMicNoCallbackRecoveryTriggersWhenBtProfileHasNoCallbacks() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicNoCallbackRecovery(
+            btExternalMicProfileActive: true,
+            totalCallbacks: 0,
+            attemptsInCurrentRoute: 0,
+            isRecoveryInFlight: false
+        )
+        XCTAssertTrue(shouldRecover)
+    }
+
+    func testMicNoCallbackRecoveryRequiresBtProfile() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicNoCallbackRecovery(
+            btExternalMicProfileActive: false,
+            totalCallbacks: 0,
+            attemptsInCurrentRoute: 0,
+            isRecoveryInFlight: false
+        )
+        XCTAssertFalse(shouldRecover)
+    }
+
     func testPhase15RenderRmsUsesLatestWhenRenderUpdated() {
         let renderRms = AudioWorker.phase15RenderRmsForFrame(
             latestRenderRmsLinear: 0.25,

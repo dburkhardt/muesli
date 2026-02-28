@@ -224,10 +224,28 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     }
     private nonisolated(unsafe) let captureStartupState = OSAllocatedUnfairLock(initialState: CaptureStartupState())
 
+    private struct MicLivenessRecoveryState {
+        var lastRouteEpochId: Int = 0
+        var totalCallbacks: Int = 0
+        var consecutiveDigitalSilenceCallbacks: Int = 0
+        var attemptsInCurrentRoute: Int = 0
+        var recoveryInFlight: Bool = false
+    }
+    private nonisolated(unsafe) let micLivenessRecoveryState = OSAllocatedUnfairLock(
+        initialState: MicLivenessRecoveryState()
+    )
+    private var micStartupLivenessTask: Task<Void, Never>?
+    private var micCaptureGeneration: Int = 0
+
     /// AVAudioEngine microphone tap buffer size (frames in source sample-rate domain).
     private static let microphoneTapBufferSizeFrames: AVAudioFrameCount = 4096
     /// Tighter tap buffer for BT-output + external-mic routes to reduce startup/steady-state latency.
     private static let microphoneTapBufferSizeFramesBtProfile: AVAudioFrameCount = 2048
+    /// Detect digital-silence failures from external webcam mics.
+    private static let micDigitalSilenceRmsThreshold: Float = 0.000_001
+    private static let micSilentDetectionConsecutiveCallbacks = 40
+    private static let micLivenessStartupTimeoutMs = 4000
+    private static let micLivenessMaxRecoveryAttemptsPerRoute = 2
 
     // #region agent log
     private struct AgentMicSignalTelemetry {
@@ -1346,10 +1364,38 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             await DiagnosticLogger.shared.log(.aec,
                 "MIC_SAMPLE_RATE: hardware=\(finalHardwareSampleRate)Hz, channels=\(finalHardwareChannels), tapOutput=\(finalTapSampleRate)Hz/\(finalTapChannels)ch, tapBufferFrames=\(finalTapBufferFrames), aecTarget=48000Hz, resampler=\(finalResamplerEnabled), resamplerPrimeMethod=\(finalResamplerPrimeMethod), resamplerChannelMap=\(finalResamplerChannelMap)")
         }
+
+        let routeEpochID = routeEpochState.withLock { state in state }
+        _ = micLivenessRecoveryState.withLock { state in
+            if state.lastRouteEpochId != routeEpochID {
+                state.lastRouteEpochId = routeEpochID
+                state.attemptsInCurrentRoute = 0
+            }
+            state.totalCallbacks = 0
+            state.consecutiveDigitalSilenceCallbacks = 0
+            state.recoveryInFlight = false
+        }
+
+        micStartupLivenessTask?.cancel()
+        micCaptureGeneration += 1
+        let captureGeneration = micCaptureGeneration
+        micStartupLivenessTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(Self.micLivenessStartupTimeoutMs))
+            } catch {
+                return
+            }
+            await self?.handleMicStartupLivenessTimeout(
+                generation: captureGeneration,
+                routeEpochId: routeEpochID
+            )
+        }
     }
 
     /// Stop microphone capture
     private func stopMicrophoneCapture() {
+        micStartupLivenessTask?.cancel()
+        micStartupLivenessTask = nil
         if let engine = microphoneEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -1357,6 +1403,97 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         microphoneEngine = nil
         micResampler = nil
         micResampleBuffer = nil
+    }
+
+    private func handleMicStartupLivenessTimeout(
+        generation: Int,
+        routeEpochId: Int
+    ) async {
+        guard generation == micCaptureGeneration else { return }
+        guard isRecording, microphoneEngine != nil else { return }
+
+        let btProfileActive = btExternalMicProfileState.withLock { state in state }
+        let startupRecoveryDecision = micLivenessRecoveryState.withLock {
+            state -> (shouldRecover: Bool, attempt: Int, totalCallbacks: Int) in
+            guard state.lastRouteEpochId == routeEpochId else {
+                return (false, state.attemptsInCurrentRoute, state.totalCallbacks)
+            }
+            let shouldRecover = Self.shouldTriggerMicNoCallbackRecovery(
+                btExternalMicProfileActive: btProfileActive,
+                totalCallbacks: state.totalCallbacks,
+                attemptsInCurrentRoute: state.attemptsInCurrentRoute,
+                isRecoveryInFlight: state.recoveryInFlight
+            )
+            guard shouldRecover else {
+                return (false, state.attemptsInCurrentRoute, state.totalCallbacks)
+            }
+            state.recoveryInFlight = true
+            state.attemptsInCurrentRoute += 1
+            return (true, state.attemptsInCurrentRoute, state.totalCallbacks)
+        }
+
+        guard startupRecoveryDecision.shouldRecover else { return }
+        await triggerMicLivenessRecovery(
+            reason: "startup_no_callbacks",
+            routeEpochId: routeEpochId,
+            attempt: startupRecoveryDecision.attempt,
+            consecutiveSilentCallbacks: 0,
+            totalCallbacks: startupRecoveryDecision.totalCallbacks,
+            sourceRms: nil,
+            pipelineRms: nil
+        )
+    }
+
+    private func triggerMicLivenessRecovery(
+        reason: String,
+        routeEpochId: Int,
+        attempt: Int,
+        consecutiveSilentCallbacks: Int,
+        totalCallbacks: Int,
+        sourceRms: Float?,
+        pipelineRms: Float?
+    ) async {
+        guard isRecording else {
+            _ = micLivenessRecoveryState.withLock { state in
+                if state.lastRouteEpochId == routeEpochId {
+                    state.recoveryInFlight = false
+                }
+            }
+            return
+        }
+
+        await DiagnosticLogger.shared.log(.aec,
+            "MIC_LIVENESS_RECOVERY: routeEpochId=\(routeEpochId), status=starting, reason=\(reason), attempt=\(attempt), consecutiveSilentCallbacks=\(consecutiveSilentCallbacks), totalCallbacks=\(totalCallbacks), sourceRms=\(sourceRms.map { String(format: "%.6f", $0) } ?? "n/a"), pipelineRms=\(pipelineRms.map { String(format: "%.6f", $0) } ?? "n/a")")
+
+        synchronizer.reset()
+        aecProcessor.reset()
+        resetAECRingsAndCounters()
+        stopMicrophoneCapture()
+        _ = captureStartupState.withLock { state in
+            state.sessionStartWallClock = CFAbsoluteTimeGetCurrent()
+            state.firstCaptureAudioLogged = false
+        }
+
+        do {
+            try startMicrophoneCapture()
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_LIVENESS_RECOVERY: routeEpochId=\(routeEpochId), status=success, reason=\(reason), attempt=\(attempt)")
+        } catch {
+            _ = micLivenessRecoveryState.withLock { state in
+                if state.lastRouteEpochId == routeEpochId {
+                    state.recoveryInFlight = false
+                }
+            }
+            logger.error("MIC_LIVENESS_RECOVERY failed for routeEpochId=\(routeEpochId): \(error.localizedDescription)")
+            warningHandler?(
+                .microphone,
+                "Webcam microphone recovery failed",
+                "Muesli detected silent microphone samples and attempted recovery, but restart failed. Error: \(error.localizedDescription)",
+                false
+            )
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_LIVENESS_RECOVERY: routeEpochId=\(routeEpochId), status=failed, reason=\(reason), attempt=\(attempt), error=\(error.localizedDescription)")
+        }
     }
 
     /// Handle microphone buffer from AVAudioEngine
@@ -1477,6 +1614,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             : 0
         let routeSnapshot = agentMicRouteSnapshotLock.withLock { state in state }
         let sourceSampleRate = buffer.format.sampleRate
+        let routeEpochID = routeEpochState.withLock { state in state }
         let firstCaptureAudio = captureStartupState.withLock { state -> (shouldLog: Bool, latencyMs: Double) in
             guard !state.firstCaptureAudioLogged else {
                 return (false, -1)
@@ -1492,10 +1630,70 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             return (true, -1)
         }
         if firstCaptureAudio.shouldLog {
-            let routeEpochID = routeEpochState.withLock { state in state }
             Task {
                 await DiagnosticLogger.shared.log(.aec,
                     "MIC_FIRST_AUDIO: latencyMs=\(String(format: "%.0f", firstCaptureAudio.latencyMs)), sourceRms=\(String(format: "%.4f", sourceRms)), pipelineRms=\(String(format: "%.4f", pipelineRms)), resamplerActive=\(resamplerActive), routeEpochId=\(routeEpochID)")
+            }
+        }
+        let silentRecoveryDecision = micLivenessRecoveryState.withLock { state -> (
+            shouldRecover: Bool,
+            attempt: Int,
+            consecutiveSilentCallbacks: Int,
+            totalCallbacks: Int
+        ) in
+            if state.lastRouteEpochId != routeEpochID {
+                state.lastRouteEpochId = routeEpochID
+                state.totalCallbacks = 0
+                state.consecutiveDigitalSilenceCallbacks = 0
+                state.attemptsInCurrentRoute = 0
+                state.recoveryInFlight = false
+            }
+
+            state.totalCallbacks += 1
+            let isDigitalSilence = sourceRms <= Self.micDigitalSilenceRmsThreshold
+                && pipelineRms <= Self.micDigitalSilenceRmsThreshold
+            state.consecutiveDigitalSilenceCallbacks = isDigitalSilence
+                ? state.consecutiveDigitalSilenceCallbacks + 1
+                : 0
+
+            let shouldRecover = Self.shouldTriggerMicSilentRecovery(
+                btExternalMicProfileActive: btExternalMicProfileActive,
+                sourceRms: sourceRms,
+                pipelineRms: pipelineRms,
+                consecutiveSilentCallbacks: state.consecutiveDigitalSilenceCallbacks,
+                attemptsInCurrentRoute: state.attemptsInCurrentRoute,
+                isRecoveryInFlight: state.recoveryInFlight
+            )
+
+            guard shouldRecover else {
+                return (
+                    false,
+                    state.attemptsInCurrentRoute,
+                    state.consecutiveDigitalSilenceCallbacks,
+                    state.totalCallbacks
+                )
+            }
+
+            state.recoveryInFlight = true
+            state.attemptsInCurrentRoute += 1
+            return (
+                true,
+                state.attemptsInCurrentRoute,
+                state.consecutiveDigitalSilenceCallbacks,
+                state.totalCallbacks
+            )
+        }
+        if silentRecoveryDecision.shouldRecover {
+            Task { [weak self] in
+                await self?.triggerMicLivenessRecovery(
+                    reason: "sustained_digital_silence",
+                    routeEpochId: routeEpochID,
+                    attempt: silentRecoveryDecision.attempt,
+                    consecutiveSilentCallbacks: silentRecoveryDecision.consecutiveSilentCallbacks,
+                    totalCallbacks: silentRecoveryDecision.totalCallbacks,
+                    sourceRms: sourceRms,
+                    pipelineRms: pipelineRms
+                )
             }
         }
         let telemetryDecision = agentMicSignalTelemetryLock.withLock { state -> (Bool, Bool, Bool, Int, String?) in
@@ -1903,6 +2101,37 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             ? Int(microphoneTapBufferSizeFramesBtProfile)
             : Int(microphoneTapBufferSizeFrames)
         return AVAudioFrameCount(max(expectedOutputFrames + margin, minimumCapacity))
+    }
+
+    nonisolated static func shouldTriggerMicSilentRecovery(
+        btExternalMicProfileActive: Bool,
+        sourceRms: Float,
+        pipelineRms: Float,
+        consecutiveSilentCallbacks: Int,
+        attemptsInCurrentRoute: Int,
+        isRecoveryInFlight: Bool,
+        silentRmsThreshold: Float = micDigitalSilenceRmsThreshold,
+        silentCallbackThreshold: Int = micSilentDetectionConsecutiveCallbacks,
+        maxAttemptsPerRoute: Int = micLivenessMaxRecoveryAttemptsPerRoute
+    ) -> Bool {
+        guard btExternalMicProfileActive else { return false }
+        guard !isRecoveryInFlight else { return false }
+        guard attemptsInCurrentRoute < maxAttemptsPerRoute else { return false }
+        guard sourceRms <= silentRmsThreshold, pipelineRms <= silentRmsThreshold else { return false }
+        return consecutiveSilentCallbacks >= silentCallbackThreshold
+    }
+
+    nonisolated static func shouldTriggerMicNoCallbackRecovery(
+        btExternalMicProfileActive: Bool,
+        totalCallbacks: Int,
+        attemptsInCurrentRoute: Int,
+        isRecoveryInFlight: Bool,
+        maxAttemptsPerRoute: Int = micLivenessMaxRecoveryAttemptsPerRoute
+    ) -> Bool {
+        guard btExternalMicProfileActive else { return false }
+        guard !isRecoveryInFlight else { return false }
+        guard totalCallbacks == 0 else { return false }
+        return attemptsInCurrentRoute < maxAttemptsPerRoute
     }
 
     nonisolated static func microphoneRouteRebindDecision(
