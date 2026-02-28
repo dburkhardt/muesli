@@ -1872,6 +1872,7 @@ final class RegressionTests: XCTestCase {
             return
         }
         XCTAssertEqual(summary.windowFrames, 100)
+        XCTAssertEqual(summary.invalidDelaySamples, 0)
         XCTAssertEqual(summary.erleBelow3Frames, 100)
         XCTAssertEqual(summary.deltaOver100Frames, 100)
         XCTAssertEqual(summary.coincidentFrames, 100)
@@ -1906,6 +1907,34 @@ final class RegressionTests: XCTestCase {
         XCTAssertEqual(summary.erleBelow3Frames, 0, "ERLE threshold should be strict (< 3.0dB)")
         XCTAssertEqual(summary.deltaOver100Frames, 0, "Delay threshold should be strict (> 100ms)")
         XCTAssertEqual(summary.coincidentFrames, 0)
+    }
+
+    func testPhase15RecordSampleSkipsDeltaWhenBridgeUnavailable() {
+        let aec = AECProcessor()
+        aec.setMode(.conservative)
+        aec.debugResetPhase15Counters()
+
+        var summary: AECPhase15Summary?
+        for _ in 0..<99 {
+            summary = aec.recordPhase15Sample(syncDelayMs: 200)
+            XCTAssertNil(summary)
+        }
+
+        summary = aec.recordPhase15Sample(syncDelayMs: 200)
+        guard let summary else {
+            XCTFail("Summary should emit at 100 frames")
+            return
+        }
+
+        XCTAssertEqual(summary.windowFrames, 100)
+        XCTAssertEqual(summary.invalidDelaySamples, 100, "All samples should be marked invalid without ready bridge delay")
+        XCTAssertEqual(summary.deltaOver100Frames, 0, "Invalid bridge delay must not count as >100ms mismatch")
+        XCTAssertEqual(summary.coincidentFrames, 0, "Coincidence must not increment for invalid delay samples")
+        XCTAssertEqual(summary.deltaBinLt20, 0)
+        XCTAssertEqual(summary.deltaBin20To49, 0)
+        XCTAssertEqual(summary.deltaBin50To99, 0)
+        XCTAssertEqual(summary.deltaBin100To199, 0)
+        XCTAssertEqual(summary.deltaBinGe200, 0)
     }
 
     func testDelayDecompositionSourceTagMapping() {

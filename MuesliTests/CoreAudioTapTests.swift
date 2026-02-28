@@ -593,10 +593,12 @@ final class CoreAudioTapTests: XCTestCase {
             requestedDelayMs: 220,
             source: .coarse,
             lastAppliedDelayMs: 180,
+            lastAppliedSource: .seeded,
             isStable: false,
             enabled: true
         )
         XCTAssertEqual(decision.delayMs, 180, "Unstable windows should hold last applied delay hint")
+        XCTAssertEqual(decision.source, .seeded, "Unstable hold should preserve last applied source")
         XCTAssertTrue(decision.heldInUnstableWindow, "Decision should mark unstable-window hold")
         XCTAssertFalse(decision.clamped)
     }
@@ -606,13 +608,31 @@ final class CoreAudioTapTests: XCTestCase {
             requestedDelayMs: 220,
             source: .coarse,
             lastAppliedDelayMs: 180,
+            lastAppliedSource: .seeded,
             isStable: true,
             enabled: true,
             slewLimitMsPerFrame: 8
         )
         XCTAssertEqual(decision.delayMs, 188, "Stable windows should apply slew-limited delay transitions")
+        XCTAssertEqual(decision.source, .coarse, "Stable path should keep requested source")
         XCTAssertTrue(decision.clamped)
         XCTAssertFalse(decision.heldInUnstableWindow)
+    }
+
+    func testPhase15RenderRmsUsesLatestWhenRenderUpdated() {
+        let renderRms = AudioWorker.phase15RenderRmsForFrame(
+            latestRenderRmsLinear: 0.25,
+            renderUpdatedThisIteration: true
+        )
+        XCTAssertEqual(renderRms, 0.25, accuracy: 0.000_1)
+    }
+
+    func testPhase15RenderRmsZeroFillsWhenRenderNotUpdated() {
+        let renderRms = AudioWorker.phase15RenderRmsForFrame(
+            latestRenderRmsLinear: 0.25,
+            renderUpdatedThisIteration: false
+        )
+        XCTAssertEqual(renderRms, 0, accuracy: 0.000_1)
     }
 }
 

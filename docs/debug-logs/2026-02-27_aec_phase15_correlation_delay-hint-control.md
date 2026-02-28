@@ -131,3 +131,22 @@ if let phaseSummary = aecProcessor.recordPhase15Sample(syncDelayMs: syncCoarseDe
   1. Set `UserDefaults.standard.set(false, forKey: "aecDelayHintControlEnabled")`
   2. Relaunch app
   3. Compare `AEC_PHASE15`/ERLE behavior with flag off vs on
+
+## Follow-up Corrections (edc5af3)
+
+### 1) Bridge-unavailable gating in Phase 1.5
+
+- `recordPhase15Sample(syncDelayMs:)` now uses an explicit invalid sentinel for bridge delay (`-1`) when bridge is unavailable/not ready.
+- Invalid-delay samples are excluded from delta threshold, coincidence, and histogram bin counting.
+- Added `invalidDelaySamples` in `AEC_PHASE15` / `AEC_PHASE15_CSV` for observability of startup or bridge-unready windows.
+
+### 2) Cadence-safe render RMS policy
+
+- Canonical policy: when no render frame is consumed in a worker iteration, Phase 1.5 render RMS uses zero-fill for capture-frame aligned accumulation.
+- This prevents stale carry-forward from prior render iterations from biasing regime classification and collapse streak detection.
+
+### 3) Delay-hint source attribution (`requested` vs `applied`)
+
+- Unstable-window hold now preserves both the previous applied delay value and previous applied source.
+- `streamDelaySource` reflects the source that actually produced the applied hint, not the newly requested source during hold.
+- Startup edge behavior is explicit: if no valid hint has been applied yet, source remains `.unknown`.

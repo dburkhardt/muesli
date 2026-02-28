@@ -92,6 +92,7 @@ struct AECStats {
 struct AECPhase15Summary {
     let windowFrames: Int64
     let totalFrames: Int64
+    let invalidDelaySamples: Int64
     let erleBelow3Frames: Int64
     let deltaOver100Frames: Int64
     let coincidentFrames: Int64
@@ -163,11 +164,13 @@ final class AECProcessor {
         var phaseErleBelow3Frames: Int64 = 0
         var phaseDeltaOver100Frames: Int64 = 0
         var phaseCoincidentFrames: Int64 = 0
+        var phaseInvalidDelaySamples: Int64 = 0
         // Phase 1.5 1-second window counters (100 frames @ 10ms)
         var phaseWindowFrames: Int64 = 0
         var phaseWindowErleBelow3Frames: Int64 = 0
         var phaseWindowDeltaOver100Frames: Int64 = 0
         var phaseWindowCoincidentFrames: Int64 = 0
+        var phaseWindowInvalidDelaySamples: Int64 = 0
         // Fixed-size delta histogram bins (window scoped)
         var phaseWindowDeltaBinLt20: Int64 = 0
         var phaseWindowDeltaBin20To49: Int64 = 0
@@ -539,22 +542,27 @@ final class AECProcessor {
     private static let phase15WindowFramesTarget: Int64 = 100
     private static let phase15LowErleThresholdDb: Float = 3.0
     private static let phase15DeltaThresholdMs: Int = 100
+    private static let invalidDelayMs = -1
 
     /// Record one worker-thread Phase 1.5 sample and emit a fixed-size summary at 1Hz.
     /// This API is worker-only and must not be called from callback/RT paths.
     func recordPhase15Sample(syncDelayMs: Int) -> AECPhase15Summary? {
         stateLock.withLock { state -> AECPhase15Summary? in
             guard state.mode != .off else { return nil }
+            let bridgeDelayForPhase: Int
 
             if let bridge = state.bridge, bridge.isReady {
                 state.stats.erleDb = bridge.getERLE()
                 state.stats.delayMs = Int(bridge.getDelayMs())
+                bridgeDelayForPhase = state.stats.delayMs
+            } else {
+                bridgeDelayForPhase = Self.invalidDelayMs
             }
 
             return Self.updatePhase15CountersLocked(
                 state: &state,
                 erleDb: state.stats.erleDb,
-                bridgeDelayMs: state.stats.delayMs,
+                bridgeDelayMs: bridgeDelayForPhase,
                 syncDelayMs: syncDelayMs
             )
         }
@@ -827,6 +835,9 @@ final class AECProcessor {
             default:
                 state.phaseWindowDeltaBinGe200 += 1
             }
+        } else {
+            state.phaseInvalidDelaySamples += 1
+            state.phaseWindowInvalidDelaySamples += 1
         }
 
         guard state.phaseWindowFrames >= phase15WindowFramesTarget else { return nil }
@@ -837,6 +848,7 @@ final class AECProcessor {
         let summary = AECPhase15Summary(
             windowFrames: state.phaseWindowFrames,
             totalFrames: state.phaseTotalFrames,
+            invalidDelaySamples: state.phaseWindowInvalidDelaySamples,
             erleBelow3Frames: state.phaseWindowErleBelow3Frames,
             deltaOver100Frames: state.phaseWindowDeltaOver100Frames,
             coincidentFrames: state.phaseWindowCoincidentFrames,
@@ -858,6 +870,7 @@ final class AECProcessor {
         state.phaseWindowErleBelow3Frames = 0
         state.phaseWindowDeltaOver100Frames = 0
         state.phaseWindowCoincidentFrames = 0
+        state.phaseWindowInvalidDelaySamples = 0
         state.phaseWindowDeltaBinLt20 = 0
         state.phaseWindowDeltaBin20To49 = 0
         state.phaseWindowDeltaBin50To99 = 0
@@ -870,6 +883,7 @@ final class AECProcessor {
         state.phaseErleBelow3Frames = 0
         state.phaseDeltaOver100Frames = 0
         state.phaseCoincidentFrames = 0
+        state.phaseInvalidDelaySamples = 0
         resetPhase15WindowLocked(state: &state)
     }
 
