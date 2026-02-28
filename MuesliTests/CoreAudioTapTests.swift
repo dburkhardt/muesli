@@ -619,6 +619,70 @@ final class CoreAudioTapTests: XCTestCase {
         XCTAssertFalse(decision.heldInUnstableWindow)
     }
 
+    func testAudioWorkerStartupGateTransitionsToDelayReadyAfterRenderWarmup() {
+        let transition = AudioWorker.transitionStartupGateState(
+            currentState: .waitingRenderReady,
+            renderReadyStreak: 5,
+            delayReadyStreak: 0,
+            elapsedMs: 500,
+            renderReadyFrames: 5,
+            delayReadyFrames: 10,
+            timeoutMs: 15_000
+        )
+        XCTAssertEqual(transition.nextState, .waitingDelayReady)
+        XCTAssertNil(transition.releaseReason)
+    }
+
+    func testAudioWorkerStartupGateTransitionsToFullAfterDelayReady() {
+        let transition = AudioWorker.transitionStartupGateState(
+            currentState: .waitingDelayReady,
+            renderReadyStreak: 5,
+            delayReadyStreak: 10,
+            elapsedMs: 1_000,
+            renderReadyFrames: 5,
+            delayReadyFrames: 10,
+            timeoutMs: 15_000
+        )
+        XCTAssertEqual(transition.nextState, .fullAdaptation)
+        XCTAssertEqual(transition.releaseReason, "render_and_delay_ready")
+    }
+
+    func testAudioWorkerStartupGateTransitionsToGuardedOnTimeout() {
+        let transition = AudioWorker.transitionStartupGateState(
+            currentState: .waitingRenderReady,
+            renderReadyStreak: 0,
+            delayReadyStreak: 0,
+            elapsedMs: 15_000,
+            renderReadyFrames: 5,
+            delayReadyFrames: 10,
+            timeoutMs: 15_000
+        )
+        XCTAssertEqual(transition.nextState, .guardedTimeout)
+        XCTAssertEqual(transition.releaseReason, "timeout_guarded")
+    }
+
+    func testRouteCoalesceDelayHonorsMaxWindowCap() {
+        let firstEvent = Date(timeIntervalSince1970: 1000)
+        let delayNearStart = TapAudioCaptureService.nextRouteCoalesceDelayMs(
+            firstEventAt: firstEvent,
+            now: Date(timeIntervalSince1970: 1000.2)
+        )
+        XCTAssertEqual(delayNearStart, 1500, "Early clustered events should use full debounce window")
+
+        let delayNearCap = TapAudioCaptureService.nextRouteCoalesceDelayMs(
+            firstEventAt: firstEvent,
+            now: Date(timeIntervalSince1970: 1003.8)
+        )
+        XCTAssertTrue((199...201).contains(delayNearCap),
+                      "Delay should shrink as max coalescing cap is approached")
+
+        let delayPastCap = TapAudioCaptureService.nextRouteCoalesceDelayMs(
+            firstEventAt: firstEvent,
+            now: Date(timeIntervalSince1970: 1004.2)
+        )
+        XCTAssertEqual(delayPastCap, 0, "Delay should clamp to zero once max coalescing window is exceeded")
+    }
+
     func testPhase15RenderRmsUsesLatestWhenRenderUpdated() {
         let renderRms = AudioWorker.phase15RenderRmsForFrame(
             latestRenderRmsLinear: 0.25,

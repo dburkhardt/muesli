@@ -31,6 +31,37 @@ enum CoreAudioError: Error {
     }
 }
 
+enum AudioDeviceTransport: String {
+    case builtIn
+    case aggregate
+    case virtual
+    case pci
+    case usb
+    case fireWire
+    case bluetooth
+    case bluetoothLE
+    case hdmi
+    case displayPort
+    case airPlay
+    case avb
+    case unknown
+}
+
+struct AudioRouteSnapshot {
+    let inputDeviceID: AudioDeviceID
+    let outputDeviceID: AudioDeviceID
+    let inputUID: String
+    let outputUID: String
+    let inputName: String
+    let outputName: String
+    let inputTransport: AudioDeviceTransport
+    let outputTransport: AudioDeviceTransport
+    let topologyMode: DeviceTopologyMode
+    let isBluetoothOutput: Bool
+    let isExternalInput: Bool
+    let isBluetoothExternalMicProfile: Bool
+}
+
 /// Core Audio utility functions
 struct CoreAudioHelpers {
     // MARK: - Device Discovery
@@ -186,6 +217,33 @@ struct CoreAudioHelpers {
         return nameCFString as String
     }
 
+    /// Get transport type for a given device.
+    static func getDeviceTransportType(_ deviceID: AudioDeviceID) throws -> UInt32 {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var transportType: UInt32 = 0
+        var propertySize = UInt32(MemoryLayout<UInt32>.size)
+
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &transportType
+        )
+
+        guard status == noErr else {
+            throw CoreAudioError.apiError(status)
+        }
+
+        return transportType
+    }
+
     /// Check if input and output device UIDs match (headset mode detection)
     static func isHeadsetMode(inputDeviceID: AudioDeviceID, outputDeviceID: AudioDeviceID) -> Bool {
         guard let inputUID = try? getDeviceUID(inputDeviceID),
@@ -233,28 +291,90 @@ struct CoreAudioHelpers {
 
     // MARK: - Device Topology Detection
 
+    static func transportFromRaw(_ rawValue: UInt32) -> AudioDeviceTransport {
+        switch rawValue {
+        case kAudioDeviceTransportTypeBuiltIn:
+            return .builtIn
+        case kAudioDeviceTransportTypeAggregate:
+            return .aggregate
+        case kAudioDeviceTransportTypeVirtual:
+            return .virtual
+        case kAudioDeviceTransportTypePCI:
+            return .pci
+        case kAudioDeviceTransportTypeUSB:
+            return .usb
+        case kAudioDeviceTransportTypeFireWire:
+            return .fireWire
+        case kAudioDeviceTransportTypeBluetooth:
+            return .bluetooth
+        case kAudioDeviceTransportTypeBluetoothLE:
+            return .bluetoothLE
+        case kAudioDeviceTransportTypeHDMI:
+            return .hdmi
+        case kAudioDeviceTransportTypeDisplayPort:
+            return .displayPort
+        case kAudioDeviceTransportTypeAirPlay:
+            return .airPlay
+        case kAudioDeviceTransportTypeAVB:
+            return .avb
+        default:
+            return .unknown
+        }
+    }
+
+    static func currentRouteSnapshot() -> AudioRouteSnapshot? {
+        guard let inputDeviceID = try? getDefaultInputDevice(),
+              let outputDeviceID = try? getDefaultOutputDevice() else {
+            return nil
+        }
+
+        let inputUID = (try? getDeviceUID(inputDeviceID)) ?? "unknown"
+        let outputUID = (try? getDeviceUID(outputDeviceID)) ?? "unknown"
+        let inputName = (try? getDeviceName(inputDeviceID)) ?? "unknown"
+        let outputName = (try? getDeviceName(outputDeviceID)) ?? "unknown"
+
+        let inputTransportRaw = (try? getDeviceTransportType(inputDeviceID)) ?? 0
+        let outputTransportRaw = (try? getDeviceTransportType(outputDeviceID)) ?? 0
+        let inputTransport = transportFromRaw(inputTransportRaw)
+        let outputTransport = transportFromRaw(outputTransportRaw)
+
+        let isHeadset = inputUID == outputUID
+        let topology: DeviceTopologyMode = isHeadset ? .headset : .speakerphone
+        let outputBluetoothByTransport = outputTransport == .bluetooth || outputTransport == .bluetoothLE
+        let outputBluetoothByHeuristic =
+            outputUID.localizedCaseInsensitiveContains("bluetooth")
+            || outputName.localizedCaseInsensitiveContains("bluetooth")
+        let isBluetoothOutput = outputBluetoothByTransport || outputBluetoothByHeuristic
+
+        let inputBuiltInByTransport = inputTransport == .builtIn
+        let inputBuiltInByHeuristic =
+            inputUID.localizedCaseInsensitiveContains("builtin")
+            || inputName.localizedCaseInsensitiveContains("built-in")
+            || inputName.localizedCaseInsensitiveContains("macbook")
+            || inputName.localizedCaseInsensitiveContains("internal microphone")
+        let isExternalInput = !(inputBuiltInByTransport || inputBuiltInByHeuristic)
+        let isBluetoothExternalMicProfile = isBluetoothOutput && isExternalInput && !isHeadset
+
+        return AudioRouteSnapshot(
+            inputDeviceID: inputDeviceID,
+            outputDeviceID: outputDeviceID,
+            inputUID: inputUID,
+            outputUID: outputUID,
+            inputName: inputName,
+            outputName: outputName,
+            inputTransport: inputTransport,
+            outputTransport: outputTransport,
+            topologyMode: topology,
+            isBluetoothOutput: isBluetoothOutput,
+            isExternalInput: isExternalInput,
+            isBluetoothExternalMicProfile: isBluetoothExternalMicProfile
+        )
+    }
+
     /// Detect device topology mode (headset vs speakerphone)
     /// - Returns: .headset if input/output share same UID (e.g., AirPods), .speakerphone otherwise
     static func detectTopologyMode() -> DeviceTopologyMode {
-        guard let inputDeviceID = try? getDefaultInputDevice(),
-              let outputDeviceID = try? getDefaultOutputDevice() else {
-            return .unknown
-        }
-
-        if isHeadsetMode(inputDeviceID: inputDeviceID, outputDeviceID: outputDeviceID) {
-            return .headset
-        }
-
-        // Check for Bluetooth or AirPlay output (speakerphone indicators)
-        if let outputUID = try? getDeviceUID(outputDeviceID) {
-            // Bluetooth and AirPlay devices typically have UIDs containing these
-            if outputUID.contains("Bluetooth") || outputUID.contains("AirPlay") {
-                return .speakerphone
-            }
-        }
-
-        // Default to speakerphone for separate input/output devices
-        return .speakerphone
+        currentRouteSnapshot()?.topologyMode ?? .unknown
     }
 
     // MARK: - Route Change Notification

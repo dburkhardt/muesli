@@ -36,6 +36,14 @@ struct AudioWorkerStats {
     var isRunning: Bool = false
 }
 
+enum AudioWorkerStartupGateState: String {
+    case inactive
+    case waitingRenderReady
+    case waitingDelayReady
+    case guardedTimeout
+    case fullAdaptation
+}
+
 // MARK: - Audio Worker
 
 /// High-priority audio worker for non-RT processing.
@@ -63,6 +71,13 @@ final class AudioWorker {
         let source: AECStreamDelayHintSource
         let clamped: Bool
         let heldInUnstableWindow: Bool
+    }
+
+    private struct StartupGateConfig {
+        let renderReadyFrames: Int
+        let delayReadyFrames: Int
+        let timeoutMs: Int
+        let renderThresholdLinear: Float
     }
     // MARK: - Configuration
 
@@ -97,6 +112,10 @@ final class AudioWorker {
 
     /// Closure to query whether AEC is enabled (RT-safe: reads OSAllocatedUnfairLock).
     private let isAECEnabled: @Sendable () -> Bool
+    /// Closure returning current coalesced route epoch ID.
+    private let routeEpochProvider: @Sendable () -> Int
+    /// Closure returning whether BT-output + external-mic profile is active.
+    private let isBtExternalMicProfileActive: @Sendable () -> Bool
 
     /// Callback for processed microphone frames.
     private var processedMicCallback: ProcessedMicFrameCallback?
@@ -159,8 +178,17 @@ final class AudioWorker {
     private let diagnosticsEnabled: Bool
     private let diagnosticsVerboseEnabled: Bool
     private let delayHintControlEnabled: Bool
+    private let btStartupGateEnabled: Bool
+    private let startupGateConfig: StartupGateConfig
+    private var startupGateState: AudioWorkerStartupGateState = .inactive
+    private var startupGateReleaseReason: String = "disabled"
+    private var startupGateRenderReadyStreak: Int = 0
+    private var startupGateDelayReadyStreak: Int = 0
+    private var startupGateStartTime: TimeInterval = 0
+    private var startupGateRouteEpoch: Int = 0
     private var passThroughWindow = PassThroughWindow()
     private var passThroughSuspiciousSeconds: Int = 0
+    private var passThroughLowAttenuationSeconds: Int = 0
     private var delayWindow = DelayWindow()
     private var latestRenderRmsLinear: Float = 0
     private var phase15RenderRmsAccumulator: Double = 0
@@ -185,13 +213,17 @@ final class AudioWorker {
         aecProcessor: AECProcessor,
         popRenderAECFrame: @escaping PopAECFrameCallback,
         popCaptureAECFrame: @escaping PopAECFrameCallback,
-        isAECEnabled: @escaping @Sendable () -> Bool = { true }
+        isAECEnabled: @escaping @Sendable () -> Bool = { true },
+        routeEpochProvider: @escaping @Sendable () -> Int = { 0 },
+        isBtExternalMicProfileActive: @escaping @Sendable () -> Bool = { false }
     ) {
         self.synchronizer = synchronizer
         self.aecProcessor = aecProcessor
         self.popRenderAECFrame = popRenderAECFrame
         self.popCaptureAECFrame = popCaptureAECFrame
         self.isAECEnabled = isAECEnabled
+        self.routeEpochProvider = routeEpochProvider
+        self.isBtExternalMicProfileActive = isBtExternalMicProfileActive
         self.processingTimesRing = [Double](repeating: 0, count: processingTimeHistorySize)
         let defaults = UserDefaults.standard
         #if DEBUG
@@ -202,6 +234,18 @@ final class AudioWorker {
         self.diagnosticsVerboseEnabled = defaults.bool(forKey: "AECDiagnosticsVerbose")
         #endif
         self.delayHintControlEnabled = (defaults.object(forKey: "aecDelayHintControlEnabled") as? Bool) ?? true
+        self.btStartupGateEnabled = (defaults.object(forKey: "aecBtHardeningStartupGateEnabled") as? Bool) ?? true
+        let startupRenderReadyFrames = (defaults.object(forKey: "aecBtHardeningStartupRenderReadyFrames") as? Int) ?? 5
+        let startupDelayReadyFrames = (defaults.object(forKey: "aecBtHardeningStartupDelayReadyFrames") as? Int) ?? 10
+        let startupTimeoutMs = (defaults.object(forKey: "aecBtHardeningStartupTimeoutMs") as? Int) ?? 15_000
+        let startupRenderThresholdDbfs = (defaults.object(forKey: "aecBtHardeningRenderThresholdDbfs") as? Double) ?? -45.0
+        let startupRenderThresholdLinear = max(Float(pow(10.0, startupRenderThresholdDbfs / 20.0)), 0.00001)
+        self.startupGateConfig = StartupGateConfig(
+            renderReadyFrames: max(1, startupRenderReadyFrames),
+            delayReadyFrames: max(1, startupDelayReadyFrames),
+            timeoutMs: max(1000, startupTimeoutMs),
+            renderThresholdLinear: startupRenderThresholdLinear
+        )
 
         assert(renderFrameBuffer.count == Self.frameSizeSamples)
         assert(captureFrameBuffer.count == Self.frameSizeSamples)
@@ -256,6 +300,42 @@ final class AudioWorker {
         return (requestedDelayMs, source, false, false)
     }
 
+    static func transitionStartupGateState(
+        currentState: AudioWorkerStartupGateState,
+        renderReadyStreak: Int,
+        delayReadyStreak: Int,
+        elapsedMs: Int,
+        renderReadyFrames: Int,
+        delayReadyFrames: Int,
+        timeoutMs: Int
+    ) -> (nextState: AudioWorkerStartupGateState, releaseReason: String?) {
+        switch currentState {
+        case .inactive, .fullAdaptation:
+            return (currentState, nil)
+        case .waitingRenderReady:
+            if renderReadyStreak >= renderReadyFrames {
+                return (.waitingDelayReady, nil)
+            }
+            if elapsedMs >= timeoutMs {
+                return (.guardedTimeout, "timeout_guarded")
+            }
+            return (.waitingRenderReady, nil)
+        case .waitingDelayReady:
+            if renderReadyStreak >= renderReadyFrames && delayReadyStreak >= delayReadyFrames {
+                return (.fullAdaptation, "render_and_delay_ready")
+            }
+            if elapsedMs >= timeoutMs {
+                return (.guardedTimeout, "timeout_guarded")
+            }
+            return (.waitingDelayReady, nil)
+        case .guardedTimeout:
+            if renderReadyStreak >= renderReadyFrames && delayReadyStreak >= delayReadyFrames {
+                return (.fullAdaptation, "delayed_readiness_after_timeout")
+            }
+            return (.guardedTimeout, nil)
+        }
+    }
+
     static func phase15RenderRmsForFrame(
         latestRenderRmsLinear: Float,
         renderUpdatedThisIteration: Bool
@@ -293,10 +373,19 @@ final class AudioWorker {
 
         let logDelayHintControlEnabled = delayHintControlEnabled
         let logDiagnosticsVerboseEnabled = diagnosticsVerboseEnabled
+        resetStartupGateForCurrentRoute(reason: "worker_start")
+        let logStartupState = startupGateState.rawValue
+        let logStartupReason = startupGateReleaseReason
+        let logStartupEnabled = btStartupGateEnabled
+        let logBtProfileActive = isBtExternalMicProfileActive()
+        let logRouteEpochID = startupGateRouteEpoch
         let delayHintConfigMessage =
             "AEC_DELAY_HINT_CONTROL_CONFIG: enabled=\(logDelayHintControlEnabled), slewLimitMsPerFrame=\(Self.delayHintSlewLimitMsPerFrame), diagnosticsVerbose=\(logDiagnosticsVerboseEnabled)"
+        let flagsSnapshotMessage =
+            "AEC_FLAGS_SNAPSHOT: aecTelemetryVersion=2, routeEpochId=\(logRouteEpochID), btExternalMicProfile=\(logBtProfileActive), delayHintControlEnabled=\(logDelayHintControlEnabled), btStartupGateEnabled=\(logStartupEnabled), startupRenderReadyFrames=\(startupGateConfig.renderReadyFrames), startupDelayReadyFrames=\(startupGateConfig.delayReadyFrames), startupTimeoutMs=\(startupGateConfig.timeoutMs), startupRenderThresholdLinear=\(String(format: "%.5f", startupGateConfig.renderThresholdLinear)), startupGateState=\(logStartupState), startupGateReleaseReason=\(logStartupReason)"
         Task.detached(priority: nil) {
             await DiagnosticLogger.shared.log(.aec, "AUDIO_WORKER_START")
+            await DiagnosticLogger.shared.log(.aec, flagsSnapshotMessage)
             await DiagnosticLogger.shared.log(.aec, delayHintConfigMessage)
         }
     }
@@ -362,8 +451,15 @@ final class AudioWorker {
         processingTimesCount = 0
         passThroughWindow = PassThroughWindow()
         passThroughSuspiciousSeconds = 0
+        passThroughLowAttenuationSeconds = 0
         delayWindow = DelayWindow()
         latestRenderRmsLinear = 0
+        startupGateState = .inactive
+        startupGateReleaseReason = "reset"
+        startupGateRenderReadyStreak = 0
+        startupGateDelayReadyStreak = 0
+        startupGateStartTime = 0
+        startupGateRouteEpoch = routeEpochProvider()
         phase15RenderRmsAccumulator = 0
         phase15CaptureRmsAccumulator = 0
         phase15RmsFrameCount = 0
@@ -416,6 +512,7 @@ final class AudioWorker {
     private func processAvailableFrames() {
         let maxFramesPerIteration = 10
         let aecEnabled = isAECEnabled()
+        refreshStartupGateForRouteEpochChange()
 
         // 1) Feed render stream first, but keep lead bounded.
         //    Skip entirely if AEC is disabled — no point feeding render to a disabled processor.
@@ -436,12 +533,18 @@ final class AudioWorker {
                     break
                 }
 
-                _ = aecProcessor.feedRenderFrame(renderFrameBuffer, isStable: synchronizer.isStable)
+                let syncIsStableForRender = synchronizer.isStable
+                let adaptationStableForRender = startupGateAllowsAdaptation(
+                    syncIsStable: syncIsStableForRender,
+                    delaySourceTag: nil
+                )
+                _ = aecProcessor.feedRenderFrame(renderFrameBuffer, isStable: adaptationStableForRender)
                 renderFedCount += 1
                 renderFedThisIteration += 1
 
                 // Accumulate render RMS for telemetry
                 let renderRms = computeRMS(renderFrameBuffer)
+                updateStartupRenderReadyStreak(renderRms: renderRms)
                 renderRmsAccumulator += Double(renderRms)
                 rmsFrameCount += 1
                 latestRenderRmsLinear = renderRms
@@ -539,13 +642,18 @@ final class AudioWorker {
                 let syncCoarseDelayMs = synchronizer.coarseDelayMs
                 let syncSeededDelayMs = synchronizer.seededDelayMs
                 let syncIsStable = synchronizer.isStable
+                let delayDecomposition = synchronizer.delayDecompositionSnapshot()
+                let adaptationStable = startupGateAllowsAdaptation(
+                    syncIsStable: syncIsStable,
+                    delaySourceTag: delayDecomposition.sourceTag
+                )
                 let delayHint = Self.selectStreamDelayHint(
                     coarseDelayMs: syncCoarseDelayMs,
                     seededDelayMs: syncSeededDelayMs
                 )
                 let controlledDelayHint = applyDelayHintControl(
                     selectedHint: delayHint,
-                    isStable: syncIsStable
+                    isStable: adaptationStable
                 )
                 if controlledDelayHint.clamped {
                     phase15DelayHintClampCount += 1
@@ -571,7 +679,7 @@ final class AudioWorker {
 
                 processedCapture = aecProcessor.processCaptureFrame(
                     captureFrameBuffer,
-                    isStable: syncIsStable
+                    isStable: adaptationStable
                 )
 
                 // Worker-owned Phase 1.5 correlation accumulation (1Hz snapshots).
@@ -585,7 +693,6 @@ final class AudioWorker {
                 phase15CaptureRmsAccumulator += Double(captureRms)
                 phase15RmsFrameCount += 1
                 if let phaseSummary = aecProcessor.recordPhase15Sample(syncDelayMs: syncCoarseDelayMs) {
-                    let delayDecomposition = synchronizer.delayDecompositionSnapshot()
                     emitPhase15Summary(
                         summary: phaseSummary,
                         delayDecomposition: delayDecomposition
@@ -663,6 +770,97 @@ final class AudioWorker {
         }
     }
 
+    private func refreshStartupGateForRouteEpochChange() {
+        let epoch = routeEpochProvider()
+        if epoch != startupGateRouteEpoch {
+            resetStartupGateForCurrentRoute(reason: "route_epoch_changed")
+        }
+    }
+
+    private func resetStartupGateForCurrentRoute(reason: String) {
+        startupGateRouteEpoch = routeEpochProvider()
+        startupGateRenderReadyStreak = 0
+        startupGateDelayReadyStreak = 0
+        startupGateStartTime = Date().timeIntervalSince1970
+
+        let gateActive = btStartupGateEnabled && isBtExternalMicProfileActive()
+        if gateActive {
+            startupGateState = .waitingRenderReady
+            startupGateReleaseReason = "pending"
+        } else {
+            startupGateState = .inactive
+            startupGateReleaseReason = "disabled_or_non_bt_profile"
+        }
+
+        let routeEpoch = startupGateRouteEpoch
+        let state = startupGateState.rawValue
+        let releaseReason = startupGateReleaseReason
+        Task.detached(priority: nil) {
+            await DiagnosticLogger.shared.log(.aec,
+                "AEC_STARTUP_GATE_RESET: routeEpochId=\(routeEpoch), reason=\(reason), state=\(state), releaseReason=\(releaseReason)")
+        }
+    }
+
+    private func updateStartupRenderReadyStreak(renderRms: Float) {
+        guard startupGateState != .inactive && startupGateState != .fullAdaptation else { return }
+        if renderRms >= startupGateConfig.renderThresholdLinear {
+            startupGateRenderReadyStreak += 1
+        } else {
+            startupGateRenderReadyStreak = 0
+        }
+    }
+
+    private func startupGateAllowsAdaptation(
+        syncIsStable: Bool,
+        delaySourceTag: DelayDecompositionSourceTag?
+    ) -> Bool {
+        if startupGateState == .inactive {
+            return syncIsStable
+        }
+
+        if let delaySourceTag {
+            if delaySourceTag != .unavailable {
+                startupGateDelayReadyStreak += 1
+            } else {
+                startupGateDelayReadyStreak = 0
+            }
+        }
+
+        let elapsedMs = max(0, Int((Date().timeIntervalSince1970 - startupGateStartTime) * 1000.0))
+        let transition = Self.transitionStartupGateState(
+            currentState: startupGateState,
+            renderReadyStreak: startupGateRenderReadyStreak,
+            delayReadyStreak: startupGateDelayReadyStreak,
+            elapsedMs: elapsedMs,
+            renderReadyFrames: startupGateConfig.renderReadyFrames,
+            delayReadyFrames: startupGateConfig.delayReadyFrames,
+            timeoutMs: startupGateConfig.timeoutMs
+        )
+
+        if transition.nextState != startupGateState {
+            let previousState = startupGateState
+            startupGateState = transition.nextState
+            if let releaseReason = transition.releaseReason {
+                startupGateReleaseReason = releaseReason
+            }
+            let routeEpoch = startupGateRouteEpoch
+            let prev = previousState.rawValue
+            let next = startupGateState.rawValue
+            let releaseReason = startupGateReleaseReason
+            let renderStreak = startupGateRenderReadyStreak
+            let delayStreak = startupGateDelayReadyStreak
+            Task.detached(priority: nil) {
+                await DiagnosticLogger.shared.log(.aec,
+                    "AEC_STARTUP_GATE_TRANSITION: routeEpochId=\(routeEpoch), from=\(prev), to=\(next), releaseReason=\(releaseReason), elapsedMs=\(elapsedMs), renderReadyStreak=\(renderStreak), delayReadyStreak=\(delayStreak)")
+            }
+        }
+
+        if startupGateState == .fullAdaptation {
+            return syncIsStable
+        }
+        return false
+    }
+
     private func applyDelayHintControl(
         selectedHint: (delayMs: Int, source: AECStreamDelayHintSource),
         isStable: Bool
@@ -717,7 +915,7 @@ final class AudioWorker {
         phase15PreviousTimestampSeconds = now
 
         let summaryLine =
-            "AEC_PHASE15: windowFrames=\(summary.windowFrames), totalFrames=\(summary.totalFrames), invalidDelaySamples=\(summary.invalidDelaySamples), erleBelow3Pct=\(String(format: "%.1f", summary.erleBelow3Pct)), deltaOver100Pct=\(String(format: "%.1f", summary.deltaOver100Pct)), coincidencePct=\(String(format: "%.1f", summary.coincidencePct)), regime=\(regime), collapseSeconds=\(phase15ConsecutiveCollapseSeconds), collapseAlert=\(collapseAlert), coarseDelayMs=\(delayDecomposition.coarseDelayMs), seededDelayMs=\(delayDecomposition.seededDelayMs), sourceTag=\(delayDecomposition.sourceTag.rawValue), driftPpm=\(String(format: "%.1f", delayDecomposition.driftPPM)), driftAdjustMsPerSec=\(String(format: "%.3f", delayDecomposition.driftAdjustmentMsPerSec)), effectiveDelayMs=\(String(format: "%.3f", delayDecomposition.effectiveCoarseDelayMs)), coarseSlopeMsPerSec=\(String(format: "%.3f", coarseSlopeMsPerSec)), delayHintClampCount=\(phase15DelayHintClampCount), delayHintHoldCount=\(phase15DelayHintHoldCount)"
+            "AEC_PHASE15: windowFrames=\(summary.windowFrames), totalFrames=\(summary.totalFrames), invalidDelaySamples=\(summary.invalidDelaySamples), erleBelow3Pct=\(String(format: "%.1f", summary.erleBelow3Pct)), deltaOver100Pct=\(String(format: "%.1f", summary.deltaOver100Pct)), coincidencePct=\(String(format: "%.1f", summary.coincidencePct)), regime=\(regime), collapseSeconds=\(phase15ConsecutiveCollapseSeconds), collapseAlert=\(collapseAlert), coarseDelayMs=\(delayDecomposition.coarseDelayMs), seededDelayMs=\(delayDecomposition.seededDelayMs), sourceTag=\(delayDecomposition.sourceTag.rawValue), driftPpm=\(String(format: "%.1f", delayDecomposition.driftPPM)), driftAdjustMsPerSec=\(String(format: "%.3f", delayDecomposition.driftAdjustmentMsPerSec)), effectiveDelayMs=\(String(format: "%.3f", delayDecomposition.effectiveCoarseDelayMs)), coarseSlopeMsPerSec=\(String(format: "%.3f", coarseSlopeMsPerSec)), delayHintClampCount=\(phase15DelayHintClampCount), delayHintHoldCount=\(phase15DelayHintHoldCount), routeEpochId=\(startupGateRouteEpoch), startupGateState=\(startupGateState.rawValue), startupGateReleaseReason=\(startupGateReleaseReason)"
 
         Task.detached(priority: nil) {
             await DiagnosticLogger.shared.log(.aec, summaryLine)
@@ -725,7 +923,7 @@ final class AudioWorker {
 
         if diagnosticsVerboseEnabled {
             let csvLine =
-                "AEC_PHASE15_CSV: windowFrames=\(summary.windowFrames),totalFrames=\(summary.totalFrames),invalidDelaySamples=\(summary.invalidDelaySamples),erleBelow3Frames=\(summary.erleBelow3Frames),deltaOver100Frames=\(summary.deltaOver100Frames),coincidentFrames=\(summary.coincidentFrames),erleBelow3Pct=\(String(format: "%.3f", summary.erleBelow3Pct)),deltaOver100Pct=\(String(format: "%.3f", summary.deltaOver100Pct)),coincidencePct=\(String(format: "%.3f", summary.coincidencePct)),deltaBinLt20=\(summary.deltaBinLt20),deltaBin20To49=\(summary.deltaBin20To49),deltaBin50To99=\(summary.deltaBin50To99),deltaBin100To199=\(summary.deltaBin100To199),deltaBinGe200=\(summary.deltaBinGe200),regime=\(regime),collapseSeconds=\(phase15ConsecutiveCollapseSeconds),collapseAlert=\(collapseAlert),coarseDelayMs=\(delayDecomposition.coarseDelayMs),seededDelayMs=\(delayDecomposition.seededDelayMs),sourceTag=\(delayDecomposition.sourceTag.rawValue),driftPpm=\(String(format: "%.3f", delayDecomposition.driftPPM)),driftAdjustMsPerSec=\(String(format: "%.6f", delayDecomposition.driftAdjustmentMsPerSec)),effectiveDelayMs=\(String(format: "%.6f", delayDecomposition.effectiveCoarseDelayMs)),coarseSlopeMsPerSec=\(String(format: "%.6f", coarseSlopeMsPerSec)),delayHintClampCount=\(phase15DelayHintClampCount),delayHintHoldCount=\(phase15DelayHintHoldCount)"
+                "AEC_PHASE15_CSV: windowFrames=\(summary.windowFrames),totalFrames=\(summary.totalFrames),invalidDelaySamples=\(summary.invalidDelaySamples),erleBelow3Frames=\(summary.erleBelow3Frames),deltaOver100Frames=\(summary.deltaOver100Frames),coincidentFrames=\(summary.coincidentFrames),erleBelow3Pct=\(String(format: "%.3f", summary.erleBelow3Pct)),deltaOver100Pct=\(String(format: "%.3f", summary.deltaOver100Pct)),coincidencePct=\(String(format: "%.3f", summary.coincidencePct)),deltaBinLt20=\(summary.deltaBinLt20),deltaBin20To49=\(summary.deltaBin20To49),deltaBin50To99=\(summary.deltaBin50To99),deltaBin100To199=\(summary.deltaBin100To199),deltaBinGe200=\(summary.deltaBinGe200),regime=\(regime),collapseSeconds=\(phase15ConsecutiveCollapseSeconds),collapseAlert=\(collapseAlert),coarseDelayMs=\(delayDecomposition.coarseDelayMs),seededDelayMs=\(delayDecomposition.seededDelayMs),sourceTag=\(delayDecomposition.sourceTag.rawValue),driftPpm=\(String(format: "%.3f", delayDecomposition.driftPPM)),driftAdjustMsPerSec=\(String(format: "%.6f", delayDecomposition.driftAdjustmentMsPerSec)),effectiveDelayMs=\(String(format: "%.6f", delayDecomposition.effectiveCoarseDelayMs)),coarseSlopeMsPerSec=\(String(format: "%.6f", coarseSlopeMsPerSec)),delayHintClampCount=\(phase15DelayHintClampCount),delayHintHoldCount=\(phase15DelayHintHoldCount),routeEpochId=\(startupGateRouteEpoch),startupGateState=\(startupGateState.rawValue),startupGateReleaseReason=\(startupGateReleaseReason)"
             Task.detached(priority: nil) {
                 await DiagnosticLogger.shared.log(.aec, csvLine)
             }
@@ -818,11 +1016,14 @@ final class AudioWorker {
             let rmsIn = sqrt(passThroughWindow.sumInSq / n)
             let rmsOut = sqrt(passThroughWindow.sumOutSq / n)
             let attenuationDb = (rmsIn > 0 && rmsOut > 0) ? (20 * log10(rmsIn / rmsOut)) : 0
+            let lowAttenuation = attenuationDb < 3.0
             let suspicious = corr > 0.95 && attenuationDb < 1.0
+            passThroughLowAttenuationSeconds = lowAttenuation ? (passThroughLowAttenuationSeconds + 1) : 0
             passThroughSuspiciousSeconds = suspicious ? (passThroughSuspiciousSeconds + 1) : 0
             let suspiciousSeconds = passThroughSuspiciousSeconds
+            let lowAttenuationSeconds = passThroughLowAttenuationSeconds
             let passThroughMessage =
-                "AEC_PASS_THROUGH_AUDIT: corr=\(String(format: "%.3f", corr)), attenuationDb=\(String(format: "%.2f", attenuationDb)), suspiciousSeconds=\(suspiciousSeconds), alert=\(suspiciousSeconds >= 10)"
+                "AEC_PASS_THROUGH_AUDIT: corr=\(String(format: "%.3f", corr)), attenuationDb=\(String(format: "%.2f", attenuationDb)), lowAttenuationSeconds=\(lowAttenuationSeconds), lowAttenuationWarning=\(lowAttenuationSeconds >= 5), suspiciousSeconds=\(suspiciousSeconds), alert=\(suspiciousSeconds >= 10)"
 
             Task {
                 await DiagnosticLogger.shared.log(

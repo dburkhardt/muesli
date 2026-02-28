@@ -197,6 +197,31 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// Current session ID for log correlation (short 8-char UUID prefix)
     private var currentSessionID: String = "none"
+    /// Snapshot of active input/output route metadata for diagnostics and BT-profile gating.
+    private var currentRouteSnapshot: AudioRouteSnapshot?
+    /// Coalesced route-change epoch ID (increments on first event in an epoch).
+    private var routeChangeEpochID: Int = 0
+    /// Number of raw route change events observed within the active epoch.
+    private var routeChangeEventCountInEpoch: Int = 0
+    /// First event timestamp for current route-change epoch.
+    private var routeChangeEpochFirstEventAt: Date?
+    /// Pending coalesced reset task for route changes.
+    private var routeChangeCoalesceTask: Task<Void, Never>?
+    /// Route-change debounce window and hard cap.
+    private static let routeChangeCoalesceWindowMs = 1500
+    private static let routeChangeCoalesceMaxWindowMs = 4000
+    /// Capture-startup readiness threshold (linear RMS, ~= -60 dBFS).
+    private static let startupSignalThreshold: Float = 0.001
+    /// Shared route epoch/profile state for worker-thread reads.
+    private nonisolated(unsafe) let routeEpochState = OSAllocatedUnfairLock(initialState: 0)
+    private nonisolated(unsafe) let btExternalMicProfileState = OSAllocatedUnfairLock(initialState: false)
+
+    private struct CaptureStartupState {
+        var sessionStartWallClock: CFAbsoluteTime = 0
+        var firstCaptureAudioLogged = false
+    }
+    private nonisolated(unsafe) let captureStartupState = OSAllocatedUnfairLock(initialState: CaptureStartupState())
+
     /// AVAudioEngine microphone tap buffer size (frames in source sample-rate domain).
     private static let microphoneTapBufferSizeFrames: AVAudioFrameCount = 4096
 
@@ -293,6 +318,12 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Set the microphone device to use
     func setMicrophoneDevice(_ deviceID: String?) {
         selectedMicrophoneDeviceID = deviceID
+        if let snapshot = currentRouteSnapshot, snapshot.isBluetoothOutput {
+            let profileActive = snapshot.isBluetoothExternalMicProfile || isSelectedMicrophoneLikelyExternal()
+            _ = btExternalMicProfileState.withLock { state in
+                state = profileActive
+            }
+        }
         
         guard isRecording else { return }
         
@@ -374,8 +405,23 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         print("[TAP DEBUG] Starting tap-based audio capture...")
         logger.info("Starting tap-based audio capture")
 
-        // Detect device topology
-        topologyMode = CoreAudioHelpers.detectTopologyMode()
+        // Detect route + topology snapshot before pipeline reset so startup logs include
+        // deterministic transport/UID metadata.
+        currentRouteSnapshot = CoreAudioHelpers.currentRouteSnapshot()
+        let selectedMicLikelyExternal = isSelectedMicrophoneLikelyExternal()
+        if let snapshot = currentRouteSnapshot {
+            topologyMode = snapshot.topologyMode
+            let profileActive = snapshot.isBluetoothExternalMicProfile
+                || (snapshot.isBluetoothOutput && selectedMicLikelyExternal)
+            _ = btExternalMicProfileState.withLock { state in
+                state = profileActive
+            }
+        } else {
+            topologyMode = CoreAudioHelpers.detectTopologyMode()
+            _ = btExternalMicProfileState.withLock { state in
+                state = false
+            }
+        }
         print("[TAP DEBUG] Detected topology: \(topologyMode)")
         logger.info("Detected topology: \(String(describing: self.topologyMode))")
 
@@ -393,6 +439,18 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         // Configure synchronizer and AEC for topology
         currentSessionID = String(UUID().uuidString.prefix(8))
+        routeChangeEpochID = 0
+        routeChangeEventCountInEpoch = 0
+        routeChangeEpochFirstEventAt = nil
+        routeChangeCoalesceTask?.cancel()
+        routeChangeCoalesceTask = nil
+        _ = routeEpochState.withLock { state in
+            state = 0
+        }
+        _ = captureStartupState.withLock { state in
+            state.sessionStartWallClock = CFAbsoluteTimeGetCurrent()
+            state.firstCaptureAudioLogged = false
+        }
         synchronizer.resetForNewSession()
         aecProcessor.reset()
         synchronizer.configure(topologyMode: topologyMode, sessionID: currentSessionID)
@@ -417,6 +475,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 CoreAudioHelpers.removeRouteChangeListener(token)
                 routeChangeToken = nil
             }
+            routeChangeCoalesceTask?.cancel()
+            routeChangeCoalesceTask = nil
             throw error
         }
 
@@ -484,6 +544,8 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 CoreAudioHelpers.removeRouteChangeListener(token)
                 routeChangeToken = nil
             }
+            routeChangeCoalesceTask?.cancel()
+            routeChangeCoalesceTask = nil
             throw AudioCaptureError.microphoneStartFailed(error)
         }
 
@@ -497,7 +559,13 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             popCaptureAECFrame: { [weak self] destination in
                 self?.popCaptureAECFrame(into: destination)
             },
-            isAECEnabled: isAECEnabled
+            isAECEnabled: isAECEnabled,
+            routeEpochProvider: { [routeEpochState] in
+                routeEpochState.withLock { state in state }
+            },
+            isBtExternalMicProfileActive: { [btExternalMicProfileState] in
+                btExternalMicProfileState.withLock { state in state }
+            }
         )
         worker.start(
             micCallback: { [weak self] frame in
@@ -529,6 +597,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         logger.info("Tap-based audio capture started")
 
         let logTopology = self.topologyMode
+        let logRouteEpoch = routeChangeEpochID
+        let logRoute = currentRouteSnapshot
+        let logBtProfileActive = btExternalMicProfileState.withLock { $0 }
         // Read raw UserDefaults as tri-state so fresh installs log "unset" instead of
         // a misleading "false" (bool(forKey:) collapses unset → false).
         let aecStoredObj = UserDefaults.standard.object(forKey: "echoCancellationEnabled")
@@ -548,7 +619,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let logPermissionWasCached = UserDefaults.standard.object(forKey: "systemAudioPermissionGranted") != nil
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "TAP_CAPTURE_START: topology=\(logTopology), aecStoredPref=\(logAECStoredPref), aecEffective=\(logAECEffective), build=\(logBuild), permissionWasCached=\(logPermissionWasCached)")
+                "AEC_ROUTE_SNAPSHOT: aecTelemetryVersion=2, routeEpochId=\(logRouteEpoch), topology=\(logTopology), btExternalMicProfile=\(logBtProfileActive), outputUID=\(logRoute?.outputUID ?? "unknown"), outputName=\(logRoute?.outputName ?? "unknown"), outputTransport=\(logRoute?.outputTransport.rawValue ?? "unknown"), inputUID=\(logRoute?.inputUID ?? "unknown"), inputName=\(logRoute?.inputName ?? "unknown"), inputTransport=\(logRoute?.inputTransport.rawValue ?? "unknown")")
+            await DiagnosticLogger.shared.log(.aec,
+                "TAP_CAPTURE_START: aecTelemetryVersion=2, routeEpochId=\(logRouteEpoch), topology=\(logTopology), btExternalMicProfile=\(logBtProfileActive), aecStoredPref=\(logAECStoredPref), aecEffective=\(logAECEffective), build=\(logBuild), permissionWasCached=\(logPermissionWasCached)")
         }
     }
 
@@ -583,18 +656,29 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             CoreAudioHelpers.removeRouteChangeListener(token)
             routeChangeToken = nil
         }
+        routeChangeCoalesceTask?.cancel()
+        routeChangeCoalesceTask = nil
+        routeChangeEpochFirstEventAt = nil
+        routeChangeEventCountInEpoch = 0
 
         // Reset state
         synchronizer.reset()
         aecProcessor.reset()
         resetAECRingsAndCounters()
         preAggregateDefaultInputDeviceID = nil
+        currentRouteSnapshot = nil
+        _ = routeEpochState.withLock { state in
+            state = 0
+        }
+        _ = btExternalMicProfileState.withLock { state in
+            state = false
+        }
 
         isRecording = false
         logger.info("Tap-based audio capture stopped")
 
         Task {
-            await DiagnosticLogger.shared.log(.aec, "TAP_CAPTURE_STOP")
+            await DiagnosticLogger.shared.log(.aec, "TAP_CAPTURE_STOP: aecTelemetryVersion=2, routeEpochId=\(routeChangeEpochID)")
         }
     }
 
@@ -935,6 +1019,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
         _ = agentMicSignalTelemetryLock.withLock { state in
             state = AgentMicSignalTelemetry()
+        }
+        _ = captureStartupState.withLock { state in
+            state.firstCaptureAudioLogged = false
         }
         agentForwardAECLogState = AgentForwardAECLogState()
     }
@@ -1355,6 +1442,27 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             : 0
         let routeSnapshot = agentMicRouteSnapshotLock.withLock { state in state }
         let sourceSampleRate = buffer.format.sampleRate
+        let firstCaptureAudio = captureStartupState.withLock { state -> (shouldLog: Bool, latencyMs: Double) in
+            guard !state.firstCaptureAudioLogged else {
+                return (false, -1)
+            }
+            guard pipelineRms > Self.startupSignalThreshold else {
+                return (false, -1)
+            }
+            state.firstCaptureAudioLogged = true
+            if state.sessionStartWallClock > 0 {
+                let latencyMs = (CFAbsoluteTimeGetCurrent() - state.sessionStartWallClock) * 1000.0
+                return (true, latencyMs)
+            }
+            return (true, -1)
+        }
+        if firstCaptureAudio.shouldLog {
+            let routeEpochID = routeEpochState.withLock { state in state }
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_FIRST_AUDIO: latencyMs=\(String(format: "%.0f", firstCaptureAudio.latencyMs)), sourceRms=\(String(format: "%.4f", sourceRms)), pipelineRms=\(String(format: "%.4f", pipelineRms)), resamplerActive=\(resamplerActive), routeEpochId=\(routeEpochID)")
+            }
+        }
         let telemetryDecision = agentMicSignalTelemetryLock.withLock { state -> (Bool, Bool, Bool, Int, String?) in
             state.callbackCount += 1
             state.minInputFrames = min(state.minInputFrames, frameLength)
@@ -1381,8 +1489,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 let callbacks = max(state.callbackCount, 1)
                 let minIn = state.minInputFrames == .max ? 0 : state.minInputFrames
                 let minOut = state.minOutputFrames == .max ? 0 : state.minOutputFrames
+                let haveDataPct = (Double(state.statusHaveData) / Double(callbacks)) * 100.0
+                let inputRanDryPct = (Double(state.statusInputRanDry) / Double(callbacks)) * 100.0
                 summaryPayload =
                     "callbacks=\(state.callbackCount), minInputFrames=\(minIn), maxInputFrames=\(state.maxInputFrames), avgInputFrames=\(String(format: "%.1f", Double(state.sumInputFrames) / Double(callbacks))), minOutputFrames=\(minOut), maxOutputFrames=\(state.maxOutputFrames), avgOutputFrames=\(String(format: "%.1f", Double(state.sumOutputFrames) / Double(callbacks))), statusHaveData=\(state.statusHaveData), statusInputRanDry=\(state.statusInputRanDry), statusError=\(state.statusError), sourceSampleRate=\(String(format: "%.1f", sourceSampleRate)), resamplerActive=\(resamplerActive)"
+                    + ", haveDataPct=\(String(format: "%.1f", haveDataPct)), inputRanDryPct=\(String(format: "%.1f", inputRanDryPct))"
                 state.callbackCount = 0
                 state.minInputFrames = .max
                 state.maxInputFrames = 0
@@ -1417,8 +1528,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         if telemetryDecision.0 {
             if let summary = telemetryDecision.4 {
+                let routeEpochID = routeEpochState.withLock { state in state }
+                let btProfileActive = btExternalMicProfileState.withLock { state in state }
                 Task {
-                    await DiagnosticLogger.shared.log(.aec, "MIC_RESAMPLER_SUMMARY: \(summary)")
+                    await DiagnosticLogger.shared.log(.aec, "MIC_RESAMPLER_SUMMARY: \(summary), routeEpochId=\(routeEpochID), btExternalMicProfile=\(btProfileActive)")
                 }
             }
             // #region agent log
@@ -1701,27 +1814,123 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
     }
 
+    private func isSelectedMicrophoneLikelyExternal() -> Bool {
+        guard let selectedUID = selectedMicrophoneDeviceID else { return false }
+        if selectedUID.hasPrefix("com.muesli.tap") {
+            return false
+        }
+        if selectedUID.localizedCaseInsensitiveContains("builtin")
+            || selectedUID.localizedCaseInsensitiveContains("built-in")
+            || selectedUID.localizedCaseInsensitiveContains("macbook")
+            || selectedUID.localizedCaseInsensitiveContains("internal") {
+            return false
+        }
+        return true
+    }
+
+    static func nextRouteCoalesceDelayMs(
+        firstEventAt: Date,
+        now: Date,
+        coalesceWindowMs: Int = routeChangeCoalesceWindowMs,
+        maxWindowMs: Int = routeChangeCoalesceMaxWindowMs
+    ) -> Int {
+        let elapsedMs = max(0, Int(now.timeIntervalSince(firstEventAt) * 1000))
+        let remainingToMax = max(0, maxWindowMs - elapsedMs)
+        return min(coalesceWindowMs, remainingToMax)
+    }
+
     /// Handle audio route change (device switch)
     private func handleRouteChange() {
-        logger.info("Audio route changed, resetting synchronizer")
+        let now = Date()
+        if routeChangeEpochFirstEventAt == nil {
+            routeChangeEpochID += 1
+            routeChangeEpochFirstEventAt = now
+            routeChangeEventCountInEpoch = 0
+        }
+        routeChangeEventCountInEpoch += 1
 
-        // Re-detect topology
-        let newTopology = CoreAudioHelpers.detectTopologyMode()
-
-        if newTopology != topologyMode {
-            topologyMode = newTopology
-            synchronizer.configure(topologyMode: newTopology, sessionID: currentSessionID)
-            aecProcessor.configure(topology: newTopology, sessionID: currentSessionID, synchronizer: synchronizer)
+        let epochID = routeChangeEpochID
+        let eventCount = routeChangeEventCountInEpoch
+        let firstEventAt = routeChangeEpochFirstEventAt ?? now
+        let coalesceDelayMs = Self.nextRouteCoalesceDelayMs(
+            firstEventAt: firstEventAt,
+            now: now
+        )
+        _ = routeEpochState.withLock { state in
+            state = epochID
         }
 
-        // Reset synchronizer to handle the discontinuity
+        // Immediate minimal safety action: freeze adaptation and defer full reset/reseed.
+        aecProcessor.freezeAdaptation()
+
+        if let snapshot = CoreAudioHelpers.currentRouteSnapshot() {
+            currentRouteSnapshot = snapshot
+            topologyMode = snapshot.topologyMode
+            let selectedMicLikelyExternal = isSelectedMicrophoneLikelyExternal()
+            let profileActive = snapshot.isBluetoothExternalMicProfile
+                || (snapshot.isBluetoothOutput && selectedMicLikelyExternal)
+            _ = btExternalMicProfileState.withLock { state in
+                state = profileActive
+            }
+        }
+
+        routeChangeCoalesceTask?.cancel()
+        if coalesceDelayMs == 0 {
+            applyCoalescedRouteChangeIfCurrent(epochID: epochID)
+        } else {
+            routeChangeCoalesceTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: .milliseconds(coalesceDelayMs))
+                } catch {
+                    return
+                }
+                await self?.applyCoalescedRouteChangeIfCurrent(epochID: epochID)
+            }
+        }
+
+        let route = currentRouteSnapshot
+        Task {
+            await DiagnosticLogger.shared.log(.aec,
+                "ROUTE_CHANGE_EVENT: routeEpochId=\(epochID), eventCount=\(eventCount), coalesceDelayMs=\(coalesceDelayMs), topology=\(self.topologyMode), btExternalMicProfile=\(self.btExternalMicProfileState.withLock { $0 }), outputUID=\(route?.outputUID ?? "unknown"), outputTransport=\(route?.outputTransport.rawValue ?? "unknown"), inputUID=\(route?.inputUID ?? "unknown"), inputTransport=\(route?.inputTransport.rawValue ?? "unknown")")
+        }
+    }
+
+    private func applyCoalescedRouteChangeIfCurrent(epochID: Int) {
+        guard routeChangeEpochID == epochID else { return }
+
+        let eventCount = routeChangeEventCountInEpoch
+        let refreshedRoute = CoreAudioHelpers.currentRouteSnapshot()
+        if let refreshedRoute {
+            currentRouteSnapshot = refreshedRoute
+            topologyMode = refreshedRoute.topologyMode
+            let selectedMicLikelyExternal = isSelectedMicrophoneLikelyExternal()
+            let profileActive = refreshedRoute.isBluetoothExternalMicProfile
+                || (refreshedRoute.isBluetoothOutput && selectedMicLikelyExternal)
+            _ = btExternalMicProfileState.withLock { state in
+                state = profileActive
+            }
+        } else {
+            topologyMode = CoreAudioHelpers.detectTopologyMode()
+            _ = btExternalMicProfileState.withLock { state in
+                state = false
+            }
+        }
+
+        synchronizer.configure(topologyMode: topologyMode, sessionID: currentSessionID)
+        aecProcessor.configure(topology: topologyMode, sessionID: currentSessionID, synchronizer: synchronizer)
         synchronizer.reset()
         aecProcessor.reset()
         resetAECRingsAndCounters()
 
+        routeChangeCoalesceTask = nil
+        routeChangeEpochFirstEventAt = nil
+        routeChangeEventCountInEpoch = 0
+
+        let route = currentRouteSnapshot
+        let btProfileActive = btExternalMicProfileState.withLock { state in state }
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "ROUTE_CHANGE: newTopology=\(newTopology)")
+                "ROUTE_CHANGE_APPLIED: routeEpochId=\(epochID), eventsCoalesced=\(eventCount), topology=\(self.topologyMode), btExternalMicProfile=\(btProfileActive), outputUID=\(route?.outputUID ?? "unknown"), outputTransport=\(route?.outputTransport.rawValue ?? "unknown"), inputUID=\(route?.inputUID ?? "unknown"), inputTransport=\(route?.inputTransport.rawValue ?? "unknown")")
         }
     }
 

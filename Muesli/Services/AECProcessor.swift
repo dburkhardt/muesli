@@ -616,10 +616,15 @@ final class AECProcessor {
         }
 
         var msg = "session=\(sessionID) AEC_TELEMETRY: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
+        msg += ", aecTelemetryVersion=2"
         msg += ", delay=\(stats.delayMs)ms"
+        msg += ", bridgeInternalDelayMs=\(stats.delayMs)"
         msg += ", streamDelay=\(stats.lastStreamDelayMs)ms"
+        msg += ", appliedStreamDelayHintMs=\(stats.lastStreamDelayMs)"
         msg += ", streamDelayRaw=\(stats.lastStreamDelayRawMs)ms"
+        msg += ", appliedStreamDelayHintRawMs=\(stats.lastStreamDelayRawMs)"
         msg += ", streamDelaySource=\(stats.lastStreamDelayHintSource.label)"
+        msg += ", appliedStreamDelayHintSource=\(stats.lastStreamDelayHintSource.label)"
         msg += ", externalDelayEstimator=\(isExternalDelayEstimatorEnabled)"
         msg += ", mode=\(stats.currentMode)"
         msg += ", processed=\(stats.framesProcessed)"
@@ -652,9 +657,12 @@ final class AECProcessor {
         let streamDelayMs = stats.lastStreamDelayMs
         let streamDelaySource = stats.lastStreamDelayHintSource.label
         let delta = bridgeDelayMs - syncDelayMs
-        let auditMsg = "session=\(sessionID) DELAY_AUDIT: streamDelayMs=\(streamDelayMs)"
+        let auditMsg = "session=\(sessionID) DELAY_AUDIT: aecTelemetryVersion=2, streamDelayMs=\(streamDelayMs)"
             + ", streamDelaySource=\(streamDelaySource)"
+            + ", appliedStreamDelayHintMs=\(streamDelayMs)"
+            + ", appliedStreamDelayHintSource=\(streamDelaySource)"
             + ", bridgeDelayMs=\(bridgeDelayMs)"
+            + ", bridgeInternalDelayMs=\(bridgeDelayMs)"
             + ", synchronizerDelayMs=\(syncDelayMs)"
             + ", delta=\(delta)ms"
         Task {
