@@ -88,6 +88,35 @@ final class RegressionTests: XCTestCase {
         // The important thing is that the check completes and returns a valid boolean
         XCTAssertNotNil(hasPermission as Bool?, "Permission check should return a boolean value")
     }
+
+    // MARK: - Microphone Signal Contract Regression Tests (Bug Fix: Feb 28, 2026)
+
+    /// Regression test: converter source channels must match delivery channels.
+    /// Bug: HAL callback delivered mono channel-zero extraction but converter was
+    ///      configured from hardware channel count (2ch), causing conversion errors.
+    func testMicSignalContractRejectsConverterChannelMismatch() {
+        let result = TapAudioCaptureService.evaluateMicSignalContract(
+            sourceSampleRate: 16_000,
+            deliveryChannels: 1,
+            converterSourceChannels: 2,
+            converterOutputSampleRate: 48_000,
+            converterEnabled: true
+        )
+        XCTAssertFalse(result.isValid)
+        XCTAssertEqual(result.reason, "converter_source_channels_mismatch")
+    }
+
+    /// Regression test: repeated converter recovery after fallback forces degraded mode.
+    /// Bug: converter failure loops could repeatedly restart microphone capture without
+    ///      a deterministic terminal policy.
+    func testConverterEscalationDisablesAecPathAfterFallbackThreshold() {
+        let decision = TapAudioCaptureService.converterRecoveryEscalationDecision(
+            recoveriesInWindow: 3,
+            fallbackAlreadyForced: true
+        )
+        XCTAssertFalse(decision.escalateToFallback)
+        XCTAssertTrue(decision.disableAecPath)
+    }
     
     // MARK: - Audio Buffer Queue Regression Tests (Bug Fix: Jan 15, 2026)
     

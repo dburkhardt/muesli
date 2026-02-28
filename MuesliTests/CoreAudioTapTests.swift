@@ -793,6 +793,78 @@ final class CoreAudioTapTests: XCTestCase {
         XCTAssertEqual(channelMap, [NSNumber(value: 0)])
     }
 
+    func testEvaluateMicSignalContractAcceptsConverterAlignedContract() {
+        let result = TapAudioCaptureService.evaluateMicSignalContract(
+            sourceSampleRate: 16_000,
+            deliveryChannels: 1,
+            converterSourceChannels: 1,
+            converterOutputSampleRate: 48_000,
+            converterEnabled: true
+        )
+        XCTAssertTrue(result.isValid)
+        XCTAssertEqual(result.reason, "converter_contract_ok")
+    }
+
+    func testEvaluateMicSignalContractRejectsConverterChannelMismatch() {
+        let result = TapAudioCaptureService.evaluateMicSignalContract(
+            sourceSampleRate: 44_100,
+            deliveryChannels: 1,
+            converterSourceChannels: 2,
+            converterOutputSampleRate: 48_000,
+            converterEnabled: true
+        )
+        XCTAssertFalse(result.isValid)
+        XCTAssertEqual(result.reason, "converter_source_channels_mismatch")
+    }
+
+    func testEvaluateMicSignalContractRejectsNativeNon48kWithoutConverter() {
+        let result = TapAudioCaptureService.evaluateMicSignalContract(
+            sourceSampleRate: 44_100,
+            deliveryChannels: 1,
+            converterSourceChannels: 1,
+            converterOutputSampleRate: 44_100,
+            converterEnabled: false
+        )
+        XCTAssertFalse(result.isValid)
+        XCTAssertEqual(result.reason, "native_source_rate_not_48k_without_converter")
+    }
+
+    func testConverterRecoveryEscalationDecisionEscalatesToFallbackAtThreshold() {
+        let decision = TapAudioCaptureService.converterRecoveryEscalationDecision(
+            recoveriesInWindow: 3,
+            fallbackAlreadyForced: false
+        )
+        XCTAssertTrue(decision.escalateToFallback)
+        XCTAssertFalse(decision.disableAecPath)
+    }
+
+    func testConverterRecoveryEscalationDecisionDisablesAecWhenFallbackAlreadyForced() {
+        let decision = TapAudioCaptureService.converterRecoveryEscalationDecision(
+            recoveriesInWindow: 3,
+            fallbackAlreadyForced: true
+        )
+        XCTAssertFalse(decision.escalateToFallback)
+        XCTAssertTrue(decision.disableAecPath)
+    }
+
+    func testConverterFailureZeroFillFrameCountUses48kDomainWhenResamplerActive() {
+        let frameCount = TapAudioCaptureService.converterFailureZeroFillFrameCount(
+            inputFrameCount: 4096,
+            sourceSampleRate: 16_000,
+            resamplerActive: true
+        )
+        XCTAssertEqual(frameCount, 12_288)
+    }
+
+    func testConverterFailureZeroFillFrameCountUsesInputFramesWithoutResampler() {
+        let frameCount = TapAudioCaptureService.converterFailureZeroFillFrameCount(
+            inputFrameCount: 480,
+            sourceSampleRate: 48_000,
+            resamplerActive: false
+        )
+        XCTAssertEqual(frameCount, 480)
+    }
+
     func testMicrophoneRouteRebindDecisionTriggersDuringStartupWithoutCaptureAudio() {
         let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
             previousAppliedInputUID: "08-FF-44-49-A4-D3:input",

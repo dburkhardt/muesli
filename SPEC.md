@@ -179,13 +179,13 @@ class RecordingSession: Identifiable {
 The audio pipeline uses parallel capture with separate files for system and microphone audio:
 
 ```
-┌──────────────────────┐    ┌──────────────────────┐
-│  Core Audio Tap      │    │  AVAudioEngine       │
-│  (Output Mix)        │    │  (Microphone)        │
-│                      │    │                      │
-│  System audio        │    │  User's microphone   │
-│  (Muesli excluded)   │    │  (device selectable) │
-└──────────┬───────────┘    └──────────┬───────────┘
+┌──────────────────────┐    ┌─────────────────────────────┐
+│  Core Audio Tap      │    │  HAL-first Mic Capture      │
+│  (Output Mix)        │    │  (Microphone)               │
+│                      │    │                             │
+│  System audio        │    │  User's microphone          │
+│  (Muesli excluded)   │    │  (AVAudioEngine fallback)   │
+└──────────┬───────────┘    └───────────┬──────────┘
            │                           │
            │ 48kHz stereo              │ 48kHz mono
            └───────────┬───────────────┘
@@ -220,7 +220,7 @@ The audio pipeline uses parallel capture with separate files for system and micr
 - Separate files allow independent post-processing
 - Users can reprocess with different speaker assignments
 
-**Note**: Microphone capture uses AVAudioEngine (not tap capture APIs) so users can choose their input device and switch devices during recording.
+**Note**: Microphone capture uses a HAL-first backend for deterministic device binding. AVAudioEngine is retained as a compatibility fallback when HAL startup/recovery cannot satisfy the signal contract.
 
 ### Meeting App Detection
 
@@ -656,7 +656,7 @@ The MVP is complete. All core features are implemented and functional.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Menu bar app | ✅ | Menu bar app (LSUIElement=false; appears in Dock) |
-| Audio capture | ✅ | System audio via Core Audio taps, mic via AVAudioEngine |
+| Audio capture | ✅ | System audio via Core Audio taps, mic via HAL-first backend (AVAudioEngine fallback) |
 | Real-time transcription | ✅ | WhisperKit with "Me" vs "Them" speaker labels |
 | File output | ✅ | CAF audio + Markdown transcript |
 | Onboarding | ✅ | Permission flow + model download |

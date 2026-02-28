@@ -32,6 +32,7 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### February
 
+- [2026-02-28: Bluetooth + Webcam AEC Signal Contract Hardening](2026-02-28_bt-webcam-aec-signal-contract-hardening.md) - Hardened HAL-first mic contract, removed unsafe converter fallback, added deterministic escalation policy, and documented stage-gated BT+webcam validation/rollback guardrails
 - [2026-02-27: AEC Phase 1.5 Correlation and Delay-Hint Control](2026-02-27_aec_phase15_correlation_delay-hint-control.md) - Added fixed-size ERLE/delay coincidence telemetry and a feature-flagged delay-hint conditioning path (hold+slew-limit) with deterministic regression coverage
 - [2026-02-26: Stop Finalization UX Restoration After Revert](2026-02-26_stop-finalization-ux-restoration.md) - Restored bounded stop flush, explicit `finalizingLive` processing phase, and phase-specific indicator messaging after revert `1fe2214`
 - [2026-02-25: Stop UI Hang + AEC Delay-Hint Regression](2026-02-25_stop-ui-hang-and-aec-delay-hint-regression.md) - Stop appeared stalled without clear end-state indicator; restored off-main post-processing flow and synchronizer-derived AEC delay hints

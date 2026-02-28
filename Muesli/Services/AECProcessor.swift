@@ -720,7 +720,8 @@ final class AECProcessor {
             && stats.framesProcessed >= convergenceMinFrames
             && !stats.adaptationFrozen
             && stats.erleDb < erleThresholdDb
-            && renderRmsLinear > 0.001 { // render has actual signal (not silence)
+            && renderRmsLinear > 0.001
+            && captureRmsLinear > 0.001 { // both sides have speech-level signal
             let nonConvergingMsg = "session=\(sessionID) AEC_NONCONVERGING: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
                 + " after \(stats.framesProcessed) frames"
                 + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"

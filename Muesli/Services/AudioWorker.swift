@@ -210,6 +210,8 @@ final class AudioWorker {
     private static let delayHintSlewLimitMsPerFrame = 8
     private static let btRecoveryLowAttenuationSecondsThreshold = 20
     private static let btRecoveryMaxAttemptsPerRoute = 1
+    private static let btPassThroughMinRenderRmsLinear = 0.003
+    private static let btPassThroughMinCaptureRmsLinear = 0.003
 
     // MARK: - Initialization
 
@@ -1066,14 +1068,16 @@ final class AudioWorker {
             let rmsIn = sqrt(passThroughWindow.sumInSq / n)
             let rmsOut = sqrt(passThroughWindow.sumOutSq / n)
             let attenuationDb = (rmsIn > 0 && rmsOut > 0) ? (20 * log10(rmsIn / rmsOut)) : 0
-            let lowAttenuation = attenuationDb < 3.0
-            let suspicious = corr > 0.95 && attenuationDb < 1.0
+            let hasHealthyEnergy = rmsIn >= Self.btPassThroughMinCaptureRmsLinear
+                && rmsOut >= Self.btPassThroughMinRenderRmsLinear
+            let lowAttenuation = hasHealthyEnergy && attenuationDb < 3.0
+            let suspicious = hasHealthyEnergy && corr > 0.95 && attenuationDb < 1.0
             passThroughLowAttenuationSeconds = lowAttenuation ? (passThroughLowAttenuationSeconds + 1) : 0
             passThroughSuspiciousSeconds = suspicious ? (passThroughSuspiciousSeconds + 1) : 0
             let suspiciousSeconds = passThroughSuspiciousSeconds
             let lowAttenuationSeconds = passThroughLowAttenuationSeconds
             let passThroughMessage =
-                "AEC_PASS_THROUGH_AUDIT: corr=\(String(format: "%.3f", corr)), attenuationDb=\(String(format: "%.2f", attenuationDb)), lowAttenuationSeconds=\(lowAttenuationSeconds), lowAttenuationWarning=\(lowAttenuationSeconds >= 5), suspiciousSeconds=\(suspiciousSeconds), alert=\(suspiciousSeconds >= 10)"
+                "AEC_PASS_THROUGH_AUDIT: corr=\(String(format: "%.3f", corr)), attenuationDb=\(String(format: "%.2f", attenuationDb)), renderRmsLinear=\(String(format: "%.6f", rmsOut)), captureRmsLinear=\(String(format: "%.6f", rmsIn)), hasHealthyEnergy=\(hasHealthyEnergy), lowAttenuationSeconds=\(lowAttenuationSeconds), lowAttenuationWarning=\(lowAttenuationSeconds >= 5), suspiciousSeconds=\(suspiciousSeconds), alert=\(suspiciousSeconds >= 10)"
 
             Task {
                 await DiagnosticLogger.shared.log(
