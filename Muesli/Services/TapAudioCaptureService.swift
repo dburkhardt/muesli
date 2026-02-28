@@ -84,7 +84,8 @@ private struct UnsafeSynchronousCapture<Value>: @unchecked Sendable {
 // MARK: - Tap Audio Capture Service
 
 /// Core Audio Tap-based audio capture service
-/// Captures system audio via taps and microphone via AVAudioEngine
+/// Captures system audio via taps and microphone via Core Audio HAL
+/// (with AVAudioEngine fallback when HAL capture cannot start).
 /// Provides synchronized, echo-cancelled audio for transcription
 ///
 actor TapAudioCaptureService: AudioCaptureServiceProtocol {
@@ -109,8 +110,16 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     /// Tap manager for system audio
     private let tapManager = CoreAudioTapManager()
 
-    /// Microphone capture engine (AVAudioEngine-based)
+    /// Microphone capture engine (fallback path).
     private var microphoneEngine: AVAudioEngine?
+    /// Device-bound HAL microphone capture path (primary path for robust external-mic routing).
+    private var microphoneHALDeviceID: AudioDeviceID = kAudioObjectUnknown
+    private var microphoneHALIOProcID: AudioDeviceIOProcID?
+    private nonisolated(unsafe) var microphoneHALFormat: AudioStreamBasicDescription?
+    private let microphoneHALCallbackQueue = DispatchQueue(
+        label: "com.dburkhardt.muesli.microphone-hal-callback",
+        qos: .userInteractive
+    )
 
     /// Audio synchronizer (nonisolated for RT-safe access from IOProc)
     /// The synchronizer uses internal locking (NSLock/OSAllocatedUnfairLock) for thread safety
@@ -1149,8 +1158,380 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         return status == noErr ? sampleBuffer : nil
     }
 
-    /// Start microphone capture using AVAudioEngine
+    private func hasActiveMicrophoneCapture() -> Bool {
+        microphoneEngine != nil || microphoneHALIOProcID != nil
+    }
+
+    private func startMicLivenessWatchdog() {
+        let routeEpochID = routeEpochState.withLock { state in state }
+        _ = micLivenessRecoveryState.withLock { state in
+            if state.lastRouteEpochId != routeEpochID {
+                state.lastRouteEpochId = routeEpochID
+                state.attemptsInCurrentRoute = 0
+            }
+            state.totalCallbacks = 0
+            state.consecutiveDigitalSilenceCallbacks = 0
+            state.recoveryInFlight = false
+        }
+
+        micStartupLivenessTask?.cancel()
+        micCaptureGeneration += 1
+        let captureGeneration = micCaptureGeneration
+        micStartupLivenessTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(Self.micLivenessStartupTimeoutMs))
+            } catch {
+                return
+            }
+            await self?.handleMicStartupLivenessTimeout(
+                generation: captureGeneration,
+                routeEpochId: routeEpochID
+            )
+        }
+    }
+
+    private func resolveMicrophoneHALDevice() -> (
+        deviceID: AudioDeviceID,
+        requestedUID: String,
+        actualUID: String,
+        explicitlySet: Bool
+    )? {
+        let requestedUID = selectedMicrophoneDeviceID ?? "nil"
+        if let selectedUID = selectedMicrophoneDeviceID, !isMuesliAggregateUID(selectedUID) {
+            for device in CoreAudioHelpers.getAllDevices() {
+                guard let uid = try? CoreAudioHelpers.getDeviceUID(device), uid == selectedUID else { continue }
+                return (device, requestedUID, uid, true)
+            }
+            logger.warning("MIC_HAL_SELECT: requested UID \(selectedUID) not found in Core Audio device list")
+        }
+
+        if let fallbackID = preAggregateDefaultInputDeviceID,
+           fallbackID != kAudioObjectUnknown,
+           let fallbackUID = try? CoreAudioHelpers.getDeviceUID(fallbackID),
+           !isMuesliAggregateUID(fallbackUID) {
+            return (fallbackID, requestedUID, fallbackUID, false)
+        }
+
+        if let defaultInputID = try? CoreAudioHelpers.getDefaultInputDevice(),
+           defaultInputID != kAudioObjectUnknown,
+           let defaultInputUID = try? CoreAudioHelpers.getDeviceUID(defaultInputID),
+           !isMuesliAggregateUID(defaultInputUID) {
+            return (defaultInputID, requestedUID, defaultInputUID, false)
+        }
+
+        return nil
+    }
+
+    private func startMicrophoneCaptureHAL() throws {
+        guard let resolved = resolveMicrophoneHALDevice() else {
+            throw AudioCaptureError.microphoneStartFailed(
+                NSError(
+                    domain: "TapAudioCapture.HAL",
+                    code: -100,
+                    userInfo: [NSLocalizedDescriptionKey: "No valid microphone device available for HAL capture."]
+                )
+            )
+        }
+
+        let sourceFormat = try CoreAudioHelpers.getDeviceFormat(
+            resolved.deviceID,
+            scope: kAudioObjectPropertyScopeInput
+        )
+        guard sourceFormat.mSampleRate > 0, sourceFormat.mChannelsPerFrame > 0 else {
+            throw AudioCaptureError.microphoneStartFailed(
+                NSError(
+                    domain: "TapAudioCapture.HAL",
+                    code: -101,
+                    userInfo: [NSLocalizedDescriptionKey: "HAL microphone format is invalid."]
+                )
+            )
+        }
+
+        let formatFlags = sourceFormat.mFormatFlags
+        let bitsPerChannel = Int(sourceFormat.mBitsPerChannel)
+        let isFloatFormat = (formatFlags & kAudioFormatFlagIsFloat) != 0
+        let isSignedIntegerFormat = (formatFlags & kAudioFormatFlagIsSignedInteger) != 0
+        let supportedHALFormat =
+            sourceFormat.mFormatID == kAudioFormatLinearPCM
+            && ((isFloatFormat && (bitsPerChannel == 32 || bitsPerChannel == 64))
+                || (isSignedIntegerFormat && (bitsPerChannel == 16 || bitsPerChannel == 32)))
+        guard supportedHALFormat else {
+            throw AudioCaptureError.microphoneStartFailed(
+                NSError(
+                    domain: "TapAudioCapture.HAL",
+                    code: -102,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "Unsupported HAL microphone sample format (formatID=\(sourceFormat.mFormatID), bits=\(bitsPerChannel), flags=\(formatFlags)).",
+                    ]
+                )
+            )
+        }
+
+        stopMicrophoneHALCapture()
+
+        var ioProcID: AudioDeviceIOProcID?
+        let createStatus = AudioDeviceCreateIOProcIDWithBlock(
+            &ioProcID,
+            resolved.deviceID,
+            microphoneHALCallbackQueue
+        ) { [weak self] _, inInputData, inInputTime, _, _ in
+            self?.handleHALMicrophoneIOProc(
+                inputData: inInputData,
+                inputTime: inInputTime
+            )
+        }
+        guard createStatus == noErr, let ioProcID else {
+            throw AudioCaptureError.microphoneStartFailed(
+                NSError(
+                    domain: "TapAudioCapture.HAL",
+                    code: Int(createStatus),
+                    userInfo: [NSLocalizedDescriptionKey: "AudioDeviceCreateIOProcIDWithBlock failed (\(createStatus))."]
+                )
+            )
+        }
+
+        let startStatus = AudioDeviceStart(resolved.deviceID, ioProcID)
+        guard startStatus == noErr else {
+            AudioDeviceDestroyIOProcID(resolved.deviceID, ioProcID)
+            throw AudioCaptureError.microphoneStartFailed(
+                NSError(
+                    domain: "TapAudioCapture.HAL",
+                    code: Int(startStatus),
+                    userInfo: [NSLocalizedDescriptionKey: "AudioDeviceStart failed (\(startStatus))."]
+                )
+            )
+        }
+
+        microphoneHALDeviceID = resolved.deviceID
+        microphoneHALIOProcID = ioProcID
+        microphoneHALFormat = sourceFormat
+        microphoneSampleRate = sourceFormat.mSampleRate
+        microphoneEngine = nil
+
+        let btExternalMicProfileActive = btExternalMicProfileState.withLock { state in state }
+        let tapBufferSizeFrames = Self.microphoneTapBufferFramesForProfile(
+            btExternalMicProfileActive: btExternalMicProfileActive
+        )
+        let sourceChannels = AVAudioChannelCount(max(sourceFormat.mChannelsPerFrame, 1))
+        let sourceSampleRate = sourceFormat.mSampleRate
+
+        _ = agentMicRouteSnapshotLock.withLock { state in
+            state.requestedUID = resolved.requestedUID
+            state.engineUID = resolved.actualUID
+            state.explicitlySet = resolved.explicitlySet
+            state.hardwareSampleRate = sourceSampleRate
+            state.tapSampleRate = sourceSampleRate
+        }
+
+        if sourceSampleRate != 48000 || sourceChannels != 1 {
+            let srcFormat = AVAudioFormat(
+                standardFormatWithSampleRate: sourceSampleRate,
+                channels: sourceChannels
+            )!
+            let dstFormat = AVAudioFormat(
+                standardFormatWithSampleRate: 48000,
+                channels: 1
+            )!
+            micResampler = AVAudioConverter(from: srcFormat, to: dstFormat)
+            micResampler?.channelMap = Self.microphoneResamplerChannelMapForTapChannels(sourceChannels)
+            let estimatedInputFrames = Int(
+                max(
+                    Double(tapBufferSizeFrames),
+                    ceil(sourceSampleRate * 0.10)
+                )
+            )
+            if btExternalMicProfileActive {
+                micResampler?.primeMethod = .none
+            }
+            let maxOutputFrames = Self.microphoneResamplerOutputFrameCapacity(
+                inputFrameCount: estimatedInputFrames,
+                inputSampleRate: sourceSampleRate,
+                btExternalMicProfileActive: btExternalMicProfileActive
+            )
+            micResampleBuffer = AVAudioPCMBuffer(pcmFormat: dstFormat, frameCapacity: maxOutputFrames)
+        } else {
+            micResampler = nil
+            micResampleBuffer = nil
+        }
+
+        let isNonInterleaved = (sourceFormat.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+        Task {
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_CAPTURE_BACKEND: backend=hal, uid=\(resolved.actualUID), audioDeviceID=\(resolved.deviceID), explicitlySet=\(resolved.explicitlySet)")
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_SAMPLE_RATE: hardware=\(sourceSampleRate)Hz, channels=\(sourceChannels), tapOutput=\(sourceSampleRate)Hz/\(sourceChannels)ch, tapBufferFrames=\(tapBufferSizeFrames), aecTarget=48000Hz, resampler=\(self.micResampler != nil), resamplerPrimeMethod=\(self.micResampler != nil ? "configured" : "notUsed"), resamplerChannelMap=backendManaged, backend=hal, formatFlags=\(sourceFormat.mFormatFlags), bitsPerChannel=\(sourceFormat.mBitsPerChannel), interleaved=\(!isNonInterleaved)")
+        }
+
+        logger.info("MIC_CAPTURE_BACKEND: HAL active (uid: \(resolved.actualUID), sampleRate: \(sourceSampleRate), channels: \(sourceChannels))")
+        startMicLivenessWatchdog()
+    }
+
+    private func stopMicrophoneHALCapture() {
+        if let ioProcID = microphoneHALIOProcID, microphoneHALDeviceID != kAudioObjectUnknown {
+            AudioDeviceStop(microphoneHALDeviceID, ioProcID)
+            AudioDeviceDestroyIOProcID(microphoneHALDeviceID, ioProcID)
+        }
+        microphoneHALIOProcID = nil
+        microphoneHALDeviceID = kAudioObjectUnknown
+        microphoneHALFormat = nil
+    }
+
+    private nonisolated func handleHALMicrophoneIOProc(
+        inputData: UnsafePointer<AudioBufferList>?,
+        inputTime: UnsafePointer<AudioTimeStamp>?
+    ) {
+        guard let inputData, let inputTime, let sourceFormat = microphoneHALFormat else { return }
+        guard let channelZeroSamples = Self.extractChannelZeroFloatSamples(
+            from: inputData,
+            format: sourceFormat
+        ), !channelZeroSamples.isEmpty else {
+            return
+        }
+
+        let sampleTimeValid = (inputTime.pointee.mFlags.rawValue & AudioTimeStampFlags.sampleTimeValid.rawValue) != 0
+        let sampleTime = sampleTimeValid ? inputTime.pointee.mSampleTime : Float64(-1)
+        let hostTime = inputTime.pointee.mHostTime
+
+        guard let monoFormat = AVAudioFormat(
+            standardFormatWithSampleRate: sourceFormat.mSampleRate,
+            channels: 1
+        ), let monoBuffer = AVAudioPCMBuffer(
+            pcmFormat: monoFormat,
+            frameCapacity: AVAudioFrameCount(channelZeroSamples.count)
+        ), let destination = monoBuffer.floatChannelData?[0] else {
+            return
+        }
+
+        monoBuffer.frameLength = AVAudioFrameCount(channelZeroSamples.count)
+        channelZeroSamples.withUnsafeBufferPointer { source in
+            if let base = source.baseAddress {
+                destination.assign(from: base, count: channelZeroSamples.count)
+            }
+        }
+
+        let avTime: AVAudioTime
+        if sampleTimeValid {
+            avTime = AVAudioTime(
+                hostTime: hostTime,
+                sampleTime: AVAudioFramePosition(sampleTime),
+                atRate: sourceFormat.mSampleRate
+            )
+        } else {
+            avTime = AVAudioTime(hostTime: hostTime)
+        }
+
+        handleMicrophoneBuffer(monoBuffer, time: avTime)
+    }
+
+    private nonisolated static func extractChannelZeroFloatSamples(
+        from inputData: UnsafePointer<AudioBufferList>,
+        format: AudioStreamBasicDescription
+    ) -> [Float]? {
+        guard format.mFormatID == kAudioFormatLinearPCM else { return nil }
+
+        let formatFlags = format.mFormatFlags
+        let isFloatFormat = (formatFlags & kAudioFormatFlagIsFloat) != 0
+        let isSignedIntegerFormat = (formatFlags & kAudioFormatFlagIsSignedInteger) != 0
+        let isNonInterleaved = (formatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+        let bitsPerChannel = Int(format.mBitsPerChannel)
+        let bytesPerSample = max(bitsPerChannel / 8, 1)
+
+        let bufferList = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: inputData)
+        )
+        guard let firstBuffer = bufferList.first, let data = firstBuffer.mData else { return nil }
+
+        let sourceChannels: Int
+        let frameCount: Int
+        if isNonInterleaved {
+            sourceChannels = 1
+            frameCount = Int(firstBuffer.mDataByteSize) / bytesPerSample
+        } else {
+            sourceChannels = max(max(Int(firstBuffer.mNumberChannels), Int(format.mChannelsPerFrame)), 1)
+            let bytesPerFrame = max(Int(format.mBytesPerFrame), bytesPerSample * sourceChannels)
+            frameCount = Int(firstBuffer.mDataByteSize) / max(bytesPerFrame, 1)
+        }
+        guard frameCount > 0 else { return nil }
+
+        var mono = [Float](repeating: 0, count: frameCount)
+
+        if isFloatFormat && bitsPerChannel == 32 {
+            let source = data.assumingMemoryBound(to: Float.self)
+            if isNonInterleaved || sourceChannels == 1 {
+                mono.withUnsafeMutableBufferPointer { dst in
+                    if let dstBase = dst.baseAddress {
+                        dstBase.assign(from: source, count: frameCount)
+                    }
+                }
+            } else {
+                for frame in 0..<frameCount {
+                    mono[frame] = source[frame * sourceChannels]
+                }
+            }
+            return mono
+        }
+
+        if isFloatFormat && bitsPerChannel == 64 {
+            let source = data.assumingMemoryBound(to: Double.self)
+            if isNonInterleaved || sourceChannels == 1 {
+                for frame in 0..<frameCount {
+                    mono[frame] = Float(source[frame])
+                }
+            } else {
+                for frame in 0..<frameCount {
+                    mono[frame] = Float(source[frame * sourceChannels])
+                }
+            }
+            return mono
+        }
+
+        if isSignedIntegerFormat && bitsPerChannel == 16 {
+            let source = data.assumingMemoryBound(to: Int16.self)
+            let scale = Float(Int16.max)
+            if isNonInterleaved || sourceChannels == 1 {
+                for frame in 0..<frameCount {
+                    mono[frame] = Float(source[frame]) / scale
+                }
+            } else {
+                for frame in 0..<frameCount {
+                    mono[frame] = Float(source[frame * sourceChannels]) / scale
+                }
+            }
+            return mono
+        }
+
+        if isSignedIntegerFormat && bitsPerChannel == 32 {
+            let source = data.assumingMemoryBound(to: Int32.self)
+            let scale = Float(Int32.max)
+            if isNonInterleaved || sourceChannels == 1 {
+                for frame in 0..<frameCount {
+                    mono[frame] = Float(source[frame]) / scale
+                }
+            } else {
+                for frame in 0..<frameCount {
+                    mono[frame] = Float(source[frame * sourceChannels]) / scale
+                }
+            }
+            return mono
+        }
+
+        return nil
+    }
+
+    /// Start microphone capture using HAL (preferred) with AVAudioEngine fallback.
     private func startMicrophoneCapture() throws {
+        do {
+            try startMicrophoneCaptureHAL()
+            return
+        } catch {
+            logger.warning("MIC_CAPTURE_BACKEND: HAL start failed, falling back to AVAudioEngine (\(error.localizedDescription))")
+            Task {
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_CAPTURE_BACKEND: backend=avaudioengine_fallback, reason=\(error.localizedDescription)")
+            }
+        }
+
         let engine = AVAudioEngine()
 
         // Set the user-selected mic (or pre-aggregate default) BEFORE reading
@@ -1365,37 +1746,14 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 "MIC_SAMPLE_RATE: hardware=\(finalHardwareSampleRate)Hz, channels=\(finalHardwareChannels), tapOutput=\(finalTapSampleRate)Hz/\(finalTapChannels)ch, tapBufferFrames=\(finalTapBufferFrames), aecTarget=48000Hz, resampler=\(finalResamplerEnabled), resamplerPrimeMethod=\(finalResamplerPrimeMethod), resamplerChannelMap=\(finalResamplerChannelMap)")
         }
 
-        let routeEpochID = routeEpochState.withLock { state in state }
-        _ = micLivenessRecoveryState.withLock { state in
-            if state.lastRouteEpochId != routeEpochID {
-                state.lastRouteEpochId = routeEpochID
-                state.attemptsInCurrentRoute = 0
-            }
-            state.totalCallbacks = 0
-            state.consecutiveDigitalSilenceCallbacks = 0
-            state.recoveryInFlight = false
-        }
-
-        micStartupLivenessTask?.cancel()
-        micCaptureGeneration += 1
-        let captureGeneration = micCaptureGeneration
-        micStartupLivenessTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(Self.micLivenessStartupTimeoutMs))
-            } catch {
-                return
-            }
-            await self?.handleMicStartupLivenessTimeout(
-                generation: captureGeneration,
-                routeEpochId: routeEpochID
-            )
-        }
+        startMicLivenessWatchdog()
     }
 
     /// Stop microphone capture
     private func stopMicrophoneCapture() {
         micStartupLivenessTask?.cancel()
         micStartupLivenessTask = nil
+        stopMicrophoneHALCapture()
         if let engine = microphoneEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -1410,7 +1768,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         routeEpochId: Int
     ) async {
         guard generation == micCaptureGeneration else { return }
-        guard isRecording, microphoneEngine != nil else { return }
+        guard isRecording, hasActiveMicrophoneCapture() else { return }
 
         let btProfileActive = btExternalMicProfileState.withLock { state in state }
         let startupRecoveryDecision = micLivenessRecoveryState.withLock {
@@ -2276,7 +2634,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             previousAppliedInputUID: previousAppliedInputUID,
             refreshedInputUID: refreshedInputUID,
             selectedMicrophoneUID: selectedMicrophoneDeviceID,
-            hasActiveMicrophoneEngine: microphoneEngine != nil,
+            hasActiveMicrophoneEngine: hasActiveMicrophoneCapture(),
             hasSeenCaptureAudio: hasSeenCaptureAudio
         )
         var micRebindStatus = "not_needed"
