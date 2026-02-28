@@ -150,6 +150,30 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// Microphone sample rate (detected at start)
     private var microphoneSampleRate: Double = 48000
+    /// Runtime microphone contract fields used for startup validation/telemetry.
+    private var microphoneNominalSampleRate: Double = 48000
+    private var microphoneHardwareChannels: AVAudioChannelCount = 1
+    private var microphoneDeliveryChannels: AVAudioChannelCount = 1
+    private var microphoneConverterSourceChannels: AVAudioChannelCount = 1
+    private var microphoneConverterOutputSampleRate: Double = 48000
+    private var microphoneCaptureBackend: String = "none"
+    private var micConverterRecoveryTimestamps: [TimeInterval] = []
+
+    private enum MicBackendPolicy: String {
+        case halPreferred
+        case forceAVAudioEngine
+    }
+
+    private struct MicConverterFailureGuardState {
+        var consecutiveFailures: Int = 0
+        var recoveryScheduled: Bool = false
+    }
+
+    private var micBackendPolicy: MicBackendPolicy = .halPreferred
+    private nonisolated(unsafe) let micAECPathDisabledState = OSAllocatedUnfairLock(initialState: false)
+    private nonisolated(unsafe) let micConverterFailureGuardState = OSAllocatedUnfairLock(
+        initialState: MicConverterFailureGuardState()
+    )
 
     /// Dedicated render ring for AEC timing feed (48kHz mono).
     private nonisolated(unsafe) let renderRingForAEC = TapCaptureRing(capacityMs: 600)
@@ -255,6 +279,9 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
     private static let micSilentDetectionConsecutiveCallbacks = 40
     private static let micLivenessStartupTimeoutMs = 4000
     private static let micLivenessMaxRecoveryAttemptsPerRoute = 2
+    private static let micConverterFailureRestartThreshold = 10
+    private static let micConverterRecoveryWindowSeconds: TimeInterval = 60
+    private static let micConverterRecoveryFallbackThreshold = 3
 
     // #region agent log
     private struct AgentMicSignalTelemetry {
@@ -435,6 +462,16 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         print("[TAP DEBUG] Starting tap-based audio capture...")
         logger.info("Starting tap-based audio capture")
+        resetMicPipelinePolicyState()
+        configureMicSignalContract(
+            backend: "none",
+            sourceSampleRate: 48000,
+            nominalSampleRate: 48000,
+            hardwareChannels: 1,
+            deliveryChannels: 1,
+            converterSourceChannels: 1,
+            converterOutputSampleRate: 48000
+        )
 
         // Detect route + topology snapshot before pipeline reset so startup logs include
         // deterministic transport/UID metadata.
@@ -711,6 +748,16 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         _ = btExternalMicProfileState.withLock { state in
             state = false
         }
+        resetMicPipelinePolicyState()
+        configureMicSignalContract(
+            backend: "none",
+            sourceSampleRate: 48000,
+            nominalSampleRate: 48000,
+            hardwareChannels: 1,
+            deliveryChannels: 1,
+            converterSourceChannels: 1,
+            converterOutputSampleRate: 48000
+        )
 
         isRecording = false
         logger.info("Tap-based audio capture stopped")
@@ -1162,6 +1209,188 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         microphoneEngine != nil || microphoneHALIOProcID != nil
     }
 
+    private func resetMicPipelinePolicyState() {
+        micBackendPolicy = .halPreferred
+        micConverterRecoveryTimestamps.removeAll()
+        _ = micAECPathDisabledState.withLock { state in
+            state = false
+        }
+        _ = micConverterFailureGuardState.withLock { state in
+            state.consecutiveFailures = 0
+            state.recoveryScheduled = false
+        }
+    }
+
+    private nonisolated func isMicAecPathDisabled() -> Bool {
+        micAECPathDisabledState.withLock { state in state }
+    }
+
+    private func setMicAecPathDisabled(_ disabled: Bool) {
+        _ = micAECPathDisabledState.withLock { state in
+            state = disabled
+        }
+    }
+
+    private func clearMicConverterFailureGuard() {
+        _ = micConverterFailureGuardState.withLock { state in
+            state.consecutiveFailures = 0
+            state.recoveryScheduled = false
+        }
+    }
+
+    private func configureMicSignalContract(
+        backend: String,
+        sourceSampleRate: Double,
+        nominalSampleRate: Double,
+        hardwareChannels: AVAudioChannelCount,
+        deliveryChannels: AVAudioChannelCount,
+        converterSourceChannels: AVAudioChannelCount,
+        converterOutputSampleRate: Double
+    ) {
+        microphoneCaptureBackend = backend
+        microphoneSampleRate = sourceSampleRate
+        microphoneNominalSampleRate = nominalSampleRate
+        microphoneHardwareChannels = hardwareChannels
+        microphoneDeliveryChannels = max(deliveryChannels, 1)
+        microphoneConverterSourceChannels = max(converterSourceChannels, 1)
+        microphoneConverterOutputSampleRate = converterOutputSampleRate
+    }
+
+    private func validateMicSignalContract() -> (isValid: Bool, reason: String) {
+        Self.evaluateMicSignalContract(
+            sourceSampleRate: microphoneSampleRate,
+            deliveryChannels: microphoneDeliveryChannels,
+            converterSourceChannels: microphoneConverterSourceChannels,
+            converterOutputSampleRate: microphoneConverterOutputSampleRate,
+            converterEnabled: micResampler != nil
+        )
+    }
+
+    private func emitMicSignalContractTelemetry() {
+        let contract = validateMicSignalContract()
+        let converterEnabled = micResampler != nil
+        Task {
+            await DiagnosticLogger.shared.log(
+                .aec,
+                "MIC_SIGNAL_CONTRACT: backend=\(self.microphoneCaptureBackend), sourceRate=\(String(format: "%.1f", self.microphoneSampleRate)), nominalRate=\(String(format: "%.1f", self.microphoneNominalSampleRate)), hardwareChannels=\(self.microphoneHardwareChannels), deliveryChannels=\(self.microphoneDeliveryChannels), converterSourceChannels=\(self.microphoneConverterSourceChannels), converterOutputRate=\(String(format: "%.1f", self.microphoneConverterOutputSampleRate)), converterEnabled=\(converterEnabled), contractValid=\(contract.isValid), reason=\(contract.reason)"
+            )
+        }
+    }
+
+    private func recordMicConverterRecoveryTimestamp(now: TimeInterval) -> Int {
+        micConverterRecoveryTimestamps.removeAll {
+            now - $0 > Self.micConverterRecoveryWindowSeconds
+        }
+        micConverterRecoveryTimestamps.append(now)
+        return micConverterRecoveryTimestamps.count
+    }
+
+    private func handleConverterFailureEscalation(
+        routeEpochId: Int,
+        sourceRms: Float,
+        pipelineRms: Float
+    ) async {
+        guard isRecording, hasActiveMicrophoneCapture() else {
+            clearMicConverterFailureGuard()
+            return
+        }
+
+        let shouldRecover = micConverterFailureGuardState.withLock { state in
+            state.consecutiveFailures >= Self.micConverterFailureRestartThreshold
+        }
+        guard shouldRecover else {
+            _ = micConverterFailureGuardState.withLock { state in
+                state.recoveryScheduled = false
+            }
+            return
+        }
+
+        let canStartRecovery = micLivenessRecoveryState.withLock { state -> Bool in
+            if state.lastRouteEpochId != routeEpochId {
+                state.lastRouteEpochId = routeEpochId
+                state.attemptsInCurrentRoute = 0
+            }
+            guard !state.recoveryInFlight else { return false }
+            state.recoveryInFlight = true
+            return true
+        }
+        guard canStartRecovery else {
+            _ = micConverterFailureGuardState.withLock { state in
+                state.recoveryScheduled = false
+            }
+            return
+        }
+
+        let now = Date().timeIntervalSince1970
+        let recoveriesInWindow = recordMicConverterRecoveryTimestamp(now: now)
+        let attempt = recoveriesInWindow
+        let consecutiveFailures = micConverterFailureGuardState.withLock { state in
+            state.consecutiveFailures
+        }
+
+        let escalationDecision = Self.converterRecoveryEscalationDecision(
+            recoveriesInWindow: recoveriesInWindow,
+            fallbackAlreadyForced: micBackendPolicy == .forceAVAudioEngine
+        )
+        let escalatedToFallback = escalationDecision.escalateToFallback
+        let degradedToAecDisabled = escalationDecision.disableAecPath
+        if escalatedToFallback {
+            micBackendPolicy = .forceAVAudioEngine
+        }
+
+        await DiagnosticLogger.shared.log(
+            .aec,
+            "MIC_CONVERTER_RECOVERY_POLICY: routeEpochId=\(routeEpochId), consecutiveFailures=\(consecutiveFailures), recoveriesInWindow=\(recoveriesInWindow), windowSeconds=\(Int(Self.micConverterRecoveryWindowSeconds)), backendPolicy=\(micBackendPolicy.rawValue), escalatedToFallback=\(escalatedToFallback), degradedToAecDisabled=\(degradedToAecDisabled)"
+        )
+
+        if escalatedToFallback {
+            warningHandler?(
+                .microphone,
+                "Switching microphone backend",
+                "Muesli detected repeated microphone conversion failures and is switching to AVAudioEngine fallback for this recording session.",
+                false
+            )
+        }
+
+        if degradedToAecDisabled {
+            setMicAecPathDisabled(true)
+            warningHandler?(
+                .microphone,
+                "Microphone processing degraded",
+                "Muesli could not restore a stable microphone conversion contract. AEC microphone processing is now disabled for safety in this session.",
+                false
+            )
+            _ = micConverterFailureGuardState.withLock { state in
+                state.recoveryScheduled = false
+                state.consecutiveFailures = 0
+            }
+            _ = micLivenessRecoveryState.withLock { state in
+                if state.lastRouteEpochId == routeEpochId {
+                    state.recoveryInFlight = false
+                }
+            }
+            await DiagnosticLogger.shared.log(
+                .aec,
+                "MIC_CONVERTER_RECOVERY: routeEpochId=\(routeEpochId), status=degraded_aec_disabled, attempt=\(attempt), sourceRms=\(String(format: "%.6f", sourceRms)), pipelineRms=\(String(format: "%.6f", pipelineRms))"
+            )
+            return
+        }
+
+        await triggerMicLivenessRecovery(
+            reason: "converter_failure_streak",
+            routeEpochId: routeEpochId,
+            attempt: attempt,
+            consecutiveSilentCallbacks: 0,
+            totalCallbacks: 0,
+            sourceRms: sourceRms,
+            pipelineRms: pipelineRms
+        )
+
+        _ = micConverterFailureGuardState.withLock { state in
+            state.recoveryScheduled = false
+        }
+    }
+
     private func startMicLivenessWatchdog() {
         let routeEpochID = routeEpochState.withLock { state in state }
         _ = micLivenessRecoveryState.withLock { state in
@@ -1233,10 +1462,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             )
         }
 
-        let sourceFormat = try CoreAudioHelpers.getDeviceFormat(
+        let formatSnapshot = try CoreAudioHelpers.getDeviceFormatSnapshot(
             resolved.deviceID,
             scope: kAudioObjectPropertyScopeInput
         )
+        let sourceFormat = formatSnapshot.streamFormat
         guard sourceFormat.mSampleRate > 0, sourceFormat.mChannelsPerFrame > 0 else {
             throw AudioCaptureError.microphoneStartFailed(
                 NSError(
@@ -1306,7 +1536,6 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         microphoneHALDeviceID = resolved.deviceID
         microphoneHALIOProcID = ioProcID
         microphoneHALFormat = sourceFormat
-        microphoneSampleRate = sourceFormat.mSampleRate
         microphoneEngine = nil
 
         let btExternalMicProfileActive = btExternalMicProfileState.withLock { state in state }
@@ -1314,7 +1543,12 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             btExternalMicProfileActive: btExternalMicProfileActive
         )
         let sourceChannels = AVAudioChannelCount(max(sourceFormat.mChannelsPerFrame, 1))
+        let deliveryChannels: AVAudioChannelCount = 1
+        let converterSourceChannels = deliveryChannels
         let sourceSampleRate = sourceFormat.mSampleRate
+        let nominalSampleRate = formatSnapshot.nominalSampleRate > 0
+            ? formatSnapshot.nominalSampleRate
+            : sourceSampleRate
 
         _ = agentMicRouteSnapshotLock.withLock { state in
             state.requestedUID = resolved.requestedUID
@@ -1324,17 +1558,16 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             state.tapSampleRate = sourceSampleRate
         }
 
-        if sourceSampleRate != 48000 || sourceChannels != 1 {
+        if sourceSampleRate != 48000 || converterSourceChannels != 1 {
             let srcFormat = AVAudioFormat(
                 standardFormatWithSampleRate: sourceSampleRate,
-                channels: sourceChannels
+                channels: converterSourceChannels
             )!
             let dstFormat = AVAudioFormat(
                 standardFormatWithSampleRate: 48000,
                 channels: 1
             )!
             micResampler = AVAudioConverter(from: srcFormat, to: dstFormat)
-            micResampler?.channelMap = Self.microphoneResamplerChannelMapForTapChannels(sourceChannels)
             let estimatedInputFrames = Int(
                 max(
                     Double(tapBufferSizeFrames),
@@ -1355,13 +1588,40 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             micResampleBuffer = nil
         }
 
+        let converterOutputSampleRate = micResampler?.outputFormat.sampleRate ?? sourceSampleRate
+        configureMicSignalContract(
+            backend: "hal",
+            sourceSampleRate: sourceSampleRate,
+            nominalSampleRate: nominalSampleRate,
+            hardwareChannels: sourceChannels,
+            deliveryChannels: deliveryChannels,
+            converterSourceChannels: converterSourceChannels,
+            converterOutputSampleRate: converterOutputSampleRate
+        )
+        clearMicConverterFailureGuard()
+        let contractState = validateMicSignalContract()
+        if contractState.isValid {
+            setMicAecPathDisabled(false)
+        } else {
+            setMicAecPathDisabled(true)
+            warningHandler?(
+                .microphone,
+                "Microphone contract degraded",
+                "HAL microphone capture started but did not satisfy the signal contract. AEC microphone processing is disabled for this session.",
+                false
+            )
+        }
+
         let isNonInterleaved = (sourceFormat.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
         Task {
             await DiagnosticLogger.shared.log(.aec,
                 "MIC_CAPTURE_BACKEND: backend=hal, uid=\(resolved.actualUID), audioDeviceID=\(resolved.deviceID), explicitlySet=\(resolved.explicitlySet)")
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_SAMPLE_RATE: hardware=\(sourceSampleRate)Hz, channels=\(sourceChannels), tapOutput=\(sourceSampleRate)Hz/\(sourceChannels)ch, tapBufferFrames=\(tapBufferSizeFrames), aecTarget=48000Hz, resampler=\(self.micResampler != nil), resamplerPrimeMethod=\(self.micResampler != nil ? "configured" : "notUsed"), resamplerChannelMap=backendManaged, backend=hal, formatFlags=\(sourceFormat.mFormatFlags), bitsPerChannel=\(sourceFormat.mBitsPerChannel), interleaved=\(!isNonInterleaved)")
+                "MIC_SAMPLE_RATE: hardware=\(sourceSampleRate)Hz, nominal=\(nominalSampleRate)Hz, channels=\(sourceChannels), deliveryChannels=\(deliveryChannels), tapOutput=\(sourceSampleRate)Hz/\(deliveryChannels)ch, tapBufferFrames=\(tapBufferSizeFrames), aecTarget=48000Hz, resampler=\(self.micResampler != nil), resamplerPrimeMethod=\(self.micResampler != nil ? "configured" : "notUsed"), resamplerChannelMap=backendManaged, backend=hal, formatFlags=\(sourceFormat.mFormatFlags), bitsPerChannel=\(sourceFormat.mBitsPerChannel), interleaved=\(!isNonInterleaved)")
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_SIGNAL_CONTRACT_VALIDATION: backend=hal, contractValid=\(contractState.isValid), reason=\(contractState.reason)")
         }
+        emitMicSignalContractTelemetry()
 
         logger.info("MIC_CAPTURE_BACKEND: HAL active (uid: \(resolved.actualUID), sampleRate: \(sourceSampleRate), channels: \(sourceChannels))")
         startMicLivenessWatchdog()
@@ -1521,14 +1781,21 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
     /// Start microphone capture using HAL (preferred) with AVAudioEngine fallback.
     private func startMicrophoneCapture() throws {
-        do {
-            try startMicrophoneCaptureHAL()
-            return
-        } catch {
-            logger.warning("MIC_CAPTURE_BACKEND: HAL start failed, falling back to AVAudioEngine (\(error.localizedDescription))")
+        if micBackendPolicy == .halPreferred {
+            do {
+                try startMicrophoneCaptureHAL()
+                return
+            } catch {
+                logger.warning("MIC_CAPTURE_BACKEND: HAL start failed, falling back to AVAudioEngine (\(error.localizedDescription))")
+                Task {
+                    await DiagnosticLogger.shared.log(.aec,
+                        "MIC_CAPTURE_BACKEND: backend=avaudioengine_fallback, reason=\(error.localizedDescription)")
+                }
+            }
+        } else {
             Task {
                 await DiagnosticLogger.shared.log(.aec,
-                    "MIC_CAPTURE_BACKEND: backend=avaudioengine_fallback, reason=\(error.localizedDescription)")
+                    "MIC_CAPTURE_BACKEND_POLICY: forcing_avaudioengine=true, reason=converter_failure_recovery")
             }
         }
 
@@ -1674,24 +1941,27 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let activeEngine = microphoneEngine!
         let tapOutputFormat = activeEngine.inputNode.outputFormat(forBus: 0)
         let tapSampleRate = tapOutputFormat.sampleRate
-        let tapChannels = tapOutputFormat.channelCount
+        let tapChannels = max(tapOutputFormat.channelCount, 1)
+        let deliveryChannels = AVAudioChannelCount(tapChannels)
+        let converterSourceChannels = deliveryChannels
         let hardwareRateForLog = derivedHardwareSampleRate
+        let nominalSampleRate = (try? CoreAudioHelpers.getDeviceNominalSampleRate(actualDeviceID)) ?? tapSampleRate
         _ = agentMicRouteSnapshotLock.withLock { state in
             state.hardwareSampleRate = hardwareRateForLog
             state.tapSampleRate = tapSampleRate
         }
 
-        if tapSampleRate != 48000 || tapChannels != 1 {
+        if tapSampleRate != 48000 || deliveryChannels != 1 {
             let srcFormat = AVAudioFormat(
                 standardFormatWithSampleRate: tapSampleRate,
-                channels: AVAudioChannelCount(tapChannels)
+                channels: converterSourceChannels
             )!
             let dstFormat = AVAudioFormat(
                 standardFormatWithSampleRate: 48000,
                 channels: 1
             )!
             micResampler = AVAudioConverter(from: srcFormat, to: dstFormat)
-            micResampler?.channelMap = Self.microphoneResamplerChannelMapForTapChannels(tapChannels)
+            micResampler?.channelMap = Self.microphoneResamplerChannelMapForTapChannels(deliveryChannels)
             let estimatedInputFrames = Int(
                 max(
                     Double(tapBufferSizeFrames),
@@ -1713,11 +1983,35 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             micResampleBuffer = nil
         }
 
+        let converterOutputSampleRate = micResampler?.outputFormat.sampleRate ?? tapSampleRate
+        configureMicSignalContract(
+            backend: "avaudioengine",
+            sourceSampleRate: tapSampleRate,
+            nominalSampleRate: nominalSampleRate,
+            hardwareChannels: AVAudioChannelCount(max(derivedHardwareChannels, 1)),
+            deliveryChannels: deliveryChannels,
+            converterSourceChannels: converterSourceChannels,
+            converterOutputSampleRate: converterOutputSampleRate
+        )
+        clearMicConverterFailureGuard()
+        let contractState = validateMicSignalContract()
+        if contractState.isValid {
+            setMicAecPathDisabled(false)
+        } else {
+            setMicAecPathDisabled(true)
+            warningHandler?(
+                .microphone,
+                "Microphone contract degraded",
+                "Muesli could not establish a valid microphone conversion contract. AEC microphone processing is disabled for this session.",
+                false
+            )
+        }
+
         logger.info("Microphone capture started at native \(derivedHardwareSampleRate)Hz, \(derivedHardwareChannels)ch, tapOutput=\(tapSampleRate)Hz \(tapChannels)ch")
         let finalHardwareSampleRate = derivedHardwareSampleRate
         let finalHardwareChannels = derivedHardwareChannels
         let finalTapSampleRate = tapSampleRate
-        let finalTapChannels = tapChannels
+        let finalTapChannels = deliveryChannels
         let finalResamplerEnabled = micResampler != nil
         let finalTapBufferFrames = tapBufferSizeFrames
         let finalResamplerPrimeMethod: String
@@ -1743,8 +2037,11 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         }
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "MIC_SAMPLE_RATE: hardware=\(finalHardwareSampleRate)Hz, channels=\(finalHardwareChannels), tapOutput=\(finalTapSampleRate)Hz/\(finalTapChannels)ch, tapBufferFrames=\(finalTapBufferFrames), aecTarget=48000Hz, resampler=\(finalResamplerEnabled), resamplerPrimeMethod=\(finalResamplerPrimeMethod), resamplerChannelMap=\(finalResamplerChannelMap)")
+                "MIC_SAMPLE_RATE: hardware=\(finalHardwareSampleRate)Hz, nominal=\(nominalSampleRate)Hz, channels=\(finalHardwareChannels), tapOutput=\(finalTapSampleRate)Hz/\(finalTapChannels)ch, tapBufferFrames=\(finalTapBufferFrames), aecTarget=48000Hz, resampler=\(finalResamplerEnabled), resamplerPrimeMethod=\(finalResamplerPrimeMethod), resamplerChannelMap=\(finalResamplerChannelMap)")
+            await DiagnosticLogger.shared.log(.aec,
+                "MIC_SIGNAL_CONTRACT_VALIDATION: backend=avaudioengine, contractValid=\(contractState.isValid), reason=\(contractState.reason)")
         }
+        emitMicSignalContractTelemetry()
 
         startMicLivenessWatchdog()
     }
@@ -1761,6 +2058,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         microphoneEngine = nil
         micResampler = nil
         micResampleBuffer = nil
+        clearMicConverterFailureGuard()
     }
 
     private func handleMicStartupLivenessTimeout(
@@ -1834,8 +2132,31 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
         do {
             try startMicrophoneCapture()
-            await DiagnosticLogger.shared.log(.aec,
-                "MIC_LIVENESS_RECOVERY: routeEpochId=\(routeEpochId), status=success, reason=\(reason), attempt=\(attempt)")
+            var contractState = validateMicSignalContract()
+            if !contractState.isValid && micBackendPolicy == .halPreferred {
+                micBackendPolicy = .forceAVAudioEngine
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_LIVENESS_RECOVERY: routeEpochId=\(routeEpochId), status=contract_invalid_retry_with_fallback, reason=\(reason), attempt=\(attempt), contractReason=\(contractState.reason)")
+                stopMicrophoneCapture()
+                try startMicrophoneCapture()
+                contractState = validateMicSignalContract()
+            }
+
+            if contractState.isValid {
+                setMicAecPathDisabled(false)
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_LIVENESS_RECOVERY: routeEpochId=\(routeEpochId), status=success, reason=\(reason), attempt=\(attempt)")
+            } else {
+                setMicAecPathDisabled(true)
+                warningHandler?(
+                    .microphone,
+                    "Microphone recovery degraded",
+                    "Muesli restarted the microphone but could not satisfy the signal contract. AEC microphone processing is disabled for this session.",
+                    false
+                )
+                await DiagnosticLogger.shared.log(.aec,
+                    "MIC_LIVENESS_RECOVERY: routeEpochId=\(routeEpochId), status=degraded_aec_disabled, reason=\(reason), attempt=\(attempt), contractReason=\(contractState.reason)")
+            }
         } catch {
             _ = micLivenessRecoveryState.withLock { state in
                 if state.lastRouteEpochId == routeEpochId {
@@ -1867,13 +2188,31 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let sampleTime: Float64 = time.isSampleTimeValid ? Float64(time.sampleTime) : Float64(-1)
         let hostTime = time.hostTime
 
-        // Determine samples to push to AEC: either resampled to 48kHz mono, or raw channel 0
-        let aecSamples: UnsafeMutablePointer<Float>
+        let resamplerActive = micResampler != nil
+        let expectedOutputFrames48k = Self.converterFailureZeroFillFrameCount(
+            inputFrameCount: frameLength,
+            sourceSampleRate: buffer.format.sampleRate,
+            resamplerActive: resamplerActive
+        )
+        let expectedFrameCount = max(expectedOutputFrames48k, 1)
+
+        // Determine samples to push to AEC: either resampled 48kHz mono, or
+        // deterministic zero-fill on conversion failure to preserve timeline cadence.
+        var aecSamples: UnsafeMutablePointer<Float>
         var aecCount: Int
+        var zeroFillAllocation: UnsafeMutablePointer<Float>?
+        var zeroFillCount = 0
         var converterStatusRaw: Int = -1
         var converterStatusLabel = "notUsed"
         var converterError = "none"
+        var converterFailed = false
         let btExternalMicProfileActive = btExternalMicProfileState.withLock { state in state }
+        defer {
+            if let zeroFillAllocation {
+                zeroFillAllocation.deinitialize(count: zeroFillCount)
+                zeroFillAllocation.deallocate()
+            }
+        }
 
         if let converter = micResampler {
             let requiredOutputFrames = Self.microphoneResamplerOutputFrameCapacity(
@@ -1904,61 +2243,86 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
             }
 
             if let outBuf = micResampleBuffer {
-            outBuf.frameLength = 0
-            var error: NSError?
-            var consumed = false
-            let status = converter.convert(to: outBuf, error: &error) { _, outStatus in
-                if consumed {
-                    outStatus.pointee = .noDataNow
-                    return nil
+                outBuf.frameLength = 0
+                var error: NSError?
+                var consumed = false
+                let status = converter.convert(to: outBuf, error: &error) { _, outStatus in
+                    if consumed {
+                        outStatus.pointee = .noDataNow
+                        return nil
+                    }
+                    consumed = true
+                    outStatus.pointee = .haveData
+                    return buffer
                 }
-                consumed = true
-                outStatus.pointee = .haveData
-                return buffer
-            }
-            converterStatusRaw = status.rawValue
-            switch status {
-            case .haveData:
-                converterStatusLabel = "haveData"
-            case .inputRanDry:
-                converterStatusLabel = "inputRanDry"
-            case .endOfStream:
-                converterStatusLabel = "endOfStream"
-            case .error:
-                converterStatusLabel = "error"
-            @unknown default:
-                converterStatusLabel = "unknown"
-            }
-            if let e = error {
-                converterError = e.localizedDescription
-                // Fallback: use raw channel 0
-                aecSamples = floatChannelData[0]
-                aecCount = frameLength
-                _ = e  // suppress unused warning
-            } else {
-                converterError = "none"
-                aecSamples = outBuf.floatChannelData![0]
-                aecCount = Int(outBuf.frameLength)
-            }
+                converterStatusRaw = status.rawValue
+                switch status {
+                case .haveData:
+                    converterStatusLabel = "haveData"
+                case .inputRanDry:
+                    converterStatusLabel = "inputRanDry"
+                case .endOfStream:
+                    converterStatusLabel = "endOfStream"
+                case .error:
+                    converterStatusLabel = "error"
+                @unknown default:
+                    converterStatusLabel = "unknown"
+                }
+
+                let hasUsableOutput = (status == .haveData || status == .inputRanDry)
+                    && error == nil
+                    && outBuf.frameLength > 0
+                if hasUsableOutput, let outData = outBuf.floatChannelData?[0] {
+                    converterError = "none"
+                    aecSamples = outData
+                    aecCount = Int(outBuf.frameLength)
+                } else {
+                    converterFailed = true
+                    converterError = error?.localizedDescription ?? "converter_status_\(converterStatusLabel)"
+                    let zeroPtr = UnsafeMutablePointer<Float>.allocate(capacity: expectedFrameCount)
+                    zeroPtr.initialize(repeating: 0, count: expectedFrameCount)
+                    zeroFillAllocation = zeroPtr
+                    zeroFillCount = expectedFrameCount
+                    aecSamples = zeroPtr
+                    aecCount = expectedFrameCount
+                }
             } else {
                 converterStatusLabel = "noOutputBuffer"
-                // Fallback: use raw channel 0 when output buffer allocation fails.
-                aecSamples = floatChannelData[0]
-                aecCount = frameLength
+                converterError = "no_output_buffer"
+                converterFailed = true
+                let zeroPtr = UnsafeMutablePointer<Float>.allocate(capacity: expectedFrameCount)
+                zeroPtr.initialize(repeating: 0, count: expectedFrameCount)
+                zeroFillAllocation = zeroPtr
+                zeroFillCount = expectedFrameCount
+                aecSamples = zeroPtr
+                aecCount = expectedFrameCount
             }
         } else {
             aecSamples = floatChannelData[0]
             aecCount = frameLength
         }
 
+        let aecMicPathDisabledNow = isMicAecPathDisabled()
+        if aecMicPathDisabledNow {
+            converterStatusLabel = "aecPathDisabled"
+            converterError = "aec_mic_path_disabled"
+            if let existingZeroFill = zeroFillAllocation {
+                aecSamples = existingZeroFill
+                aecCount = zeroFillCount
+            } else {
+                let zeroPtr = UnsafeMutablePointer<Float>.allocate(capacity: expectedFrameCount)
+                zeroPtr.initialize(repeating: 0, count: expectedFrameCount)
+                zeroFillAllocation = zeroPtr
+                zeroFillCount = expectedFrameCount
+                aecSamples = zeroPtr
+                aecCount = expectedFrameCount
+            }
+        }
+
         guard aecCount > 0 else { return }
 
         let sourceRms = calculateRMS(samples: UnsafePointer(floatChannelData[0]), count: frameLength)
         let pipelineRms = calculateRMS(samples: UnsafePointer(aecSamples), count: aecCount)
-        let resamplerActive = micResampler != nil
-        let expectedOutputFrames48k = resamplerActive
-            ? Int(round(Double(frameLength) * 48000.0 / max(buffer.format.sampleRate, 1.0)))
-            : frameLength
         let maxReasonableOutputFrames48k = resamplerActive
             ? expectedOutputFrames48k + 1024
             : expectedOutputFrames48k
@@ -1973,6 +2337,39 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         let routeSnapshot = agentMicRouteSnapshotLock.withLock { state in state }
         let sourceSampleRate = buffer.format.sampleRate
         let routeEpochID = routeEpochState.withLock { state in state }
+        let converterFailedSnapshot = converterFailed
+        let converterRecoveryDecision = micConverterFailureGuardState.withLock { state -> (shouldSchedule: Bool, consecutiveFailures: Int) in
+            if aecMicPathDisabledNow {
+                state.consecutiveFailures = 0
+                state.recoveryScheduled = false
+                return (false, 0)
+            }
+            if converterFailedSnapshot {
+                state.consecutiveFailures += 1
+                guard state.consecutiveFailures >= Self.micConverterFailureRestartThreshold,
+                      !state.recoveryScheduled else {
+                    return (false, state.consecutiveFailures)
+                }
+                state.recoveryScheduled = true
+                return (true, state.consecutiveFailures)
+            }
+            state.consecutiveFailures = 0
+            if !state.recoveryScheduled {
+                return (false, 0)
+            }
+            // Recovery was scheduled but conversion resumed before escalation ran.
+            state.recoveryScheduled = false
+            return (false, 0)
+        }
+        if converterRecoveryDecision.shouldSchedule {
+            Task { [weak self] in
+                await self?.handleConverterFailureEscalation(
+                    routeEpochId: routeEpochID,
+                    sourceRms: sourceRms,
+                    pipelineRms: pipelineRms
+                )
+            }
+        }
         let firstCaptureAudio = captureStartupState.withLock { state -> (shouldLog: Bool, latencyMs: Double) in
             guard !state.firstCaptureAudioLogged else {
                 return (false, -1)
@@ -2054,6 +2451,10 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 )
             }
         }
+        let consecutiveConverterFailures = micConverterFailureGuardState.withLock { state in
+            state.consecutiveFailures
+        }
+        let aecMicPathDisabled = isMicAecPathDisabled()
         let telemetryDecision = agentMicSignalTelemetryLock.withLock { state -> (Bool, Bool, Bool, Int, String?) in
             state.callbackCount += 1
             state.minInputFrames = min(state.minInputFrames, frameLength)
@@ -2085,6 +2486,7 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
                 summaryPayload =
                     "callbacks=\(state.callbackCount), minInputFrames=\(minIn), maxInputFrames=\(state.maxInputFrames), avgInputFrames=\(String(format: "%.1f", Double(state.sumInputFrames) / Double(callbacks))), minOutputFrames=\(minOut), maxOutputFrames=\(state.maxOutputFrames), avgOutputFrames=\(String(format: "%.1f", Double(state.sumOutputFrames) / Double(callbacks))), statusHaveData=\(state.statusHaveData), statusInputRanDry=\(state.statusInputRanDry), statusError=\(state.statusError), sourceSampleRate=\(String(format: "%.1f", sourceSampleRate)), resamplerActive=\(resamplerActive)"
                     + ", haveDataPct=\(String(format: "%.1f", haveDataPct)), inputRanDryPct=\(String(format: "%.1f", inputRanDryPct))"
+                    + ", consecutiveConverterFailures=\(consecutiveConverterFailures), aecMicPathDisabled=\(aecMicPathDisabled)"
                 state.callbackCount = 0
                 state.minInputFrames = .max
                 state.maxInputFrames = 0
@@ -2461,6 +2863,64 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
         return AVAudioFrameCount(max(expectedOutputFrames + margin, minimumCapacity))
     }
 
+    nonisolated static func converterFailureZeroFillFrameCount(
+        inputFrameCount: Int,
+        sourceSampleRate: Double,
+        resamplerActive: Bool
+    ) -> Int {
+        if !resamplerActive {
+            return max(inputFrameCount, 1)
+        }
+        let expected = Int(
+            round(Double(max(inputFrameCount, 1)) * 48000.0 / max(sourceSampleRate, 1.0))
+        )
+        return max(expected, 1)
+    }
+
+    nonisolated static func evaluateMicSignalContract(
+        sourceSampleRate: Double,
+        deliveryChannels: AVAudioChannelCount,
+        converterSourceChannels: AVAudioChannelCount,
+        converterOutputSampleRate: Double,
+        converterEnabled: Bool
+    ) -> (isValid: Bool, reason: String) {
+        guard deliveryChannels > 0 else {
+            return (false, "delivery_channels_invalid")
+        }
+
+        if converterEnabled {
+            guard converterSourceChannels == deliveryChannels else {
+                return (false, "converter_source_channels_mismatch")
+            }
+            guard abs(converterOutputSampleRate - 48000.0) < 0.5 else {
+                return (false, "converter_output_rate_not_48k")
+            }
+            return (true, "converter_contract_ok")
+        }
+
+        guard abs(sourceSampleRate - 48000.0) < 0.5 else {
+            return (false, "native_source_rate_not_48k_without_converter")
+        }
+        guard deliveryChannels == 1 else {
+            return (false, "native_delivery_channels_not_mono_without_converter")
+        }
+        return (true, "native_contract_ok")
+    }
+
+    nonisolated static func converterRecoveryEscalationDecision(
+        recoveriesInWindow: Int,
+        fallbackAlreadyForced: Bool,
+        fallbackThreshold: Int = micConverterRecoveryFallbackThreshold
+    ) -> (escalateToFallback: Bool, disableAecPath: Bool) {
+        guard recoveriesInWindow >= fallbackThreshold else {
+            return (false, false)
+        }
+        if fallbackAlreadyForced {
+            return (false, true)
+        }
+        return (true, false)
+    }
+
     nonisolated static func shouldTriggerMicSilentRecovery(
         btExternalMicProfileActive: Bool,
         sourceRms: Float,
@@ -2654,10 +3114,26 @@ actor TapAudioCaptureService: AudioCaptureServiceProtocol {
 
             do {
                 try startMicrophoneCapture()
-                micRebindStatus = "success"
-                Task {
-                    await DiagnosticLogger.shared.log(.aec,
-                        "MIC_ROUTE_REBIND: routeEpochId=\(epochID), status=success, reason=\(rebindDecision.reason)")
+                let contractState = validateMicSignalContract()
+                if contractState.isValid {
+                    micRebindStatus = "success"
+                    Task {
+                        await DiagnosticLogger.shared.log(.aec,
+                            "MIC_ROUTE_REBIND: routeEpochId=\(epochID), status=success, reason=\(rebindDecision.reason)")
+                    }
+                } else {
+                    micRebindStatus = "degraded_contract_invalid"
+                    setMicAecPathDisabled(true)
+                    warningHandler?(
+                        .microphone,
+                        "Microphone route recovery degraded",
+                        "Route recovery restarted the microphone but could not restore a valid signal contract. AEC microphone processing is disabled for this session.",
+                        false
+                    )
+                    Task {
+                        await DiagnosticLogger.shared.log(.aec,
+                            "MIC_ROUTE_REBIND: routeEpochId=\(epochID), status=degraded_contract_invalid, reason=\(rebindDecision.reason), contractReason=\(contractState.reason)")
+                    }
                 }
             } catch {
                 micRebindStatus = "failed"

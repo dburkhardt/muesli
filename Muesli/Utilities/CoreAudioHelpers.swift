@@ -62,6 +62,11 @@ struct AudioRouteSnapshot {
     let isBluetoothExternalMicProfile: Bool
 }
 
+struct AudioDeviceFormatSnapshot {
+    let nominalSampleRate: Double
+    let streamFormat: AudioStreamBasicDescription
+}
+
 /// Core Audio utility functions
 struct CoreAudioHelpers {
     // MARK: - Device Discovery
@@ -280,6 +285,44 @@ struct CoreAudioHelpers {
         }
 
         return format
+    }
+
+    /// Get the nominal sample rate configured for a device.
+    static func getDeviceNominalSampleRate(_ deviceID: AudioDeviceID) throws -> Double {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var nominalSampleRate: Float64 = 0
+        var propertySize = UInt32(MemoryLayout<Float64>.size)
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &nominalSampleRate
+        )
+        guard status == noErr else {
+            throw CoreAudioError.apiError(status)
+        }
+
+        return nominalSampleRate
+    }
+
+    /// Snapshot both nominal and active stream format for diagnostics/contract validation.
+    static func getDeviceFormatSnapshot(
+        _ deviceID: AudioDeviceID,
+        scope: AudioObjectPropertyScope
+    ) throws -> AudioDeviceFormatSnapshot {
+        let streamFormat = try getDeviceFormat(deviceID, scope: scope)
+        let nominalSampleRate = (try? getDeviceNominalSampleRate(deviceID)) ?? streamFormat.mSampleRate
+        return AudioDeviceFormatSnapshot(
+            nominalSampleRate: nominalSampleRate,
+            streamFormat: streamFormat
+        )
     }
 
     // MARK: - Process ID Helpers
