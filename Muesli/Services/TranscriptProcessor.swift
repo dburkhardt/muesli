@@ -12,7 +12,7 @@ final class TranscriptProcessor {
     
     /// Minimum words from other speaker to end current block
     /// (brief interjections like "uh-huh" don't break flow)
-    private let minWordsToBreakFlow: Int = 10
+    private let minWordsToBreakFlow: Int = 20
     
     // MARK: - State
     
@@ -109,15 +109,23 @@ final class TranscriptProcessor {
             speaker: segment.speaker
         )
         
-        addSegmentToBlocks(cleanedSegment)
+        if let lastBlock = blocks.last, lastBlock.speaker != speaker {
+            // Speaker switch — hold this segment; pending-resolution logic above
+            // will decide whether to commit or drop it on the next call
+            pendingInterjection = cleanedSegment
+        } else {
+            // Same speaker (or first segment) — append directly
+            addSegmentToBlocks(cleanedSegment)
+        }
     }
-    
+
     /// Finalize processing - flush any pending content
     func finalize() {
         if let pending = pendingInterjection {
             addSegmentToBlocks(pending)
             pendingInterjection = nil
         }
+        consolidateBlocks()
     }
     
     /// Reset processor state
@@ -322,5 +330,22 @@ final class TranscriptProcessor {
             )
             blocks.append(newBlock)
         }
+    }
+
+    /// Merge consecutive same-speaker blocks that are close in time and under word limit
+    /// Called from finalize() after flushing the pending interjection
+    private func consolidateBlocks(timeGapThreshold: TimeInterval = 10.0, maxWords: Int = 150) {
+        var result: [TranscriptBlock] = []
+        for block in blocks {
+            if let last = result.last,
+               last.speaker == block.speaker,
+               block.startTimestamp - last.endTimestamp < timeGapThreshold,
+               last.wordCount + block.wordCount < maxWords {
+                result[result.count - 1].append(block.text, endTimestamp: block.endTimestamp)
+            } else {
+                result.append(block)
+            }
+        }
+        blocks = result
     }
 }

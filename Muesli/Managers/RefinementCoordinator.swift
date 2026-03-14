@@ -174,7 +174,7 @@ final class RefinementCoordinator {
                 }
                 
                 // Refine block-based transcript
-                let refinedBlocks = try await refinementService.refineTranscript(blocks)
+                let refinedBlocks = try await refinementService.consolidateAndRefineTranscript(blocks)
                 
                 try Task.checkCancellation()
                 
