@@ -335,6 +335,7 @@ final class TranscriptProcessor {
     /// Merge consecutive same-speaker blocks that are close in time and under word limit
     /// Called from finalize() after flushing the pending interjection
     private func consolidateBlocks(timeGapThreshold: TimeInterval = 10.0, maxWords: Int = 150) {
+        // Pass 1: time-gap merge
         var result: [TranscriptBlock] = []
         for block in blocks {
             if let last = result.last,
@@ -346,6 +347,30 @@ final class TranscriptProcessor {
                 result.append(block)
             }
         }
-        blocks = result
+
+        // Pass 2: sentence-boundary enforcement
+        // If a block doesn't end with sentence-ending punctuation and the next block
+        // is the same speaker, merge them so blocks always end at sentence boundaries.
+        let sentenceHardCap = 200
+        var sentenceResult: [TranscriptBlock] = []
+        for block in result {
+            if let last = sentenceResult.last,
+               last.speaker == block.speaker,
+               !endsSentence(last.text),
+               last.wordCount + block.wordCount < sentenceHardCap {
+                sentenceResult[sentenceResult.count - 1].append(block.text, endTimestamp: block.endTimestamp)
+            } else {
+                sentenceResult.append(block)
+            }
+        }
+
+        blocks = sentenceResult
+    }
+
+    /// Returns true if text ends with sentence-ending punctuation
+    private func endsSentence(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else { return false }
+        return last == "." || last == "!" || last == "?" || last == "…"
     }
 }
