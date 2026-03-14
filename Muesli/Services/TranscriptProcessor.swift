@@ -349,14 +349,20 @@ final class TranscriptProcessor {
         }
 
         // Pass 2: sentence-boundary enforcement
-        // If a block doesn't end with sentence-ending punctuation and the next block
-        // is the same speaker, merge them so blocks always end at sentence boundaries.
-        let sentenceHardCap = 200
+        // Only stitch a block onto the previous one if:
+        //   (a) same speaker
+        //   (b) previous block is short (a fragment, not a full paragraph)
+        //   (c) previous block doesn't end at a sentence boundary
+        //   (d) combined word count stays under the hard cap
+        // This fixes micro-fragments without merging long blocks into walls of text.
+        let sentenceFragmentThreshold = 30  // only merge if previous block is a short fragment
+        let sentenceHardCap = 80
         var sentenceResult: [TranscriptBlock] = []
         for block in result {
             if let last = sentenceResult.last,
                last.speaker == block.speaker,
                !endsSentence(last.text),
+               last.wordCount < sentenceFragmentThreshold,
                last.wordCount + block.wordCount < sentenceHardCap {
                 sentenceResult[sentenceResult.count - 1].append(block.text, endTimestamp: block.endTimestamp)
             } else {
