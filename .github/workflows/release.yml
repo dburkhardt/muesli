@@ -64,7 +64,7 @@ jobs:
 
       - name: Set up Xcode
         # maxim-lobanov/setup-xcode v1
-        uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
@@ -158,7 +158,7 @@ jobs:
 
       - name: Cache Homebrew packages
         # actions/cache v5
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
         with:
           path: |
             ~/Library/Caches/Homebrew
@@ -170,7 +170,7 @@ jobs:
 
       - name: Cache Swift packages
         # actions/cache v5
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/Muesli-*/SourcePackages
@@ -181,7 +181,7 @@ jobs:
       - name: Cache WebRTC XCFramework
         id: cache-webrtc
         # actions/cache v5
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
         with:
           path: Muesli/Frameworks/webrtc_audio_processing.xcframework
           key: webrtc-v1.3-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.XCODE_VERSION }}-${{ hashFiles('scripts/build-webrtc-aec.sh', 'scripts/cross_mac_*.txt') }}
