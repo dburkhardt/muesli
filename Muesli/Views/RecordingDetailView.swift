@@ -272,8 +272,9 @@ struct RecordingDetailView: View {
                 .padding(.bottom, 100) // Space for floating control bar
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onChange(of: session.transcriptBlocks.count) { _, _ in
-                // Auto-scroll to latest block
+            .onChange(of: session.transcriptBlocks.last?.id) { _, _ in
+                // Auto-scroll to latest block (use last block ID, not count,
+                // because consolidation can reduce count while new content arrives)
                 if let lastBlock = session.transcriptBlocks.last {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(lastBlock.id, anchor: .bottom)
@@ -335,10 +336,16 @@ struct RecordingDetailView: View {
         HStack(spacing: 16) {
             // Microphone control with level indicator
             microphoneControl(session: session)
-            
+
+            // Copy transcript (consolidated snapshot for clean clipboard output)
+            CopyTranscriptButton(
+                getBlocks: { session.consolidatedTranscriptBlocks() },
+                helpText: "Copy transcript so far"
+            )
+
             // Settings menu (Live Transcript + Audio Source)
             settingsMenuControl(session: session)
-            
+
             // Stop recording button
             stopRecordingButton(session: session)
         }
@@ -563,8 +570,9 @@ struct RecordingDetailView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onChange(of: session.transcriptBlocks.count) { _, _ in
-                // Auto-scroll to latest block
+            .onChange(of: session.transcriptBlocks.last?.id) { _, _ in
+                // Auto-scroll to latest block (use last block ID, not count,
+                // because consolidation can reduce count while new content arrives)
                 if let lastBlock = session.transcriptBlocks.last {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(lastBlock.id, anchor: .bottom)

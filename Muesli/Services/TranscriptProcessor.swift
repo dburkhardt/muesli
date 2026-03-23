@@ -16,6 +16,11 @@ final class TranscriptProcessor {
     /// Hard word-count ceiling for finalized blocks (prevents walls of text)
     private let maxWordsAfterConsolidation: Int = 120
 
+    /// Minimum words in a block before absent punctuation is treated as a natural stop.
+    /// Below this threshold a block without sentence-ending punctuation is a fragment
+    /// and gets merged with the next same-speaker block.
+    private let minWordsToStandAlone: Int = 60
+
     // MARK: - State
 
     /// Current blocks being built
@@ -85,6 +90,36 @@ final class TranscriptProcessor {
     /// Must be called once after all segments have been processed.
     func finalize() {
         consolidateBlocks()
+    }
+
+    /// Merge settled blocks (all except the last/active block) during live recording.
+    /// Called automatically when a new block is created, so the previously-active block
+    /// becomes eligible for merging. O(n) string ops — microseconds even for hundreds of blocks.
+    func consolidateSettledBlocks() {
+        guard blocks.count >= 2 else { return }
+
+        let activeBlock = blocks.removeLast()
+        consolidateBlocks()
+        blocks.append(activeBlock)
+    }
+
+    /// Return a fully consolidated copy of all blocks (including the active block)
+    /// for clipboard use, without mutating live state.
+    func consolidatedBlocksSnapshot() -> [TranscriptBlock] {
+        var result: [TranscriptBlock] = []
+
+        for block in blocks {
+            if let last = result.last,
+               last.speaker == block.speaker,
+               last.wordCount + block.wordCount <= maxWordsAfterConsolidation,
+               !endsSentence(last.text) || sentenceCount(last.text) < targetSentencesPerBlock {
+                result[result.count - 1].append(block.text, endTimestamp: block.endTimestamp)
+            } else {
+                result.append(block)
+            }
+        }
+
+        return result
     }
 
     /// Reset processor state
@@ -280,6 +315,8 @@ final class TranscriptProcessor {
                 text: text,
                 startTimestamp: timestamp
             ))
+            // New block created — merge settled blocks (all except the new active block)
+            consolidateSettledBlocks()
         }
     }
 
@@ -300,9 +337,21 @@ final class TranscriptProcessor {
         for block in blocks {
             if let last = result.last,
                last.speaker == block.speaker,
-               last.wordCount + block.wordCount <= maxWordsAfterConsolidation,
-               !endsSentence(last.text) || sentenceCount(last.text) < targetSentencesPerBlock {
-                result[result.count - 1].append(block.text, endTimestamp: block.endTimestamp)
+               last.wordCount + block.wordCount <= maxWordsAfterConsolidation {
+                let shouldMerge: Bool
+                if endsSentence(last.text) {
+                    // Clean sentence boundary: continue accumulating until target paragraph size
+                    shouldMerge = sentenceCount(last.text) < targetSentencesPerBlock
+                } else {
+                    // No punctuation: merge only if block is too short to stand alone.
+                    // Long unpunctuated blocks are WhisperKit's limitation — stop here.
+                    shouldMerge = last.wordCount < minWordsToStandAlone
+                }
+                if shouldMerge {
+                    result[result.count - 1].append(block.text, endTimestamp: block.endTimestamp)
+                } else {
+                    result.append(block)
+                }
             } else {
                 result.append(block)
             }

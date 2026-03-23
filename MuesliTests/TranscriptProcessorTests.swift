@@ -849,7 +849,124 @@ final class TranscriptProcessorTests: XCTestCase {
 
         for block in processor.blocks {
             XCTAssertLessThanOrEqual(block.wordCount, 130,
-                "No block should exceed hard word cap, got \(block.wordCount) words")
+                "No block should exceed hard word cap (120 + margin), got \(block.wordCount) words")
         }
+    }
+
+    // MARK: - Part 8: Incremental Consolidation
+
+    /// Verify that older (settled) blocks merge while the active block stays separate
+    func testIncrementalConsolidationMergesSettledBlocks() {
+        // Feed segments that create 3+ blocks via speaker switches:
+        // Block 1: me (settled after block 2 created)
+        // Block 2: them (settled after block 3 created)
+        // Block 3: me (active)
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: "I was thinking about the problem",  // no period — should merge with next me block
+            timestamp: 0.0, speaker: .me
+        )
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "Yes, that makes sense to me actually.",
+            timestamp: 1.0, speaker: .them
+        )
+        let s3 = TranscriptionService.TranscriptSegment(
+            text: "And here is the continuation of my thoughts on this matter.",
+            timestamp: 2.0, speaker: .me
+        )
+        processor.processSegment(s1)
+        processor.processSegment(s2)
+        processor.processSegment(s3)
+
+        // After incremental consolidation (triggered automatically):
+        // - Settled blocks should have been consolidated where possible
+        // - The last block (active) should still be separate
+        XCTAssertTrue(processor.blocks.count >= 2,
+            "Should have at least 2 blocks (them + active me)")
+        // The last block should be the active me block
+        XCTAssertEqual(processor.blocks.last?.speaker, .me)
+        XCTAssertTrue(processor.blocks.last?.text.contains("continuation") ?? false,
+            "Active block should contain the latest segment")
+    }
+
+    /// Verify the last (active) block is not touched by incremental consolidation
+    func testActiveBlockNotMergedDuringLive() {
+        // Create two blocks from same speaker by exceeding word limit
+        let words = (1...80).map { "word\($0)" }
+        let longText = words.joined(separator: " ")
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: longText,
+            timestamp: 0.0, speaker: .me
+        )
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "This is the active block with new content.",
+            timestamp: 1.0, speaker: .me
+        )
+        processor.processSegment(s1)
+        processor.processSegment(s2)
+
+        // The active block (last) should remain separate — not merged into the first
+        XCTAssertEqual(processor.blocks.count, 2,
+            "Active block should not be merged with settled blocks")
+        XCTAssertEqual(processor.blocks.last?.text, "This is the active block with new content.")
+    }
+
+    /// Verify snapshot merges everything (including active block) for clipboard
+    func testConsolidatedSnapshotIncludesActiveBlock() {
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: "First part of speech",  // no period
+            timestamp: 0.0, speaker: .me
+        )
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "Interjection from another speaker here.",
+            timestamp: 1.0, speaker: .them
+        )
+        let s3 = TranscriptionService.TranscriptSegment(
+            text: "second part continuing the thought",  // no period — active block
+            timestamp: 2.0, speaker: .me
+        )
+        processor.processSegment(s1)
+        processor.processSegment(s2)
+        processor.processSegment(s3)
+
+        let snapshot = processor.consolidatedBlocksSnapshot()
+
+        // Snapshot should consolidate all blocks (including active)
+        let allText = snapshot.map { $0.text }.joined(separator: " ")
+        XCTAssertTrue(allText.contains("First part"))
+        XCTAssertTrue(allText.contains("Interjection"))
+        XCTAssertTrue(allText.contains("second part"))
+
+        // Live blocks should be unchanged (snapshot is non-mutating)
+        XCTAssertTrue(processor.blocks.count >= 2,
+            "Live blocks should not be affected by snapshot")
+    }
+
+    /// Verify merged block keeps the first block's UUID
+    func testBlockIdsStableAfterConsolidation() {
+        // Create two same-speaker blocks that should merge
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: "Start of thought",  // no period
+            timestamp: 0.0, speaker: .me
+        )
+        processor.processSegment(s1)
+        let firstBlockId = processor.blocks.first!.id
+
+        // Force a new block via speaker switch, then back
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "Brief interjection from the other speaker here.",
+            timestamp: 1.0, speaker: .them
+        )
+        let s3 = TranscriptionService.TranscriptSegment(
+            text: "and conclusion of the original thought.",
+            timestamp: 2.0, speaker: .me
+        )
+        processor.processSegment(s2)
+        processor.processSegment(s3)
+
+        // After finalize, the first me block should keep its original ID
+        processor.finalize()
+        let meBlocks = processor.blocks.filter { $0.speaker == .me }
+        XCTAssertTrue(meBlocks.contains(where: { $0.id == firstBlockId }),
+            "Merged block should preserve the first block's UUID")
     }
 }

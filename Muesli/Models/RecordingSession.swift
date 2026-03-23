@@ -285,6 +285,12 @@ final class RecordingSession: Identifiable {
         transcriptBlocks = transcriptProcessor.blocks
     }
     
+    /// Return a fully consolidated copy of all transcript blocks (including the active block)
+    /// for clipboard use during live recording, without mutating live state.
+    func consolidatedTranscriptBlocks() -> [TranscriptBlock] {
+        return transcriptProcessor.consolidatedBlocksSnapshot()
+    }
+
     /// Finalize transcript processing (call when recording ends)
     func finalizeTranscript() {
         transcriptProcessor.finalize()
