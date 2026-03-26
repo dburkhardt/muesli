@@ -109,6 +109,10 @@ final class RecordingSession: Identifiable {
     /// Whether recording without transcription (no model available)
     var isRecordingOnly: Bool = false
     
+    /// Effective live transcription model used during this session.
+    /// Captures fallback model usage when the preferred active model isn't ready.
+    var effectiveLiveModel: ModelManager.ModelSize?
+    
     /// Description of the audio source for UI display
     let audioSourceDescription: String = "All System Audio"
     
@@ -155,6 +159,9 @@ final class RecordingSession: Identifiable {
     
     /// Whether the transcript is being finalized via second-pass ASR
     var isFinalizingTranscript: Bool = false
+
+    /// Start time for stop/finalization processing UI.
+    var finalizationStartTime: Date?
     
     /// Update the live draft text and speaker shown during recording
     func updateLiveDraft(_ text: String, speaker: TranscriptBlock.Speaker) {
@@ -278,6 +285,12 @@ final class RecordingSession: Identifiable {
         transcriptBlocks = transcriptProcessor.blocks
     }
     
+    /// Return a fully consolidated copy of all transcript blocks (including the active block)
+    /// for clipboard use during live recording, without mutating live state.
+    func consolidatedTranscriptBlocks() -> [TranscriptBlock] {
+        return transcriptProcessor.consolidatedBlocksSnapshot()
+    }
+
     /// Finalize transcript processing (call when recording ends)
     func finalizeTranscript() {
         transcriptProcessor.finalize()
@@ -301,6 +314,7 @@ final class RecordingSession: Identifiable {
         liveDraftText = nil
         liveDraftSpeaker = nil
         isFinalizingTranscript = false
+        finalizationStartTime = nil
     }
     
     // MARK: - Error Handling

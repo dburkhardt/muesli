@@ -370,7 +370,7 @@ struct RefinementToggleControl: View {
 /// background reprocessing or refinement is in progress. Displays an
 /// animated icon, status label, and elapsed timer.
 struct FloatingProcessingIndicator: View {
-    enum Phase {
+    enum Phase: Equatable {
         case reprocessing
         case refining
         
@@ -398,9 +398,12 @@ struct FloatingProcessingIndicator: View {
     
     let phase: Phase
     let startTime: Date
+    var statusText: String? = nil
     var onTap: (() -> Void)?
+    var onCancel: (() -> Void)?
     
     @State private var isPulsing = false
+    @State private var rotationDegrees: Double = 0
     @State private var now = Date()
     
     private var elapsedText: String {
@@ -411,13 +414,14 @@ struct FloatingProcessingIndicator: View {
     }
     
     var body: some View {
-        let content = HStack(spacing: 8) {
+        HStack(spacing: 8) {
             Image(systemName: phase.icon)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(phase.tint)
-                .opacity(isPulsing ? 1.0 : 0.5)
+                .rotationEffect(.degrees(rotationDegrees))
+                .opacity(phase == .reprocessing ? 1.0 : (isPulsing ? 1.0 : 0.5))
             
-            Text(phase.label)
+            Text(statusText ?? phase.label)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -425,6 +429,16 @@ struct FloatingProcessingIndicator: View {
             Text(elapsedText)
                 .font(.system(size: 12, weight: .medium).monospacedDigit())
                 .foregroundStyle(.tertiary)
+
+            if let onCancel {
+                Button(action: onCancel) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancel")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -433,28 +447,46 @@ struct FloatingProcessingIndicator: View {
                 .fill(.regularMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
         }
-        
-        if let onTap {
-            Button(action: onTap) { content }
-                .buttonStyle(.plain)
-                .modifier(ProcessingIndicatorAnimations(isPulsing: $isPulsing, now: $now))
-        } else {
-            content
-                .modifier(ProcessingIndicatorAnimations(isPulsing: $isPulsing, now: $now))
+        .contentShape(Rectangle())
+        .modifier(
+            ProcessingIndicatorAnimations(
+                phase: phase,
+                isPulsing: $isPulsing,
+                rotationDegrees: $rotationDegrees,
+                now: $now
+            )
+        )
+        .onTapGesture {
+            onTap?()
         }
     }
 }
 
 private struct ProcessingIndicatorAnimations: ViewModifier {
+    let phase: FloatingProcessingIndicator.Phase
     @Binding var isPulsing: Bool
+    @Binding var rotationDegrees: Double
     @Binding var now: Date
     
     func body(content: Content) -> some View {
         content
             .onAppear {
-                withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                    isPulsing = true
+                if phase == .reprocessing {
+                    isPulsing = false
+                    rotationDegrees = 0
+                    withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+                        rotationDegrees = 360
+                    }
+                } else {
+                    rotationDegrees = 0
+                    withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                        isPulsing = true
+                    }
                 }
+            }
+            .onDisappear {
+                isPulsing = false
+                rotationDegrees = 0
             }
             .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { tick in
                 now = tick

@@ -83,7 +83,7 @@ struct MuesliApp: App {
         // Wire up PreferencesManager callbacks to services
         prefs.outputDirectoryDidChange = { newDirectory in
             fileOutputService.setOutputDirectory(newDirectory)
-            historyManager.refreshMeetingHistory()
+            vm.refreshMeetingHistory()
         }
         // Note: transcriptionModeDidChange callback removed to prevent infinite recursion
         // MuesliViewModel.transcriptionMode setter already updates PreferencesManager AND

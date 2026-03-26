@@ -176,6 +176,25 @@ final class CoreAudioTapTests: XCTestCase {
         
         controller.unfreezeAdaptation()
     }
+
+    func testCoarseDelayControllerBluetoothProfileLowersDeadband() {
+        let defaultProfileController = CoarseDelayController()
+        defaultProfileController.update(observedDelaySamples: 500)
+        XCTAssertEqual(
+            defaultProfileController.currentDelaySamples,
+            0,
+            "Default profile should ignore 500-sample updates inside 15ms deadband"
+        )
+
+        let btProfileController = CoarseDelayController()
+        btProfileController.setBluetoothExternalMicProfile(true)
+        btProfileController.update(observedDelaySamples: 500)
+        XCTAssertGreaterThan(
+            btProfileController.currentDelaySamples,
+            0,
+            "BT profile should react to 500-sample updates due to tighter deadband"
+        )
+    }
     
     // MARK: - DriftTracker Tests
     
@@ -464,6 +483,518 @@ final class CoreAudioTapTests: XCTestCase {
         // the lead should be bounded by maxRenderLeadFrames (30).
         XCTAssertLessThanOrEqual(stats.renderLeadFrames, Int64(AudioWorker.maxRenderLeadFrames) + 1,
             "Render lead should be bounded by maxRenderLeadFrames")
+    }
+
+    func testAudioWorkerFeedsSynchronizerDelayHintToAEC() async throws {
+        let config = AudioSynchronizer.TimingConfig(
+            minNoDiscontinuitySeconds: 0.0,
+            discontinuityDebounceSeconds: 0.0
+        )
+        let synchronizer = AudioSynchronizer(timingConfig: config)
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone, synchronizer: synchronizer)
+
+        // Prime synchronizer into stable state with non-zero render lead.
+        let silence = [Float](repeating: 0, count: 480)
+        for i in 0..<15 {
+            silence.withUnsafeBufferPointer { ptr in
+                synchronizer.pushRender(
+                    samples: ptr.baseAddress!,
+                    count: 480,
+                    sampleTime: Float64(i * 480),
+                    hostTime: 0
+                )
+            }
+        }
+        silence.withUnsafeBufferPointer { ptr in
+            synchronizer.pushCapture(
+                samples: ptr.baseAddress!,
+                count: 480,
+                sampleTime: 0,
+                hostTime: 0
+            )
+        }
+        _ = synchronizer.getAlignedFrame()
+        XCTAssertGreaterThan(synchronizer.coarseDelayMs, 0, "Precondition: synchronizer should expose a non-zero delay hint")
+
+        let renderRing = TapCaptureRing(capacityMs: 200)
+        let captureRing = TapCaptureRing(capacityMs: 200)
+        for i in 0..<6 {
+            silence.withUnsafeBufferPointer { ptr in
+                renderRing.push(
+                    samples: ptr.baseAddress!,
+                    count: 480,
+                    sampleTime: Float64(i * 480),
+                    hostTime: 0
+                )
+                captureRing.push(
+                    samples: ptr.baseAddress!,
+                    count: 480,
+                    sampleTime: Float64(i * 480),
+                    hostTime: 0
+                )
+            }
+        }
+
+        nonisolated(unsafe) let renderRingRef = renderRing
+        nonisolated(unsafe) let captureRingRef = captureRing
+        let renderCounter = OSAllocatedUnfairLock(initialState: Int64(0))
+        let captureCounter = OSAllocatedUnfairLock(initialState: Int64(0))
+
+        let worker = AudioWorker(
+            synchronizer: synchronizer,
+            aecProcessor: aec,
+            popRenderAECFrame: { dest in
+                guard renderRingRef.pop(into: dest, count: 480) else { return nil }
+                let idx = renderCounter.withLock { count -> Int64 in
+                    let current = count
+                    count += 1
+                    return current
+                }
+                return (hostTime: 0, startSampleIndex: idx * 480)
+            },
+            popCaptureAECFrame: { dest in
+                guard captureRingRef.pop(into: dest, count: 480) else { return nil }
+                let idx = captureCounter.withLock { count -> Int64 in
+                    let current = count
+                    count += 1
+                    return current
+                }
+                return (hostTime: 0, startSampleIndex: idx * 480)
+            }
+        )
+
+        let processedExpectation = expectation(description: "Capture frame processed")
+        processedExpectation.assertForOverFulfill = false
+        worker.start { _ in
+            processedExpectation.fulfill()
+        }
+        defer { worker.stop() }
+
+        await fulfillment(of: [processedExpectation], timeout: 1.0)
+
+        let lastDelayMs = aec.getStats().lastStreamDelayMs
+        if lastDelayMs == -1 {
+            throw XCTSkip("AEC bridge unavailable in this environment")
+        }
+        XCTAssertGreaterThan(lastDelayMs, 0, "AudioWorker should feed non-zero synchronizer delay hint to AEC")
+    }
+
+    func testAudioWorkerUsesCoarseDelayWhenAvailable() {
+        let selection = AudioWorker.selectStreamDelayHint(
+            coarseDelayMs: 175,
+            seededDelayMs: 80
+        )
+        XCTAssertEqual(selection.delayMs, 175, "Coarse delay should take precedence when available")
+        XCTAssertEqual(selection.source, .coarse)
+    }
+
+    func testAudioWorkerFallsBackToSeededDelayWhenCoarseZero() {
+        let selection = AudioWorker.selectStreamDelayHint(
+            coarseDelayMs: 0,
+            seededDelayMs: 80
+        )
+        XCTAssertEqual(selection.delayMs, 80, "Seeded delay should be used when coarse delay is not available")
+        XCTAssertEqual(selection.source, .seeded)
+    }
+
+    func testAudioWorkerDelayHintSelectsNoneWhenUnavailable() {
+        let selection = AudioWorker.selectStreamDelayHint(
+            coarseDelayMs: 0,
+            seededDelayMs: -1
+        )
+        XCTAssertEqual(selection.delayMs, 0, "When no delay estimates are available, hint should be zero")
+        XCTAssertEqual(selection.source, .none)
+    }
+
+    func testAudioWorkerDelayHintControlHoldsHintDuringUnstableWindows() {
+        let decision = AudioWorker.applyDelayHintControl(
+            requestedDelayMs: 220,
+            source: .coarse,
+            lastAppliedDelayMs: 180,
+            lastAppliedSource: .seeded,
+            isStable: false,
+            enabled: true
+        )
+        XCTAssertEqual(decision.delayMs, 180, "Unstable windows should hold last applied delay hint")
+        XCTAssertEqual(decision.source, .seeded, "Unstable hold should preserve last applied source")
+        XCTAssertTrue(decision.heldInUnstableWindow, "Decision should mark unstable-window hold")
+        XCTAssertFalse(decision.clamped)
+    }
+
+    func testAudioWorkerDelayHintControlSlewLimitsLargeStableJump() {
+        let decision = AudioWorker.applyDelayHintControl(
+            requestedDelayMs: 220,
+            source: .coarse,
+            lastAppliedDelayMs: 180,
+            lastAppliedSource: .seeded,
+            isStable: true,
+            enabled: true,
+            slewLimitMsPerFrame: 8
+        )
+        XCTAssertEqual(decision.delayMs, 188, "Stable windows should apply slew-limited delay transitions")
+        XCTAssertEqual(decision.source, .coarse, "Stable path should keep requested source")
+        XCTAssertTrue(decision.clamped)
+        XCTAssertFalse(decision.heldInUnstableWindow)
+    }
+
+    func testAudioWorkerBtProfileDelayBiasAppliesToDelayHint() {
+        let adjusted = AudioWorker.applyBtProfileDelayBias(
+            selectedHint: (delayMs: 200, source: .coarse),
+            btExternalMicProfileActive: true,
+            biasMs: 80
+        )
+        XCTAssertEqual(adjusted.delayMs, 280)
+        XCTAssertEqual(adjusted.source, .coarse)
+    }
+
+    func testAudioWorkerBtProfileDelayBiasDoesNotChangeNoneSource() {
+        let adjusted = AudioWorker.applyBtProfileDelayBias(
+            selectedHint: (delayMs: 0, source: .none),
+            btExternalMicProfileActive: true,
+            biasMs: 80
+        )
+        XCTAssertEqual(adjusted.delayMs, 0)
+        XCTAssertEqual(adjusted.source, .none)
+    }
+
+    func testAudioWorkerBtRecoveryTriggersAfterSustainedLowAttenuation() {
+        let shouldRecover = AudioWorker.shouldTriggerBtRecovery(
+            btExternalMicProfileActive: true,
+            startupGateState: .fullAdaptation,
+            lowAttenuationSeconds: 20,
+            attemptCount: 0
+        )
+        XCTAssertTrue(shouldRecover, "BT recovery should trigger after sustained low attenuation in full adaptation")
+    }
+
+    func testAudioWorkerBtRecoveryRequiresFullAdaptationState() {
+        let shouldRecover = AudioWorker.shouldTriggerBtRecovery(
+            btExternalMicProfileActive: true,
+            startupGateState: .waitingDelayReady,
+            lowAttenuationSeconds: 30,
+            attemptCount: 0
+        )
+        XCTAssertFalse(shouldRecover, "Recovery should stay off until startup gate reaches full adaptation")
+    }
+
+    func testAudioWorkerBtRecoveryHonorsAttemptLimit() {
+        let shouldRecover = AudioWorker.shouldTriggerBtRecovery(
+            btExternalMicProfileActive: true,
+            startupGateState: .fullAdaptation,
+            lowAttenuationSeconds: 30,
+            attemptCount: 1
+        )
+        XCTAssertFalse(shouldRecover, "Recovery should not retrigger once max per-route attempts are consumed")
+    }
+
+    func testAudioWorkerStartupGateTransitionsToDelayReadyAfterRenderWarmup() {
+        let transition = AudioWorker.transitionStartupGateState(
+            currentState: .waitingRenderReady,
+            renderReadyStreak: 5,
+            delayReadyStreak: 0,
+            elapsedMs: 500,
+            renderReadyFrames: 5,
+            delayReadyFrames: 10,
+            timeoutMs: 15_000
+        )
+        XCTAssertEqual(transition.nextState, .waitingDelayReady)
+        XCTAssertNil(transition.releaseReason)
+    }
+
+    func testAudioWorkerStartupGateTransitionsToFullAfterDelayReady() {
+        let transition = AudioWorker.transitionStartupGateState(
+            currentState: .waitingDelayReady,
+            renderReadyStreak: 5,
+            delayReadyStreak: 10,
+            elapsedMs: 1_000,
+            renderReadyFrames: 5,
+            delayReadyFrames: 10,
+            timeoutMs: 15_000
+        )
+        XCTAssertEqual(transition.nextState, .fullAdaptation)
+        XCTAssertEqual(transition.releaseReason, "render_and_delay_ready")
+    }
+
+    func testAudioWorkerStartupGateTransitionsToGuardedOnTimeout() {
+        let transition = AudioWorker.transitionStartupGateState(
+            currentState: .waitingRenderReady,
+            renderReadyStreak: 0,
+            delayReadyStreak: 0,
+            elapsedMs: 15_000,
+            renderReadyFrames: 5,
+            delayReadyFrames: 10,
+            timeoutMs: 15_000
+        )
+        XCTAssertEqual(transition.nextState, .guardedTimeout)
+        XCTAssertEqual(transition.releaseReason, "timeout_guarded")
+    }
+
+    func testRouteCoalesceDelayHonorsMaxWindowCap() {
+        let firstEvent = Date(timeIntervalSince1970: 1000)
+        let delayNearStart = TapAudioCaptureService.nextRouteCoalesceDelayMs(
+            firstEventAt: firstEvent,
+            now: Date(timeIntervalSince1970: 1000.2)
+        )
+        XCTAssertEqual(delayNearStart, 1500, "Early clustered events should use full debounce window")
+
+        let delayNearCap = TapAudioCaptureService.nextRouteCoalesceDelayMs(
+            firstEventAt: firstEvent,
+            now: Date(timeIntervalSince1970: 1003.8)
+        )
+        XCTAssertTrue((199...201).contains(delayNearCap),
+                      "Delay should shrink as max coalescing cap is approached")
+
+        let delayPastCap = TapAudioCaptureService.nextRouteCoalesceDelayMs(
+            firstEventAt: firstEvent,
+            now: Date(timeIntervalSince1970: 1004.2)
+        )
+        XCTAssertEqual(delayPastCap, 0, "Delay should clamp to zero once max coalescing window is exceeded")
+    }
+
+    func testTapMicBufferSizingUsesBtProfileSpecificValues() {
+        let defaultTapFrames = TapAudioCaptureService.microphoneTapBufferFramesForProfile(
+            btExternalMicProfileActive: false
+        )
+        let btTapFrames = TapAudioCaptureService.microphoneTapBufferFramesForProfile(
+            btExternalMicProfileActive: true
+        )
+        XCTAssertEqual(defaultTapFrames, 4096)
+        XCTAssertEqual(btTapFrames, 2048)
+    }
+
+    func testTapMicResamplerCapacityUsesTighterBtMargin() {
+        let defaultCapacity = TapAudioCaptureService.microphoneResamplerOutputFrameCapacity(
+            inputFrameCount: 4410,
+            inputSampleRate: 44_100,
+            btExternalMicProfileActive: false
+        )
+        let btCapacity = TapAudioCaptureService.microphoneResamplerOutputFrameCapacity(
+            inputFrameCount: 4410,
+            inputSampleRate: 44_100,
+            btExternalMicProfileActive: true
+        )
+        XCTAssertEqual(defaultCapacity, 5824)
+        XCTAssertEqual(btCapacity, 5056)
+        XCTAssertLessThan(
+            btCapacity,
+            defaultCapacity,
+            "BT profile should reduce converter output capacity margin to avoid bursty frame output"
+        )
+    }
+
+    func testTapMicResamplerChannelMapPinsFirstChannelForMultiChannelInput() {
+        let channelMap = TapAudioCaptureService.microphoneResamplerChannelMapForTapChannels(2)
+        XCTAssertEqual(channelMap, [NSNumber(value: 0)])
+    }
+
+    func testTapMicResamplerChannelMapUsesChannelZeroForMonoInput() {
+        let channelMap = TapAudioCaptureService.microphoneResamplerChannelMapForTapChannels(1)
+        XCTAssertEqual(channelMap, [NSNumber(value: 0)])
+    }
+
+    func testEvaluateMicSignalContractAcceptsConverterAlignedContract() {
+        let result = TapAudioCaptureService.evaluateMicSignalContract(
+            sourceSampleRate: 16_000,
+            deliveryChannels: 1,
+            converterSourceChannels: 1,
+            converterOutputSampleRate: 48_000,
+            converterEnabled: true
+        )
+        XCTAssertTrue(result.isValid)
+        XCTAssertEqual(result.reason, "converter_contract_ok")
+    }
+
+    func testEvaluateMicSignalContractRejectsConverterChannelMismatch() {
+        let result = TapAudioCaptureService.evaluateMicSignalContract(
+            sourceSampleRate: 44_100,
+            deliveryChannels: 1,
+            converterSourceChannels: 2,
+            converterOutputSampleRate: 48_000,
+            converterEnabled: true
+        )
+        XCTAssertFalse(result.isValid)
+        XCTAssertEqual(result.reason, "converter_source_channels_mismatch")
+    }
+
+    func testEvaluateMicSignalContractRejectsNativeNon48kWithoutConverter() {
+        let result = TapAudioCaptureService.evaluateMicSignalContract(
+            sourceSampleRate: 44_100,
+            deliveryChannels: 1,
+            converterSourceChannels: 1,
+            converterOutputSampleRate: 44_100,
+            converterEnabled: false
+        )
+        XCTAssertFalse(result.isValid)
+        XCTAssertEqual(result.reason, "native_source_rate_not_48k_without_converter")
+    }
+
+    func testConverterRecoveryEscalationDecisionEscalatesToFallbackAtThreshold() {
+        let decision = TapAudioCaptureService.converterRecoveryEscalationDecision(
+            recoveriesInWindow: 3,
+            fallbackAlreadyForced: false
+        )
+        XCTAssertTrue(decision.escalateToFallback)
+        XCTAssertFalse(decision.disableAecPath)
+    }
+
+    func testConverterRecoveryEscalationDecisionDisablesAecWhenFallbackAlreadyForced() {
+        let decision = TapAudioCaptureService.converterRecoveryEscalationDecision(
+            recoveriesInWindow: 3,
+            fallbackAlreadyForced: true
+        )
+        XCTAssertFalse(decision.escalateToFallback)
+        XCTAssertTrue(decision.disableAecPath)
+    }
+
+    func testConverterFailureZeroFillFrameCountUses48kDomainWhenResamplerActive() {
+        let frameCount = TapAudioCaptureService.converterFailureZeroFillFrameCount(
+            inputFrameCount: 4096,
+            sourceSampleRate: 16_000,
+            resamplerActive: true
+        )
+        XCTAssertEqual(frameCount, 12_288)
+    }
+
+    func testConverterFailureZeroFillFrameCountUsesInputFramesWithoutResampler() {
+        let frameCount = TapAudioCaptureService.converterFailureZeroFillFrameCount(
+            inputFrameCount: 480,
+            sourceSampleRate: 48_000,
+            resamplerActive: false
+        )
+        XCTAssertEqual(frameCount, 480)
+    }
+
+    func testMicrophoneRouteRebindDecisionTriggersDuringStartupWithoutCaptureAudio() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "08-FF-44-49-A4-D3:input",
+            refreshedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            selectedMicrophoneUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            hasActiveMicrophoneEngine: true,
+            hasSeenCaptureAudio: false
+        )
+        XCTAssertTrue(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "startup_no_capture_audio")
+    }
+
+    func testMicrophoneRouteRebindDecisionTriggersWhenInputUIDChanges() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "08-FF-44-49-A4-D3:input",
+            refreshedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            selectedMicrophoneUID: nil,
+            hasActiveMicrophoneEngine: true,
+            hasSeenCaptureAudio: true
+        )
+        XCTAssertTrue(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "input_uid_changed")
+    }
+
+    func testMicrophoneRouteRebindDecisionTriggersOnSelectedUIDMismatch() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "08-FF-44-49-A4-D3:input",
+            refreshedInputUID: "08-FF-44-49-A4-D3:input",
+            selectedMicrophoneUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            hasActiveMicrophoneEngine: true,
+            hasSeenCaptureAudio: true
+        )
+        XCTAssertTrue(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "selected_uid_mismatch")
+    }
+
+    func testMicrophoneRouteRebindDecisionSkipsWhenRouteStable() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            refreshedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            selectedMicrophoneUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            hasActiveMicrophoneEngine: true,
+            hasSeenCaptureAudio: true
+        )
+        XCTAssertFalse(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "no_rebind_needed")
+    }
+
+    func testMicrophoneRouteRebindDecisionSkipsWithoutActiveEngine() {
+        let decision = TapAudioCaptureService.microphoneRouteRebindDecision(
+            previousAppliedInputUID: "08-FF-44-49-A4-D3:input",
+            refreshedInputUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            selectedMicrophoneUID: "AppleUSBAudioEngine:Unknown Manufacturer:HD Pro Webcam C920:FAEA515F:3",
+            hasActiveMicrophoneEngine: false,
+            hasSeenCaptureAudio: false
+        )
+        XCTAssertFalse(decision.shouldRebind)
+        XCTAssertEqual(decision.reason, "no_active_engine")
+    }
+
+    func testMicSilentRecoveryTriggersForSustainedDigitalSilence() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicSilentRecovery(
+            btExternalMicProfileActive: true,
+            sourceRms: 0,
+            pipelineRms: 0,
+            consecutiveSilentCallbacks: 40,
+            attemptsInCurrentRoute: 0,
+            isRecoveryInFlight: false
+        )
+        XCTAssertTrue(shouldRecover)
+    }
+
+    func testMicSilentRecoveryDoesNotTriggerForNonZeroSignal() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicSilentRecovery(
+            btExternalMicProfileActive: true,
+            sourceRms: 0.01,
+            pipelineRms: 0.01,
+            consecutiveSilentCallbacks: 100,
+            attemptsInCurrentRoute: 0,
+            isRecoveryInFlight: false
+        )
+        XCTAssertFalse(shouldRecover)
+    }
+
+    func testMicSilentRecoveryHonorsAttemptLimit() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicSilentRecovery(
+            btExternalMicProfileActive: true,
+            sourceRms: 0,
+            pipelineRms: 0,
+            consecutiveSilentCallbacks: 100,
+            attemptsInCurrentRoute: 2,
+            isRecoveryInFlight: false
+        )
+        XCTAssertFalse(shouldRecover)
+    }
+
+    func testMicNoCallbackRecoveryTriggersWhenBtProfileHasNoCallbacks() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicNoCallbackRecovery(
+            btExternalMicProfileActive: true,
+            totalCallbacks: 0,
+            attemptsInCurrentRoute: 0,
+            isRecoveryInFlight: false
+        )
+        XCTAssertTrue(shouldRecover)
+    }
+
+    func testMicNoCallbackRecoveryRequiresBtProfile() {
+        let shouldRecover = TapAudioCaptureService.shouldTriggerMicNoCallbackRecovery(
+            btExternalMicProfileActive: false,
+            totalCallbacks: 0,
+            attemptsInCurrentRoute: 0,
+            isRecoveryInFlight: false
+        )
+        XCTAssertFalse(shouldRecover)
+    }
+
+    func testPhase15RenderRmsUsesLatestWhenRenderUpdated() {
+        let renderRms = AudioWorker.phase15RenderRmsForFrame(
+            latestRenderRmsLinear: 0.25,
+            renderUpdatedThisIteration: true
+        )
+        XCTAssertEqual(renderRms, 0.25, accuracy: 0.000_1)
+    }
+
+    func testPhase15RenderRmsZeroFillsWhenRenderNotUpdated() {
+        let renderRms = AudioWorker.phase15RenderRmsForFrame(
+            latestRenderRmsLinear: 0.25,
+            renderUpdatedThisIteration: false
+        )
+        XCTAssertEqual(renderRms, 0, accuracy: 0.000_1)
     }
 }
 

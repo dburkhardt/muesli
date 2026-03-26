@@ -249,43 +249,42 @@ struct GeneralPreferencesTab: View {
                 Toggle(isOn: $prefs.isSecondPassASREnabled) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Finalize transcript after recording")
-                        Text("Runs a second-pass ASR over saved audio for higher quality final transcript.")
+                        Text("Automatically runs a final pass on saved audio after recording stops.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
                 .toggleStyle(.switch)
-                
-                Toggle(isOn: $prefs.isAutoReprocessAfterMeetingEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Reprocess after every meeting")
-                        Text("Automatically reprocesses completed meetings using your selected reprocess model.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+
+                if prefs.isSecondPassASREnabled {
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            LabeledContent("Finalization model") {
+                                Picker(selection: $prefs.secondPassModelPreference) {
+                                    Text("Same as live model").tag(PreferencesManager.SecondPassModelPreference.sameAsLive)
+                                    Text("Best available").tag(PreferencesManager.SecondPassModelPreference.bestAvailable)
+                                } label: {
+                                    EmptyView()
+                                }
+                                .frame(maxWidth: 280)
+                            }
+
+                            Text("Best available prefers the highest-quality downloaded model.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Toggle(isOn: $prefs.isAutoRefineEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Auto-refine with AI (experimental)")
+                                Text("Applies constrained LLM cleanup after second-pass ASR.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
                     }
-                }
-                .toggleStyle(.switch)
-                
-                Toggle(isOn: $prefs.isAutoRefineEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Auto-refine with AI (experimental)")
-                        Text("Applies constrained LLM cleanup after second-pass ASR.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .toggleStyle(.switch)
-                
-                LabeledContent("Second-pass model") {
-                    Picker(selection: $prefs.secondPassModelPreference) {
-                        Text("Best available").tag(PreferencesManager.SecondPassModelPreference.bestAvailable)
-                        Text("Same as live model").tag(PreferencesManager.SecondPassModelPreference.sameAsLive)
-                        Text("Best available (no downgrade)").tag(PreferencesManager.SecondPassModelPreference.bestAvailableNoDowngrade)
-                        Text("Specific model").tag(PreferencesManager.SecondPassModelPreference.specific)
-                    } label: {
-                        EmptyView()
-                    }
-                    .frame(maxWidth: 280)
+                    .padding(.leading, 18)
                 }
             }
             

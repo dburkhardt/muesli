@@ -32,6 +32,16 @@ See [`template.md`](template.md) for the standard debug log format.
 
 #### February
 
+- [2026-02-28: Bluetooth + Webcam AEC Signal Contract Hardening](2026-02-28_bt-webcam-aec-signal-contract-hardening.md) - Hardened HAL-first mic contract, removed unsafe converter fallback, added deterministic escalation policy, and documented stage-gated BT+webcam validation/rollback guardrails
+- [2026-02-27: AEC Phase 1.5 Correlation and Delay-Hint Control](2026-02-27_aec_phase15_correlation_delay-hint-control.md) - Added fixed-size ERLE/delay coincidence telemetry and a feature-flagged delay-hint conditioning path (hold+slew-limit) with deterministic regression coverage
+- [2026-02-26: Stop Finalization UX Restoration After Revert](2026-02-26_stop-finalization-ux-restoration.md) - Restored bounded stop flush, explicit `finalizingLive` processing phase, and phase-specific indicator messaging after revert `1fe2214`
+- [2026-02-25: Stop UI Hang + AEC Delay-Hint Regression](2026-02-25_stop-ui-hang-and-aec-delay-hint-regression.md) - Stop appeared stalled without clear end-state indicator; restored off-main post-processing flow and synchronizer-derived AEC delay hints
+- [2026-02-25: Second-Pass Finalization Stop-Flow Latency and Session Lifetime Race](2026-02-25_second-pass-finalization-stopflow-latency.md) - Stop path awaited export during active second-pass and could exit early if session deallocated before task start
+- [2026-02-25: Reprocessing Indicator Stuck on Completed Meeting](2026-02-25_reprocessing-ui-stuck-stale-selection.md) - Detail pane remained in reprocessing due to stale selected meeting reference after history refresh
+- [2026-02-25: ASR Finalization Missing on Interruption Stop](2026-02-25_asr-finalization-interruption-gap.md) - Interrupted-stop path skipped export/second-pass/rescue parity; fix unifies stop finalization flow and hardens interruption idempotency
+- [2026-02-24: Reprocess Transcript Block Ordering Lost](2026-02-24_reprocess-block-ordering.md) - Post-meeting reprocessing lost chronological speaker interleaving; fix adds timestamp sort matching second-pass ASR pattern
+- [2026-02-24: Consolidated Automatic Finalization Workflow Migration](2026-02-24_consolidated-finalization-workflow-migration.md) - Unified overlapping post-meeting workflows, simplified model preference options, and added deterministic settings migration
+- [2026-02-24: installTap NSException Crash During Mic Start](2026-02-24_installtap-nsexception-crash.md) - AVAudioNode.installTap NSException aborted the process; fix adds ObjC try/catch wrapper and permission-gated error classification
 - [2026-02-24: AEC convergence recovery: preserve filter through silence freezes](2026-02-24_aec_convergence_freeze_reset_fix.md) - Preserve AEC filter state across render-silence pauses and raise freeze threshold to reduce false resets
 - [2026-02-24: Auto-Reprocess and Second-Pass Race Condition](2026-02-24_reprocessing-race-condition.md) - Concurrent WhisperKit instances compete for ANE resources, producing incomplete transcripts
 - [2026-02-24: AEC Convergence Failure with Non-48kHz Microphones](2026-02-24_aec_convergence_non48khz_mic.md) - Sample-time domain mismatch causes false discontinuities, permanently freezing AEC when mic resampler is active

@@ -1,4 +1,5 @@
 import Foundation
+import os.lock
 import os.log
 
 /// Coordinates transcription model lifecycle and audio buffering
@@ -28,6 +29,38 @@ final class TranscriptionCoordinator {
             return false
         }
     }
+
+    /// High-level processing phase shown in meeting UI.
+    enum ProcessingPhase: String, Sendable {
+        case finalizingLive
+        case secondPass
+        case autoReprocess
+        case manualReprocess
+
+        var displayStatus: String {
+            switch self {
+            case .finalizingLive:
+                return "Finalizing live transcript..."
+            case .secondPass:
+                return "Reprocessing..."
+            case .autoReprocess:
+                return "Reprocessing..."
+            case .manualReprocess:
+                return "Reprocessing..."
+            }
+        }
+    }
+
+    /// Canonical processing state keyed by meeting directory path.
+    struct MeetingProcessingState: Sendable {
+        let phase: ProcessingPhase
+        let startedAt: Date
+        let cancellable: Bool
+
+        var displayStatus: String {
+            phase.displayStatus
+        }
+    }
     
     // MARK: - Dependencies
     
@@ -39,6 +72,10 @@ final class TranscriptionCoordinator {
     
     /// Called when a meeting is updated (for export service integration)
     var onMeetingUpdated: ((MeetingHistoryItem) -> Void)?
+
+    /// Called whenever processing state entries are added/updated/removed.
+    /// Used by the ViewModel to force UI invalidation for floating indicators.
+    var onProcessingStatesChanged: (() -> Void)?
     
     // MARK: - Live Refinement
     
@@ -82,7 +119,17 @@ final class TranscriptionCoordinator {
     }
     
     /// Directories with an active second-pass ASR task (prevents concurrent auto-reprocess)
-    private var activeSecondPassDirectories: Set<URL> = []
+    private var activeSecondPassDirectories: Set<String> = []
+
+    /// Canonical meeting processing states keyed by standardized directory path.
+    private var processingStatesByDirectory: [String: MeetingProcessingState] = [:]
+
+    /// Active auto-reprocess tasks keyed by canonical directory path (supports user cancellation).
+    private var autoReprocessTasks: [String: Task<Void, Never>] = [:]
+    
+    /// Effective model used by live transcription in the current recording session.
+    /// This may differ from modelManager.activeModel when fallback is used.
+    private(set) var effectiveLiveModelForSession: ModelManager.ModelSize?
     
     /// Audio buffering while model loads (protected by serial actor execution)
     private var pendingSystemAudio: [Float] = []
@@ -213,6 +260,7 @@ final class TranscriptionCoordinator {
         if case .failed = modelState {
             modelState = .notAvailable
         }
+        effectiveLiveModelForSession = nil
         clearBuffers()
         
         // Reset slow-load detection state
@@ -235,6 +283,7 @@ final class TranscriptionCoordinator {
         
         // Check if model is available
         guard let activeModel = modelManager.activeModel else {
+            effectiveLiveModelForSession = nil
             modelState = .notAvailable
             return .notAvailable
         }
@@ -285,12 +334,14 @@ final class TranscriptionCoordinator {
                 return await prepareModel()  // Retry with fallback
             }
 
+            effectiveLiveModelForSession = nil
             modelState = .notAvailable
             return .notAvailable
         }
         
         // If already initialized, return ready
         if isInitialized {
+            effectiveLiveModelForSession = modelToUse
             modelState = .ready
             // Flush any buffered audio in case we resumed
             processBufferedAudio()
@@ -341,6 +392,7 @@ final class TranscriptionCoordinator {
         
         do {
             try await transcriptionService.initialize(modelPath: modelPath)
+            effectiveLiveModelForSession = modelToUse
             isInitialized = true
             modelState = .ready
             
@@ -375,6 +427,7 @@ final class TranscriptionCoordinator {
                 return await prepareModel()  // Retry with fallback
             }
 
+            effectiveLiveModelForSession = nil
             return .failed(error)
         }
     }
@@ -394,18 +447,85 @@ final class TranscriptionCoordinator {
         transcriptionService.startTranscription(recordingStartTime: recordingStartTime)
     }
     
-    /// Stop transcription and process remaining audio
-    func stopTranscription() async {
-        await transcriptionService.stopTranscription()
+    /// Stop transcription and process remaining audio.
+    /// - Parameters:
+    ///   - maxFlushDuration: Optional max wait budget for final live flush.
+    ///   - allowDeferredFlush: Allow bounded stop to return incomplete flush on timeout.
+    @discardableResult
+    func stopTranscription(
+        maxFlushDuration: TimeInterval? = nil,
+        allowDeferredFlush: Bool = false
+    ) async -> TranscriptionService.StopFlushResult {
+        let flushResult = await transcriptionService.stopTranscription(
+            maxFlushDuration: maxFlushDuration,
+            allowDeferredFlush: allowDeferredFlush
+        )
         clearBuffers()
         
         // Clear handler to break retain cycle
         transcriptionService.setTranscriptHandler { _ in }
         transcriptionService.setDraftHandler { _, _ in }
+        return flushResult
     }
     
     deinit {
         logger.debug("Deallocating")
+    }
+
+    // MARK: - Processing State
+
+    /// Canonical key for matching meeting directories across refreshed URL instances.
+    private func canonicalDirectoryKey(_ directory: URL) -> String {
+        directory.standardizedFileURL.path
+    }
+
+    /// Snapshot all active processing states keyed by canonical directory path.
+    func allActiveProcessingStates() -> [String: MeetingProcessingState] {
+        processingStatesByDirectory
+    }
+
+    /// Active processing state for a specific meeting directory, if any.
+    func processingState(for directory: URL) -> MeetingProcessingState? {
+        processingStatesByDirectory[canonicalDirectoryKey(directory)]
+    }
+
+    /// Register active processing for a meeting directory.
+    func beginProcessingState(
+        for directory: URL,
+        phase: ProcessingPhase,
+        startedAt: Date = Date(),
+        cancellable: Bool
+    ) {
+        let key = canonicalDirectoryKey(directory)
+        let preservedStart = processingStatesByDirectory[key]?.startedAt ?? startedAt
+        processingStatesByDirectory[key] = MeetingProcessingState(
+            phase: phase,
+            startedAt: preservedStart,
+            cancellable: cancellable
+        )
+        logger.info(
+            "processingState:set phase=\(phase.rawValue) dir=\(directory.lastPathComponent) cancellable=\(cancellable)"
+        )
+        onProcessingStatesChanged?()
+    }
+
+    /// Clear active processing state for a directory.
+    /// If `phase` is set, clear only when the current state matches that phase.
+    func clearProcessingState(
+        for directory: URL,
+        phase: ProcessingPhase? = nil,
+        reason: String? = nil
+    ) {
+        let key = canonicalDirectoryKey(directory)
+        guard let current = processingStatesByDirectory[key] else { return }
+        if let phase, current.phase != phase {
+            return
+        }
+        processingStatesByDirectory.removeValue(forKey: key)
+        logger.info(
+            "processingState:clear phase=\(current.phase.rawValue) dir=\(directory.lastPathComponent) reason=\(reason ?? "none")"
+        )
+        onProcessingStatesChanged?()
     }
     
     /// Set transcript handler for receiving segments
@@ -539,10 +659,21 @@ final class TranscriptionCoordinator {
     
     /// Mark a directory as having an active second-pass ASR task.
     /// Called by RecordingController before launching `launchSecondPassFinalization`.
-    /// Cleared automatically via `defer` inside `runSecondPassASR`.
+    /// Cleared via `clearSecondPassActive(for:)` (including `runSecondPassASR` defer).
     func markSecondPassActive(for directory: URL) {
-        activeSecondPassDirectories.insert(directory.standardizedFileURL)
+        let key = canonicalDirectoryKey(directory)
+        activeSecondPassDirectories.insert(key)
+        beginProcessingState(for: directory, phase: .secondPass, cancellable: true)
         logger.info("Second-pass marked active for \(directory.lastPathComponent)")
+    }
+
+    /// Idempotently clear active second-pass marker for a directory.
+    func clearSecondPassActive(for directory: URL) {
+        let key = canonicalDirectoryKey(directory)
+        if activeSecondPassDirectories.remove(key) != nil {
+            logger.info("Second-pass cleared for \(directory.lastPathComponent)")
+        }
+        clearProcessingState(for: directory, phase: .secondPass, reason: "secondPassCleared")
     }
     
     // MARK: - Auto-Reprocessing (for empty transcripts)
@@ -550,7 +681,8 @@ final class TranscriptionCoordinator {
     /// Auto-reprocess a meeting once the model becomes ready
     /// Used when recording stopped with empty transcript (model wasn't ready in time)
     func autoReprocessWhenReady(meeting: MeetingHistoryItem) {
-        if activeSecondPassDirectories.contains(meeting.directory.standardizedFileURL) {
+        let meetingKey = canonicalDirectoryKey(meeting.directory)
+        if activeSecondPassDirectories.contains(meetingKey) {
             logger.warning("Skipping auto-reprocess for '\(meeting.title)': second-pass in progress")
             return
         }
@@ -564,14 +696,23 @@ final class TranscriptionCoordinator {
         
         meeting.isReprocessing = true
         meeting.reprocessingStartTime = Date()
-        
-        Task { @MainActor in
+        beginProcessingState(for: meeting.directory, phase: .autoReprocess, startedAt: meeting.reprocessingStartTime ?? Date(), cancellable: true)
+
+        autoReprocessTasks[meetingKey]?.cancel()
+        let task = Task { @MainActor in
+            defer {
+                self.autoReprocessTasks[meetingKey] = nil
+                self.clearProcessingState(for: meeting.directory, phase: .autoReprocess, reason: "autoReprocessFinished")
+            }
             let modelStateResult = await prepareModel()
             
             if modelStateResult.isReady {
                 do {
+                    try Task.checkCancellation()
                     try await reprocessTranscript(for: meeting, using: activeModel)
                     logger.info("Auto-reprocess completed for '\(meeting.title)'")
+                } catch is CancellationError {
+                    logger.info("Auto-reprocess cancelled by user for '\(meeting.title)'")
                 } catch {
                     logger.error("Auto-reprocess failed: \(error.localizedDescription)")
                 }
@@ -582,6 +723,16 @@ final class TranscriptionCoordinator {
             meeting.isReprocessing = false
             meeting.reprocessingStartTime = nil
         }
+        autoReprocessTasks[meetingKey] = task
+    }
+
+    /// Cancel auto-reprocessing for a meeting, if a task is currently active.
+    func cancelAutoReprocess(for meeting: MeetingHistoryItem) {
+        let meetingKey = canonicalDirectoryKey(meeting.directory)
+        guard let task = autoReprocessTasks.removeValue(forKey: meetingKey) else { return }
+        task.cancel()
+        clearProcessingState(for: meeting.directory, phase: .autoReprocess, reason: "userCancelled")
+        logger.info("Cancelled auto-reprocess for '\(meeting.title)'")
     }
     
     // MARK: - Reprocessing (for completed meetings)
@@ -595,8 +746,7 @@ final class TranscriptionCoordinator {
         liveModel: ModelManager.ModelSize? = nil
     ) async throws -> [TranscriptBlock] {
         defer {
-            activeSecondPassDirectories.remove(directory.standardizedFileURL)
-            logger.info("Second-pass cleared for \(directory.lastPathComponent)")
+            clearSecondPassActive(for: directory)
         }
         
         guard let selectedModel = resolveSecondPassModel(
@@ -622,11 +772,7 @@ final class TranscriptionCoordinator {
         
         await DiagnosticLogger.shared.log(.stabilizer, "secondPass:start model=\(selectedModel.rawValue)")
         let start = Date()
-        
-        let tempService = TranscriptionService()
-        try await tempService.initialize(modelPath: modelPath)
-        tempService.setTranscriptionMode(.postProcessing)
-        
+
         let segmentsToProcess = enumerateAudioSegments(in: directory)
         guard !segmentsToProcess.isEmpty else {
             throw NSError(
@@ -635,23 +781,18 @@ final class TranscriptionCoordinator {
                 userInfo: [NSLocalizedDescriptionKey: "No audio files found for second-pass ASR"]
             )
         }
-        
-        nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
-        tempService.setTranscriptHandler { segment in
-            segments.append(segment)
-        }
-        
-        for pair in segmentsToProcess {
-            try Task.checkCancellation()
-            try await tempService.transcribePostProcessing(
-                systemAudioURL: pair.systemURL,
-                micAudioURL: pair.micURL,
-                startTime: recordingStartTime
+
+        let segments = try await Task.detached(priority: .userInitiated) {
+            try await Self.collectPostProcessingSegments(
+                modelPath: modelPath,
+                segmentsToProcess: segmentsToProcess,
+                recordingStartTime: recordingStartTime
             )
-        }
-        
+        }.value
+
         let processor = TranscriptProcessor()
-        for segment in segments.sorted(by: { $0.timestamp < $1.timestamp }) {
+        let sortedSegments = stableSortSegmentsByTimestamp(segments)
+        for segment in sortedSegments {
             processor.processSegment(segment)
         }
         processor.finalize()
@@ -668,7 +809,7 @@ final class TranscriptionCoordinator {
         preference: PreferencesManager.SecondPassModelPreference,
         liveModel: ModelManager.ModelSize?
     ) -> ModelManager.ModelSize? {
-        let effectiveLiveModel = liveModel ?? modelManager.activeModel
+        let effectiveLiveModel = liveModel ?? effectiveLiveModelForSession ?? modelManager.activeModel
 
         func isReady(_ model: ModelManager.ModelSize) -> Bool {
             modelManager.downloadState(for: model) == .completed &&
@@ -685,21 +826,6 @@ final class TranscriptionCoordinator {
         case .sameAsLive:
             guard let effectiveLiveModel, isReady(effectiveLiveModel) else { return nil }
             return effectiveLiveModel
-        case .bestAvailableNoDowngrade:
-            guard let effectiveLiveModel else { return bestAvailable }
-            guard let candidate = bestAvailable else { return nil }
-            let rank: [ModelManager.ModelSize: Int] = [.large: 0, .largeTurbo: 1, .medium: 2, .small: 3]
-            guard let liveRank = rank[effectiveLiveModel], let candidateRank = rank[candidate], candidateRank <= liveRank else {
-                return nil
-            }
-            return candidate
-        case .specific:
-            guard let raw = UserDefaults.standard.string(forKey: AppStorageKeys.secondPassSpecificModel),
-                  let model = ModelManager.ModelSize(rawValue: raw),
-                  isReady(model) else {
-                return nil
-            }
-            return model
         }
     }
 
@@ -741,6 +867,34 @@ final class TranscriptionCoordinator {
             .map { ($0.1, $0.2) }
             .filter { $0.0 != nil || $0.1 != nil }
     }
+
+    /// Run post-processing ASR over one or more audio segment pairs and collect raw segments.
+    /// This helper is nonisolated so heavy WhisperKit work stays off the MainActor.
+    private nonisolated static func collectPostProcessingSegments(
+        modelPath: URL,
+        segmentsToProcess: [(systemURL: URL?, micURL: URL?)],
+        recordingStartTime: Date
+    ) async throws -> [TranscriptionService.TranscriptSegment] {
+        let tempService = TranscriptionService()
+        try await tempService.initialize(modelPath: modelPath)
+        tempService.setTranscriptionMode(.postProcessing)
+
+        let segmentsLock = OSAllocatedUnfairLock(initialState: [TranscriptionService.TranscriptSegment]())
+        tempService.setTranscriptHandler { segment in
+            segmentsLock.withLock { $0.append(segment) }
+        }
+
+        for pair in segmentsToProcess {
+            try Task.checkCancellation()
+            try await tempService.transcribePostProcessing(
+                systemAudioURL: pair.systemURL,
+                micAudioURL: pair.micURL,
+                startTime: recordingStartTime
+            )
+        }
+
+        return segmentsLock.withLock { $0 }
+    }
     
     private func parseSegmentIndex(from name: String, prefix: String, suffix: String) -> Int? {
         guard name.hasPrefix(prefix), name.hasSuffix(suffix) else { return nil }
@@ -748,6 +902,24 @@ final class TranscriptionCoordinator {
         let end = name.index(name.endIndex, offsetBy: -suffix.count)
         guard start < end else { return nil }
         return Int(name[start..<end])
+    }
+
+    /// Deterministically sort transcript segments by timestamp while preserving source
+    /// order for equal timestamps.
+    private func stableSortSegmentsByTimestamp(
+        _ segments: [TranscriptionService.TranscriptSegment]
+    ) -> [TranscriptionService.TranscriptSegment] {
+        let tieTolerance: TimeInterval = 0.001
+        return segments
+            .enumerated()
+            .sorted { lhs, rhs in
+                let delta = lhs.element.timestamp - rhs.element.timestamp
+                if abs(delta) > tieTolerance {
+                    return delta < 0
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
     }
     
     /// Reprocess a completed meeting's audio with a different model
@@ -772,6 +944,8 @@ final class TranscriptionCoordinator {
         using modelSize: ModelManager.ModelSize,
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
+        try Task.checkCancellation()
+
         // Get model path
         guard let modelPath = modelManager.pathForModel(modelSize) else {
             throw NSError(domain: "TranscriptionCoordinator", code: 1,
@@ -788,41 +962,38 @@ final class TranscriptionCoordinator {
         Task { await DiagnosticLogger.shared.log(.transcription,
             "Reprocess: model=\(modelSize.rawValue)") }
         
-        // Initialize transcription service with selected model
-        let tempService = TranscriptionService()
-        try await tempService.initialize(modelPath: modelPath)
-        tempService.setTranscriptionMode(.postProcessing)
-        
         // Get audio file URLs
         let systemAudioURL = meeting.directory.appendingPathComponent("audio.caf")
         let micAudioURL = meeting.directory.appendingPathComponent("microphone.caf")
+        let recordingStartTime = meeting.date
         let systemExists = FileManager.default.fileExists(atPath: systemAudioURL.path)
         let micExists = FileManager.default.fileExists(atPath: micAudioURL.path)
         
         // Log audio file availability
         Task { await DiagnosticLogger.shared.log(.transcription,
             "Audio files: system=\(systemExists), mic=\(micExists)") }
-        
-        // Transcribe - use nonisolated(unsafe) since we're on MainActor and handler runs synchronously
-        nonisolated(unsafe) var segments: [TranscriptionService.TranscriptSegment] = []
-        tempService.setTranscriptHandler { segment in
-            segments.append(segment)
-        }
-        
-        try await tempService.transcribePostProcessing(
-            systemAudioURL: systemExists ? systemAudioURL : nil,
-            micAudioURL: micExists ? micAudioURL : nil,
-            startTime: meeting.date
-        )
-        
+
+        let segments = try await Task.detached(priority: .userInitiated) {
+            try await Self.collectPostProcessingSegments(
+                modelPath: modelPath,
+                segmentsToProcess: [(
+                    systemURL: systemExists ? systemAudioURL : nil,
+                    micURL: micExists ? micAudioURL : nil
+                )],
+                recordingStartTime: recordingStartTime
+            )
+        }.value
+        try Task.checkCancellation()
+
         // Log reprocess completion
         Task { await DiagnosticLogger.shared.log(.transcription,
             "Reprocess done: segments=\(segments.count)") }
-        
+
         // Use TranscriptProcessor to filter artifacts (e.g., [BLANK_AUDIO], hallucinations)
         // and merge segments into blocks with word limits
         let processor = TranscriptProcessor()
-        for segment in segments {
+        for segment in stableSortSegmentsByTimestamp(segments) {
+            try Task.checkCancellation()
             processor.processSegment(segment)
         }
         processor.finalize()

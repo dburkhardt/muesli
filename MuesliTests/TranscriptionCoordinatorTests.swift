@@ -282,6 +282,33 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         XCTAssertEqual(switchedTo, .medium)
     }
     
+    /// Ensure fallback sessions track the actual live model used for transcription.
+    @MainActor
+    func testPrepareModelTracksEffectiveLiveModelForFallbackSession() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+        
+        // Preferred model is busy; fallback model is ready.
+        mockModelManager.downloadStates[.large] = .compiling
+        mockModelManager.downloadedModels.insert(.large)
+        mockModelManager.mockModelPaths[.large] = mockModelManager.modelDirectory.appendingPathComponent("large")
+        mockModelManager.activeModel = .large
+        mockModelManager.addDownloadedModel(.small, setActive: false)
+        
+        let state = await sut.prepareModel()
+        
+        XCTAssertTrue(state.isReady)
+        XCTAssertEqual(
+            sut.effectiveLiveModelForSession,
+            .small,
+            "Effective live model should capture the fallback model used by the session"
+        )
+    }
+    
     /// Test model preparation retry limit enforcement
     @MainActor
     func testPrepareModelRetryLimitEnforcement() async {
@@ -341,6 +368,7 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         } else {
             XCTFail("Expected notAvailable state after reset, got \(sut.modelState)")
         }
+        XCTAssertNil(sut.effectiveLiveModelForSession, "Reset should clear tracked effective live model")
     }
     
     /// Test model switch callback invocation
@@ -899,6 +927,99 @@ final class TranscriptionCoordinatorTests: XCTestCase {
     */
     
     // MARK: - Second-Pass / Auto-Reprocess Race Condition Guards
+
+    @MainActor
+    func testMarkSecondPassActiveRegistersProcessingState() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-processing-state-\(UUID().uuidString)")
+        sut.markSecondPassActive(for: directory)
+
+        let state = sut.processingState(for: directory)
+        XCTAssertNotNil(state)
+        XCTAssertEqual(state?.phase, .secondPass)
+        XCTAssertEqual(state?.cancellable, true)
+    }
+
+    @MainActor
+    func testFinalizingLiveProcessingStateHasExpectedStatusText() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-finalizing-live-\(UUID().uuidString)")
+        sut.beginProcessingState(for: directory, phase: .finalizingLive, cancellable: false)
+
+        let state = sut.processingState(for: directory)
+        XCTAssertEqual(state?.phase, .finalizingLive)
+        XCTAssertEqual(state?.displayStatus, "Finalizing live transcript...")
+        XCTAssertEqual(state?.cancellable, false)
+    }
+
+    @MainActor
+    func testStopTranscriptionForwardsFlushBudget() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        _ = await sut.stopTranscription(maxFlushDuration: 1.5, allowDeferredFlush: true)
+
+        XCTAssertEqual(mockTranscriptionService.stopTranscriptionCallCount, 1)
+        XCTAssertNotNil(mockTranscriptionService.lastStopMaxFlushDuration)
+        XCTAssertEqual(mockTranscriptionService.lastStopMaxFlushDuration ?? 0, 1.5, accuracy: 0.001)
+        XCTAssertTrue(mockTranscriptionService.lastStopAllowDeferredFlush)
+    }
+
+    @MainActor
+    func testProcessingStateLookupUsesCanonicalDirectoryPath() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-processing-state-canonical-\(UUID().uuidString)", isDirectory: true)
+        let variantDirectory = URL(fileURLWithPath: directory.path + "/")
+
+        sut.markSecondPassActive(for: directory)
+
+        let state = sut.processingState(for: variantDirectory)
+        XCTAssertNotNil(state)
+        XCTAssertEqual(state?.phase, .secondPass)
+    }
+
+    @MainActor
+    func testClearSecondPassActiveClearsProcessingState() {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-processing-state-clear-\(UUID().uuidString)")
+        sut.markSecondPassActive(for: directory)
+        XCTAssertNotNil(sut.processingState(for: directory))
+
+        sut.clearSecondPassActive(for: directory)
+        XCTAssertNil(sut.processingState(for: directory))
+    }
     
     /// When a directory is marked as having an active second-pass, autoReprocessWhenReady should skip.
     @MainActor
@@ -1007,5 +1128,74 @@ final class TranscriptionCoordinatorTests: XCTestCase {
         
         XCTAssertTrue(meetingB.isReprocessing,
                       "Auto-reprocess should proceed for a directory without an active second-pass")
+    }
+
+    /// Clearing an active second-pass marker should allow auto-reprocess for that same directory.
+    @MainActor
+    func testClearSecondPassActiveUnblocksAutoReprocessForSameDirectory() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        mockModelManager.addDownloadedModel(.small)
+        _ = await sut.prepareModel()
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-clear-second-pass-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let meeting = MeetingHistoryItem(
+            title: "Meeting",
+            date: Date(),
+            directory: directory,
+            hasAudio: true,
+            hasMicrophone: false
+        )
+
+        sut.markSecondPassActive(for: directory)
+        sut.autoReprocessWhenReady(meeting: meeting)
+        XCTAssertFalse(meeting.isReprocessing, "Marked directory should block auto-reprocess")
+
+        sut.clearSecondPassActive(for: directory)
+        sut.autoReprocessWhenReady(meeting: meeting)
+        XCTAssertTrue(meeting.isReprocessing, "Cleared directory should allow auto-reprocess")
+    }
+
+    /// clearSecondPassActive should be safe to call more than once.
+    @MainActor
+    func testClearSecondPassActiveIsIdempotent() async {
+        let mockTranscriptionService = MockTranscriptionService()
+        let mockModelManager = MockModelManager()
+        let sut = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: mockModelManager
+        )
+
+        mockModelManager.addDownloadedModel(.small)
+        _ = await sut.prepareModel()
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-clear-second-pass-idempotent-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let meeting = MeetingHistoryItem(
+            title: "Meeting",
+            date: Date(),
+            directory: directory,
+            hasAudio: true,
+            hasMicrophone: false
+        )
+
+        sut.markSecondPassActive(for: directory)
+        sut.clearSecondPassActive(for: directory)
+        sut.clearSecondPassActive(for: directory)  // second clear should be a no-op
+
+        sut.autoReprocessWhenReady(meeting: meeting)
+        XCTAssertTrue(meeting.isReprocessing, "Double clear should leave directory unblocked")
     }
 }

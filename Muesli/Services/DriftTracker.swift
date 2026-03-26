@@ -22,8 +22,11 @@ final class DriftTracker {
     /// Maximum reasonable drift (500 ppm)
     static let maxDriftPPM: Double = 500
     
-    /// Minimum measurements for valid estimate
-    static let minMeasurements = 100
+    /// Minimum measurements for provisional estimate (~5 seconds at 1Hz updates)
+    static let provisionalMinMeasurements = 5
+
+    /// Minimum measurements for valid estimate (~30 seconds at 1Hz updates)
+    static let minMeasurements = 30
     
     /// Update interval for drift calculation
     static let updateIntervalSeconds: TimeInterval = 1.0
@@ -43,6 +46,9 @@ final class DriftTracker {
     
     /// Whether we have a valid drift estimate
     private(set) var hasValidEstimate: Bool = false
+    
+    /// Whether we have a provisional (not yet fully validated) drift estimate.
+    private(set) var hasProvisionalEstimate: Bool = false
     
     // MARK: - Render Tracking
     
@@ -129,6 +135,7 @@ final class DriftTracker {
         lastCaptureHostTime = 0
         currentDriftPPM = 0
         hasValidEstimate = false
+        hasProvisionalEstimate = false
         driftHistory.removeAll()
         lastDriftCalculationTime = Date()
         
@@ -208,6 +215,7 @@ final class DriftTracker {
             // Initial estimate from history mean
             currentDriftPPM = driftHistory.reduce(0, +) / Double(driftHistory.count)
             hasValidEstimate = true
+            hasProvisionalEstimate = true
 
             logger.info("Drift estimate established: \(String(format: "%.1f", self.currentDriftPPM)) ppm")
 
@@ -216,6 +224,11 @@ final class DriftTracker {
                 await DiagnosticLogger.shared.log(.aec,
                     "DRIFT_ESTIMATE: ppm=\(String(format: "%.1f", logDrift))")
             }
+        } else if driftHistory.count >= Self.provisionalMinMeasurements {
+            // Provisional estimate with tighter clamp to avoid overreacting early.
+            let provisional = driftHistory.reduce(0, +) / Double(driftHistory.count)
+            currentDriftPPM = max(-150, min(150, provisional))
+            hasProvisionalEstimate = true
         }
     }
     

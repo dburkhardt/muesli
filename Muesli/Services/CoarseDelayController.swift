@@ -15,6 +15,11 @@ import os.log
 /// Controls coarse delay estimation for render-capture alignment
 /// Uses conservative hysteresis and slew limiting to prevent AEC instability
 final class CoarseDelayController {
+    private struct TuningProfile {
+        let deadbandSamples: Int
+        let maxSlewRateSamplesPerSecond: Int
+    }
+
     // MARK: - Configuration (from plan)
     
     /// Hysteresis deadband in samples (15ms at 48kHz)
@@ -22,6 +27,12 @@ final class CoarseDelayController {
     
     /// Maximum slew rate (1ms/sec at 48kHz = 48 samples/sec)
     static let maxSlewRateSamplesPerSecond = 48
+
+    /// BT-output + external-mic profile deadband (8ms at 48kHz)
+    static let btExternalMicDeadbandSamples = 8 * 48  // 384 samples
+
+    /// BT-output + external-mic profile slew (4ms/sec at 48kHz)
+    static let btExternalMicMaxSlewRateSamplesPerSecond = 192
     
     /// Minimum delay (0ms)
     static let minDelaySamples = 0
@@ -53,6 +64,12 @@ final class CoarseDelayController {
     
     /// Whether we're in headset mode (more conservative)
     private var isHeadsetMode: Bool = false
+
+    /// Active delay adaptation tuning profile.
+    private var tuningProfile = TuningProfile(
+        deadbandSamples: CoarseDelayController.deadbandSamples,
+        maxSlewRateSamplesPerSecond: CoarseDelayController.maxSlewRateSamplesPerSecond
+    )
     
     /// Last update timestamp for slew calculation
     private var lastUpdateTime: Date = Date()
@@ -101,7 +118,7 @@ final class CoarseDelayController {
         let error = clampedObserved - currentDelaySamples
         
         // Apply hysteresis deadband - ignore small changes
-        guard abs(error) > Self.deadbandSamples else {
+        guard abs(error) > tuningProfile.deadbandSamples else {
             // Within deadband - consider stable
             updateStability(isStable: true)
             return
@@ -115,7 +132,7 @@ final class CoarseDelayController {
         let elapsed = now.timeIntervalSince(lastUpdateTime)
         lastUpdateTime = now
         
-        let maxSlewThisUpdate = Int(Double(Self.maxSlewRateSamplesPerSecond) * elapsed)
+        let maxSlewThisUpdate = Int(Double(tuningProfile.maxSlewRateSamplesPerSecond) * elapsed)
         let slewAmount = min(abs(error), max(1, maxSlewThisUpdate))
         
         if error > 0 {
@@ -165,6 +182,27 @@ final class CoarseDelayController {
         if enabled {
             isAdaptationFrozen = true
         }
+    }
+
+    /// Set BT-output + external-mic tuning profile.
+    /// This profile allows quicker convergence on routes with larger transport jitter.
+    func setBluetoothExternalMicProfile(_ enabled: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        tuningProfile = enabled
+            ? TuningProfile(
+                deadbandSamples: Self.btExternalMicDeadbandSamples,
+                maxSlewRateSamplesPerSecond: Self.btExternalMicMaxSlewRateSamplesPerSecond
+            )
+            : TuningProfile(
+                deadbandSamples: Self.deadbandSamples,
+                maxSlewRateSamplesPerSecond: Self.maxSlewRateSamplesPerSecond
+            )
+
+        logger.info(
+            "CoarseDelayController BT profile \(enabled ? "enabled" : "disabled"), deadband=\(self.tuningProfile.deadbandSamples) samples, maxSlew=\(self.tuningProfile.maxSlewRateSamplesPerSecond) samples/sec"
+        )
     }
     
     /// Seed the delay estimate directly from a known render-lead measurement.

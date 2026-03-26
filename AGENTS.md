@@ -15,7 +15,7 @@ Meeting transcription for macOS: captures audio (Zoom/Teams/Meet) + mic, real-ti
 | Language | Swift 6 |
 | UI | SwiftUI with `@Observable` |
 | Architecture | `MuesliViewModel` (app state) + `RecordingSession` (per-recording) |
-| Audio | Core Audio Taps (macOS 14.2+) via AVAudioEngine |
+| Audio | Core Audio taps + HAL-first microphone capture (AVAudioEngine fallback) |
 | Transcription | WhisperKit |
 | Package manager | Swift Package Manager |
 
@@ -499,7 +499,7 @@ ViewModel delegates recording operations to RecordingController. Views observe o
 System Audio: Core Audio Tap → TapCaptureRing → AudioWorker → AECProcessor
                                                                ├── FileOutputService (audio.caf)
                                                                └── TranscriptionService (→16kHz→WhisperKit)
-Microphone:   AVAudioEngine → MicCaptureRing → AudioSynchronizer → AECProcessor → ...
+Microphone:   HAL-first capture (AVAudioEngine fallback) → MicCaptureRing → AudioSynchronizer → AECProcessor → ...
 ```
 
 ## UI Patterns
@@ -537,7 +537,7 @@ Recordings saved to: `~/Library/Application Support/Muesli/Recordings/YYYY-MM-DD
 4. See [plans/code_signing.md](plans/code_signing.md) for full troubleshooting guide
 
 ### Audio Sample Rates (CRITICAL)
-**If transcription outputs gibberish, check sample rates first!** WhisperKit requires 16kHz. Both system audio (Core Audio tap) and microphone (AVAudioEngine) capture at 48kHz. Use `TranscriptionService.resampleToWhisperFormat()`:
+**If transcription outputs gibberish, check sample rates first!** WhisperKit requires 16kHz. System audio captures at 48kHz, and microphone capture is normalized to the 48kHz AEC contract before Whisper resampling. Use `TranscriptionService.resampleToWhisperFormat()`:
 ```swift
 // System: 48kHz stereo → 16kHz mono
 resampleToWhisperFormat(buffer, sourceSampleRate: 48000, sourceChannels: 2)
@@ -670,7 +670,7 @@ This builds a searchable knowledge base that helps future debugging sessions.
 **Dependencies**:
 - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — on-device speech-to-text
 - [MLXLLM / MLXLMCommon](https://github.com/ml-explore/mlx-swift-examples) — on-device LLM transcript refinement
-- Core Audio / AVAudioEngine — system audio capture via process taps
+- Core Audio / AVAudioEngine — system audio taps and microphone fallback capture
 - GitHub CLI (`gh`) — for PR management from command line
 
 **Testing**: Use Zoom/Meet/Teams or QuickTime Player. Verify permissions, recording cycles, transcript accuracy.

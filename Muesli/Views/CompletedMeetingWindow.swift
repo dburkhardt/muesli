@@ -39,6 +39,11 @@ struct CompletedMeetingWindow: View {
             ResumeControlPane(viewModel: viewModel, meeting: meeting)
                 .padding(.bottom, 16)
         }
+        .overlay(alignment: .bottomTrailing) {
+            processingIndicator
+                .padding(.trailing, 16)
+                .padding(.bottom, 92)
+        }
         .frame(minWidth: 600, minHeight: 500)
         .background(.background)
         .onAppear {
@@ -139,7 +144,7 @@ struct CompletedMeetingWindow: View {
                         }
                     }
                 }
-                .disabled(meeting.isReprocessing)
+                .disabled(viewModel.isMeetingProcessing(for: meeting))
             }
             
             Divider()
@@ -232,6 +237,29 @@ struct CompletedMeetingWindow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+    }
+
+    // MARK: - Processing Indicator
+
+    @ViewBuilder
+    private var processingIndicator: some View {
+        if let processingState = viewModel.processingState(for: meeting) {
+            let cancelAction: (() -> Void)? = processingState.cancellable
+                ? { viewModel.cancelReprocessing(for: meeting) }
+                : nil
+            FloatingProcessingIndicator(
+                phase: .reprocessing,
+                startTime: processingState.startedAt,
+                statusText: processingState.displayStatus,
+                onCancel: cancelAction
+            )
+        } else if meeting.isReprocessing, let startTime = meeting.reprocessingStartTime {
+            FloatingProcessingIndicator(
+                phase: .reprocessing,
+                startTime: startTime,
+                onCancel: { viewModel.cancelReprocessing(for: meeting) }
+            )
         }
     }
     

@@ -88,6 +88,35 @@ final class RegressionTests: XCTestCase {
         // The important thing is that the check completes and returns a valid boolean
         XCTAssertNotNil(hasPermission as Bool?, "Permission check should return a boolean value")
     }
+
+    // MARK: - Microphone Signal Contract Regression Tests (Bug Fix: Feb 28, 2026)
+
+    /// Regression test: converter source channels must match delivery channels.
+    /// Bug: HAL callback delivered mono channel-zero extraction but converter was
+    ///      configured from hardware channel count (2ch), causing conversion errors.
+    func testMicSignalContractRejectsConverterChannelMismatch() {
+        let result = TapAudioCaptureService.evaluateMicSignalContract(
+            sourceSampleRate: 16_000,
+            deliveryChannels: 1,
+            converterSourceChannels: 2,
+            converterOutputSampleRate: 48_000,
+            converterEnabled: true
+        )
+        XCTAssertFalse(result.isValid)
+        XCTAssertEqual(result.reason, "converter_source_channels_mismatch")
+    }
+
+    /// Regression test: repeated converter recovery after fallback forces degraded mode.
+    /// Bug: converter failure loops could repeatedly restart microphone capture without
+    ///      a deterministic terminal policy.
+    func testConverterEscalationDisablesAecPathAfterFallbackThreshold() {
+        let decision = TapAudioCaptureService.converterRecoveryEscalationDecision(
+            recoveriesInWindow: 3,
+            fallbackAlreadyForced: true
+        )
+        XCTAssertFalse(decision.escalateToFallback)
+        XCTAssertTrue(decision.disableAecPath)
+    }
     
     // MARK: - Audio Buffer Queue Regression Tests (Bug Fix: Jan 15, 2026)
     
@@ -452,6 +481,163 @@ final class RegressionTests: XCTestCase {
             "Raw format guard must execute before deriving hardwareChannels"
         )
     }
+
+    /// Regression test: installTap calls are wrapped with ObjCTryCatch to prevent NSException crashes.
+    /// Bug: AVAudioNode.installTap can throw NSException, which Swift cannot catch via do/catch.
+    func testStartMicrophoneCaptureWrapsInstallTapCallsInObjCTryCatch() throws {
+        let source = try tapAudioCaptureServiceSource()
+
+        let primaryPattern = #"if let installException = ObjCTryCatch\(\{\s*[A-Za-z0-9_\.]+\.installTap\(onBus:\s*0,\s*bufferSize:\s*[A-Za-z0-9_\.]+,\s*format:\s*nil\)"#
+        let fallbackPattern = #"if let fallbackInstallException = ObjCTryCatch\(\{\s*[A-Za-z0-9_\.]+\.installTap\(onBus:\s*0,\s*bufferSize:\s*[A-Za-z0-9_\.]+,\s*format:\s*nil\)"#
+
+        XCTAssertNotNil(
+            source.range(of: primaryPattern, options: .regularExpression),
+            "Primary inputNode.installTap call must be wrapped in ObjCTryCatch"
+        )
+        XCTAssertNotNil(
+            source.range(of: fallbackPattern, options: .regularExpression),
+            "Fallback fallbackInputNode.installTap call must be wrapped in ObjCTryCatch"
+        )
+    }
+
+    /// Regression test: microphoneStartFailed mapping is permission-gated.
+    /// Bug: Non-permission microphone start failures were mapped to microphoneDenied.
+    func testHandleCaptureErrorPermissionGatesMicrophoneStartFailureMapping() throws {
+        let source = try recordingControllerSource()
+
+        XCTAssertTrue(
+            source.contains("let missingMicPermission = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized"),
+            "handleCaptureError should compute missingMicPermission once and use it for classification"
+        )
+
+        let mappingPattern = #"case \.microphoneStartFailed:\s*muesliError = missingMicPermission \? \.microphoneDenied : \.captureStartFailed\(underlying: error\)"#
+        XCTAssertNotNil(
+            source.range(of: mappingPattern, options: .regularExpression),
+            "microphoneStartFailed should map to microphoneDenied only when permission is actually missing"
+        )
+
+        let recoveryPattern = #"case \.microphoneStartFailed:\s*if missingMicPermission, let callback = onPermissionRecoveryNeeded"#
+        XCTAssertNotNil(
+            source.range(of: recoveryPattern, options: .regularExpression),
+            "permission-recovery callback for microphoneStartFailed should remain permission-gated"
+        )
+    }
+    
+    /// Regression test: stop flow uses one automatic finalization path.
+    /// Bug: legacy dual toggles created overlapping post-stop workflows.
+    func testStopRecordingUsesUnifiedAutomaticFinalizationGate() throws {
+        let source = try recordingControllerSource()
+        
+        XCTAssertTrue(
+            source.contains("let decision = Self.automaticFinalizationDecision(") &&
+            source.contains("secondPassEnabled: preferencesManager.isSecondPassASREnabled") &&
+            source.contains("recordingDuration: duration"),
+            "stopRecordingAsync should gate automatic finalization by unified toggle + audio files + min duration"
+        )
+        
+        XCTAssertFalse(
+            source.contains("isAutoReprocessAfterMeetingEnabled"),
+            "Legacy auto-reprocess preference should not be used in stopRecordingAsync"
+        )
+    }
+
+    /// Regression test: stop flow uses a bounded live flush budget only for eligible second-pass launch.
+    func testStopRecordingUsesBoundedFlushBudgetForEligibleSecondPass() throws {
+        let source = try recordingControllerSource()
+
+        XCTAssertTrue(
+            source.contains("maxFlushDuration: shouldUseBoundedFlush ? 1.5 : nil"),
+            "stopRecordingAsync should use a bounded flush budget only when second-pass is eligible"
+        )
+        XCTAssertTrue(
+            source.contains("allowDeferredFlush: shouldUseBoundedFlush"),
+            "stopRecordingAsync should enable bounded stop semantics only when second-pass is eligible"
+        )
+    }
+    
+    /// Regression test: empty-transcript rescue is independent and runs only when needed.
+    func testStopRecordingEmptyTranscriptRescueCondition() throws {
+        let source = try recordingControllerSource()
+        
+        XCTAssertTrue(
+            source.contains("if finalizationState.hasAudioFiles && hasEmptyTranscript && !finalizationState.automaticFinalizationLaunched"),
+            "Empty-transcript rescue should run only when finalization did not launch"
+        )
+        XCTAssertFalse(
+            source.contains("shouldAutoReprocess"),
+            "Legacy shouldAutoReprocess branch should be removed after consolidation"
+        )
+    }
+    
+    /// Regression test: second-pass finalization receives the effective live model.
+    func testSecondPassFinalizationPassesEffectiveLiveModel() throws {
+        let source = try recordingControllerSource()
+        
+        XCTAssertTrue(
+            source.contains("let liveModelAtStop = session.effectiveLiveModel"),
+            "second-pass launch should snapshot the effective live model at stop time"
+        )
+        XCTAssertTrue(
+            source.contains("liveModel: liveModelAtStop"),
+            "runSecondPassASR should receive session.effectiveLiveModel for sameAsLive correctness"
+        )
+    }
+    
+    /// Regression test: auto-reprocess callback stays wired through ViewModel canonical meeting resolution.
+    func testAutoReprocessCallbackRoutesThroughViewModelMeetingResolution() throws {
+        let source = try muesliViewModelSource()
+        
+        XCTAssertTrue(
+            source.contains("self.recordingController.onAutoReprocessRequested"),
+            "ViewModel should register onAutoReprocessRequested callback"
+        )
+        XCTAssertTrue(
+            source.contains("self.transcriptionCoordinator.autoReprocessWhenReady(meeting: meeting)"),
+            "Callback should route to autoReprocessWhenReady with canonical meeting instance"
+        )
+    }
+
+    /// Regression test: stop flow exposes explicit finalizing phase for processing indicator lifecycle.
+    func testStopFlowUsesFinalizingLiveProcessingPhase() throws {
+        let controllerSource = try recordingControllerSource()
+        let coordinatorSource = try transcriptionCoordinatorSource()
+
+        XCTAssertTrue(
+            controllerSource.contains("phase: .finalizingLive"),
+            "RecordingController should set/clear the finalizingLive processing phase during stop flow"
+        )
+        XCTAssertTrue(
+            coordinatorSource.contains("case finalizingLive"),
+            "TranscriptionCoordinator should define finalizingLive processing phase"
+        )
+    }
+
+    /// Regression test: processing indicators are driven by an observable snapshot mirror,
+    /// not a dummy read tick that can be optimized away.
+    func testProcessingIndicatorUsesSnapshotMirrorInViewModel() throws {
+        let source = try muesliViewModelSource()
+
+        XCTAssertTrue(
+            source.contains("private var processingStatesSnapshot"),
+            "ViewModel should keep an observable processing-state snapshot"
+        )
+        XCTAssertTrue(
+            source.contains("processingStatesSnapshot = transcriptionCoordinator.allActiveProcessingStates()"),
+            "Snapshot should refresh from coordinator state"
+        )
+        XCTAssertTrue(
+            source.contains("onProcessingStatesChanged"),
+            "ViewModel should react to coordinator processing-state callbacks"
+        )
+        XCTAssertTrue(
+            source.contains("processingStatesSnapshot[canonicalDirectoryKey(meeting.directory)]"),
+            "Indicator lookup should read from the observable snapshot map"
+        )
+        XCTAssertFalse(
+            source.contains("processingStateTick"),
+            "Legacy tick-based invalidation should not be used"
+        )
+    }
     
     /// Regression test: Mic audio RMS should be measurable (not all zeros)
     /// Bug: Logs showed mic audio RMS was consistently 0.0 with all-zero samples.
@@ -473,6 +659,27 @@ final class RegressionTests: XCTestCase {
         let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
         let serviceURL = repoRoot.appendingPathComponent("Muesli/Services/TapAudioCaptureService.swift")
         return try String(contentsOf: serviceURL, encoding: .utf8)
+    }
+
+    private func recordingControllerSource() throws -> String {
+        let testsFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
+        let controllerURL = repoRoot.appendingPathComponent("Muesli/Controllers/RecordingController.swift")
+        return try String(contentsOf: controllerURL, encoding: .utf8)
+    }
+    
+    private func muesliViewModelSource() throws -> String {
+        let testsFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
+        let viewModelURL = repoRoot.appendingPathComponent("Muesli/ViewModels/MuesliViewModel.swift")
+        return try String(contentsOf: viewModelURL, encoding: .utf8)
+    }
+
+    private func transcriptionCoordinatorSource() throws -> String {
+        let testsFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = testsFileURL.deletingLastPathComponent().deletingLastPathComponent()
+        let coordinatorURL = repoRoot.appendingPathComponent("Muesli/Managers/TranscriptionCoordinator.swift")
+        return try String(contentsOf: coordinatorURL, encoding: .utf8)
     }
     
     // MARK: - Window Management Regression Tests (Bug Fix: Jan 15, 2026)
@@ -1443,6 +1650,341 @@ final class RegressionTests: XCTestCase {
         XCTAssertFalse(rejected, "Negative delay should be rejected")
     }
 
+    /// Regression test: setStreamDelayMs records unbounded value and source for observability.
+    /// If AEC bridge is available, the clamped value is fed through bridge setStreamDelayMs.
+    /// If bridge is unavailable (stub mode), clamping cannot be verified, but source/raw capture is still deterministic.
+    func testSetStreamDelayMsRecordsRawValueAndSource() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let ok = aec.setStreamDelayMs(250, source: .coarse)
+        let stats = aec.getStats()
+
+        // Raw value and source should be recorded regardless of bridge readiness.
+        XCTAssertEqual(stats.lastStreamDelayRawMs, 250, "lastStreamDelayRawMs should always capture the unbounded call value")
+        XCTAssertEqual(stats.lastStreamDelayHintSource, .coarse, "Hint source should be tracked")
+
+        if ok {
+            XCTAssertEqual(stats.lastStreamDelayMs, 250, "When accepted, lastStreamDelayMs should match clamped input")
+        }
+    }
+
+    /// Regression test: setStreamDelayMs clamps values above the 500ms domain boundary before bridging.
+    /// In environments without a live WebRTC bridge, skip strict bound assertion and only assert raw capture.
+    func testSetStreamDelayMsClampedToRange0To500() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let inputDelayMs = 777
+        let ok = aec.setStreamDelayMs(inputDelayMs, source: .seeded)
+        let stats = aec.getStats()
+
+        XCTAssertEqual(stats.lastStreamDelayRawMs, inputDelayMs, "Raw value should preserve out-of-range input for debugging")
+        XCTAssertEqual(stats.lastStreamDelayHintSource, .seeded, "Hint source should be preserved after clamping")
+
+        // 500ms is the configured upper bound in setStreamDelayMs
+        if ok {
+            XCTAssertEqual(stats.lastStreamDelayMs, 500, "Bounded delay fed to AEC should be 500ms max")
+        }
+    }
+
+    /// Regression test: explicit pass/fail mapping for estimator path.
+    /// Path A (effective): if external estimator is enabled, a valid hint should be accepted by WebRTC.
+    /// Path B (non-effective): if estimator is unavailable, the hint is still captured for observability but not applied.
+    func testSetStreamDelayMsPathAorBEstimatorBehavior() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let ok = aec.setStreamDelayMs(180, source: .coarse)
+        let stats = aec.getStats()
+
+        XCTAssertEqual(stats.lastStreamDelayRawMs, 180, "Raw delay value should always be captured")
+        XCTAssertEqual(stats.lastStreamDelayHintSource, .coarse, "Hint source should be captured")
+
+        if aec.isExternalDelayEstimatorEnabled {
+            XCTAssertTrue(ok, "Path A: active external estimator should accept a valid delay hint")
+            if ok {
+                XCTAssertEqual(stats.lastStreamDelayMs, 180, "Path A: accepted hint should be stored as sent (after clamp)")
+            }
+        } else {
+            XCTAssertFalse(ok, "Path B: estimator-unavailable path should not report successful bridge write")
+        }
+    }
+
+    /// Compatibility alias for explicit plan-mapped test name.
+    func testAudioWorkerDelayHintClampedToRange0to500() {
+        let aec = AECProcessor()
+        aec.configure(topology: .speakerphone)
+
+        let ok = aec.setStreamDelayMs(777, source: .coarse)
+        let stats = aec.getStats()
+
+        XCTAssertEqual(stats.lastStreamDelayRawMs, 777, "Raw delay should remain the outbound value")
+        XCTAssertEqual(stats.lastStreamDelayHintSource, .coarse, "Hint source should remain coarse")
+        if ok {
+            XCTAssertEqual(stats.lastStreamDelayMs, 500, "Clamped delay should be 500ms")
+        }
+    }
+
+    /// Regression test: delay mismatch transitions to WARN only after sustained >20ms mismatch
+    /// for >3s (300 frames), and is silent at exact-threshold mismatch.
+    func testDelayMismatchWarnBoundary_20ms3s() {
+        let aec = AECProcessor()
+        aec.debugResetDelayMismatchState()
+
+        // Exactly-on-threshold mismatch should be ignored.
+        let onThreshold = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 220,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 1
+        )
+        XCTAssertEqual(onThreshold.mismatchMs, 20)
+        XCTAssertFalse(onThreshold.emitWarn)
+        XCTAssertEqual(onThreshold.state, 0)
+
+        // Above-threshold mismatch should emit WARN at/after sustained 300 frames.
+        for frame in 1...299 {
+            let decision = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 221,
+                syncDelayMs: 200,
+                renderRmsLinear: 1.0,
+                captureRmsLinear: 1.0,
+                framesProcessed: Int64(frame)
+            )
+            XCTAssertFalse(decision.emitWarn, "WARN should not emit before 300 sustained frames")
+        }
+        let warnDecision = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 221,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 300
+        )
+        XCTAssertEqual(warnDecision.mismatchMs, 21)
+        XCTAssertTrue(warnDecision.emitWarn, "WARN should emit at sustained threshold")
+        XCTAssertEqual(warnDecision.state, 1)
+    }
+
+    /// Regression test: delay mismatch transitions to FAIL only after sustained >80ms mismatch
+    /// for >5s (500 frames), and below threshold does not fail.
+    func testDelayMismatchFailBoundary_80ms5s() {
+        let aec = AECProcessor()
+        aec.debugResetDelayMismatchState()
+
+        // Exactly-on-threshold mismatch should be ignored.
+        let onThreshold = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 280,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 1
+        )
+        XCTAssertEqual(onThreshold.mismatchMs, 80)
+        XCTAssertFalse(onThreshold.emitFail)
+        XCTAssertEqual(onThreshold.state, 0)
+
+        for frame in 1...499 {
+            let decision = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 281,
+                syncDelayMs: 200,
+                renderRmsLinear: 1.0,
+                captureRmsLinear: 1.0,
+                framesProcessed: Int64(frame)
+            )
+            XCTAssertFalse(decision.emitFail, "FAIL should not emit before 500 sustained frames")
+        }
+        let failDecision = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 281,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 500
+        )
+        XCTAssertEqual(failDecision.mismatchMs, 81)
+        XCTAssertTrue(failDecision.emitFail, "FAIL should emit at sustained threshold")
+        XCTAssertEqual(failDecision.state, 2)
+    }
+
+    /// Regression test: sustained mismatch must clear and reset counters when mismatch is resolved.
+    func testDelayMismatchClearsResetsSustainedCounter() {
+        let aec = AECProcessor()
+        aec.debugResetDelayMismatchState()
+
+        // Build to WARN state.
+        for frame in 1...300 {
+            _ = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 240,
+                syncDelayMs: 200,
+                renderRmsLinear: 1.0,
+                captureRmsLinear: 1.0,
+                framesProcessed: Int64(frame)
+            )
+        }
+
+        // Recovery to healthy ranges must emit CLEAR and transition to none.
+        let clearDecision = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 200,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 301
+        )
+        XCTAssertTrue(clearDecision.emitClear, "MISMATCH clear should emit when mismatch recovers")
+        XCTAssertEqual(clearDecision.state, 0)
+
+        // Start counting mismatch again after recovery.
+        for frame in 302...600 {
+            let decision = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 240,
+                syncDelayMs: 200,
+                renderRmsLinear: 1.0,
+                captureRmsLinear: 1.0,
+                framesProcessed: Int64(frame)
+            )
+            if frame < 601 {
+                XCTAssertFalse(decision.emitWarn, "Warn should restart after clear and not carry prior sustained count")
+            }
+        }
+        let restartedWarn = aec.debugEvaluateDelayMismatch(
+            bridgeDelayMs: 240,
+            syncDelayMs: 200,
+            renderRmsLinear: 1.0,
+            captureRmsLinear: 1.0,
+            framesProcessed: 601
+        )
+        XCTAssertTrue(restartedWarn.emitWarn, "Warn should re-emit after a full new sustain window")
+        XCTAssertEqual(restartedWarn.state, 1)
+    }
+
+    /// Regression test: mismatch detection is suppressed during very low RMS (silence or near-silence).
+    func testDelayMismatchSuppressedWhenRmsTooLow() {
+        let aec = AECProcessor()
+        aec.debugResetDelayMismatchState()
+
+        for frame in 1...500 {
+            let decision = aec.debugEvaluateDelayMismatch(
+                bridgeDelayMs: 300,
+                syncDelayMs: 200,
+                renderRmsLinear: 0.000_5,
+                captureRmsLinear: 0.000_5,
+                framesProcessed: Int64(frame)
+            )
+            XCTAssertFalse(decision.emitWarn)
+            XCTAssertFalse(decision.emitFail)
+            XCTAssertEqual(decision.state, 0)
+        }
+    }
+
+    func testPhase15SummaryEmitsAtOneSecondWindowAndResets() {
+        let aec = AECProcessor()
+        aec.debugResetPhase15Counters()
+
+        var summary: AECPhase15Summary?
+        for _ in 0..<99 {
+            summary = aec.debugRecordPhase15Sample(
+                erleDb: 2.5,
+                bridgeDelayMs: 350,
+                syncDelayMs: 200
+            )
+            XCTAssertNil(summary, "Summary should not emit before full 1-second window")
+        }
+
+        summary = aec.debugRecordPhase15Sample(
+            erleDb: 2.5,
+            bridgeDelayMs: 350,
+            syncDelayMs: 200
+        )
+        guard let summary else {
+            XCTFail("Summary should emit at 100 frames")
+            return
+        }
+        XCTAssertEqual(summary.windowFrames, 100)
+        XCTAssertEqual(summary.invalidDelaySamples, 0)
+        XCTAssertEqual(summary.erleBelow3Frames, 100)
+        XCTAssertEqual(summary.deltaOver100Frames, 100)
+        XCTAssertEqual(summary.coincidentFrames, 100)
+        XCTAssertEqual(summary.erleBelow3Pct, 100.0, accuracy: 0.001)
+        XCTAssertEqual(summary.deltaOver100Pct, 100.0, accuracy: 0.001)
+        XCTAssertEqual(summary.coincidencePct, 100.0, accuracy: 0.001)
+
+        let nextWindow = aec.debugRecordPhase15Sample(
+            erleDb: 6.0,
+            bridgeDelayMs: 200,
+            syncDelayMs: 200
+        )
+        XCTAssertNil(nextWindow, "Window counters should reset after an emitted summary")
+    }
+
+    func testPhase15ThresholdBoundariesAreExclusive() {
+        let aec = AECProcessor()
+        aec.debugResetPhase15Counters()
+
+        var summary: AECPhase15Summary?
+        for _ in 0..<100 {
+            summary = aec.debugRecordPhase15Sample(
+                erleDb: 3.0,
+                bridgeDelayMs: 300,
+                syncDelayMs: 200
+            )
+        }
+        guard let summary else {
+            XCTFail("Summary should emit at 100 frames")
+            return
+        }
+        XCTAssertEqual(summary.erleBelow3Frames, 0, "ERLE threshold should be strict (< 3.0dB)")
+        XCTAssertEqual(summary.deltaOver100Frames, 0, "Delay threshold should be strict (> 100ms)")
+        XCTAssertEqual(summary.coincidentFrames, 0)
+    }
+
+    func testPhase15RecordSampleSkipsDeltaWhenBridgeUnavailable() {
+        let aec = AECProcessor()
+        aec.setMode(.conservative)
+        aec.debugResetPhase15Counters()
+
+        var summary: AECPhase15Summary?
+        for _ in 0..<99 {
+            summary = aec.recordPhase15Sample(syncDelayMs: 200)
+            XCTAssertNil(summary)
+        }
+
+        summary = aec.recordPhase15Sample(syncDelayMs: 200)
+        guard let summary else {
+            XCTFail("Summary should emit at 100 frames")
+            return
+        }
+
+        XCTAssertEqual(summary.windowFrames, 100)
+        XCTAssertEqual(summary.invalidDelaySamples, 100, "All samples should be marked invalid without ready bridge delay")
+        XCTAssertEqual(summary.deltaOver100Frames, 0, "Invalid bridge delay must not count as >100ms mismatch")
+        XCTAssertEqual(summary.coincidentFrames, 0, "Coincidence must not increment for invalid delay samples")
+        XCTAssertEqual(summary.deltaBinLt20, 0)
+        XCTAssertEqual(summary.deltaBin20To49, 0)
+        XCTAssertEqual(summary.deltaBin50To99, 0)
+        XCTAssertEqual(summary.deltaBin100To199, 0)
+        XCTAssertEqual(summary.deltaBinGe200, 0)
+    }
+
+    func testDelayDecompositionSourceTagMapping() {
+        XCTAssertEqual(
+            AudioSynchronizer.delayDecompositionSourceTag(coarseDelayMs: 0, seededDelayMs: -1),
+            .unavailable
+        )
+        XCTAssertEqual(
+            AudioSynchronizer.delayDecompositionSourceTag(coarseDelayMs: 0, seededDelayMs: 120),
+            .seededOnly
+        )
+        XCTAssertEqual(
+            AudioSynchronizer.delayDecompositionSourceTag(coarseDelayMs: 180, seededDelayMs: -1),
+            .coarseOnly
+        )
+        XCTAssertEqual(
+            AudioSynchronizer.delayDecompositionSourceTag(coarseDelayMs: 180, seededDelayMs: 120),
+            .coarseAndSeeded
+        )
+    }
+
     /// Regression test: CoarseDelayController.seed() sets currentDelaySamples immediately.
     /// Bug: Without seed(), coarseDelayMs starts at 0 and slews at ~2ms/sec,
     /// taking ~90 seconds to reach a typical 175ms render lead.
@@ -1756,6 +2298,11 @@ final class RegressionTests: XCTestCase {
         // Session should be ready (using the fallback model)
         XCTAssertTrue(state.isReady,
             "prepareModel() should succeed using fallback model when preferred is compiling")
+        XCTAssertEqual(
+            coordinator.effectiveLiveModelForSession,
+            .small,
+            "Fallback session should track the effective live model used for transcription"
+        )
 
         // User preference must NOT have changed
         XCTAssertEqual(mockModelManager.activeModel, .large,

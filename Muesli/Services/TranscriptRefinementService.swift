@@ -124,10 +124,106 @@ final class TranscriptRefinementService {
         progress = 0.5
         let refinedText = try await refineBlockText(text, container: container)
         progress = 1.0
-        
+
         return refinedText
     }
-    
+
+    /// Refine transcript by consolidating fragmented same-speaker turns into cohesive paragraphs
+    /// Sends the full conversation to the LLM for holistic restructuring
+    /// - Parameter blocks: Array of transcript blocks to consolidate and refine
+    /// - Returns: Consolidated and refined transcript blocks
+    func consolidateAndRefineTranscript(_ blocks: [TranscriptBlock]) async throws -> [TranscriptBlock] {
+        guard !blocks.isEmpty else { return blocks }
+
+        isRefining = true
+        progress = 0.0
+        errorMessage = nil
+
+        defer {
+            isRefining = false
+            progress = 0.0
+        }
+
+        guard llmManager.isLLMAvailable && llmManager.isLLMStitchingEnabled else {
+            return blocks
+        }
+
+        guard let container = llmManager.modelContainer else {
+            throw LLMManager.LLMError.modelNotLoaded
+        }
+
+        // Serialize all blocks to structured text
+        let inputText = blocks.map { block in
+            "**\(block.speaker.rawValue)** _[\(block.formattedStartTime)]_\n\n\(block.text)"
+        }.joined(separator: "\n\n")
+
+        progress = 0.3
+
+        let result = try await container.perform { context in
+            let systemMessage = """
+                You are a transcript editor. Restructure this meeting transcript so that consecutive turns \
+                from the same speaker are merged into cohesive paragraphs of 3-4 sentences. Rules:
+                - Keep ALL spoken content — do not delete or summarize anything
+                - Merge consecutive same-speaker fragments into one paragraph
+                - Fix grammar and remove filler words (um, uh, like, you know)
+                - Keep the speaker label (**Me** or **Them**) and the timestamp of the FIRST fragment in each merged group
+                - Output in the same format: **Speaker** _[MM:SS]_ followed by a blank line and paragraph text
+                - Do not add information or change meaning
+                """
+
+            let messages: [Chat.Message] = [
+                .system(systemMessage),
+                .user(inputText)
+            ]
+
+            let userInput = UserInput(chat: messages)
+            let input = try await context.processor.prepare(input: userInput)
+
+            let generateParams = GenerateParameters(
+                maxTokens: 4096,
+                temperature: 0.2
+            )
+
+            let cache = context.model.newCache(parameters: generateParams)
+            let iterator = try TokenIterator(
+                input: input,
+                model: context.model,
+                cache: cache,
+                parameters: generateParams
+            )
+
+            let generateResult: GenerateResult = generate(
+                input: input,
+                context: context,
+                iterator: iterator
+            ) { _ in .more }
+
+            Stream.gpu.synchronize()
+            return generateResult.output
+        }
+
+        progress = 0.8
+
+        let output = result.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Fall back to original if LLM returned nothing useful
+        guard !output.isEmpty, output.count > inputText.count / 4 else {
+            return blocks
+        }
+
+        // Parse LLM output back into TranscriptBlocks
+        let parsedBlocks = parseConsolidatedOutput(output, originalBlocks: blocks)
+
+        // Validate with consolidation guardrails (allows fewer blocks than input)
+        if passesConsolidationGuardrails(originalBlocks: blocks, candidateBlocks: parsedBlocks) {
+            progress = 1.0
+            return parsedBlocks
+        }
+
+        // Guardrails failed — return original
+        return blocks
+    }
+
     // MARK: - Guardrails
     
     /// Validates that LLM output preserves required structure (speaker labels, timestamps)
@@ -490,5 +586,93 @@ final class TranscriptRefinementService {
             // Fallback: return entire text as single sentence
             return [text.trimmingCharacters(in: .whitespacesAndNewlines)]
         }
+    }
+
+    /// Parse holistic LLM output back into TranscriptBlock array
+    private func parseConsolidatedOutput(
+        _ output: String,
+        originalBlocks: [TranscriptBlock]
+    ) -> [TranscriptBlock] {
+        let headerPattern = #"\*\*(Me|Them)\*\*\s+_\[(\d{1,2}):(\d{2})\]_"#
+        guard let regex = try? NSRegularExpression(pattern: headerPattern) else {
+            return originalBlocks
+        }
+
+        let nsOutput = output as NSString
+        let range = NSRange(output.startIndex..., in: output)
+        let headerMatches = regex.matches(in: output, range: range)
+
+        guard !headerMatches.isEmpty else { return originalBlocks }
+
+        var result: [TranscriptBlock] = []
+
+        for (i, match) in headerMatches.enumerated() {
+            guard let speakerRange = Range(match.range(at: 1), in: output),
+                  let minsRange = Range(match.range(at: 2), in: output),
+                  let secsRange = Range(match.range(at: 3), in: output) else {
+                continue
+            }
+
+            let speakerString = String(output[speakerRange])
+            let mins = Int(output[minsRange]) ?? 0
+            let secs = Int(output[secsRange]) ?? 0
+            let timestamp = TimeInterval(mins * 60 + secs)
+
+            // Find text content: from end of this header to start of next header (or end of output)
+            let contentStart = match.range.upperBound
+            let contentEnd: Int
+            if i + 1 < headerMatches.count {
+                contentEnd = headerMatches[i + 1].range.lowerBound
+            } else {
+                contentEnd = nsOutput.length
+            }
+
+            let contentNSRange = NSRange(location: contentStart, length: contentEnd - contentStart)
+            guard let contentRange = Range(contentNSRange, in: output) else { continue }
+
+            let text = String(output[contentRange])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !text.isEmpty else { continue }
+
+            let speaker: TranscriptBlock.Speaker = speakerString == "Me" ? .me : .them
+
+            // Use end timestamp from closest original block
+            let endTimestamp = originalBlocks
+                .min(by: { abs($0.startTimestamp - timestamp) < abs($1.startTimestamp - timestamp) })?
+                .endTimestamp ?? timestamp
+
+            result.append(TranscriptBlock(
+                speaker: speaker,
+                text: text,
+                startTimestamp: timestamp,
+                endTimestamp: endTimestamp
+            ))
+        }
+
+        return result.isEmpty ? originalBlocks : result
+    }
+
+    /// Validate consolidated output — allows fewer blocks than input (intentional for consolidation)
+    /// Requires all original speakers to be represented and word count within 50% of original
+    private func passesConsolidationGuardrails(
+        originalBlocks: [TranscriptBlock],
+        candidateBlocks: [TranscriptBlock]
+    ) -> Bool {
+        guard !candidateBlocks.isEmpty else { return false }
+
+        // All original speakers must be represented in output
+        let originalSpeakers = Set(originalBlocks.map { $0.speaker })
+        let candidateSpeakers = Set(candidateBlocks.map { $0.speaker })
+        guard originalSpeakers.isSubset(of: candidateSpeakers) else { return false }
+
+        // Output word count must not be drastically lower (> 50% reduction signals dropped content)
+        let originalWords = originalBlocks.reduce(0) { $0 + $1.wordCount }
+        let candidateWords = candidateBlocks.reduce(0) { $0 + $1.wordCount }
+        guard originalWords == 0 || Double(candidateWords) >= Double(originalWords) * 0.5 else {
+            return false
+        }
+
+        return true
     }
 }

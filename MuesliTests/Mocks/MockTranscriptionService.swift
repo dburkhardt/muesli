@@ -23,6 +23,11 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         code: 2,
         userInfo: [NSLocalizedDescriptionKey: "Mock post-processing error"]
     )
+    var stopTranscriptionResult = TranscriptionService.StopFlushResult(
+        completedFullFlush: true,
+        flushDurationMs: 0,
+        remainingBufferedSamples: 0
+    )
     
     /// Simulated delay during initialization (for testing slow model loading)
     var initializationDelay: TimeInterval = 0
@@ -38,6 +43,8 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
     var setTranscriptHandlerCallCount: Int = 0
     var lastModelPath: URL?
     var lastRecordingStartTime: Date?
+    var lastStopMaxFlushDuration: TimeInterval?
+    var lastStopAllowDeferredFlush: Bool = false
     
     // MARK: - Handlers
     
@@ -83,9 +90,16 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         isTranscribing = true
     }
     
-    func stopTranscription() async {
+    @discardableResult
+    func stopTranscription(
+        maxFlushDuration: TimeInterval?,
+        allowDeferredFlush: Bool
+    ) async -> TranscriptionService.StopFlushResult {
         stopTranscriptionCallCount += 1
+        lastStopMaxFlushDuration = maxFlushDuration
+        lastStopAllowDeferredFlush = allowDeferredFlush
         isTranscribing = false
+        return stopTranscriptionResult
     }
     
     func appendSystemAudio(_ samples: [Float]) {
@@ -148,8 +162,15 @@ final class MockTranscriptionService: TranscriptionServiceProtocol, @unchecked S
         postProcessingCallCount = 0
         setTranscriptHandlerCallCount = 0
         setDraftHandlerCallCount = 0
+        stopTranscriptionResult = TranscriptionService.StopFlushResult(
+            completedFullFlush: true,
+            flushDurationMs: 0,
+            remainingBufferedSamples: 0
+        )
         lastModelPath = nil
         lastRecordingStartTime = nil
+        lastStopMaxFlushDuration = nil
+        lastStopAllowDeferredFlush = false
         transcriptHandler = nil
         draftHandler = nil
     }

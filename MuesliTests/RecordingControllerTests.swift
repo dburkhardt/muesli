@@ -8,6 +8,41 @@ import XCTest
 final class RecordingControllerTests: XCTestCase {
     // MARK: - Test Setup
     
+    private static let userDefaultsKeysToClean = [
+        AppStorageKeys.secondPassASREnabled,
+        AppStorageKeys.secondPassModelPreference,
+        AppStorageKeys.reprocessWorkflowMigrationDone,
+        AppStorageKeys.exportEnabled,
+        AppStorageKeys.exportDirectory,
+        "autoReprocessAfterMeetingEnabled",
+        "secondPassSpecificModel",
+    ]
+    
+    private static let testOutputDirectory =
+        FileManager.default.temporaryDirectory.appendingPathComponent("MuesliTests_RecordingController")
+
+    override func setUp() {
+        super.setUp()
+        Self.resetReprocessWorkflowDefaults()
+        
+        // Set test output directory to avoid writing to real user directories
+        UserDefaults.standard.set(Self.testOutputDirectory.path, forKey: "outputDirectory")
+    }
+    
+    override func tearDown() {
+        // Clean up test directories
+        try? FileManager.default.removeItem(at: Self.testOutputDirectory)
+        UserDefaults.standard.removeObject(forKey: "outputDirectory")
+        
+        Self.resetReprocessWorkflowDefaults()
+        super.tearDown()
+    }
+    
+    private static func resetReprocessWorkflowDefaults() {
+        let defaults = UserDefaults.standard
+        userDefaultsKeysToClean.forEach { defaults.removeObject(forKey: $0) }
+    }
+    
     private func createTestController() async -> RecordingController {
         let (controller, _) = await createTestControllerWithMocks()
         return controller
@@ -35,6 +70,42 @@ final class RecordingControllerTests: XCTestCase {
             exportService: ExportService()
         )
         return (controller, audioCaptureService)
+    }
+
+    private func createTestControllerWithMockTranscriptionService() async -> (
+        RecordingController,
+        MockAudioCaptureService,
+        MockTranscriptionService
+    ) {
+        let audioCaptureService = MockAudioCaptureService()
+        let fileOutputService = FileOutputService()
+        let mockTranscriptionService = MockTranscriptionService()
+        let modelManager = MockModelManager()
+        let transcriptionCoordinator = TranscriptionCoordinator(
+            transcriptionService: mockTranscriptionService,
+            modelManager: modelManager
+        )
+        let preferencesManager = PreferencesManager()
+        let microphoneManager = MicrophoneManager()
+
+        let controller = RecordingController(
+            audioCaptureService: audioCaptureService,
+            fileOutputService: fileOutputService,
+            transcriptionService: TranscriptionService(),
+            transcriptionCoordinator: transcriptionCoordinator,
+            preferencesManager: preferencesManager,
+            microphoneManager: microphoneManager,
+            exportService: ExportService()
+        )
+        return (controller, audioCaptureService, mockTranscriptionService)
+    }
+
+    private func ensurePrimaryAudioFileExists(for session: RecordingSession) {
+        guard let directory = session.outputDirectory else { return }
+        let audioURL = directory.appendingPathComponent("audio.caf")
+        if !FileManager.default.fileExists(atPath: audioURL.path) {
+            _ = FileManager.default.createFile(atPath: audioURL.path, contents: Data([0x00]))
+        }
     }
     
     // MARK: - Session Creation Tests
@@ -534,10 +605,15 @@ final class RecordingControllerTests: XCTestCase {
 
     /// Verifies that isFinalizingTranscript is false on a freshly stopped session when second-pass is disabled.
     func testFinalizingFlagClearedWhenSecondPassDisabled() async {
+        // Also disable the legacy auto-reprocess key so the migration path (if it runs)
+        // cannot re-enable second-pass finalization.
+        UserDefaults.standard.set(false, forKey: "autoReprocessAfterMeetingEnabled")
+        UserDefaults.standard.removeObject(forKey: AppStorageKeys.reprocessWorkflowMigrationDone)
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
         let controller = await createTestController()
         let session = controller.createSession()
 
-        // Flags default to false, so second pass is skipped and flag is never set
+        // Second-pass explicitly disabled, so finalization should be skipped.
         XCTAssertFalse(session.isFinalizingTranscript)
         session.meetingTitle = "Test Meeting"
         controller.startRecording(for: session)
@@ -588,6 +664,299 @@ final class RecordingControllerTests: XCTestCase {
         // Session should be in a consistent state (not nil, not crashed)
         // We don't assert a specific value because the last writer wins.
         XCTAssertNotNil(session, "Session must survive concurrent draft updates")
+    }
+
+    // MARK: - Interruption Finalization Parity
+
+    func testAutomaticFinalizationDecisionMatrix() {
+        let minDuration = AudioConfiguration.secondPassMinDurationSeconds
+        let expectedLaunch = RecordingController.AutomaticFinalizationDecision(
+            shouldLaunchSecondPass: true,
+            skipReason: nil
+        )
+
+        let noAudioDecision = RecordingController.automaticFinalizationDecision(
+            hasAudioFiles: false,
+            secondPassEnabled: true,
+            recordingDuration: minDuration + 5
+        )
+        XCTAssertEqual(
+            noAudioDecision,
+            RecordingController.AutomaticFinalizationDecision(
+                shouldLaunchSecondPass: false,
+                skipReason: .noAudioFiles
+            )
+        )
+
+        let disabledDecision = RecordingController.automaticFinalizationDecision(
+            hasAudioFiles: true,
+            secondPassEnabled: false,
+            recordingDuration: minDuration + 5
+        )
+        XCTAssertEqual(
+            disabledDecision,
+            RecordingController.AutomaticFinalizationDecision(
+                shouldLaunchSecondPass: false,
+                skipReason: .preferenceDisabled
+            )
+        )
+
+        let shortDecision = RecordingController.automaticFinalizationDecision(
+            hasAudioFiles: true,
+            secondPassEnabled: true,
+            recordingDuration: minDuration - 0.1
+        )
+        XCTAssertEqual(
+            shortDecision,
+            RecordingController.AutomaticFinalizationDecision(
+                shouldLaunchSecondPass: false,
+                skipReason: .recordingTooShort
+            )
+        )
+
+        let launchDecision = RecordingController.automaticFinalizationDecision(
+            hasAudioFiles: true,
+            secondPassEnabled: true,
+            recordingDuration: minDuration + 0.1
+        )
+        XCTAssertEqual(launchDecision, expectedLaunch)
+    }
+
+    func testStopRecordingUsesFullFlushWhenSecondPassDecisionSkips() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, _, mockTranscriptionService) = await createTestControllerWithMockTranscriptionService()
+        let session = controller.createSession()
+        session.meetingTitle = "Short Meeting"
+
+        let completionExpectation = expectation(description: "Stop completes")
+        controller.onSessionCompleted = { _, _ in
+            completionExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(for: .milliseconds(200))
+        ensurePrimaryAudioFileExists(for: session)
+        // Keep duration below threshold so automatic second-pass is ineligible.
+        session.recordingStartTime = Date()
+
+        controller.stopRecording(for: session)
+        await fulfillment(of: [completionExpectation], timeout: 3.0)
+
+        XCTAssertEqual(mockTranscriptionService.lastStopMaxFlushDuration, nil)
+        XCTAssertFalse(mockTranscriptionService.lastStopAllowDeferredFlush)
+    }
+
+    func testInterruptionUsesBoundedFlushWhenSecondPassDecisionLaunches() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, mockCapture, mockTranscriptionService) = await createTestControllerWithMockTranscriptionService()
+        let session = controller.createSession()
+        session.meetingTitle = "Interrupted Long Meeting"
+
+        let completionExpectation = expectation(description: "Interrupted stop completes")
+        controller.onSessionCompleted = { _, _ in
+            completionExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(for: .milliseconds(200))
+        ensurePrimaryAudioFileExists(for: session)
+        session.recordingStartTime = Date().addingTimeInterval(-(AudioConfiguration.secondPassMinDurationSeconds + 2.0))
+
+        await mockCapture.simulateInterruption(nil)
+        await fulfillment(of: [completionExpectation], timeout: 3.0)
+
+        XCTAssertEqual(mockTranscriptionService.lastStopMaxFlushDuration ?? 0, 1.5, accuracy: 0.001)
+        XCTAssertTrue(mockTranscriptionService.lastStopAllowDeferredFlush)
+    }
+
+    func testSecondPassFailureForcesAutoReprocessAfterIncompleteBoundedFlush() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, _, mockTranscriptionService) = await createTestControllerWithMockTranscriptionService()
+        mockTranscriptionService.stopTranscriptionResult = .init(
+            completedFullFlush: false,
+            flushDurationMs: 1500,
+            remainingBufferedSamples: 4800
+        )
+
+        let session = controller.createSession()
+        session.meetingTitle = "Force Recovery Meeting"
+        session.appendTranscriptSegment(
+            .init(text: "existing transcript", timestamp: 0.0, speaker: .me)
+        )
+
+        let completionExpectation = expectation(description: "Stop completes")
+        let autoReprocessExpectation = expectation(description: "Auto-reprocess forced")
+        controller.onSessionCompleted = { _, _ in
+            completionExpectation.fulfill()
+        }
+        controller.onAutoReprocessRequested = { _ in
+            autoReprocessExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(for: .milliseconds(200))
+        ensurePrimaryAudioFileExists(for: session)
+        session.recordingStartTime = Date().addingTimeInterval(-(AudioConfiguration.secondPassMinDurationSeconds + 2.0))
+
+        controller.stopRecording(for: session)
+        await fulfillment(of: [completionExpectation, autoReprocessExpectation], timeout: 4.0)
+
+        XCTAssertEqual(mockTranscriptionService.lastStopMaxFlushDuration ?? 0, 1.5, accuracy: 0.001)
+        XCTAssertTrue(mockTranscriptionService.lastStopAllowDeferredFlush)
+    }
+
+    func testInterruptionPathSkipsStopCapture() async {
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, mockCapture) = await createTestControllerWithMocks()
+        let session = controller.createSession()
+        session.meetingTitle = "Interrupted Meeting"
+
+        let completionExpectation = expectation(description: "Interrupted stop completes")
+        controller.onSessionCompleted = { _, _ in
+            completionExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await mockCapture.simulateInterruption(nil)
+        await fulfillment(of: [completionExpectation], timeout: 3.0)
+
+        let stopCount = await mockCapture.stopCaptureCallCount
+        XCTAssertEqual(stopCount, 0, "Interrupted stop must not call stopCapture()")
+    }
+
+    func testInterruptionCallbackIsIdempotent() async {
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, mockCapture) = await createTestControllerWithMocks()
+        let session = controller.createSession()
+        session.meetingTitle = "Interrupted Meeting"
+
+        var completionCount = 0
+        let completionExpectation = expectation(description: "Interrupted completion fires once")
+        completionExpectation.expectedFulfillmentCount = 1
+        completionExpectation.assertForOverFulfill = true
+        controller.onSessionCompleted = { _, _ in
+            completionCount += 1
+            completionExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        await mockCapture.simulateInterruption(nil)
+        await mockCapture.simulateInterruption(nil)
+        await fulfillment(of: [completionExpectation], timeout: 3.0)
+
+        // Give any duplicate asynchronous callback time to fire if present.
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(completionCount, 1, "Duplicate interruption callbacks must not duplicate completion")
+    }
+
+    func testInterruptionPathIncludesExportParity() async {
+        let exportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MuesliTests_InterruptedExport-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: exportDirectory) }
+
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.exportEnabled)
+        UserDefaults.standard.set(exportDirectory.path, forKey: AppStorageKeys.exportDirectory)
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, mockCapture) = await createTestControllerWithMocks()
+        let session = controller.createSession()
+        session.meetingTitle = "Interrupted Meeting"
+
+        var completedDirectory: URL?
+        let completionExpectation = expectation(description: "Interrupted completion with directory")
+        controller.onSessionCompleted = { _, directory in
+            completedDirectory = directory
+            completionExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await mockCapture.simulateInterruption(nil)
+        await fulfillment(of: [completionExpectation], timeout: 3.0)
+
+        guard let directory = completedDirectory else {
+            return XCTFail("Expected completed output directory for interrupted recording")
+        }
+
+        let markerPath = exportDirectory.appendingPathComponent(".muesli-export")
+        let manifestPath = exportDirectory.appendingPathComponent("manifest.json")
+        let meetingExportDir = exportDirectory
+            .appendingPathComponent("meetings")
+            .appendingPathComponent(directory.lastPathComponent)
+        let transcriptPath = meetingExportDir.appendingPathComponent("transcript.md")
+        let metadataPath = meetingExportDir.appendingPathComponent("metadata.json")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markerPath.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manifestPath.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: transcriptPath.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: metadataPath.path))
+    }
+
+    func testInterruptionPathRunsRescueAfterCompletionCallback() async {
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, mockCapture) = await createTestControllerWithMocks()
+        let session = controller.createSession()
+        session.meetingTitle = "Interrupted Meeting"
+
+        var callbackOrder: [String] = []
+        let callbackExpectation = expectation(description: "Completion then rescue callbacks")
+        callbackExpectation.expectedFulfillmentCount = 2
+        callbackExpectation.assertForOverFulfill = true
+
+        controller.onSessionCompleted = { _, _ in
+            callbackOrder.append("completed")
+            callbackExpectation.fulfill()
+        }
+        controller.onAutoReprocessRequested = { _ in
+            callbackOrder.append("rescue")
+            callbackExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        if let outputDirectory = session.outputDirectory {
+            let audioPath = outputDirectory.appendingPathComponent("audio.caf")
+            if !FileManager.default.fileExists(atPath: audioPath.path) {
+                _ = FileManager.default.createFile(atPath: audioPath.path, contents: Data())
+            }
+        }
+
+        await mockCapture.simulateInterruption(nil)
+        await fulfillment(of: [callbackExpectation], timeout: 3.0)
+
+        XCTAssertEqual(callbackOrder, ["completed", "rescue"])
+    }
+
+    func testInterruptionPathSetsCanResumeParity() async {
+        UserDefaults.standard.set(false, forKey: AppStorageKeys.secondPassASREnabled)
+
+        let (controller, mockCapture) = await createTestControllerWithMocks()
+        let session = controller.createSession()
+        session.meetingTitle = "Interrupted Meeting"
+
+        var completedSession: RecordingSession?
+        let completionExpectation = expectation(description: "Interrupted completion captures session")
+        controller.onSessionCompleted = { session, _ in
+            completedSession = session
+            completionExpectation.fulfill()
+        }
+
+        controller.startRecording(for: session)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await mockCapture.simulateInterruption(nil)
+        await fulfillment(of: [completionExpectation], timeout: 3.0)
+
+        XCTAssertEqual(completedSession?.canResume, true, "Interrupted completion should keep resume parity")
     }
     
     // MARK: - Second-Pass Cancellation

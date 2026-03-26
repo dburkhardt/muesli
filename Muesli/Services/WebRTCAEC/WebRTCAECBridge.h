@@ -78,6 +78,15 @@ typedef NS_ENUM(NSInteger, WebRTCAECError) {
 /// Whether external delay estimator is enabled for AEC3
 @property (nonatomic, readonly) BOOL externalDelayEstimatorEnabled;
 
+/// Capability/build signature for bridge runtime diagnostics.
+@property (nonatomic, readonly) NSString *capabilityMatrix;
+
+/// Total stream-delay API calls accepted by this bridge instance.
+@property (nonatomic, readonly) int streamDelaySetCalls;
+
+/// Total stream-delay API call failures for this bridge instance.
+@property (nonatomic, readonly) int streamDelaySetFailures;
+
 /// Frame size (always 480 for 10ms @ 48kHz)
 @property (nonatomic, readonly) int frameSize;
 

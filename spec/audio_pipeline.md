@@ -6,7 +6,7 @@ This document specifies how Muesli captures, processes, and transcribes audio fr
 
 The audio pipeline handles two parallel streams:
 1. **System Audio**: Captured from meeting apps (Zoom, Teams, Meet) via Core Audio taps (`AudioHardwareCreateProcessTap`)
-2. **Microphone Audio**: Captured from the user's selected microphone via AVAudioEngine (managed by TapAudioCaptureService)
+2. **Microphone Audio**: Captured from the user's selected microphone via a HAL-first backend (with AVAudioEngine fallback) managed by `TapAudioCaptureService`
 
 Both streams are simultaneously:
 - Written to disk as CAF files (for playback/reprocessing)
@@ -27,8 +27,8 @@ Both streams are simultaneously:
                     TapCaptureRing (render)
 
 ┌─────────────────────────────────────────────────────────────┐
-│                 Mic Capture (AVAudioEngine)                  │
-│        (supports user device selection)                      │
+│        Mic Capture (HAL-first + AVAudioEngine fallback)      │
+│   (device-bound Core Audio capture with deterministic policy)│
 └──────────────────────────┬──────────────────────────────────┘
                            │
                            ▼
@@ -64,7 +64,7 @@ Key advantages of Core Audio taps:
 
 | Stage | System Audio | Microphone Audio |
 |-------|-------------|-----------------|
-| Capture | 48kHz stereo Float32 | 48kHz mono Float32 |
+| Capture | 48kHz stereo Float32 | Device-native rate/channels (normalized to 48kHz mono contract for AEC) |
 | File Output | 48kHz stereo Float32 | 48kHz stereo Float32* |
 | Transcription | 16kHz mono Float32 | 16kHz mono Float32 |
 
@@ -96,17 +96,35 @@ enum AudioConfiguration {
 }
 ```
 
-## Why AVAudioEngine for Microphone?
+## Why HAL-first for Microphone?
 
 ScreenCaptureKit's `captureMicrophone` API (macOS 15+) has two issues:
 
 1. **No device selection**: Always uses system default microphone, ignoring user preference
 2. **Reliability**: Observed to return all-zero samples in some configurations
 
-TapAudioCaptureService manages mic via AVAudioEngine, providing:
-- Explicit device selection via `AudioObjectSetPropertyData`
-- Consistent Float32 sample format
-- Integration with the Core Audio tap pipeline for synchronized capture
+TapAudioCaptureService now uses a HAL-first strategy for microphone capture:
+- **Primary path**: `AudioDeviceCreateIOProcIDWithBlock` on the selected input device (deterministic device binding, robust on BT+external-mic routes)
+- **Fallback path**: AVAudioEngine when HAL startup fails or converter recovery policy escalates
+- **Contract invariants**: callback delivery channels must match converter source channels; AEC ingest stays fixed at 48kHz mono
+
+AVAudioEngine fallback is still supported for compatibility, but no longer treated as the primary routing path.
+
+## Microphone Signal Contract (Critical)
+
+The microphone path enforces a strict contract before AEC tuning:
+
+- `deliveryChannels` = channels actually delivered into `handleMicrophoneBuffer`
+- converter source channels must equal `deliveryChannels`
+- converter output domain must be `48kHz` mono before entering AEC
+- unresampled/raw passthrough is disallowed on converter failure
+
+### Converter failure policy
+
+- on converter failure: zero-fill expected 48k frame span (preserve timeline cadence)
+- `>= 10` consecutive failures: trigger mic recovery restart
+- `>= 3` recoveries in 60s: force AVAudioEngine fallback for session
+- if fallback still cannot satisfy contract: disable AEC mic path for safety and surface warning
 
 ## File Output
 
@@ -220,10 +238,10 @@ The first ~1 second of recording may have echo. This is acceptable for meeting r
 
 ### Fallback Behavior
 
-If sample rate resampling fails (mic not at 48kHz and can't be resampled), AEC is **disabled for the entire recording session**. This ensures:
-- Audio is still recorded correctly (no data loss)
-- No corrupt AEC output from mismatched sample rates
-- User is warned via UI notification
+If contract validation fails repeatedly, AEC mic processing is **disabled for the session**. This ensures:
+- Audio path remains stable (no domain leakage/corrupt AEC input)
+- Recording can continue in a degraded but safe mode
+- User receives explicit warning about degraded microphone processing
 
 ## Thread Safety
 
@@ -246,7 +264,7 @@ func handleBuffer(_ buffer: CMSampleBuffer) {
 
 ### Audio Callback Context
 
-Audio callbacks from CoreAudioTapManager IOProc and AVAudioEngine tap run on real-time priority threads:
+Audio callbacks from CoreAudioTapManager IOProc, HAL mic IOProc, and AVAudioEngine tap run on high-priority threads:
 
 - **Never block** in callback handlers (no heap allocation, no Objective-C messaging, no locks)
 - **Lock-free ring buffer handoff**: IOProc writes samples into `TapCaptureRing`/`MicCaptureRing`; a separate Swift worker thread (`AudioWorker`) reads from the rings and dispatches to downstream consumers
@@ -265,7 +283,7 @@ Audio callbacks from CoreAudioTapManager IOProc and AVAudioEngine tap run on rea
 ### No Microphone Audio
 
 1. Check microphone permission granted
-2. Verify AVAudioEngine started successfully in `TapAudioCaptureService`
+2. Verify `MIC_CAPTURE_BACKEND` and `MIC_SIGNAL_CONTRACT` logs in `TapAudioCaptureService`
 3. Check selected device ID exists and is valid
 4. Look for "Warning: Microphone capture failed to start" in logs
 5. Verify `MicCaptureRing` is receiving samples (check AudioWorker drain loop)
@@ -383,7 +401,7 @@ Long transcription segments are split into multiple `TranscriptBlock` objects:
 
 | File | Responsibility |
 |------|----------------|
-| `TapAudioCaptureService.swift` | Coordinates Core Audio tap + AVAudioEngine mic capture |
+| `TapAudioCaptureService.swift` | Coordinates Core Audio tap + HAL-first microphone capture/fallback |
 | `CoreAudioTapManager.swift` | Creates and manages `AudioHardwareCreateProcessTap` for system audio |
 | `AggregateDeviceManager.swift` | Builds tap-only aggregate devices for process exclusion |
 | `AudioSynchronizer.swift` | Sample-index timeline, jitter buffering, drift tracking |

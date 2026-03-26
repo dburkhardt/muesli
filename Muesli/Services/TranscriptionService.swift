@@ -43,6 +43,13 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Callback for transcription warnings (message, details)
     typealias TranscriptionWarningHandler = @Sendable (String, String) -> Void
+
+    /// Summary of stop-time buffer flush behavior.
+    struct StopFlushResult: Sendable {
+        let completedFullFlush: Bool
+        let flushDurationMs: Int
+        let remainingBufferedSamples: Int
+    }
     
     /// Information about audio chunks to process
     private struct ChunkInfo {
@@ -56,6 +63,95 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         /// Cumulative sample offset for mic audio (for audio-timeline timestamps)
         let micCumulativeOffset: Int
     }
+
+    enum VADMode: String, Sendable {
+        case strict
+        case boundary
+    }
+
+    enum VADDecisionReason: String, Sendable {
+        case strictPassed
+        case boundaryPassed
+        case droppedBelowRMS
+        case droppedTooShort
+        case droppedSparseEnergy
+        case droppedAfterRetryCap
+    }
+
+    struct VADDecision: Sendable {
+        let passed: Bool
+        let mode: VADMode
+        let reason: VADDecisionReason
+        let rms: Float
+        let significantRatio: Float
+        let sampleCount: Int
+    }
+
+    private enum StreamChannel: String, Sendable {
+        case system
+        case mic
+
+        var speaker: TranscriptSegment.Speaker {
+            switch self {
+            case .system: return .them
+            case .mic: return .me
+            }
+        }
+
+        var logSpeaker: String {
+            switch self {
+            case .system: return "them"
+            case .mic: return "me"
+            }
+        }
+    }
+
+    private struct BoundaryDiagnostics: Sendable {
+        var boundaryFallbackAttempted: Int = 0
+        var boundaryFallbackSucceeded: Int = 0
+        var forcedBufferEvictions: Int = 0
+        var retainedTailSamples: Int = 0
+        var skippedPartialStrict: Int = 0
+        var skippedPartialBoundary: Int = 0
+    }
+
+    private struct BoundarySnapshot: Sendable {
+        let channel: StreamChannel
+        let samples: [Float]
+        let cumulativeOffset: Int
+        let startTime: Date
+        let contextSuffix: String
+        let silenceDuration: TimeInterval
+        let bufferVersion: Int
+        let retryCount: Int
+    }
+
+    private struct BoundaryDecision {
+        let shouldTranscribe: Bool
+        let reason: VADDecisionReason
+        let strictDecision: VADDecision
+        let boundaryDecision: VADDecision?
+        let boundaryFallbackAttempted: Bool
+        let boundaryFallbackSucceeded: Bool
+    }
+
+    private struct PendingTranscription {
+        let samples: [Float]
+        let speaker: TranscriptSegment.Speaker
+        let startTime: Date
+        let cumulativeOffset: Int
+        let contextSuffix: String
+        let source: String
+    }
+
+    typealias VADEvaluator = @Sendable ([Float], VADMode) -> VADDecision
+    typealias TranscriptionExecutor = @Sendable (
+        [Float],
+        TranscriptSegment.Speaker,
+        Date,
+        Int,
+        String?
+    ) async -> String?
     
     // MARK: - Properties
     
@@ -65,12 +161,20 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     private var draftHandler: DraftHandler?
     private var warningHandler: TranscriptionWarningHandler?
     private var liveStabilizer: LiveStabilizer?
+    private var vadEvaluatorOverride: VADEvaluator?
+    private var transcriptionExecutorOverride: TranscriptionExecutor?
     
     private var isLiveStabilizerEnabled: Bool {
         if UserDefaults.standard.object(forKey: AppStorageKeys.liveStabilizerEnabled) == nil {
             return false
         }
         return UserDefaults.standard.bool(forKey: AppStorageKeys.liveStabilizerEnabled)
+    }
+
+    private var shouldAttemptBoundaryFallback: Bool {
+        AudioConfiguration.enableLiveBoundaryFallback &&
+            transcriptionMode == .live &&
+            liveStabilizer != nil
     }
     
     /// Current transcription mode
@@ -100,6 +204,16 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         var micLastVoiceTime: Date?
         var systemSilenceFlushDone: Bool = false
         var micSilenceFlushDone: Bool = false
+        var systemBufferVersion: Int = 0
+        var micBufferVersion: Int = 0
+        var systemBoundaryRetryCount: Int = 0
+        var micBoundaryRetryCount: Int = 0
+        var systemBoundaryCooldownVersion: Int?
+        var micBoundaryCooldownVersion: Int?
+        var systemBoundaryFlushInFlight: Bool = false
+        var micBoundaryFlushInFlight: Bool = false
+        var systemBoundaryDiagnostics: BoundaryDiagnostics = .init()
+        var micBoundaryDiagnostics: BoundaryDiagnostics = .init()
     }
     private let bufferState = OSAllocatedUnfairLock(initialState: BufferState())
     
@@ -154,7 +268,6 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     /// Initialize WhisperKit with the specified model path
     /// - Parameter modelPath: Path to the WhisperKit model directory (required)
-    @MainActor
     func initialize(modelPath: URL) async throws {
         guard !isInitialized else { return }
         
@@ -223,6 +336,16 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             state.micLastVoiceTime = nil
             state.systemSilenceFlushDone = false
             state.micSilenceFlushDone = false
+            state.systemBufferVersion = 0
+            state.micBufferVersion = 0
+            state.systemBoundaryRetryCount = 0
+            state.micBoundaryRetryCount = 0
+            state.systemBoundaryCooldownVersion = nil
+            state.micBoundaryCooldownVersion = nil
+            state.systemBoundaryFlushInFlight = false
+            state.micBoundaryFlushInFlight = false
+            state.systemBoundaryDiagnostics = .init()
+            state.micBoundaryDiagnostics = .init()
             state.isProcessing = true
         }
         
@@ -232,8 +355,15 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         }
     }
     
-    /// Stop transcription processing
-    func stopTranscription() async {
+    /// Stop transcription processing.
+    /// - Parameters:
+    ///   - maxFlushDuration: Optional maximum wait for final buffer flush. `nil` waits for full completion.
+    ///   - allowDeferredFlush: If true, stop can return early when timeout is reached.
+    @discardableResult
+    func stopTranscription(
+        maxFlushDuration: TimeInterval? = nil,
+        allowDeferredFlush: Bool = false
+    ) async -> StopFlushResult {
         // Signal the processing loop to stop (it checks isProcessing each iteration)
         bufferState.withLock { state in
             state.isProcessing = false
@@ -245,20 +375,56 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             await task.value  // Wait for task to complete instead of cancelling
         }
         processingTask = nil
-        
-        // Process any remaining audio
-        await processRemainingAudio()
-        
-        if let stabilizer = liveStabilizer {
-            let output = await stabilizer.flushAll()
-            for segment in output.committedSegments {
-                transcriptHandler?(segment)
+
+        let flushStart = Date()
+        let didCompleteFlush: Bool
+        if let maxFlushDuration, maxFlushDuration > 0 {
+            let flushTask = Task { [weak self] in
+                await self?.performFinalFlush()
             }
-            if let draft = output.draftUpdate {
-                draftHandler?(draft.text, draft.speaker)
+            let completedWithinBudget = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    await flushTask.value
+                    return true
+                }
+                group.addTask {
+                    try? await Task.sleep(
+                        nanoseconds: UInt64(maxFlushDuration * 1_000_000_000)
+                    )
+                    return false
+                }
+                let first = await group.next() ?? true
+                group.cancelAll()
+                return first
             }
+
+            if completedWithinBudget {
+                didCompleteFlush = true
+            } else if allowDeferredFlush {
+                flushTask.cancel()
+                didCompleteFlush = false
+                let remaining = currentBufferedSampleCount()
+                Task {
+                    await DiagnosticLogger.shared.log(
+                        .transcription,
+                        "STOP_FLUSH_BOUNDED_TIMEOUT: budgetMs=\(Int(maxFlushDuration * 1000)), remainingSamples=\(remaining)"
+                    )
+                }
+            } else {
+                await flushTask.value
+                didCompleteFlush = true
+            }
+        } else {
+            await performFinalFlush()
+            didCompleteFlush = true
         }
-        liveStabilizer = nil
+
+        let durationMs = Int(Date().timeIntervalSince(flushStart) * 1000)
+        return StopFlushResult(
+            completedFullFlush: didCompleteFlush,
+            flushDurationMs: durationMs,
+            remainingBufferedSamples: currentBufferedSampleCount()
+        )
     }
     
     // MARK: - Audio Input
@@ -270,6 +436,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             guard state.isProcessing else { return }
             state.systemAudioBuffer.append(contentsOf: samples)
             state.systemTotalSamplesReceived += samples.count
+            state.systemBufferVersion += 1
         }
     }
     
@@ -280,6 +447,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             guard state.isProcessing else { return }
             state.micAudioBuffer.append(contentsOf: samples)
             state.micTotalSamplesReceived += samples.count
+            state.micBufferVersion += 1
         }
     }
     
@@ -299,11 +467,11 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     }
     
     private func processBuffers() async {
-        guard isInitialized, let whisperKit = whisperKit else { return }
-        
         // Skip processing if in post-processing mode
         guard transcriptionMode == .live else { return }
-        
+        guard isInitialized || transcriptionExecutorOverride != nil else { return }
+        guard transcriptionExecutorOverride != nil || whisperKit != nil else { return }
+
         // Get chunks to process with overlap, using dynamic thresholds for warmup
         let chunkInfo: ChunkInfo = bufferState.withLock { state -> ChunkInfo in
             var sysChunk: [Float]?
@@ -342,6 +510,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                         state.systemAudioBuffer.removeFirst(endIndex)
                         state.systemProcessedSamples = 0
                     }
+                    state.systemBufferVersion += 1
                 }
             }
 
@@ -369,6 +538,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                         state.micAudioBuffer.removeFirst(endIndex)
                         state.micProcessedSamples = 0
                     }
+                    state.micBufferVersion += 1
                 }
             }
 
@@ -387,46 +557,52 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         let systemContext = bufferState.withLock { $0.systemLastTranscriptSuffix }
         let micContext = bufferState.withLock { $0.micLastTranscriptSuffix }
 
-        // Process system audio ("Them") with VAD check.
+        // Process system audio ("Them") with strict VAD check.
         // Warmup counter is advanced here (not in the lock) so silent chunks don't consume warmup.
-        if let chunk = chunkInfo.systemChunk, hasVoiceActivity(chunk) {
-            bufferState.withLock {
-                $0.systemChunksProcessed += 1
-                $0.systemLastVoiceTime = Date()
-                $0.systemSilenceFlushDone = false
-            }
-            Task { await DiagnosticLogger.shared.log(.transcription,
-                "Live chunk: speaker=them, samples=\(chunk.count)") }
-            if let resultText = await transcribeChunk(
-                chunk,
-                speaker: .them,
-                whisperKit: whisperKit,
-                startTime: chunkInfo.startTime,
-                cumulativeSampleOffset: chunkInfo.systemCumulativeOffset,
-                previousText: systemContext.isEmpty ? nil : systemContext
-            ) {
-                bufferState.withLock { $0.systemLastTranscriptSuffix = String(resultText.suffix(200)) }
+        if let chunk = chunkInfo.systemChunk {
+            let decision = evaluateVoiceActivity(chunk, mode: .strict)
+            if decision.passed {
+                bufferState.withLock {
+                    $0.systemChunksProcessed += 1
+                    $0.systemLastVoiceTime = Date()
+                    $0.systemSilenceFlushDone = false
+                }
+                Task { await DiagnosticLogger.shared.log(.transcription,
+                    "Live chunk: speaker=them, samples=\(chunk.count), reason=\(decision.reason.rawValue)") }
+                if let resultText = await executeTranscription(
+                    chunk,
+                    speaker: .them,
+                    whisperKit: whisperKit,
+                    startTime: chunkInfo.startTime,
+                    cumulativeSampleOffset: chunkInfo.systemCumulativeOffset,
+                    previousText: systemContext.isEmpty ? nil : systemContext
+                ) {
+                    bufferState.withLock { $0.systemLastTranscriptSuffix = String(resultText.suffix(200)) }
+                }
             }
         }
 
-        // Process mic audio ("Me") with VAD check
-        if let chunk = chunkInfo.micChunk, hasVoiceActivity(chunk) {
-            bufferState.withLock {
-                $0.micChunksProcessed += 1
-                $0.micLastVoiceTime = Date()
-                $0.micSilenceFlushDone = false
-            }
-            Task { await DiagnosticLogger.shared.log(.transcription,
-                "Live chunk: speaker=me, samples=\(chunk.count)") }
-            if let resultText = await transcribeChunk(
-                chunk,
-                speaker: .me,
-                whisperKit: whisperKit,
-                startTime: chunkInfo.startTime,
-                cumulativeSampleOffset: chunkInfo.micCumulativeOffset,
-                previousText: micContext.isEmpty ? nil : micContext
-            ) {
-                bufferState.withLock { $0.micLastTranscriptSuffix = String(resultText.suffix(200)) }
+        // Process mic audio ("Me") with strict VAD check
+        if let chunk = chunkInfo.micChunk {
+            let decision = evaluateVoiceActivity(chunk, mode: .strict)
+            if decision.passed {
+                bufferState.withLock {
+                    $0.micChunksProcessed += 1
+                    $0.micLastVoiceTime = Date()
+                    $0.micSilenceFlushDone = false
+                }
+                Task { await DiagnosticLogger.shared.log(.transcription,
+                    "Live chunk: speaker=me, samples=\(chunk.count), reason=\(decision.reason.rawValue)") }
+                if let resultText = await executeTranscription(
+                    chunk,
+                    speaker: .me,
+                    whisperKit: whisperKit,
+                    startTime: chunkInfo.startTime,
+                    cumulativeSampleOffset: chunkInfo.micCumulativeOffset,
+                    previousText: micContext.isEmpty ? nil : micContext
+                ) {
+                    bufferState.withLock { $0.micLastTranscriptSuffix = String(resultText.suffix(200)) }
+                }
             }
         }
 
@@ -435,103 +611,105 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     }
 
     /// When a stream has had voice activity but then goes silent for `silenceFlushDelay`,
-    /// force-extract the partial buffer, transcribe it, and flush the stabilizer.
-    /// Stabilizer-only: skipped when `liveStabilizer` is nil.
-    private func performSilenceFlushIfNeeded(whisperKit: WhisperKit) async {
+    /// evaluate strict VAD first, then optional boundary fallback before committing.
+    private func performSilenceFlushIfNeeded(whisperKit: WhisperKit?, now: Date = Date()) async {
         guard let stabilizer = liveStabilizer else { return }
 
-        let now = Date()
         let silenceDelay = AudioConfiguration.silenceFlushDelay
-
-        struct PartialExtraction {
-            let samples: [Float]
-            let cumulativeOffset: Int
-            let startTime: Date
-            let contextSuffix: String
-            let silenceDuration: TimeInterval
-        }
-
-        // Phase 1: extract partial buffers under the lock
-        let (sysExtraction, micExtraction): (PartialExtraction?, PartialExtraction?) = bufferState.withLock { state in
-            let startTime = state.recordingStartTime ?? Date()
-            var sys: PartialExtraction?
-            var mic: PartialExtraction?
+        let snapshots: [BoundarySnapshot] = bufferState.withLock { state in
+            let startTime = state.recordingStartTime ?? now
+            var pending: [BoundarySnapshot] = []
 
             if let lastVoice = state.systemLastVoiceTime,
                !state.systemSilenceFlushDone,
                state.systemChunksProcessed > 0,
-               now.timeIntervalSince(lastVoice) > silenceDelay {
-                let cumOffset = state.systemTotalSamplesReceived - state.systemAudioBuffer.count
-                let silence = now.timeIntervalSince(lastVoice)
-                sys = PartialExtraction(
-                    samples: state.systemAudioBuffer,
-                    cumulativeOffset: cumOffset,
-                    startTime: startTime,
-                    contextSuffix: state.systemLastTranscriptSuffix,
-                    silenceDuration: silence
+               now.timeIntervalSince(lastVoice) > silenceDelay,
+               !state.systemAudioBuffer.isEmpty,
+               !state.systemBoundaryFlushInFlight,
+               state.systemBoundaryCooldownVersion != state.systemBufferVersion {
+                pending.append(
+                    BoundarySnapshot(
+                        channel: .system,
+                        samples: state.systemAudioBuffer,
+                        cumulativeOffset: state.systemTotalSamplesReceived - state.systemAudioBuffer.count,
+                        startTime: startTime,
+                        contextSuffix: state.systemLastTranscriptSuffix,
+                        silenceDuration: now.timeIntervalSince(lastVoice),
+                        bufferVersion: state.systemBufferVersion,
+                        retryCount: state.systemBoundaryRetryCount
+                    )
                 )
-                state.systemAudioBuffer.removeAll()
-                state.systemProcessedSamples = 0
-                state.systemChunksProcessed = 0
-                state.systemSilenceFlushDone = true
+                state.systemBoundaryFlushInFlight = true
             }
 
             if let lastVoice = state.micLastVoiceTime,
                !state.micSilenceFlushDone,
                state.micChunksProcessed > 0,
-               now.timeIntervalSince(lastVoice) > silenceDelay {
-                let cumOffset = state.micTotalSamplesReceived - state.micAudioBuffer.count
-                let silence = now.timeIntervalSince(lastVoice)
-                mic = PartialExtraction(
-                    samples: state.micAudioBuffer,
-                    cumulativeOffset: cumOffset,
-                    startTime: startTime,
-                    contextSuffix: state.micLastTranscriptSuffix,
-                    silenceDuration: silence
+               now.timeIntervalSince(lastVoice) > silenceDelay,
+               !state.micAudioBuffer.isEmpty,
+               !state.micBoundaryFlushInFlight,
+               state.micBoundaryCooldownVersion != state.micBufferVersion {
+                pending.append(
+                    BoundarySnapshot(
+                        channel: .mic,
+                        samples: state.micAudioBuffer,
+                        cumulativeOffset: state.micTotalSamplesReceived - state.micAudioBuffer.count,
+                        startTime: startTime,
+                        contextSuffix: state.micLastTranscriptSuffix,
+                        silenceDuration: now.timeIntervalSince(lastVoice),
+                        bufferVersion: state.micBufferVersion,
+                        retryCount: state.micBoundaryRetryCount
+                    )
                 )
-                state.micAudioBuffer.removeAll()
-                state.micProcessedSamples = 0
-                state.micChunksProcessed = 0
-                state.micSilenceFlushDone = true
+                state.micBoundaryFlushInFlight = true
             }
 
-            return (sys, mic)
+            return pending
         }
 
-        let needsFlush = sysExtraction != nil || micExtraction != nil
-        guard needsFlush else { return }
+        guard !snapshots.isEmpty else { return }
 
-        // Phase 2: transcribe partial buffers outside the lock
-        let minSamples = 16_000 // 1 second at 16kHz
-
-        if let ext = sysExtraction, ext.samples.count >= minSamples, hasVoiceActivity(ext.samples) {
-            Task { await DiagnosticLogger.shared.log(.transcription,
-                "Silence flush: speaker=them, silenceDuration=\(String(format: "%.1f", ext.silenceDuration))s, samples=\(ext.samples.count)") }
-            if let resultText = await transcribeChunk(
-                ext.samples, speaker: .them, whisperKit: whisperKit,
-                startTime: ext.startTime, cumulativeSampleOffset: ext.cumulativeOffset,
-                previousText: ext.contextSuffix.isEmpty ? nil : ext.contextSuffix
+        var transcriptions: [PendingTranscription] = []
+        for snapshot in snapshots {
+            let decision = makeBoundaryDecision(
+                for: snapshot.samples,
+                allowFallback: shouldAttemptBoundaryFallback,
+                retryCount: snapshot.retryCount
+            )
+            if let committed = commitBoundaryDecision(
+                snapshot: snapshot,
+                decision: decision,
+                source: "silenceFlush",
+                isFinalization: false
             ) {
-                bufferState.withLock { $0.systemLastTranscriptSuffix = String(resultText.suffix(200)) }
+                transcriptions.append(committed)
             }
-        } else if let ext = sysExtraction {
+
             Task { await DiagnosticLogger.shared.log(.transcription,
-                "Silence flush: speaker=them, skipped partial transcription (samples=\(ext.samples.count))") }
+                "Silence flush decision: speaker=\(snapshot.channel.logSpeaker), " +
+                "samples=\(snapshot.samples.count), reason=\(decision.reason.rawValue), " +
+                "strict=\(decision.strictDecision.reason.rawValue), " +
+                "boundary=\(decision.boundaryDecision?.reason.rawValue ?? "notAttempted"), " +
+                "silenceDuration=\(String(format: "%.2f", snapshot.silenceDuration))") }
         }
 
-        if let ext = micExtraction, ext.samples.count >= minSamples, hasVoiceActivity(ext.samples) {
-            Task { await DiagnosticLogger.shared.log(.transcription,
-                "Silence flush: speaker=me, silenceDuration=\(String(format: "%.1f", ext.silenceDuration))s, samples=\(ext.samples.count)") }
-            if let resultText = await transcribeChunk(
-                ext.samples, speaker: .me, whisperKit: whisperKit,
-                startTime: ext.startTime, cumulativeSampleOffset: ext.cumulativeOffset,
-                previousText: ext.contextSuffix.isEmpty ? nil : ext.contextSuffix
+        for pending in transcriptions {
+            if let resultText = await executeTranscription(
+                pending.samples,
+                speaker: pending.speaker,
+                whisperKit: whisperKit,
+                startTime: pending.startTime,
+                cumulativeSampleOffset: pending.cumulativeOffset,
+                previousText: pending.contextSuffix.isEmpty ? nil : pending.contextSuffix
             ) {
-                bufferState.withLock { $0.micLastTranscriptSuffix = String(resultText.suffix(200)) }
+                bufferState.withLock { state in
+                    if pending.speaker == .them {
+                        state.systemLastTranscriptSuffix = String(resultText.suffix(200))
+                    } else {
+                        state.micLastTranscriptSuffix = String(resultText.suffix(200))
+                    }
+                }
             }
-        } else if let ext = micExtraction {
-            Task { await DiagnosticLogger.shared.log(.transcription,
-                "Silence flush: speaker=me, skipped partial transcription (samples=\(ext.samples.count))") }
         }
 
         // Flush stabilizer: commit all pending hypotheses regardless of agreement window
@@ -543,75 +721,515 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             draftHandler?(draft.text, draft.speaker)
         }
     }
-    
+
     private func processRemainingAudio() async {
-        guard isInitialized, let whisperKit = whisperKit else { return }
+        guard isInitialized || transcriptionExecutorOverride != nil else { return }
+        guard !Task.isCancelled else { return }
 
-        struct RemainingAudio {
-            let system: [Float]; let mic: [Float]; let startTime: Date
-            let sysOffset: Int; let micOffset: Int
-            let sysContext: String; let micContext: String
-        }
-        let extracted = bufferState.withLock { state -> RemainingAudio in
-            let sys = state.systemAudioBuffer
-            let mic = state.micAudioBuffer
-            let time = state.recordingStartTime ?? Date()
-            let sysOffset = state.systemTotalSamplesReceived - state.systemAudioBuffer.count
-            let micOffset = state.micTotalSamplesReceived - state.micAudioBuffer.count
-            let sysCtx = state.systemLastTranscriptSuffix
-            let micCtx = state.micLastTranscriptSuffix
-            state.systemAudioBuffer.removeAll()
-            state.micAudioBuffer.removeAll()
-            return RemainingAudio(
-                system: sys, mic: mic, startTime: time,
-                sysOffset: sysOffset, micOffset: micOffset,
-                sysContext: sysCtx, micContext: micCtx
-            )
-        }
+        let now = Date()
+        let snapshots: [BoundarySnapshot] = bufferState.withLock { state in
+            let startTime = state.recordingStartTime ?? now
+            var pending: [BoundarySnapshot] = []
 
-        let remainingSystem = extracted.system
-        let remainingMic = extracted.mic
-        let startTime = extracted.startTime
-        let sysCumulativeOffset = extracted.sysOffset
-        let micCumulativeOffset = extracted.micOffset
-        let sysContext = extracted.sysContext
-        let micContext = extracted.micContext
-        
-        // Log remaining audio for debugging
-        if !remainingSystem.isEmpty {
-            let durationMs = (Double(remainingSystem.count) / Double(sampleRate)) * 1000
-            logger.debug(
-                "Remaining system audio: \(remainingSystem.count) samples (\(String(format: "%.1f", durationMs))ms)"
-            )
-        }
-        if !remainingMic.isEmpty {
-            let durationMs = (Double(remainingMic.count) / Double(sampleRate)) * 1000
-            logger.debug("Remaining mic audio: \(remainingMic.count) samples (\(String(format: "%.1f", durationMs))ms)")
-        }
-        
-        // Process remaining system audio ONLY if it passes VAD check
-        // This prevents short/noisy trailing audio from generating hallucinations
-        if !remainingSystem.isEmpty && hasVoiceActivity(remainingSystem) {
-            logger.info("Processing remaining system audio (passed VAD)")
-            _ = await transcribeChunk(
-                remainingSystem, speaker: .them, whisperKit: whisperKit,
-                startTime: startTime, cumulativeSampleOffset: sysCumulativeOffset,
-                previousText: sysContext.isEmpty ? nil : sysContext
-            )
-        } else if !remainingSystem.isEmpty {
-            logger.info("Skipping remaining system audio (failed VAD)")
+            if !state.systemAudioBuffer.isEmpty {
+                pending.append(
+                    BoundarySnapshot(
+                        channel: .system,
+                        samples: state.systemAudioBuffer,
+                        cumulativeOffset: state.systemTotalSamplesReceived - state.systemAudioBuffer.count,
+                        startTime: startTime,
+                        contextSuffix: state.systemLastTranscriptSuffix,
+                        silenceDuration: 0,
+                        bufferVersion: state.systemBufferVersion,
+                        retryCount: state.systemBoundaryRetryCount
+                    )
+                )
+                state.systemBoundaryFlushInFlight = true
+            }
+
+            if !state.micAudioBuffer.isEmpty {
+                pending.append(
+                    BoundarySnapshot(
+                        channel: .mic,
+                        samples: state.micAudioBuffer,
+                        cumulativeOffset: state.micTotalSamplesReceived - state.micAudioBuffer.count,
+                        startTime: startTime,
+                        contextSuffix: state.micLastTranscriptSuffix,
+                        silenceDuration: 0,
+                        bufferVersion: state.micBufferVersion,
+                        retryCount: state.micBoundaryRetryCount
+                    )
+                )
+                state.micBoundaryFlushInFlight = true
+            }
+
+            return pending
         }
 
-        // Process remaining mic audio ONLY if it passes VAD check
-        if !remainingMic.isEmpty && hasVoiceActivity(remainingMic) {
-            logger.info("Processing remaining mic audio (passed VAD)")
-            _ = await transcribeChunk(
-                remainingMic, speaker: .me, whisperKit: whisperKit,
-                startTime: startTime, cumulativeSampleOffset: micCumulativeOffset,
-                previousText: micContext.isEmpty ? nil : micContext
+        guard !snapshots.isEmpty else { return }
+        let whisper = whisperKit
+
+        var transcriptions: [PendingTranscription] = []
+        for snapshot in snapshots {
+            guard !Task.isCancelled else { return }
+            let decision = makeBoundaryDecision(
+                for: snapshot.samples,
+                allowFallback: shouldAttemptBoundaryFallback,
+                retryCount: snapshot.retryCount
             )
-        } else if !remainingMic.isEmpty {
-            logger.info("Skipping remaining mic audio (failed VAD)")
+            if let committed = commitBoundaryDecision(
+                snapshot: snapshot,
+                decision: decision,
+                source: "finalization",
+                isFinalization: true
+            ) {
+                transcriptions.append(committed)
+            }
+
+            logger.info(
+                "Finalization decision: speaker=\(snapshot.channel.logSpeaker), samples=\(snapshot.samples.count), reason=\(decision.reason.rawValue), strict=\(decision.strictDecision.reason.rawValue), boundary=\(decision.boundaryDecision?.reason.rawValue ?? "notAttempted")"
+            )
+        }
+
+        for pending in transcriptions {
+            guard !Task.isCancelled else { return }
+            if let resultText = await executeTranscription(
+                pending.samples,
+                speaker: pending.speaker,
+                whisperKit: whisper,
+                startTime: pending.startTime,
+                cumulativeSampleOffset: pending.cumulativeOffset,
+                previousText: pending.contextSuffix.isEmpty ? nil : pending.contextSuffix
+            ) {
+                bufferState.withLock { state in
+                    if pending.speaker == .them {
+                        state.systemLastTranscriptSuffix = String(resultText.suffix(200))
+                    } else {
+                        state.micLastTranscriptSuffix = String(resultText.suffix(200))
+                    }
+                }
+            }
+        }
+    }
+
+    private func currentBufferedSampleCount() -> Int {
+        bufferState.withLock { state in
+            state.systemAudioBuffer.count + state.micAudioBuffer.count
+        }
+    }
+
+    private func performFinalFlush() async {
+        guard !Task.isCancelled else { return }
+        await processRemainingAudio()
+        guard !Task.isCancelled else { return }
+        logBoundaryDiagnosticsSummary()
+
+        if let stabilizer = liveStabilizer {
+            guard !Task.isCancelled else { return }
+            let output = await stabilizer.flushAll()
+            for segment in output.committedSegments {
+                transcriptHandler?(segment)
+            }
+            if let draft = output.draftUpdate {
+                draftHandler?(draft.text, draft.speaker)
+            }
+        }
+        liveStabilizer = nil
+    }
+
+    private func makeBoundaryDecision(
+        for samples: [Float],
+        allowFallback: Bool,
+        retryCount: Int
+    ) -> BoundaryDecision {
+        let strictDecision = evaluateVoiceActivity(samples, mode: .strict)
+        if strictDecision.passed {
+            return BoundaryDecision(
+                shouldTranscribe: true,
+                reason: .strictPassed,
+                strictDecision: strictDecision,
+                boundaryDecision: nil,
+                boundaryFallbackAttempted: false,
+                boundaryFallbackSucceeded: false
+            )
+        }
+
+        var boundaryDecision: VADDecision?
+        var fallbackAttempted = false
+        var fallbackSucceeded = false
+        var finalReason = strictDecision.reason
+        if allowFallback && samples.count >= AudioConfiguration.boundaryMinimumSamples {
+            fallbackAttempted = true
+            let boundary = evaluateVoiceActivity(samples, mode: .boundary)
+            boundaryDecision = boundary
+            if boundary.passed {
+                fallbackSucceeded = true
+                finalReason = .boundaryPassed
+            } else {
+                finalReason = boundary.reason
+            }
+        }
+
+        if !fallbackSucceeded && retryCount >= AudioConfiguration.boundaryMaxRetryCountPerWindow {
+            finalReason = .droppedAfterRetryCap
+        }
+
+        return BoundaryDecision(
+            shouldTranscribe: fallbackSucceeded,
+            reason: finalReason,
+            strictDecision: strictDecision,
+            boundaryDecision: boundaryDecision,
+            boundaryFallbackAttempted: fallbackAttempted,
+            boundaryFallbackSucceeded: fallbackSucceeded
+        )
+    }
+
+    private func commitBoundaryDecision(
+        snapshot: BoundarySnapshot,
+        decision: BoundaryDecision,
+        source: String,
+        isFinalization: Bool
+    ) -> PendingTranscription? {
+        bufferState.withLock { state in
+            switch snapshot.channel {
+            case .system:
+                return commitBoundaryDecisionSystem(
+                    state: &state,
+                    snapshot: snapshot,
+                    decision: decision,
+                    source: source,
+                    isFinalization: isFinalization
+                )
+            case .mic:
+                return commitBoundaryDecisionMic(
+                    state: &state,
+                    snapshot: snapshot,
+                    decision: decision,
+                    source: source,
+                    isFinalization: isFinalization
+                )
+            }
+        }
+    }
+
+    private func commitBoundaryDecisionSystem(
+        state: inout BufferState,
+        snapshot: BoundarySnapshot,
+        decision: BoundaryDecision,
+        source: String,
+        isFinalization: Bool
+    ) -> PendingTranscription? {
+        guard state.systemBoundaryFlushInFlight else { return nil }
+        guard snapshot.bufferVersion == state.systemBufferVersion else {
+            state.systemBoundaryFlushInFlight = false
+            return nil
+        }
+
+        state.systemBoundaryDiagnostics.boundaryFallbackAttempted += decision.boundaryFallbackAttempted ? 1 : 0
+        state.systemBoundaryDiagnostics.boundaryFallbackSucceeded += decision.boundaryFallbackSucceeded ? 1 : 0
+        state.systemBoundaryDiagnostics.skippedPartialStrict += decision.strictDecision.passed ? 0 : 1
+        state.systemBoundaryDiagnostics.skippedPartialBoundary += decision.boundaryFallbackAttempted &&
+            !decision.boundaryFallbackSucceeded ? 1 : 0
+
+        if decision.shouldTranscribe {
+            let consumeCount = min(snapshot.samples.count, state.systemAudioBuffer.count)
+            if consumeCount > 0 {
+                state.systemAudioBuffer.removeFirst(consumeCount)
+                state.systemBufferVersion += 1
+            }
+            state.systemProcessedSamples = 0
+            state.systemChunksProcessed = 0
+            state.systemSilenceFlushDone = true
+            state.systemBoundaryRetryCount = 0
+            state.systemBoundaryCooldownVersion = nil
+            state.systemBoundaryFlushInFlight = false
+            state.systemBoundaryDiagnostics.retainedTailSamples = state.systemAudioBuffer.count
+            return PendingTranscription(
+                samples: snapshot.samples,
+                speaker: .them,
+                startTime: snapshot.startTime,
+                cumulativeOffset: snapshot.cumulativeOffset,
+                contextSuffix: snapshot.contextSuffix,
+                source: source
+            )
+        }
+
+        if isFinalization {
+            let consumeCount = min(snapshot.samples.count, state.systemAudioBuffer.count)
+            if consumeCount > 0 {
+                state.systemAudioBuffer.removeFirst(consumeCount)
+                state.systemBufferVersion += 1
+            }
+            state.systemProcessedSamples = 0
+            state.systemChunksProcessed = 0
+            state.systemSilenceFlushDone = true
+            state.systemBoundaryRetryCount = 0
+            state.systemBoundaryCooldownVersion = nil
+            state.systemBoundaryFlushInFlight = false
+            state.systemBoundaryDiagnostics.retainedTailSamples = state.systemAudioBuffer.count
+            return nil
+        }
+
+        var mutated = false
+        let nextRetry = state.systemBoundaryRetryCount + 1
+        if nextRetry > AudioConfiguration.boundaryMaxRetryCountPerWindow {
+            let evict = min(AudioConfiguration.boundaryMinAdvanceSamples, state.systemAudioBuffer.count)
+            if evict > 0 {
+                state.systemAudioBuffer.removeFirst(evict)
+                mutated = true
+                state.systemBoundaryDiagnostics.forcedBufferEvictions += 1
+            }
+            state.systemBoundaryRetryCount = 0
+        } else {
+            state.systemBoundaryRetryCount = nextRetry
+        }
+
+        if state.systemAudioBuffer.count > AudioConfiguration.boundaryMaxRetentionSamples {
+            let overflow = state.systemAudioBuffer.count - AudioConfiguration.boundaryMaxRetentionSamples
+            state.systemAudioBuffer.removeFirst(overflow)
+            mutated = true
+            state.systemBoundaryDiagnostics.forcedBufferEvictions += 1
+        }
+
+        if state.systemAudioBuffer.count > AudioConfiguration.boundaryRetainedTailSamples {
+            let trim = state.systemAudioBuffer.count - AudioConfiguration.boundaryRetainedTailSamples
+            state.systemAudioBuffer.removeFirst(trim)
+            mutated = true
+        }
+
+        if mutated {
+            state.systemBufferVersion += 1
+        }
+
+        state.systemProcessedSamples = 0
+        state.systemSilenceFlushDone = false
+        state.systemBoundaryCooldownVersion = state.systemBufferVersion
+        state.systemBoundaryFlushInFlight = false
+        state.systemBoundaryDiagnostics.retainedTailSamples = state.systemAudioBuffer.count
+        return nil
+    }
+
+    private func commitBoundaryDecisionMic(
+        state: inout BufferState,
+        snapshot: BoundarySnapshot,
+        decision: BoundaryDecision,
+        source: String,
+        isFinalization: Bool
+    ) -> PendingTranscription? {
+        guard state.micBoundaryFlushInFlight else { return nil }
+        guard snapshot.bufferVersion == state.micBufferVersion else {
+            state.micBoundaryFlushInFlight = false
+            return nil
+        }
+
+        state.micBoundaryDiagnostics.boundaryFallbackAttempted += decision.boundaryFallbackAttempted ? 1 : 0
+        state.micBoundaryDiagnostics.boundaryFallbackSucceeded += decision.boundaryFallbackSucceeded ? 1 : 0
+        state.micBoundaryDiagnostics.skippedPartialStrict += decision.strictDecision.passed ? 0 : 1
+        state.micBoundaryDiagnostics.skippedPartialBoundary += decision.boundaryFallbackAttempted &&
+            !decision.boundaryFallbackSucceeded ? 1 : 0
+
+        if decision.shouldTranscribe {
+            let consumeCount = min(snapshot.samples.count, state.micAudioBuffer.count)
+            if consumeCount > 0 {
+                state.micAudioBuffer.removeFirst(consumeCount)
+                state.micBufferVersion += 1
+            }
+            state.micProcessedSamples = 0
+            state.micChunksProcessed = 0
+            state.micSilenceFlushDone = true
+            state.micBoundaryRetryCount = 0
+            state.micBoundaryCooldownVersion = nil
+            state.micBoundaryFlushInFlight = false
+            state.micBoundaryDiagnostics.retainedTailSamples = state.micAudioBuffer.count
+            return PendingTranscription(
+                samples: snapshot.samples,
+                speaker: .me,
+                startTime: snapshot.startTime,
+                cumulativeOffset: snapshot.cumulativeOffset,
+                contextSuffix: snapshot.contextSuffix,
+                source: source
+            )
+        }
+
+        if isFinalization {
+            let consumeCount = min(snapshot.samples.count, state.micAudioBuffer.count)
+            if consumeCount > 0 {
+                state.micAudioBuffer.removeFirst(consumeCount)
+                state.micBufferVersion += 1
+            }
+            state.micProcessedSamples = 0
+            state.micChunksProcessed = 0
+            state.micSilenceFlushDone = true
+            state.micBoundaryRetryCount = 0
+            state.micBoundaryCooldownVersion = nil
+            state.micBoundaryFlushInFlight = false
+            state.micBoundaryDiagnostics.retainedTailSamples = state.micAudioBuffer.count
+            return nil
+        }
+
+        var mutated = false
+        let nextRetry = state.micBoundaryRetryCount + 1
+        if nextRetry > AudioConfiguration.boundaryMaxRetryCountPerWindow {
+            let evict = min(AudioConfiguration.boundaryMinAdvanceSamples, state.micAudioBuffer.count)
+            if evict > 0 {
+                state.micAudioBuffer.removeFirst(evict)
+                mutated = true
+                state.micBoundaryDiagnostics.forcedBufferEvictions += 1
+            }
+            state.micBoundaryRetryCount = 0
+        } else {
+            state.micBoundaryRetryCount = nextRetry
+        }
+
+        if state.micAudioBuffer.count > AudioConfiguration.boundaryMaxRetentionSamples {
+            let overflow = state.micAudioBuffer.count - AudioConfiguration.boundaryMaxRetentionSamples
+            state.micAudioBuffer.removeFirst(overflow)
+            mutated = true
+            state.micBoundaryDiagnostics.forcedBufferEvictions += 1
+        }
+
+        if state.micAudioBuffer.count > AudioConfiguration.boundaryRetainedTailSamples {
+            let trim = state.micAudioBuffer.count - AudioConfiguration.boundaryRetainedTailSamples
+            state.micAudioBuffer.removeFirst(trim)
+            mutated = true
+        }
+
+        if mutated {
+            state.micBufferVersion += 1
+        }
+
+        state.micProcessedSamples = 0
+        state.micSilenceFlushDone = false
+        state.micBoundaryCooldownVersion = state.micBufferVersion
+        state.micBoundaryFlushInFlight = false
+        state.micBoundaryDiagnostics.retainedTailSamples = state.micAudioBuffer.count
+        return nil
+    }
+
+    private func logBoundaryDiagnosticsSummary() {
+        let snapshot = bufferState.withLock { state in
+            BoundaryMetricsSnapshot(
+                systemBoundaryFallbackAttempted: state.systemBoundaryDiagnostics.boundaryFallbackAttempted,
+                systemBoundaryFallbackSucceeded: state.systemBoundaryDiagnostics.boundaryFallbackSucceeded,
+                systemForcedBufferEvictions: state.systemBoundaryDiagnostics.forcedBufferEvictions,
+                systemRetainedTailSamples: state.systemBoundaryDiagnostics.retainedTailSamples,
+                systemSkippedPartialStrict: state.systemBoundaryDiagnostics.skippedPartialStrict,
+                systemSkippedPartialBoundary: state.systemBoundaryDiagnostics.skippedPartialBoundary,
+                micBoundaryFallbackAttempted: state.micBoundaryDiagnostics.boundaryFallbackAttempted,
+                micBoundaryFallbackSucceeded: state.micBoundaryDiagnostics.boundaryFallbackSucceeded,
+                micForcedBufferEvictions: state.micBoundaryDiagnostics.forcedBufferEvictions,
+                micRetainedTailSamples: state.micBoundaryDiagnostics.retainedTailSamples,
+                micSkippedPartialStrict: state.micBoundaryDiagnostics.skippedPartialStrict,
+                micSkippedPartialBoundary: state.micBoundaryDiagnostics.skippedPartialBoundary,
+                systemBufferedSamples: state.systemAudioBuffer.count,
+                micBufferedSamples: state.micAudioBuffer.count
+            )
+        }
+
+        Task {
+            await DiagnosticLogger.shared.log(
+                .transcription,
+                "Boundary summary: " +
+                "sysFallback=\(snapshot.systemBoundaryFallbackAttempted)/\(snapshot.systemBoundaryFallbackSucceeded), " +
+                "sysEvictions=\(snapshot.systemForcedBufferEvictions), " +
+                "sysRetained=\(snapshot.systemRetainedTailSamples), " +
+                "sysSkipped=\(snapshot.systemSkippedPartialStrict)/\(snapshot.systemSkippedPartialBoundary), " +
+                "micFallback=\(snapshot.micBoundaryFallbackAttempted)/\(snapshot.micBoundaryFallbackSucceeded), " +
+                "micEvictions=\(snapshot.micForcedBufferEvictions), " +
+                "micRetained=\(snapshot.micRetainedTailSamples), " +
+                "micSkipped=\(snapshot.micSkippedPartialStrict)/\(snapshot.micSkippedPartialBoundary)"
+            )
+        }
+    }
+
+    struct BoundaryMetricsSnapshot: Sendable {
+        let systemBoundaryFallbackAttempted: Int
+        let systemBoundaryFallbackSucceeded: Int
+        let systemForcedBufferEvictions: Int
+        let systemRetainedTailSamples: Int
+        let systemSkippedPartialStrict: Int
+        let systemSkippedPartialBoundary: Int
+        let micBoundaryFallbackAttempted: Int
+        let micBoundaryFallbackSucceeded: Int
+        let micForcedBufferEvictions: Int
+        let micRetainedTailSamples: Int
+        let micSkippedPartialStrict: Int
+        let micSkippedPartialBoundary: Int
+        let systemBufferedSamples: Int
+        let micBufferedSamples: Int
+    }
+
+    // MARK: - Deterministic Test Hooks
+
+    func testingSetVADEvaluator(_ evaluator: VADEvaluator?) {
+        vadEvaluatorOverride = evaluator
+    }
+
+    func testingSetTranscriptionExecutor(_ executor: TranscriptionExecutor?) {
+        transcriptionExecutorOverride = executor
+    }
+
+    func testingPrimeBoundaryState(
+        systemSamples: [Float] = [],
+        micSamples: [Float] = [],
+        lastVoiceTime: Date,
+        systemRetryCount: Int = 0,
+        micRetryCount: Int = 0,
+        recordingStartTime: Date = Date()
+    ) {
+        bufferState.withLock { state in
+            state.recordingStartTime = recordingStartTime
+
+            state.systemAudioBuffer = systemSamples
+            state.systemTotalSamplesReceived = systemSamples.count
+            state.systemProcessedSamples = 0
+            state.systemChunksProcessed = systemSamples.isEmpty ? 0 : 1
+            state.systemLastVoiceTime = systemSamples.isEmpty ? nil : lastVoiceTime
+            state.systemSilenceFlushDone = false
+            state.systemBufferVersion += 1
+            state.systemBoundaryRetryCount = systemRetryCount
+            state.systemBoundaryCooldownVersion = nil
+            state.systemBoundaryFlushInFlight = false
+
+            state.micAudioBuffer = micSamples
+            state.micTotalSamplesReceived = micSamples.count
+            state.micProcessedSamples = 0
+            state.micChunksProcessed = micSamples.isEmpty ? 0 : 1
+            state.micLastVoiceTime = micSamples.isEmpty ? nil : lastVoiceTime
+            state.micSilenceFlushDone = false
+            state.micBufferVersion += 1
+            state.micBoundaryRetryCount = micRetryCount
+            state.micBoundaryCooldownVersion = nil
+            state.micBoundaryFlushInFlight = false
+        }
+    }
+
+    func testingPerformSilenceFlushIfNeeded(now: Date = Date()) async {
+        await performSilenceFlushIfNeeded(whisperKit: whisperKit, now: now)
+    }
+
+    func testingProcessRemainingAudio() async {
+        await processRemainingAudio()
+    }
+
+    func testingBoundaryMetricsSnapshot() -> BoundaryMetricsSnapshot {
+        bufferState.withLock { state in
+            BoundaryMetricsSnapshot(
+                systemBoundaryFallbackAttempted: state.systemBoundaryDiagnostics.boundaryFallbackAttempted,
+                systemBoundaryFallbackSucceeded: state.systemBoundaryDiagnostics.boundaryFallbackSucceeded,
+                systemForcedBufferEvictions: state.systemBoundaryDiagnostics.forcedBufferEvictions,
+                systemRetainedTailSamples: state.systemBoundaryDiagnostics.retainedTailSamples,
+                systemSkippedPartialStrict: state.systemBoundaryDiagnostics.skippedPartialStrict,
+                systemSkippedPartialBoundary: state.systemBoundaryDiagnostics.skippedPartialBoundary,
+                micBoundaryFallbackAttempted: state.micBoundaryDiagnostics.boundaryFallbackAttempted,
+                micBoundaryFallbackSucceeded: state.micBoundaryDiagnostics.boundaryFallbackSucceeded,
+                micForcedBufferEvictions: state.micBoundaryDiagnostics.forcedBufferEvictions,
+                micRetainedTailSamples: state.micBoundaryDiagnostics.retainedTailSamples,
+                micSkippedPartialStrict: state.micBoundaryDiagnostics.skippedPartialStrict,
+                micSkippedPartialBoundary: state.micBoundaryDiagnostics.skippedPartialBoundary,
+                systemBufferedSamples: state.systemAudioBuffer.count,
+                micBufferedSamples: state.micAudioBuffer.count
+            )
         }
     }
     
@@ -647,6 +1265,69 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             noSpeechThreshold: 0.5
         )
     }
+
+    @discardableResult
+    private func executeTranscription(
+        _ samples: [Float],
+        speaker: TranscriptSegment.Speaker,
+        whisperKit: WhisperKit?,
+        startTime: Date,
+        cumulativeSampleOffset: Int = 0,
+        previousText: String? = nil
+    ) async -> String? {
+        if let override = transcriptionExecutorOverride {
+            let text = await override(
+                samples,
+                speaker,
+                startTime,
+                cumulativeSampleOffset,
+                previousText
+            )?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !Task.isCancelled else { return nil }
+            guard let text, !text.isEmpty else { return nil }
+            await emitTranscribedText(
+                text: text,
+                speaker: speaker,
+                cumulativeSampleOffset: cumulativeSampleOffset
+            )
+            return text
+        }
+
+        guard let whisperKit else { return nil }
+        guard !Task.isCancelled else { return nil }
+        return await transcribeChunk(
+            samples,
+            speaker: speaker,
+            whisperKit: whisperKit,
+            startTime: startTime,
+            cumulativeSampleOffset: cumulativeSampleOffset,
+            previousText: previousText
+        )
+    }
+
+    private func emitTranscribedText(
+        text: String,
+        speaker: TranscriptSegment.Speaker,
+        cumulativeSampleOffset: Int
+    ) async {
+        let segment = TranscriptSegment(
+            text: text,
+            timestamp: Double(cumulativeSampleOffset) / Double(sampleRate),
+            speaker: speaker
+        )
+
+        if let stabilizer = liveStabilizer, transcriptionMode == .live {
+            let output = await stabilizer.ingest(segment)
+            for committed in output.committedSegments {
+                transcriptHandler?(committed)
+            }
+            if let draft = output.draftUpdate {
+                draftHandler?(draft.text, draft.speaker)
+            }
+        } else {
+            transcriptHandler?(segment)
+        }
+    }
     
     /// Transcribe an audio chunk and return the result text for context chaining.
     /// If promptTokens cause an empty result (WhisperKit #372), retries without context.
@@ -679,26 +1360,12 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
                 return nil
             }
 
-            let timestamp = Double(cumulativeSampleOffset) / Double(sampleRate)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            
-            let segment = TranscriptSegment(
+            await emitTranscribedText(
                 text: text,
-                timestamp: timestamp,
-                speaker: speaker
+                speaker: speaker,
+                cumulativeSampleOffset: cumulativeSampleOffset
             )
-            
-            if let stabilizer = liveStabilizer, transcriptionMode == .live {
-                let output = await stabilizer.ingest(segment)
-                for committed in output.committedSegments {
-                    transcriptHandler?(committed)
-                }
-                if let draft = output.draftUpdate {
-                    draftHandler?(draft.text, draft.speaker)
-                }
-            } else {
-                transcriptHandler?(segment)
-            }
             return text
         } catch {
             logger.error("Transcription error: \(error.localizedDescription)")
@@ -718,32 +1385,84 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
     
     // MARK: - Voice Activity Detection
     
-    /// Check if audio chunk has voice activity (not silent)
-    private func hasVoiceActivity(_ samples: [Float]) -> Bool {
-        guard !samples.isEmpty else { return false }
-        
+    private func evaluateVoiceActivity(_ samples: [Float], mode: VADMode) -> VADDecision {
+        if let override = vadEvaluatorOverride {
+            return override(samples, mode)
+        }
+
+        guard !samples.isEmpty else {
+            return VADDecision(
+                passed: false,
+                mode: mode,
+                reason: .droppedTooShort,
+                rms: 0,
+                significantRatio: 0,
+                sampleCount: 0
+            )
+        }
+
+        let threshold: Float
+        let minimumSamples: Int
+        let minimumSignificantRatio: Float
+        switch mode {
+        case .strict:
+            threshold = vadThreshold
+            minimumSamples = AudioConfiguration.strictMinimumSamples
+            minimumSignificantRatio = AudioConfiguration.strictSignificantRatio
+        case .boundary:
+            threshold = AudioConfiguration.boundaryVadThreshold
+            minimumSamples = AudioConfiguration.boundaryMinimumSamples
+            minimumSignificantRatio = AudioConfiguration.boundarySignificantRatio
+        }
+
         // Calculate RMS (Root Mean Square) energy
         let sumSquares = samples.reduce(0.0) { $0 + ($1 * $1) }
         let rms = sqrt(sumSquares / Float(samples.count))
-        
-        // Basic threshold check
-        guard rms > vadThreshold else { return false }
-        
-        // Duration check: chunk should be at least 1 second of actual audio
-        // Whisper format is 16kHz, so minimum 16000 samples for 1 second
-        let minimumSamples = 16000
-        guard samples.count >= minimumSamples else { return false }
-        
+        guard rms > threshold else {
+            return VADDecision(
+                passed: false,
+                mode: mode,
+                reason: .droppedBelowRMS,
+                rms: rms,
+                significantRatio: 0,
+                sampleCount: samples.count
+            )
+        }
+
+        guard samples.count >= minimumSamples else {
+            return VADDecision(
+                passed: false,
+                mode: mode,
+                reason: .droppedTooShort,
+                rms: rms,
+                significantRatio: 0,
+                sampleCount: samples.count
+            )
+        }
+
         // Energy distribution check: reject chunks with sparse energy
-        // (mostly silence with brief noise spikes that could cause hallucinations)
-        // Calculate what percentage of the audio has significant energy
-        let significantThreshold = vadThreshold * 0.5 // Lower threshold for individual samples
+        let significantThreshold = threshold * 0.5
         let significantSamples = samples.filter { abs($0) > significantThreshold }.count
         let significantRatio = Float(significantSamples) / Float(samples.count)
-        
-        // Require at least 10% of samples to have significant energy
-        // This filters out sparse noise that triggers the RMS threshold but isn't real speech
-        return significantRatio >= 0.1
+        guard significantRatio >= minimumSignificantRatio else {
+            return VADDecision(
+                passed: false,
+                mode: mode,
+                reason: .droppedSparseEnergy,
+                rms: rms,
+                significantRatio: significantRatio,
+                sampleCount: samples.count
+            )
+        }
+
+        return VADDecision(
+            passed: true,
+            mode: mode,
+            reason: mode == .strict ? .strictPassed : .boundaryPassed,
+            rms: rms,
+            significantRatio: significantRatio,
+            sampleCount: samples.count
+        )
     }
     
     // MARK: - Post-Processing Transcription
@@ -771,47 +1490,72 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
         
         let chunkDuration = AudioConfiguration.postProcessingChunkDuration
         let overlap = AudioConfiguration.postProcessingOverlapDuration
-        
-        // Transcribe system audio if available (with chunking and deduplication)
+
+        try Task.checkCancellation()
+        var systemSamples: [Float]?
         if let systemURL = systemAudioURL {
-            if let samples = await loadAudioFile(url: systemURL) {
-                let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
-                logger.info("Post-processing system audio: \(samples.count) samples (\(duration)s)")
-                
-                let chunks = splitIntoChunks(
-                    samples: samples,
-                    chunkDuration: chunkDuration,
-                    overlap: overlap
-                )
-                
-                logger.info("Split system audio into \(chunks.count) chunks")
-                
-                try await processChunksWithDeduplication(
-                    chunks: chunks,
-                    speaker: .them,
-                    chunkDuration: chunkDuration,
-                    overlap: overlap,
-                    whisperKit: whisperKit
-                )
-            }
+            systemSamples = await loadAudioFile(url: systemURL)
         }
-        
-        // Transcribe mic audio if available (with chunking and deduplication)
-        if let micURL = micAudioURL,
-           let samples = await loadAudioFile(url: micURL) {
-            let duration = String(format: "%.1f", Double(samples.count) / Double(self.sampleRate))
-            logger.info("Post-processing mic audio: \(samples.count) samples (\(duration)s)")
+        try Task.checkCancellation()
+        var micSamples: [Float]?
+        if let micURL = micAudioURL {
+            micSamples = await loadAudioFile(url: micURL)
+        }
+
+        let systemDurationSeconds = systemSamples.map { Double($0.count) / Double(self.sampleRate) }
+        let micDurationSeconds = micSamples.map { Double($0.count) / Double(self.sampleRate) }
+        let alignmentThresholdSeconds: TimeInterval = 2.0
+        let micTimelineOffsetSeconds: TimeInterval = {
+            guard let systemDurationSeconds, let micDurationSeconds else { return 0.0 }
+            let durationGap = systemDurationSeconds - micDurationSeconds
+            // If mic capture starts later than system capture, align by shared stop time.
+            // This prevents end-of-meeting mic speech from being sorted into the middle.
+            if durationGap > alignmentThresholdSeconds {
+                return durationGap
+            }
+            return 0.0
+        }()
+
+        // Transcribe system audio if available (with chunking and deduplication)
+        if let systemSamples {
+            let duration = String(format: "%.1f", Double(systemSamples.count) / Double(self.sampleRate))
+            logger.info("Post-processing system audio: \(systemSamples.count) samples (\(duration)s)")
             
             let chunks = splitIntoChunks(
-                samples: samples,
+                samples: systemSamples,
                 chunkDuration: chunkDuration,
                 overlap: overlap
             )
             
-            logger.info("Split mic audio into \(chunks.count) chunks")
+            logger.info("Split system audio into \(chunks.count) chunks")
             
             try await processChunksWithDeduplication(
                 chunks: chunks,
+                speaker: .them,
+                chunkDuration: chunkDuration,
+                overlap: overlap,
+                whisperKit: whisperKit
+            )
+        }
+        
+        // Transcribe mic audio if available (with chunking and deduplication)
+        if let micSamples {
+            let duration = String(format: "%.1f", Double(micSamples.count) / Double(self.sampleRate))
+            logger.info("Post-processing mic audio: \(micSamples.count) samples (\(duration)s)")
+            
+            let chunks = splitIntoChunks(
+                samples: micSamples,
+                chunkDuration: chunkDuration,
+                overlap: overlap
+            )
+            let alignedMicChunks = chunks.map { chunk in
+                (samples: chunk.samples, timestamp: chunk.timestamp + micTimelineOffsetSeconds)
+            }
+            
+            logger.info("Split mic audio into \(chunks.count) chunks")
+            
+            try await processChunksWithDeduplication(
+                chunks: alignedMicChunks,
                 speaker: .me,
                 chunkDuration: chunkDuration,
                 overlap: overlap,
@@ -861,6 +1605,7 @@ final class TranscriptionService: @unchecked Sendable, TranscriptionServiceProto
             "effectiveDuration=\(effectiveChunkDuration)s") }
         
         for (index, chunk) in chunks.enumerated() {
+            try Task.checkCancellation()
             let options = buildDecodingOptions()
             let results = try await whisperKit.transcribe(audioArray: chunk.samples, decodeOptions: options)
             

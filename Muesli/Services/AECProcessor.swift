@@ -22,6 +22,35 @@ enum AECMode: Equatable {
 
 // MARK: - AEC Statistics
 
+/// Delay-hint source used for setStreamDelayMs.
+/// This is propagated from AudioWorker's synchronizer strategy so we can
+/// track whether coarse delay, seeded fallback, or no delay hint was used.
+enum AECStreamDelayHintSource: Int {
+    case unknown = 0
+    case coarse
+    case seeded
+    case none
+    
+    var label: String {
+        switch self {
+        case .unknown:
+            return "unknown"
+        case .coarse:
+            return "coarse"
+        case .seeded:
+            return "seeded"
+        case .none:
+            return "none"
+        }
+    }
+}
+
+private enum DelayMismatchTier {
+    case none
+    case warn
+    case fail
+}
+
 /// Statistics from AEC processing
 struct AECStats {
     var erleDb: Float = 0
@@ -36,6 +65,45 @@ struct AECStats {
     var captureRmsLinear: Float = 0
     /// Last delay value fed to AEC3 via setStreamDelayMs (ms). -1 if never set.
     var lastStreamDelayMs: Int = -1
+    /// Last unbounded stream delay hint passed into AECProcessor (ms), before clamp.
+    /// -1 when never set.
+    var lastStreamDelayRawMs: Int = -1
+    /// Last stream-delay hint source used when calling setStreamDelayMs.
+    var lastStreamDelayHintSource: AECStreamDelayHintSource = .unknown
+    /// Count of delay-set attempts from worker path.
+    var delaySetAttempts: Int64 = 0
+    /// Count of delay-set calls accepted by bridge.
+    var delaySetAccepted: Int64 = 0
+    /// Count of delay-set calls rejected by bridge/not-ready.
+    var delaySetRejected: Int64 = 0
+    /// Count of render skips due to mode off.
+    var skipModeOff: Int64 = 0
+    /// Count of render/capture skips due to bridge not ready.
+    var skipBridgeNotReady: Int64 = 0
+    /// Count of skips due to invalid input frame size.
+    var skipInvalidFrameSize: Int64 = 0
+    /// Count of render feed failures returned by bridge.
+    var renderFeedFail: Int64 = 0
+    /// Count of capture processing failures returned by bridge.
+    var captureProcessFail: Int64 = 0
+}
+
+/// Fixed-size Phase 1.5 correlation window summary emitted at 1Hz.
+struct AECPhase15Summary {
+    let windowFrames: Int64
+    let totalFrames: Int64
+    let invalidDelaySamples: Int64
+    let erleBelow3Frames: Int64
+    let deltaOver100Frames: Int64
+    let coincidentFrames: Int64
+    let erleBelow3Pct: Double
+    let deltaOver100Pct: Double
+    let coincidencePct: Double
+    let deltaBinLt20: Int64
+    let deltaBin20To49: Int64
+    let deltaBin50To99: Int64
+    let deltaBin100To199: Int64
+    let deltaBinGe200: Int64
 }
 
 // MARK: - AEC Processor
@@ -67,6 +135,19 @@ final class AECProcessor {
 
     /// Sustained delay-mismatch tracking for DELAY_MISMATCH warning.
     private var delayMismatchStartFrame: Int64 = -1
+    /// Sustained delay-mismatch tracking for DELAY_MISMATCH_FAIL.
+    private var delayMismatchFailStartFrame: Int64 = -1
+    /// Current mismatch state to emit DELAY_MISMATCH_CLEARED when recovered.
+    private var delayMismatchState: DelayMismatchTier = .none
+    
+    private struct DelayMismatchDecision {
+        let emitWarn: Bool
+        let emitFail: Bool
+        let emitClear: Bool
+        let mismatchMs: Int
+        let warnSustainedFrames: Int64
+        let failSustainedFrames: Int64
+    }
 
     private struct State: @unchecked Sendable {
         var bridge: WebRTCAECBridge?
@@ -78,6 +159,24 @@ final class AECProcessor {
         /// Pre-allocated silence buffer — fed to AEC3 render path when adaptation is frozen
         /// to starve the adaptive filter without disrupting audio output.
         var silenceBuffer = [Float](repeating: 0, count: AECProcessor.frameSizeSamples)
+        // Phase 1.5 cumulative counters
+        var phaseTotalFrames: Int64 = 0
+        var phaseErleBelow3Frames: Int64 = 0
+        var phaseDeltaOver100Frames: Int64 = 0
+        var phaseCoincidentFrames: Int64 = 0
+        var phaseInvalidDelaySamples: Int64 = 0
+        // Phase 1.5 1-second window counters (100 frames @ 10ms)
+        var phaseWindowFrames: Int64 = 0
+        var phaseWindowErleBelow3Frames: Int64 = 0
+        var phaseWindowDeltaOver100Frames: Int64 = 0
+        var phaseWindowCoincidentFrames: Int64 = 0
+        var phaseWindowInvalidDelaySamples: Int64 = 0
+        // Fixed-size delta histogram bins (window scoped)
+        var phaseWindowDeltaBinLt20: Int64 = 0
+        var phaseWindowDeltaBin20To49: Int64 = 0
+        var phaseWindowDeltaBin50To99: Int64 = 0
+        var phaseWindowDeltaBin100To199: Int64 = 0
+        var phaseWindowDeltaBinGe200: Int64 = 0
     }
 
     /// RT-safe state lock for all mutable processor state.
@@ -150,9 +249,23 @@ final class AECProcessor {
         }
 
         let logSessionID = self.sessionID
+        let estimatorEnabled = isExternalDelayEstimatorEnabled
+        let bridgeSnapshot = stateLock.withLock { state in
+            let ready = state.bridge?.isReady ?? false
+            let frameSize = state.bridge?.frameSize ?? -1
+            let errorCode = state.bridge?.lastError.rawValue ?? -1
+            let matrix = state.bridge?.capabilityMatrix ?? "bridgeUnavailable"
+            let delayCalls = state.bridge?.streamDelaySetCalls ?? 0
+            let delayFails = state.bridge?.streamDelaySetFailures ?? 0
+            return (ready, frameSize, errorCode, matrix, delayCalls, delayFails)
+        }
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "session=\(logSessionID) AEC_CONFIG: mode=\(logMode), topology=\(topology)")
+                "session=\(logSessionID) AEC_CONFIG: mode=\(logMode), topology=\(topology), externalDelayEstimator=\(estimatorEnabled)")
+            await DiagnosticLogger.shared.log(
+                .aec,
+                "session=\(logSessionID) AEC_BRIDGE_CAPABILITY: ready=\(bridgeSnapshot.0), frameSize=\(bridgeSnapshot.1), lastError=\(bridgeSnapshot.2), externalDelayEstimator=\(estimatorEnabled), matrix=\(bridgeSnapshot.3), delaySetCalls=\(bridgeSnapshot.4), delaySetFailures=\(bridgeSnapshot.5)"
+            )
         }
     }
     
@@ -169,6 +282,7 @@ final class AECProcessor {
             assertionFailure("AEC render frame size invariant violated: \(samples.count) != \(Self.frameSizeSamples)")
             stateLock.withLock { state in
                 state.stats.framesSkipped += 1
+                state.stats.skipInvalidFrameSize += 1
             }
             return false
         }
@@ -176,6 +290,7 @@ final class AECProcessor {
         let result = stateLock.withLock { state -> (feedSucceeded: Bool, shouldLogGatingChange: Bool, logFrozen: Bool, preservedFilterState: Bool, shouldWarn: Bool) in
             guard state.mode != .off else {
                 state.stats.framesSkipped += 1
+                state.stats.skipModeOff += 1
                 return (false, false, false, false, false)
             }
 
@@ -183,6 +298,7 @@ final class AECProcessor {
 
             guard let bridge = state.bridge, bridge.isReady else {
                 state.stats.framesSkipped += 1
+                state.stats.skipBridgeNotReady += 1
                 return (false, changed, frozen, preservedFilterState, false)
             }
 
@@ -202,6 +318,7 @@ final class AECProcessor {
 
             if !feedSucceeded {
                 state.stats.framesSkipped += 1
+                state.stats.renderFeedFail += 1
                 return (false, changed, frozen, preservedFilterState, true)
             }
 
@@ -245,6 +362,7 @@ final class AECProcessor {
             assertionFailure("AEC capture frame size invariant violated: \(captureSamples.count) != \(Self.frameSizeSamples)")
             stateLock.withLock { state in
                 state.stats.framesSkipped += 1
+                state.stats.skipInvalidFrameSize += 1
             }
             return captureSamples
         }
@@ -252,6 +370,7 @@ final class AECProcessor {
         let result = stateLock.withLock { state -> (output: [Float], captureSucceeded: Bool, shouldLogGatingChange: Bool, logFrozen: Bool, preservedFilterState: Bool, shouldWarn: Bool) in
             guard state.mode != .off else {
                 state.stats.framesSkipped += 1
+                state.stats.skipModeOff += 1
                 return (captureSamples, false, false, false, false, false)
             }
 
@@ -259,6 +378,7 @@ final class AECProcessor {
 
             guard let bridge = state.bridge, bridge.isReady else {
                 state.stats.framesSkipped += 1
+                state.stats.skipBridgeNotReady += 1
                 return (captureSamples, false, changed, frozen, preservedFilterState, false)
             }
 
@@ -273,6 +393,7 @@ final class AECProcessor {
 
             if !captureSucceeded {
                 state.stats.framesSkipped += 1
+                state.stats.captureProcessFail += 1
                 return (captureSamples, false, changed, frozen, preservedFilterState, true)
             }
 
@@ -339,13 +460,27 @@ final class AECProcessor {
     /// it assumes delay=0 and cannot converge regardless of signal quality.
     /// - Parameter delayMs: Coarse delay from AudioSynchronizer (render-lead based)
     @discardableResult
-    func setStreamDelayMs(_ delayMs: Int) -> Bool {
+    func setStreamDelayMs(
+        _ delayMs: Int,
+        source: AECStreamDelayHintSource = .unknown
+    ) -> Bool {
         guard delayMs >= 0 else { return false }
+        let boundedDelayMs = min(max(delayMs, 0), 500)
         return stateLock.withLock { state -> Bool in
-            guard let bridge = state.bridge, bridge.isReady else { return false }
-            let ok = bridge.setStreamDelayMs(Int32(delayMs))
+            state.stats.delaySetAttempts += 1
+            state.stats.lastStreamDelayRawMs = delayMs
+            state.stats.lastStreamDelayHintSource = source
+            
+            guard let bridge = state.bridge, bridge.isReady else {
+                state.stats.delaySetRejected += 1
+                return false
+            }
+            let ok = bridge.setStreamDelayMs(Int32(boundedDelayMs))
             if ok {
-                state.stats.lastStreamDelayMs = delayMs
+                state.stats.lastStreamDelayMs = boundedDelayMs
+                state.stats.delaySetAccepted += 1
+            } else {
+                state.stats.delaySetRejected += 1
             }
             return ok
         }
@@ -358,6 +493,7 @@ final class AECProcessor {
             state.isAdaptationFrozen = false
             state.stats = AECStats()
             state.stats.currentMode = state.mode
+            Self.resetPhase15CountersLocked(state: &state)
             return state.stats
         }
 
@@ -365,6 +501,8 @@ final class AECProcessor {
         // emits early AEC_TELEMETRY at ~1s/~2s regardless of prior sessions.
         lastTelemetryFrameCount = 0
         delayMismatchStartFrame = -1
+        delayMismatchFailStartFrame = -1
+        delayMismatchState = .none
 
         logger.info("AEC reset")
 
@@ -390,9 +528,45 @@ final class AECProcessor {
 
     // MARK: - Periodic Telemetry
 
+    /// Whether the loaded WebRTC bridge advertises external delay support.
+    var isExternalDelayEstimatorEnabled: Bool {
+        stateLock.withLock { state in
+            state.bridge?.externalDelayEstimatorEnabled ?? false
+        }
+    }
+
     /// Interval counter for telemetry logging (tracks capture frames processed).
     /// Internal (not private) so AudioWorker can read it to detect when a log was emitted.
     var lastTelemetryFrameCount: Int64 = 0
+
+    private static let phase15WindowFramesTarget: Int64 = 100
+    private static let phase15LowErleThresholdDb: Float = 3.0
+    private static let phase15DeltaThresholdMs: Int = 100
+    private static let invalidDelayMs = -1
+
+    /// Record one worker-thread Phase 1.5 sample and emit a fixed-size summary at 1Hz.
+    /// This API is worker-only and must not be called from callback/RT paths.
+    func recordPhase15Sample(syncDelayMs: Int) -> AECPhase15Summary? {
+        stateLock.withLock { state -> AECPhase15Summary? in
+            guard state.mode != .off else { return nil }
+            let bridgeDelayForPhase: Int
+
+            if let bridge = state.bridge, bridge.isReady {
+                state.stats.erleDb = bridge.getERLE()
+                state.stats.delayMs = Int(bridge.getDelayMs())
+                bridgeDelayForPhase = state.stats.delayMs
+            } else {
+                bridgeDelayForPhase = Self.invalidDelayMs
+            }
+
+            return Self.updatePhase15CountersLocked(
+                state: &state,
+                erleDb: state.stats.erleDb,
+                bridgeDelayMs: bridgeDelayForPhase,
+                syncDelayMs: syncDelayMs
+            )
+        }
+    }
 
     /// Log AEC telemetry at a regular interval (call from worker loop).
     /// Logs ERLE, delay estimate, mode, feed counts, and signal RMS every `intervalFrames` capture frames.
@@ -442,12 +616,28 @@ final class AECProcessor {
         }
 
         var msg = "session=\(sessionID) AEC_TELEMETRY: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
+        msg += ", aecTelemetryVersion=2"
         msg += ", delay=\(stats.delayMs)ms"
+        msg += ", bridgeInternalDelayMs=\(stats.delayMs)"
         msg += ", streamDelay=\(stats.lastStreamDelayMs)ms"
+        msg += ", appliedStreamDelayHintMs=\(stats.lastStreamDelayMs)"
+        msg += ", streamDelayRaw=\(stats.lastStreamDelayRawMs)ms"
+        msg += ", appliedStreamDelayHintRawMs=\(stats.lastStreamDelayRawMs)"
+        msg += ", streamDelaySource=\(stats.lastStreamDelayHintSource.label)"
+        msg += ", appliedStreamDelayHintSource=\(stats.lastStreamDelayHintSource.label)"
+        msg += ", externalDelayEstimator=\(isExternalDelayEstimatorEnabled)"
         msg += ", mode=\(stats.currentMode)"
         msg += ", processed=\(stats.framesProcessed)"
         msg += ", skipped=\(stats.framesSkipped)"
         msg += ", frozen=\(stats.adaptationFrozen)"
+        msg += ", delaySetAttempts=\(stats.delaySetAttempts)"
+        msg += ", delaySetAccepted=\(stats.delaySetAccepted)"
+        msg += ", delaySetRejected=\(stats.delaySetRejected)"
+        msg += ", skipModeOff=\(stats.skipModeOff)"
+        msg += ", skipBridgeNotReady=\(stats.skipBridgeNotReady)"
+        msg += ", skipInvalidFrameSize=\(stats.skipInvalidFrameSize)"
+        msg += ", renderFeedFail=\(stats.renderFeedFail)"
+        msg += ", captureProcessFail=\(stats.captureProcessFail)"
         msg += ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
         msg += ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
         msg += ", seededDelay=\(syncSeededDelayMs)ms"
@@ -464,36 +654,58 @@ final class AECProcessor {
 
         // DELAY_AUDIT: compare bridge delay vs synchronizer delay
         let bridgeDelayMs = stats.delayMs
+        let streamDelayMs = stats.lastStreamDelayMs
+        let streamDelaySource = stats.lastStreamDelayHintSource.label
         let delta = bridgeDelayMs - syncDelayMs
-        let auditMsg = "session=\(sessionID) DELAY_AUDIT: bridgeDelayMs=\(bridgeDelayMs)"
+        let auditMsg = "session=\(sessionID) DELAY_AUDIT: aecTelemetryVersion=2, streamDelayMs=\(streamDelayMs)"
+            + ", streamDelaySource=\(streamDelaySource)"
+            + ", appliedStreamDelayHintMs=\(streamDelayMs)"
+            + ", appliedStreamDelayHintSource=\(streamDelaySource)"
+            + ", bridgeDelayMs=\(bridgeDelayMs)"
+            + ", bridgeInternalDelayMs=\(bridgeDelayMs)"
             + ", synchronizerDelayMs=\(syncDelayMs)"
             + ", delta=\(delta)ms"
         Task {
             await DiagnosticLogger.shared.log(.aec, auditMsg)
         }
 
-        // DELAY_MISMATCH: warn when |sync - bridge| > 20ms sustained for >3s with healthy RMS
-        let mismatchThresholdMs = 20
-        let mismatchSustainedFrames: Int64 = 300  // ~3 seconds at 100 frames/sec
-        let hasHealthyRms = renderRmsLinear > 0.001 && captureRmsLinear > 0.001
-        if abs(delta) > mismatchThresholdMs && hasHealthyRms {
-            if delayMismatchStartFrame < 0 {
-                delayMismatchStartFrame = stats.framesProcessed
+        let mismatchDecision = evaluateDelayMismatch(
+            bridgeDelayMs: bridgeDelayMs,
+            syncDelayMs: syncDelayMs,
+            renderRmsLinear: renderRmsLinear,
+            captureRmsLinear: captureRmsLinear,
+            framesProcessed: stats.framesProcessed
+        )
+
+        if mismatchDecision.emitWarn {
+            let warnMsg = "session=\(sessionID) DELAY_MISMATCH_WARN: |sync-bridge|=\(mismatchDecision.mismatchMs)ms"
+                + " sustained \(String(format: "%.1f", Double(mismatchDecision.warnSustainedFrames) / 100.0))s"
+                + ", bridgeDelayMs=\(bridgeDelayMs)"
+                + ", synchronizerDelayMs=\(syncDelayMs)"
+                + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
+                + ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
+            Task {
+                await DiagnosticLogger.shared.log(.aec, warnMsg)
             }
-            let sustained = stats.framesProcessed - delayMismatchStartFrame
-            if sustained >= mismatchSustainedFrames {
-                let warnMsg = "session=\(sessionID) DELAY_MISMATCH: |sync-bridge|=\(abs(delta))ms"
-                    + " sustained \(String(format: "%.1f", Double(sustained) / 100.0))s"
-                    + ", bridgeDelayMs=\(bridgeDelayMs)"
-                    + ", synchronizerDelayMs=\(syncDelayMs)"
-                    + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
-                    + ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
-                Task {
-                    await DiagnosticLogger.shared.log(.aec, warnMsg)
-                }
+        }
+
+        if mismatchDecision.emitFail {
+            let failMsg = "session=\(sessionID) DELAY_MISMATCH_FAIL: |sync-bridge|=\(mismatchDecision.mismatchMs)ms"
+                + " sustained \(String(format: "%.1f", Double(mismatchDecision.failSustainedFrames) / 100.0))s"
+                + ", bridgeDelayMs=\(bridgeDelayMs)"
+                + ", synchronizerDelayMs=\(syncDelayMs)"
+                + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
+                + ", captureRms=\(String(format: "%.1f", captureRmsDb))dBFS"
+            Task {
+                await DiagnosticLogger.shared.log(.aec, failMsg)
             }
-        } else {
-            delayMismatchStartFrame = -1
+        }
+
+        if mismatchDecision.emitClear {
+            let clearMsg = "session=\(sessionID) DELAY_MISMATCH_CLEARED: currentDelta=\(mismatchDecision.mismatchMs)ms"
+            Task {
+                await DiagnosticLogger.shared.log(.aec, clearMsg)
+            }
         }
 
         // Detect stable-but-non-converging condition:
@@ -508,7 +720,8 @@ final class AECProcessor {
             && stats.framesProcessed >= convergenceMinFrames
             && !stats.adaptationFrozen
             && stats.erleDb < erleThresholdDb
-            && renderRmsLinear > 0.001 { // render has actual signal (not silence)
+            && renderRmsLinear > 0.001
+            && captureRmsLinear > 0.001 { // both sides have speech-level signal
             let nonConvergingMsg = "session=\(sessionID) AEC_NONCONVERGING: ERLE=\(String(format: "%.1f", stats.erleDb))dB"
                 + " after \(stats.framesProcessed) frames"
                 + ", renderRms=\(String(format: "%.1f", renderRmsDb))dBFS"
@@ -531,6 +744,218 @@ final class AECProcessor {
     }
     
     // MARK: - Private Implementation
+    
+    /// Evaluate the delay mismatch policy without side effects beyond state updates.
+    /// - Returns: Whether WARN/FAIL/CLEARED telemetry should be emitted for this frame.
+    private func evaluateDelayMismatch(
+        bridgeDelayMs: Int,
+        syncDelayMs: Int,
+        renderRmsLinear: Float,
+        captureRmsLinear: Float,
+        framesProcessed: Int64
+    ) -> DelayMismatchDecision {
+        let mismatchWarnThresholdMs = 20
+        let mismatchFailThresholdMs = 80
+        let mismatchWarnFrames: Int64 = 300  // ~3 seconds at 100 frames/sec
+        let mismatchFailFrames: Int64 = 500  // ~5 seconds at 100 frames/sec
+        let hasHealthyRms = renderRmsLinear > 0.001 && captureRmsLinear > 0.001
+        let mismatchMs = abs(syncDelayMs - bridgeDelayMs)
+        let isWarnCondition = mismatchMs > mismatchWarnThresholdMs &&
+            mismatchMs < mismatchFailThresholdMs &&
+            hasHealthyRms
+        let isFailCondition = mismatchMs > mismatchFailThresholdMs && hasHealthyRms
+        let previousMismatchState = delayMismatchState
+        var warnSustainedFrames: Int64 = 0
+        var failSustainedFrames: Int64 = 0
+        var nextMismatchState: DelayMismatchTier = .none
+
+        if isWarnCondition {
+            if delayMismatchStartFrame < 0 {
+                delayMismatchStartFrame = framesProcessed
+            }
+            warnSustainedFrames = (framesProcessed - delayMismatchStartFrame) + 1
+            nextMismatchState = .warn
+        } else {
+            delayMismatchStartFrame = -1
+        }
+
+        if isFailCondition {
+            if delayMismatchFailStartFrame < 0 {
+                delayMismatchFailStartFrame = framesProcessed
+            }
+            failSustainedFrames = (framesProcessed - delayMismatchFailStartFrame) + 1
+            nextMismatchState = .fail
+        } else {
+            delayMismatchFailStartFrame = -1
+        }
+
+        let emitWarn = isWarnCondition && warnSustainedFrames >= mismatchWarnFrames
+        let emitFail = isFailCondition && failSustainedFrames >= mismatchFailFrames
+        let emitClear = previousMismatchState != .none && nextMismatchState == .none
+        delayMismatchState = nextMismatchState
+
+        return DelayMismatchDecision(
+            emitWarn: emitWarn,
+            emitFail: emitFail,
+            emitClear: emitClear,
+            mismatchMs: mismatchMs,
+            warnSustainedFrames: warnSustainedFrames,
+            failSustainedFrames: failSustainedFrames
+        )
+    }
+
+    private static func updatePhase15CountersLocked(
+        state: inout State,
+        erleDb: Float,
+        bridgeDelayMs: Int,
+        syncDelayMs: Int
+    ) -> AECPhase15Summary? {
+        let hasValidDelay = bridgeDelayMs >= 0 && syncDelayMs >= 0
+        let deltaMs = hasValidDelay ? abs(bridgeDelayMs - syncDelayMs) : 0
+        let erleLow = erleDb < phase15LowErleThresholdDb
+        let deltaHigh = hasValidDelay && deltaMs > phase15DeltaThresholdMs
+        let coincident = erleLow && deltaHigh
+
+        state.phaseTotalFrames += 1
+        state.phaseWindowFrames += 1
+        if erleLow {
+            state.phaseErleBelow3Frames += 1
+            state.phaseWindowErleBelow3Frames += 1
+        }
+        if deltaHigh {
+            state.phaseDeltaOver100Frames += 1
+            state.phaseWindowDeltaOver100Frames += 1
+        }
+        if coincident {
+            state.phaseCoincidentFrames += 1
+            state.phaseWindowCoincidentFrames += 1
+        }
+
+        if hasValidDelay {
+            switch deltaMs {
+            case ..<20:
+                state.phaseWindowDeltaBinLt20 += 1
+            case 20..<50:
+                state.phaseWindowDeltaBin20To49 += 1
+            case 50..<100:
+                state.phaseWindowDeltaBin50To99 += 1
+            case 100..<200:
+                state.phaseWindowDeltaBin100To199 += 1
+            default:
+                state.phaseWindowDeltaBinGe200 += 1
+            }
+        } else {
+            state.phaseInvalidDelaySamples += 1
+            state.phaseWindowInvalidDelaySamples += 1
+        }
+
+        guard state.phaseWindowFrames >= phase15WindowFramesTarget else { return nil }
+        let windowFrames = max(state.phaseWindowFrames, 1)
+        let erlePct = (Double(state.phaseWindowErleBelow3Frames) / Double(windowFrames)) * 100.0
+        let deltaPct = (Double(state.phaseWindowDeltaOver100Frames) / Double(windowFrames)) * 100.0
+        let coincidencePct = (Double(state.phaseWindowCoincidentFrames) / Double(windowFrames)) * 100.0
+        let summary = AECPhase15Summary(
+            windowFrames: state.phaseWindowFrames,
+            totalFrames: state.phaseTotalFrames,
+            invalidDelaySamples: state.phaseWindowInvalidDelaySamples,
+            erleBelow3Frames: state.phaseWindowErleBelow3Frames,
+            deltaOver100Frames: state.phaseWindowDeltaOver100Frames,
+            coincidentFrames: state.phaseWindowCoincidentFrames,
+            erleBelow3Pct: erlePct,
+            deltaOver100Pct: deltaPct,
+            coincidencePct: coincidencePct,
+            deltaBinLt20: state.phaseWindowDeltaBinLt20,
+            deltaBin20To49: state.phaseWindowDeltaBin20To49,
+            deltaBin50To99: state.phaseWindowDeltaBin50To99,
+            deltaBin100To199: state.phaseWindowDeltaBin100To199,
+            deltaBinGe200: state.phaseWindowDeltaBinGe200
+        )
+        resetPhase15WindowLocked(state: &state)
+        return summary
+    }
+
+    private static func resetPhase15WindowLocked(state: inout State) {
+        state.phaseWindowFrames = 0
+        state.phaseWindowErleBelow3Frames = 0
+        state.phaseWindowDeltaOver100Frames = 0
+        state.phaseWindowCoincidentFrames = 0
+        state.phaseWindowInvalidDelaySamples = 0
+        state.phaseWindowDeltaBinLt20 = 0
+        state.phaseWindowDeltaBin20To49 = 0
+        state.phaseWindowDeltaBin50To99 = 0
+        state.phaseWindowDeltaBin100To199 = 0
+        state.phaseWindowDeltaBinGe200 = 0
+    }
+
+    private static func resetPhase15CountersLocked(state: inout State) {
+        state.phaseTotalFrames = 0
+        state.phaseErleBelow3Frames = 0
+        state.phaseDeltaOver100Frames = 0
+        state.phaseCoincidentFrames = 0
+        state.phaseInvalidDelaySamples = 0
+        resetPhase15WindowLocked(state: &state)
+    }
+
+    #if DEBUG
+    /// Debug-only deterministic injector for Phase 1.5 counters.
+    func debugRecordPhase15Sample(
+        erleDb: Float,
+        bridgeDelayMs: Int,
+        syncDelayMs: Int
+    ) -> AECPhase15Summary? {
+        stateLock.withLock { state -> AECPhase15Summary? in
+            Self.updatePhase15CountersLocked(
+                state: &state,
+                erleDb: erleDb,
+                bridgeDelayMs: bridgeDelayMs,
+                syncDelayMs: syncDelayMs
+            )
+        }
+    }
+
+    func debugResetPhase15Counters() {
+        stateLock.withLock { state in
+            Self.resetPhase15CountersLocked(state: &state)
+        }
+    }
+
+    /// Debug-only evaluator for deterministic mismatch policy tests.
+    func debugEvaluateDelayMismatch(
+        bridgeDelayMs: Int,
+        syncDelayMs: Int,
+        renderRmsLinear: Float,
+        captureRmsLinear: Float,
+        framesProcessed: Int64
+    ) -> (emitWarn: Bool, emitFail: Bool, emitClear: Bool, state: Int, mismatchMs: Int) {
+        let result = evaluateDelayMismatch(
+            bridgeDelayMs: bridgeDelayMs,
+            syncDelayMs: syncDelayMs,
+            renderRmsLinear: renderRmsLinear,
+            captureRmsLinear: captureRmsLinear,
+            framesProcessed: framesProcessed
+        )
+        let state: Int
+        switch delayMismatchState {
+        case .none: state = 0
+        case .warn: state = 1
+        case .fail: state = 2
+        }
+        return (
+            emitWarn: result.emitWarn,
+            emitFail: result.emitFail,
+            emitClear: result.emitClear,
+            state: state,
+            mismatchMs: result.mismatchMs
+        )
+    }
+
+    /// Reset delay mismatch tracking for deterministic tests.
+    func debugResetDelayMismatchState() {
+        delayMismatchStartFrame = -1
+        delayMismatchFailStartFrame = -1
+        delayMismatchState = .none
+    }
+    #endif
     
     /// Initialize the WebRTC AEC bridge
     private func initializeAEC() {

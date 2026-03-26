@@ -60,6 +60,22 @@ struct SynchronizerStats {
     var alignmentStableSeconds: Double = 0
 }
 
+enum DelayDecompositionSourceTag: String {
+    case unavailable
+    case seededOnly
+    case coarseOnly
+    case coarseAndSeeded
+}
+
+struct DelayDecompositionSnapshot {
+    let seededDelayMs: Int
+    let coarseDelayMs: Int
+    let driftPPM: Double
+    let driftAdjustmentMsPerSec: Double
+    let effectiveCoarseDelayMs: Double
+    let sourceTag: DelayDecompositionSourceTag
+}
+
 // MARK: - Audio Synchronizer
 
 /// Synchronizes render (tap) and capture (mic) audio streams
@@ -176,12 +192,17 @@ final class AudioSynchronizer {
     // MARK: - Public API
     
     /// Configure for device topology
-    func configure(topologyMode: DeviceTopologyMode, sessionID: String = "none") {
+    func configure(
+        topologyMode: DeviceTopologyMode,
+        sessionID: String = "none",
+        isBtExternalMicProfile: Bool = false
+    ) {
         stateLock.lock()
         defer { stateLock.unlock() }
 
         self.topologyMode = topologyMode
         self.sessionID = sessionID
+        delayController.setBluetoothExternalMicProfile(isBtExternalMicProfile)
         
         // In headset mode, use more conservative settings
         if topologyMode == .headset {
@@ -194,7 +215,7 @@ final class AudioSynchronizer {
         
         Task {
             await DiagnosticLogger.shared.log(.aec,
-                "SYNC_CONFIG: topology=\(topologyMode)")
+                "SYNC_CONFIG: topology=\(topologyMode), btExternalMicProfile=\(isBtExternalMicProfile)")
         }
     }
     
@@ -430,6 +451,38 @@ final class AudioSynchronizer {
         if seededDelaySamples < 0 { return -1 }
         return Int(Double(seededDelaySamples) / Double(Self.sampleRate) * 1000)
     }
+
+    /// Worker-safe snapshot for Phase 1.5 delay decomposition correlation.
+    /// Returns coarse and seeded delay terms plus a drift-derived adjustment estimate.
+    func delayDecompositionSnapshot() -> DelayDecompositionSnapshot {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        let coarseDelayMs = Int(Double(delayController.currentDelaySamples) / Double(Self.sampleRate) * 1000)
+        let seededDelayMs: Int
+        if seededDelaySamples < 0 {
+            seededDelayMs = -1
+        } else {
+            seededDelayMs = Int(Double(seededDelaySamples) / Double(Self.sampleRate) * 1000)
+        }
+        let driftPPM = driftTracker.currentDriftPPM
+        // ppm -> ms/s conversion at 48kHz: ppm / 1000 = drift milliseconds per second.
+        let driftAdjustmentMsPerSec = driftPPM / 1000.0
+        let effectiveCoarseDelayMs = Double(coarseDelayMs) + driftAdjustmentMsPerSec
+        let sourceTag = Self.delayDecompositionSourceTag(
+            coarseDelayMs: coarseDelayMs,
+            seededDelayMs: seededDelayMs
+        )
+
+        return DelayDecompositionSnapshot(
+            seededDelayMs: seededDelayMs,
+            coarseDelayMs: coarseDelayMs,
+            driftPPM: driftPPM,
+            driftAdjustmentMsPerSec: driftAdjustmentMsPerSec,
+            effectiveCoarseDelayMs: effectiveCoarseDelayMs,
+            sourceTag: sourceTag
+        )
+    }
     
     /// Get current statistics
     func getStats() -> SynchronizerStats {
@@ -498,6 +551,24 @@ final class AudioSynchronizer {
     }
     
     // MARK: - Private Implementation
+
+    static func delayDecompositionSourceTag(
+        coarseDelayMs: Int,
+        seededDelayMs: Int
+    ) -> DelayDecompositionSourceTag {
+        let hasCoarse = coarseDelayMs > 0
+        let hasSeeded = seededDelayMs >= 0
+        switch (hasCoarse, hasSeeded) {
+        case (true, true):
+            return .coarseAndSeeded
+        case (true, false):
+            return .coarseOnly
+        case (false, true):
+            return .seededOnly
+        case (false, false):
+            return .unavailable
+        }
+    }
     
     /// Check if we can transition from initializing to priming
     private func canTransitionToPriming() -> Bool {

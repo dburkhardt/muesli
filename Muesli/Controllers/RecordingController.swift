@@ -46,6 +46,27 @@ final class RecordingController {
     
     /// Background second-pass finalization task for the latest completed session.
     nonisolated(unsafe) private var secondPassFinalizationTask: Task<Void, Never>?
+
+    /// Deterministic skip reasons for automatic post-stop finalization.
+    enum AutomaticFinalizationSkipReason: String, Equatable {
+        case noAudioFiles
+        case preferenceDisabled
+        case recordingTooShort
+    }
+
+    /// Pure decision output for second-pass eligibility.
+    struct AutomaticFinalizationDecision: Equatable {
+        let shouldLaunchSecondPass: Bool
+        let skipReason: AutomaticFinalizationSkipReason?
+    }
+
+    /// Timing diagnostics for stop-flow phases.
+    private struct StopPhaseTiming: Sendable {
+        var stopCaptureMs: Int = 0
+        var stopTranscriptionMs: Int = 0
+        var stopWritingMs: Int = 0
+        var totalMs: Int = 0
+    }
     
     // MARK: - Audio Level Throttling
     
@@ -74,6 +95,25 @@ final class RecordingController {
     nonisolated var isMicrophoneMutedSafe: Bool {
         isMicrophoneMutedLock.withLock { $0 }
     }
+
+    // #region agent log
+    private struct AgentMicDebugTelemetry {
+        var lastProcessedLogTime: TimeInterval = 0
+        var lastRawLogTime: TimeInterval = 0
+        var processedBufferCount: Int = 0
+        var processedWhileMutedCount: Int = 0
+        var transcriptionFramesDroppedWhileMuted: Int = 0
+    }
+
+    private let agentMicDebugTelemetryLock = OSAllocatedUnfairLock(
+        initialState: AgentMicDebugTelemetry()
+    )
+
+    nonisolated(unsafe) private static let agentDebugSessionID = "b2fd5b"
+    nonisolated(unsafe) private static let agentDebugRunID = "aec-coarsedelay-nodeadband-1"
+    nonisolated(unsafe) private static let agentDebugLogPath = "/Users/dburkhardt/git-repos/muesli/.cursor/debug-b2fd5b.log"
+    nonisolated(unsafe) private static let agentDebugQueue = DispatchQueue(label: "com.muesli.agent.debug.b2fd5b")
+    // #endregion
     
     // MARK: - Callbacks
     
@@ -181,9 +221,11 @@ final class RecordingController {
         let fileService = self.fileOutputService
         let transcriptionCoordinator = self.transcriptionCoordinator
         let audioCaptureServiceRef = self.audioCaptureService
+        let preferencesManager = self.preferencesManager
 
         // Capture locks directly to avoid @MainActor isolation in callback
         let muteLock = self.isMicrophoneMutedLock
+        let agentTelemetryLock = self.agentMicDebugTelemetryLock
         let ingestionQueue = DispatchQueue(label: "com.muesli.app.transcription.ingestion", qos: .userInitiated)
         let micBatchBuffer = OSAllocatedUnfairLock(initialState: [Float]())
         let renderBatchBuffer = OSAllocatedUnfairLock(initialState: [Float]())
@@ -204,11 +246,74 @@ final class RecordingController {
                             buffer,
                             fileService: fileService
                         )
+
+                        // #region agent log
+                        let isMicMutedForFileWrite = muteLock.withLock { $0 }
+                        let shouldEmitProcessedLog = agentTelemetryLock.withLock { state in
+                            state.processedBufferCount += 1
+                            if isMicMutedForFileWrite {
+                                state.processedWhileMutedCount += 1
+                            }
+                            let now = Date().timeIntervalSince1970
+                            if now - state.lastProcessedLogTime >= 1 {
+                                state.lastProcessedLogTime = now
+                                return true
+                            }
+                            return false
+                        }
+
+                        if shouldEmitProcessedLog,
+                           var metrics = RecordingController.extractPCMStats(from: buffer) {
+                            let counters = agentTelemetryLock.withLock { state -> (Int, Int, Int) in
+                                let snapshot = (
+                                    state.processedBufferCount,
+                                    state.processedWhileMutedCount,
+                                    state.transcriptionFramesDroppedWhileMuted
+                                )
+                                state.processedBufferCount = 0
+                                state.processedWhileMutedCount = 0
+                                state.transcriptionFramesDroppedWhileMuted = 0
+                                return snapshot
+                            }
+                            metrics["isMicMuted"] = isMicMutedForFileWrite
+                            metrics["aecEnabledPreference"] = preferencesManager.echoCancellationEnabledForAudioCallback
+                            metrics["processedBuffersSeenInWindow"] = counters.0
+                            metrics["processedBuffersSeenWhileMuted"] = counters.1
+                            metrics["transcriptionFramesDroppedWhileMuted"] = counters.2
+                            RecordingController.agentDebugLog(
+                                hypothesisId: "H1",
+                                location: "RecordingController.swift:ensureAudioHandlersConfigured(bufferHandler:.microphone)",
+                                message: "Processed microphone buffer routed to file output",
+                                data: metrics
+                            )
+                        }
+                        // #endregion
                     case .rawMicrophone:
                         try RecordingController.handleRawMicrophoneAudioBuffer(
                             buffer,
                             fileService: fileService
                         )
+
+                        // #region agent log
+                        let shouldEmitRawLog = agentTelemetryLock.withLock { state in
+                            let now = Date().timeIntervalSince1970
+                            if now - state.lastRawLogTime >= 1 {
+                                state.lastRawLogTime = now
+                                return true
+                            }
+                            return false
+                        }
+
+                        if shouldEmitRawLog,
+                           let metrics = RecordingController.extractPCMStats(from: buffer) {
+                            RecordingController.agentDebugLog(
+                                hypothesisId: "H2",
+                                location: "RecordingController.swift:ensureAudioHandlersConfigured(bufferHandler:.rawMicrophone)",
+                                message: "Raw microphone buffer telemetry baseline",
+                                data: metrics
+                            )
+                        }
+                        // #endregion
                     }
 
                     // Reset error counter on success
@@ -263,7 +368,14 @@ final class RecordingController {
             ingestionQueue.async {
                 guard self != nil else { return }
                 let isMicMuted = muteLock.withLock { $0 }
-                guard !isMicMuted else { return }
+                guard !isMicMuted else {
+                    // #region agent log
+                    _ = agentTelemetryLock.withLock { state in
+                        state.transcriptionFramesDroppedWhileMuted += 1
+                    }
+                    // #endregion
+                    return
+                }
 
                 let batch: [Float]? = micBatchBuffer.withLock { buffer in
                     buffer.append(contentsOf: frame.samples)
@@ -435,6 +547,19 @@ final class RecordingController {
             // Configure microphone preference before starting capture
             // Pass selected mic device to audio capture service for AVAudioEngine capture
             let selectedMicID = microphoneManager.selectedDeviceID
+            let defaultMic = microphoneManager.currentDefaultDevice
+            // #region agent log
+            RecordingController.agentDebugLog(
+                hypothesisId: "N2",
+                location: "RecordingController.swift:startRecordingAsync",
+                message: "Recording start microphone selection snapshot",
+                data: [
+                    "selectedMicID": selectedMicID ?? "nil",
+                    "defaultMicID": defaultMic?.id ?? "nil",
+                    "defaultMicName": defaultMic?.name ?? "unknown",
+                ]
+            )
+            // #endregion
             await audioCaptureService.setMicrophoneDevice(selectedMicID)
 
             // CRITICAL: Ensure audio handlers are configured BEFORE starting capture
@@ -474,6 +599,7 @@ final class RecordingController {
         case .notAvailable:
             session.isModelLoading = false
             session.isRecordingOnly = true
+            session.effectiveLiveModel = nil
             // Continue recording without transcription
             
         case .loading:
@@ -482,6 +608,7 @@ final class RecordingController {
             
         case .ready:
             session.isModelLoading = false
+            session.effectiveLiveModel = transcriptionCoordinator.effectiveLiveModelForSession
             transcriptionCoordinator.setTranscriptHandler { [weak session] segment in
                 Task { @MainActor in
                     session?.appendTranscriptSegment(segment)
@@ -501,6 +628,7 @@ final class RecordingController {
         case .failed(let error):
             session.isModelLoading = false
             session.isRecordingOnly = true
+            session.effectiveLiveModel = nil
             // Log error but continue recording audio
             logger.error("Model loading failed: \(error), continuing audio-only recording")
             
@@ -517,6 +645,8 @@ final class RecordingController {
     }
     
     private func handleCaptureError(_ error: AudioCaptureError, for session: RecordingSession) {
+        let missingMicPermission = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+
         let muesliError: MuesliError
         switch error {
         case .noContentToCapture:
@@ -524,7 +654,7 @@ final class RecordingController {
         case .permissionDenied, .streamStartFailed:
             muesliError = .screenRecordingDenied
         case .microphoneStartFailed:
-            muesliError = .microphoneDenied
+            muesliError = missingMicPermission ? .microphoneDenied : .captureStartFailed(underlying: error)
         default:
             muesliError = .captureStartFailed(underlying: error)
         }
@@ -533,19 +663,17 @@ final class RecordingController {
         switch error {
         case .permissionDenied, .streamStartFailed:
             let missingTap = !UserDefaults.standard.bool(forKey: "systemAudioPermissionGranted")
-            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
             // If both checks say granted (false negative), default to missingTap
             // since system audio tap is what actually failed
-            let effectiveMissingTap = missingTap || (!missingTap && !missingMic)
+            let effectiveMissingTap = missingTap || (!missingTap && !missingMicPermission)
             if let callback = onPermissionRecoveryNeeded {
-                logger.warning("Permission error during capture start, triggering recovery: missingTap=\(effectiveMissingTap), missingMic=\(missingMic)")
-                callback(effectiveMissingTap, missingMic)
+                logger.warning("Permission error during capture start, triggering recovery: missingTap=\(effectiveMissingTap), missingMic=\(missingMicPermission)")
+                callback(effectiveMissingTap, missingMicPermission)
                 cleanupFailedSession(session)
                 return
             }
         case .microphoneStartFailed:
-            let missingMic = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
-            if missingMic, let callback = onPermissionRecoveryNeeded {
+            if missingMicPermission, let callback = onPermissionRecoveryNeeded {
                 logger.warning("Microphone permission error during capture start, triggering recovery")
                 callback(false, true)
                 cleanupFailedSession(session)
@@ -662,30 +790,94 @@ final class RecordingController {
         }
     }
     
+    static func automaticFinalizationDecision(
+        hasAudioFiles: Bool,
+        secondPassEnabled: Bool,
+        recordingDuration: TimeInterval,
+        minimumDuration: TimeInterval = AudioConfiguration.secondPassMinDurationSeconds
+    ) -> AutomaticFinalizationDecision {
+        guard hasAudioFiles else {
+            return AutomaticFinalizationDecision(shouldLaunchSecondPass: false, skipReason: .noAudioFiles)
+        }
+        guard secondPassEnabled else {
+            return AutomaticFinalizationDecision(shouldLaunchSecondPass: false, skipReason: .preferenceDisabled)
+        }
+        guard recordingDuration >= minimumDuration else {
+            return AutomaticFinalizationDecision(shouldLaunchSecondPass: false, skipReason: .recordingTooShort)
+        }
+        return AutomaticFinalizationDecision(shouldLaunchSecondPass: true, skipReason: nil)
+    }
+
+    private func beginFinalizingLiveState(
+        for session: RecordingSession,
+        directory overrideDirectory: URL? = nil
+    ) -> URL? {
+        guard let directory = overrideDirectory ?? session.outputDirectory else { return nil }
+        if let existing = transcriptionCoordinator.processingState(for: directory),
+           existing.phase == .finalizingLive {
+            return directory
+        }
+        transcriptionCoordinator.beginProcessingState(
+            for: directory,
+            phase: .finalizingLive,
+            startedAt: session.finalizationStartTime ?? Date(),
+            cancellable: false
+        )
+        return directory
+    }
+
     private func stopRecordingAsync(for session: RecordingSession) async {
         session.state = .stopping
         session.stopDisplayTimer()
-        
-        var secondPassLaunched = false
-        var hasAudioFiles = false
+        session.isFinalizingTranscript = true
+        session.finalizationStartTime = Date()
+        var finalizingDirectory = beginFinalizingLiveState(for: session)
+        let stopStartedAt = Date()
+        var stopTiming = StopPhaseTiming()
         
         do {
+            let captureStartedAt = Date()
             try await audioCaptureService.stopCapture()
-            await transcriptionCoordinator.stopTranscription()
+            stopTiming.stopCaptureMs = Int(Date().timeIntervalSince(captureStartedAt) * 1000)
 
             // Stop file writing and get output directory
             let directory: URL
             do {
+                let writingStartedAt = Date()
                 directory = try await fileOutputService.stopWriting()
+                stopTiming.stopWritingMs = Int(Date().timeIntervalSince(writingStartedAt) * 1000)
             } catch {
+                if let finalizingDirectory {
+                    transcriptionCoordinator.clearProcessingState(
+                        for: finalizingDirectory,
+                        phase: .finalizingLive,
+                        reason: "stopFailedNoOutputDirectory"
+                    )
+                }
                 session.showError(.outputDirectoryCreationFailed)
                 session.state = .completed
+                session.isFinalizingTranscript = false
+                session.finalizationStartTime = nil
                 activeSession = nil
                 resetMuteState()
                 return
             }
             
             session.outputDirectory = directory
+            finalizingDirectory = beginFinalizingLiveState(for: session, directory: directory) ?? finalizingDirectory
+            let stopPolicy = stopFinalizationPolicy(for: session, directory: directory)
+            let shouldUseBoundedFlush = stopPolicy.decision.shouldLaunchSecondPass &&
+                transcriptionCoordinator.transcriptionMode == .live
+
+            let transcriptionStartedAt = Date()
+            let flushResult = await transcriptionCoordinator.stopTranscription(
+                maxFlushDuration: shouldUseBoundedFlush ? 1.5 : nil,
+                allowDeferredFlush: shouldUseBoundedFlush
+            )
+            stopTiming.stopTranscriptionMs = Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000)
+            logger.info(
+                "Stop flush result: completedFullFlush=\(flushResult.completedFullFlush), flushDurationMs=\(flushResult.flushDurationMs), remainingSamples=\(flushResult.remainingBufferedSamples), boundedFlush=\(shouldUseBoundedFlush)"
+            )
             
             // Handle post-processing transcription if needed
             if transcriptionCoordinator.transcriptionMode == .postProcessing {
@@ -708,65 +900,233 @@ final class RecordingController {
                 session.showError(.transcriptSaveFailed(underlying: error))
                 // Continue - we have audio files even if transcript save failed
             }
-            
-            hasAudioFiles = FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
-                            FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
-            
-            if preferencesManager.isSecondPassASREnabled,
-               hasAudioFiles,
-               (session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0) >= AudioConfiguration.secondPassMinDurationSeconds {
-                transcriptionCoordinator.markSecondPassActive(for: directory)
-                launchSecondPassFinalization(for: session, directory: directory)
-                secondPassLaunched = true
-            }
-            
-            // Export meeting to exports directory (if enabled)
-            await exportMeetingIfEnabled(directory: directory)
+
+            await completeStopFlow(
+                for: session,
+                directory: directory,
+                automaticFinalizationDecision: stopPolicy.decision,
+                hasAudioFiles: stopPolicy.hasAudioFiles,
+                didStopWithIncompleteBoundedFlush: shouldUseBoundedFlush && !flushResult.completedFullFlush
+            )
         } catch {
+            if let finalizingDirectory {
+                transcriptionCoordinator.clearProcessingState(
+                    for: finalizingDirectory,
+                    phase: .finalizingLive,
+                    reason: "stopFlowFailed"
+                )
+            }
             session.showError(.transcriptSaveFailed(underlying: error))
         }
-        
-        // Mark session as completed
+
+        session.isFinalizingTranscript = false
+        session.finalizationStartTime = nil
+        stopTiming.totalMs = Int(Date().timeIntervalSince(stopStartedAt) * 1000)
+        Task {
+            await DiagnosticLogger.shared.log(
+                .stabilizer,
+                "stopTiming: stopCaptureMs=\(stopTiming.stopCaptureMs), stopTranscriptionMs=\(stopTiming.stopTranscriptionMs), stopWritingMs=\(stopTiming.stopWritingMs), totalMs=\(stopTiming.totalMs)"
+            )
+        }
+
+        activeSession = nil
+        resetMuteState()
+    }
+
+    private func recordingDuration(for session: RecordingSession) -> TimeInterval {
+        session.recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+    }
+
+    private func hasAudioFiles(in directory: URL) -> Bool {
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent("audio.caf").path) ||
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent("microphone.caf").path)
+    }
+
+    private func stopFinalizationPolicy(
+        for session: RecordingSession,
+        directory: URL
+    ) -> (hasAudioFiles: Bool, decision: AutomaticFinalizationDecision) {
+        let hasAudioFiles = hasAudioFiles(in: directory)
+        let duration = recordingDuration(for: session)
+        let decision = Self.automaticFinalizationDecision(
+            hasAudioFiles: hasAudioFiles,
+            secondPassEnabled: preferencesManager.isSecondPassASREnabled,
+            recordingDuration: duration
+        )
+        return (hasAudioFiles, decision)
+    }
+
+    private func logAutomaticFinalizationSkip(
+        reason: AutomaticFinalizationSkipReason,
+        recordingDuration: TimeInterval
+    ) {
+        switch reason {
+        case .noAudioFiles:
+            logger.info("Skipping automatic finalization: no audio files")
+        case .preferenceDisabled:
+            logger.info("Skipping automatic finalization: preference disabled")
+        case .recordingTooShort:
+            logger.info(
+                "Skipping automatic finalization: recording too short (\(String(format: "%.1f", recordingDuration))s < \(String(format: "%.1f", AudioConfiguration.secondPassMinDurationSeconds))s)"
+            )
+        }
+    }
+
+    private func runAutomaticFinalizationIfEligible(
+        for session: RecordingSession,
+        directory: URL,
+        decision: AutomaticFinalizationDecision,
+        hasAudioFiles: Bool,
+        didStopWithIncompleteBoundedFlush: Bool
+    ) async -> (hasAudioFiles: Bool, automaticFinalizationLaunched: Bool) {
+        var automaticFinalizationLaunched = false
+        if decision.shouldLaunchSecondPass {
+            session.effectiveLiveModel = transcriptionCoordinator.effectiveLiveModelForSession ?? session.effectiveLiveModel
+            transcriptionCoordinator.markSecondPassActive(for: directory)
+            launchSecondPassFinalization(
+                for: session,
+                directory: directory,
+                forceRecoveryOnFailure: didStopWithIncompleteBoundedFlush
+            )
+            automaticFinalizationLaunched = true
+            logger.debug("Deferring immediate export until second-pass finalization completes")
+        } else if let reason = decision.skipReason {
+            let duration = recordingDuration(for: session)
+            logAutomaticFinalizationSkip(reason: reason, recordingDuration: duration)
+        }
+
+        // When second-pass is running, finalization exports the completed transcript.
+        // Skip the immediate export here so stop-flow completion remains responsive.
+        if !automaticFinalizationLaunched {
+            await exportMeetingIfEnabled(directory: directory)
+        }
+        return (hasAudioFiles, automaticFinalizationLaunched)
+    }
+
+    private func completeStopFlow(
+        for session: RecordingSession,
+        directory: URL,
+        interruptionMessage: String? = nil,
+        automaticFinalizationDecision: AutomaticFinalizationDecision,
+        hasAudioFiles: Bool,
+        didStopWithIncompleteBoundedFlush: Bool
+    ) async {
+        let finalizationState = await runAutomaticFinalizationIfEligible(
+            for: session,
+            directory: directory,
+            decision: automaticFinalizationDecision,
+            hasAudioFiles: hasAudioFiles,
+            didStopWithIncompleteBoundedFlush: didStopWithIncompleteBoundedFlush
+        )
+
+        let writeCounters = fileOutputService.getStreamWriteCounters()
+        scheduleOutputIntegrityAudit(directory: directory, counters: writeCounters)
+
         session.state = .completed
+        // Interruption may end the live capture stream, but history resume affordance
+        // is determined from saved audio presence (`MeetingHistoryItem.canResume`).
         session.canResume = true
-        
+
+        if let interruptionMessage {
+            session.showErrorMessage(interruptionMessage)
+        }
+
         // Notify completion — refreshes history and selects the new meeting.
         // NOTE: do NOT call onRefreshHistory here; onSessionCompleted already
         // refreshes. A second refresh would replace the MeetingHistoryItem
         // objects, orphaning the selectedMeeting reference.
-        onSessionCompleted?(session, session.outputDirectory)
-        
-        // Auto-reprocess completed meetings when enabled.
-        // Runs AFTER onSessionCompleted so the canonical MeetingHistoryItem
-        // (the same instance the UI observes) exists in meetingHistory.
-        //
-        // Second-pass finalization is a superset of auto-reprocessing: it re-transcribes
-        // from saved audio with a (potentially larger) model. When it launches, skip
-        // auto-reprocess to avoid ANE resource contention and transcript.md write races.
-        // This also covers empty-transcript rescue — second-pass will produce the
-        // transcript even when the live model wasn't ready during recording.
-        // If second-pass fails, launchSecondPassFinalization's catch path fires
-        // onAutoReprocessRequested as recovery.
+        onSessionCompleted?(session, directory)
+
+        // Empty-transcript rescue runs AFTER onSessionCompleted so the canonical
+        // MeetingHistoryItem exists in meetingHistory.
+        // Automatic finalization is the primary path; rescue only runs if it did
+        // not launch and the transcript is empty.
         let hasEmptyTranscript = session.transcriptBlocks.isEmpty
-        let shouldAutoReprocess = preferencesManager.isAutoReprocessAfterMeetingEnabled || hasEmptyTranscript
-        
-        if let directory = session.outputDirectory {
-            if hasAudioFiles && shouldAutoReprocess && !secondPassLaunched {
-                let triggerReason = hasEmptyTranscript ? "empty transcript" : "preference enabled"
-                logger.info("Auto-triggering reprocessing (\(triggerReason))")
-                onAutoReprocessRequested?(directory)
-            } else if secondPassLaunched && shouldAutoReprocess {
-                logger.info("Skipping auto-reprocess: second-pass finalization already launched")
+        if finalizationState.hasAudioFiles && hasEmptyTranscript && !finalizationState.automaticFinalizationLaunched {
+            logger.info("Auto-triggering reprocessing (empty transcript rescue)")
+            onAutoReprocessRequested?(directory)
+        } else if hasEmptyTranscript && finalizationState.automaticFinalizationLaunched {
+            logger.info("Skipping empty-transcript rescue: automatic finalization already launched")
+        }
+
+        if !finalizationState.automaticFinalizationLaunched {
+            transcriptionCoordinator.clearProcessingState(
+                for: directory,
+                phase: .finalizingLive,
+                reason: "liveFinalizationComplete"
+            )
+        }
+    }
+
+    private func scheduleOutputIntegrityAudit(
+        directory: URL,
+        counters: FileOutputService.StreamWriteCounters
+    ) {
+        Task.detached(priority: .utility) {
+            await DiagnosticLogger.shared.log(
+                .aec,
+                "OUTPUT_STREAM_COUNTS: systemAppended=\(counters.systemAppended), micAppended=\(counters.microphoneAppended), rawMicAppended=\(counters.rawMicrophoneAppended), systemDropped=\(counters.systemDropped), micDropped=\(counters.microphoneDropped), rawMicDropped=\(counters.rawMicrophoneDropped)"
+            )
+
+            let micURL = directory.appendingPathComponent("microphone.caf")
+            let rawMicURL = directory.appendingPathComponent("raw_microphone.caf")
+            let fileManager = FileManager.default
+            guard fileManager.fileExists(atPath: micURL.path), fileManager.fileExists(atPath: rawMicURL.path) else {
+                await DiagnosticLogger.shared.log(.aec, "OUTPUT_FINGERPRINT: skipped reason=missing_raw_or_processed")
+                return
+            }
+
+            do {
+                let micBytes = try Self.sampleFileBytes(for: micURL, maxWindowBytes: 32 * 1024)
+                let rawBytes = try Self.sampleFileBytes(for: rawMicURL, maxWindowBytes: 32 * 1024)
+                let similarity = Self.byteSimilarity(lhs: micBytes, rhs: rawBytes)
+                await DiagnosticLogger.shared.log(
+                    .aec,
+                    "OUTPUT_FINGERPRINT: micBytes=\(micBytes.count), rawMicBytes=\(rawBytes.count), byteSimilarity=\(String(format: "%.3f", similarity))"
+                )
+            } catch {
+                await DiagnosticLogger.shared.log(.aec, "OUTPUT_FINGERPRINT: failed error=\(error.localizedDescription)")
             }
         }
-        
-        activeSession = nil
-        resetMuteState()
+    }
+
+    private nonisolated static func sampleFileBytes(for url: URL, maxWindowBytes: Int) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        let fileSize = (attrs[.size] as? NSNumber)?.intValue ?? 0
+        if fileSize <= maxWindowBytes * 2 {
+            return try handle.readToEnd() ?? Data()
+        }
+
+        let head = try handle.read(upToCount: maxWindowBytes) ?? Data()
+        try handle.seek(toOffset: UInt64(fileSize - maxWindowBytes))
+        let tail = try handle.read(upToCount: maxWindowBytes) ?? Data()
+        var combined = Data()
+        combined.append(head)
+        combined.append(tail)
+        return combined
+    }
+
+    private nonisolated static func byteSimilarity(lhs: Data, rhs: Data) -> Double {
+        let compared = min(lhs.count, rhs.count)
+        guard compared > 0 else { return 0 }
+        var equalCount = 0
+        for i in 0..<compared where lhs[i] == rhs[i] {
+            equalCount += 1
+        }
+        return Double(equalCount) / Double(compared)
     }
     
-    private func launchSecondPassFinalization(for session: RecordingSession, directory: URL) {
+    private func launchSecondPassFinalization(
+        for session: RecordingSession,
+        directory: URL,
+        forceRecoveryOnFailure: Bool
+    ) {
         let title = session.meetingTitle.isEmpty ? "Meeting" : session.meetingTitle
         let meetingDate = session.recordingStartTime ?? Date()
+        let liveModelAtStop = session.effectiveLiveModel
+        let transcriptionCoordinator = self.transcriptionCoordinator
         
         do {
             try fileOutputService.saveTranscriptBlocks(
@@ -782,21 +1142,30 @@ final class RecordingController {
         
         secondPassFinalizationTask?.cancel()
         session.isFinalizingTranscript = true
+        session.finalizationStartTime = session.finalizationStartTime ?? Date()
+        Task {
+            await DiagnosticLogger.shared.log(.stabilizer, "secondPass:scheduled dir=\(directory.lastPathComponent)")
+        }
         
-        secondPassFinalizationTask = Task { [weak self, weak session] in
-            guard let self, let session else { return }
+        secondPassFinalizationTask = Task { [weak self, weak session, transcriptionCoordinator, liveModelAtStop] in
             defer {
                 Task { @MainActor in
-                    session.isFinalizingTranscript = false
-                    self.onRefreshHistory?()
+                    // Fallback clear in case the task exits before runSecondPassASR reaches its internal defer.
+                    transcriptionCoordinator.clearSecondPassActive(for: directory)
+                    session?.isFinalizingTranscript = false
+                    session?.finalizationStartTime = nil
+                    self?.onRefreshHistory?()
                 }
             }
+
+            guard let self else { return }
             
             do {
                 let blocks = try await self.transcriptionCoordinator.runSecondPassASR(
                     in: directory,
                     recordingStartTime: meetingDate,
-                    preference: self.preferencesManager.secondPassModelPreference
+                    preference: self.preferencesManager.secondPassModelPreference,
+                    liveModel: liveModelAtStop
                 )
                 try Task.checkCancellation()
                 
@@ -809,6 +1178,7 @@ final class RecordingController {
                 )
                 
                 await MainActor.run {
+                    guard let session else { return }
                     session.resetTranscript()
                     for block in blocks {
                         let segment = TranscriptionService.TranscriptSegment(
@@ -828,17 +1198,26 @@ final class RecordingController {
                 }
             } catch is CancellationError {
                 self.logger.info("Second-pass finalization cancelled")
+                await DiagnosticLogger.shared.log(.stabilizer, "secondPass:cancelled dir=\(directory.lastPathComponent)")
             } catch {
                 self.logger.error("Second-pass finalization failed: \(error.localizedDescription)")
+                await DiagnosticLogger.shared.log(
+                    .stabilizer,
+                    "secondPass:failed dir=\(directory.lastPathComponent) error=\(error.localizedDescription)"
+                )
                 
-                // Fallback: if second-pass failed and transcript is empty, trigger
-                // auto-reprocess as recovery so the user doesn't get a blank transcript.
+                // Fallback: if second-pass failed and transcript is empty, or if
+                // bounded flush was incomplete, trigger auto-reprocess recovery.
                 let transcriptURL = directory.appendingPathComponent("transcript.md")
                 let transcriptExists = FileManager.default.fileExists(atPath: transcriptURL.path)
                 let transcriptEmpty = transcriptExists && ((try? String(contentsOf: transcriptURL))?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                if !transcriptExists || transcriptEmpty {
+                if forceRecoveryOnFailure || !transcriptExists || transcriptEmpty {
                     await MainActor.run {
-                        self.logger.info("Second-pass failed with empty transcript; falling back to auto-reprocess")
+                        if forceRecoveryOnFailure {
+                            self.logger.info("Second-pass failed after incomplete bounded flush; forcing auto-reprocess recovery")
+                        } else {
+                            self.logger.info("Second-pass failed with empty transcript; falling back to auto-reprocess")
+                        }
                         self.onAutoReprocessRequested?(directory)
                     }
                 }
@@ -981,29 +1360,67 @@ final class RecordingController {
     
     private func handleCaptureInterrupted(error: Error?) {
         guard let session = activeSession else { return }
-        
+
+        guard session.state == .recording else {
+            logger.info("Ignoring duplicate capture interruption while session is not actively recording")
+            return
+        }
+
+        // Move to stopping immediately so repeated interruption callbacks become no-ops.
+        session.state = .stopping
+        session.stopDisplayTimer()
         session.wasInterrupted = true
-        session.interruptionReason = "The captured app was closed"
-        
+        if session.interruptionReason == nil {
+            session.interruptionReason = "The captured app was closed"
+        }
+
+        let reason = session.interruptionReason ?? "The captured stream was interrupted"
+        let errorDescription = error?.localizedDescription ?? "none"
+        logger.warning("RECORDING_INTERRUPTED: reason=\(reason), error=\(errorDescription)")
+        Task {
+            await DiagnosticLogger.shared.log(
+                .app,
+                "RECORDING_INTERRUPTED: reason=\(reason), error=\(errorDescription)"
+            )
+        }
+
         Task {
             await stopRecordingAfterInterruption(for: session)
         }
     }
     
     private func stopRecordingAfterInterruption(for session: RecordingSession) async {
-        session.state = .stopping
-        session.stopDisplayTimer()
+        if session.state != .stopping {
+            session.state = .stopping
+            session.stopDisplayTimer()
+        }
+        session.isFinalizingTranscript = true
+        session.finalizationStartTime = Date()
+        var finalizingDirectory = beginFinalizingLiveState(for: session)
+        let stopStartedAt = Date()
+        var stopTiming = StopPhaseTiming()
         
         do {
-            await transcriptionCoordinator.stopTranscription()
-
+            // Interruption has already terminated the source stream, so this path
+            // intentionally does NOT call audioCaptureService.stopCapture().
             // Stop file writing and get output directory
             let directory: URL
             do {
+                let writingStartedAt = Date()
                 directory = try await fileOutputService.stopWriting()
+                stopTiming.stopWritingMs = Int(Date().timeIntervalSince(writingStartedAt) * 1000)
             } catch {
+                if let finalizingDirectory {
+                    transcriptionCoordinator.clearProcessingState(
+                        for: finalizingDirectory,
+                        phase: .finalizingLive,
+                        reason: "interruptedStopFailedNoOutputDirectory"
+                    )
+                }
                 session.state = .completed
                 session.showError(.outputDirectoryCreationFailed)
+                session.isFinalizingTranscript = false
+                session.finalizationStartTime = nil
                 activeSession = nil
                 resetMuteState()
                 // Reset isActivelyRecording so permission re-probing is not permanently suppressed.
@@ -1012,6 +1429,20 @@ final class RecordingController {
             }
             
             session.outputDirectory = directory
+            finalizingDirectory = beginFinalizingLiveState(for: session, directory: directory) ?? finalizingDirectory
+            let stopPolicy = stopFinalizationPolicy(for: session, directory: directory)
+            let shouldUseBoundedFlush = stopPolicy.decision.shouldLaunchSecondPass &&
+                transcriptionCoordinator.transcriptionMode == .live
+
+            let transcriptionStartedAt = Date()
+            let flushResult = await transcriptionCoordinator.stopTranscription(
+                maxFlushDuration: shouldUseBoundedFlush ? 1.5 : nil,
+                allowDeferredFlush: shouldUseBoundedFlush
+            )
+            stopTiming.stopTranscriptionMs = Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000)
+            logger.info(
+                "Interrupted stop flush result: completedFullFlush=\(flushResult.completedFullFlush), flushDurationMs=\(flushResult.flushDurationMs), remainingSamples=\(flushResult.remainingBufferedSamples), boundedFlush=\(shouldUseBoundedFlush)"
+            )
             
             if transcriptionCoordinator.transcriptionMode == .postProcessing {
                 await handlePostProcessingTranscription(for: session, directory: directory)
@@ -1032,19 +1463,37 @@ final class RecordingController {
                 session.showError(.transcriptSaveFailed(underlying: error))
                 // Continue - we have audio files even if transcript save failed
             }
+
+            let interruptionMessage = "Recording saved. \(session.interruptionReason ?? "The stream was interrupted.")"
+            await completeStopFlow(
+                for: session,
+                directory: directory,
+                interruptionMessage: interruptionMessage,
+                automaticFinalizationDecision: stopPolicy.decision,
+                hasAudioFiles: stopPolicy.hasAudioFiles,
+                didStopWithIncompleteBoundedFlush: shouldUseBoundedFlush && !flushResult.completedFullFlush
+            )
         } catch {
+            if let finalizingDirectory {
+                transcriptionCoordinator.clearProcessingState(
+                    for: finalizingDirectory,
+                    phase: .finalizingLive,
+                    reason: "interruptedStopFlowFailed"
+                )
+            }
             session.showError(.transcriptSaveFailed(underlying: error))
         }
-        
-        session.state = .completed
-        // Show success message with interruption reason
-        if let reason = session.interruptionReason {
-            session.showErrorMessage("Recording saved. \(reason)")
-        } else {
-            session.showErrorMessage("Recording saved. The stream was interrupted.")
+
+        session.isFinalizingTranscript = false
+        session.finalizationStartTime = nil
+        stopTiming.totalMs = Int(Date().timeIntervalSince(stopStartedAt) * 1000)
+        Task {
+            await DiagnosticLogger.shared.log(
+                .stabilizer,
+                "interruptedStopTiming: stopTranscriptionMs=\(stopTiming.stopTranscriptionMs), stopWritingMs=\(stopTiming.stopWritingMs), totalMs=\(stopTiming.totalMs)"
+            )
         }
-        
-        onSessionCompleted?(session, session.outputDirectory)
+
         activeSession = nil
         resetMuteState()
     }
@@ -1135,6 +1584,19 @@ final class RecordingController {
             
             // Pass selected mic device to audio capture service for AVAudioEngine capture
             let selectedMicID = microphoneManager.selectedDeviceID
+            let defaultMic = microphoneManager.currentDefaultDevice
+            // #region agent log
+            RecordingController.agentDebugLog(
+                hypothesisId: "N2",
+                location: "RecordingController.swift:resumeRecordingAsync",
+                message: "Resume recording microphone selection snapshot",
+                data: [
+                    "selectedMicID": selectedMicID ?? "nil",
+                    "defaultMicID": defaultMic?.id ?? "nil",
+                    "defaultMicName": defaultMic?.name ?? "unknown",
+                ]
+            )
+            // #endregion
             await audioCaptureService.setMicrophoneDevice(selectedMicID)
             
             // CRITICAL: Ensure audio handlers are configured BEFORE starting capture
@@ -1251,11 +1713,138 @@ final class RecordingController {
         session.isMicrophoneMuted.toggle()
         let mutedState = session.isMicrophoneMuted
         isMicrophoneMutedLock.withLock { $0 = mutedState }
+
+        // #region agent log
+        RecordingController.agentDebugLog(
+            hypothesisId: "H1",
+            location: "RecordingController.swift:toggleMicrophoneMute",
+            message: "Microphone mute state changed",
+            data: [
+                "isMicrophoneMuted": mutedState,
+                "hasActiveSession": activeSession != nil,
+            ]
+        )
+        // #endregion
     }
     
     private func resetMuteState() {
         isMicrophoneMutedLock.withLock { $0 = false }
     }
+
+    // #region agent log
+    private static nonisolated func extractPCMStats(from buffer: CMSampleBuffer) -> [String: Any]? {
+        guard let formatDescription = CMSampleBufferGetFormatDescription(buffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription),
+              let blockBuffer = CMSampleBufferGetDataBuffer(buffer) else {
+            return nil
+        }
+
+        var totalLength: Int = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
+        let status = CMBlockBufferGetDataPointer(
+            blockBuffer,
+            atOffset: 0,
+            lengthAtOffsetOut: nil,
+            totalLengthOut: &totalLength,
+            dataPointerOut: &dataPointer
+        )
+        guard status == kCMBlockBufferNoErr, let dataPointer else { return nil }
+
+        let channels = max(1, Int(asbd.pointee.mChannelsPerFrame))
+        let sampleRate = asbd.pointee.mSampleRate
+        let bitsPerChannel = Int(asbd.pointee.mBitsPerChannel)
+        let isFloat = (asbd.pointee.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let clipThreshold: Float = 0.98
+        let maxAnalyzedSamples = max(1, channels * 4800)
+        var analyzedSamples = 0
+        var clippedSamples = 0
+        var sumSquares: Double = 0
+        var peak: Float = 0
+
+        if isFloat && bitsPerChannel == 32 {
+            let totalSamples = totalLength / MemoryLayout<Float>.size
+            analyzedSamples = min(totalSamples, maxAnalyzedSamples)
+            let pointer = UnsafeRawPointer(dataPointer).bindMemory(to: Float.self, capacity: analyzedSamples)
+            for index in 0..<analyzedSamples {
+                let sample = pointer[index]
+                let magnitude = abs(sample)
+                sumSquares += Double(sample * sample)
+                if magnitude > peak { peak = magnitude }
+                if magnitude >= clipThreshold { clippedSamples += 1 }
+            }
+        } else if !isFloat && bitsPerChannel == 16 {
+            let totalSamples = totalLength / MemoryLayout<Int16>.size
+            analyzedSamples = min(totalSamples, maxAnalyzedSamples)
+            let pointer = UnsafeRawPointer(dataPointer).bindMemory(to: Int16.self, capacity: analyzedSamples)
+            for index in 0..<analyzedSamples {
+                let sample = Float(pointer[index]) / Float(Int16.max)
+                let magnitude = abs(sample)
+                sumSquares += Double(sample * sample)
+                if magnitude > peak { peak = magnitude }
+                if magnitude >= clipThreshold { clippedSamples += 1 }
+            }
+        } else {
+            return nil
+        }
+
+        guard analyzedSamples > 0 else { return nil }
+        let rms = sqrt(sumSquares / Double(analyzedSamples))
+        let clipRatio = Double(clippedSamples) / Double(analyzedSamples)
+
+        return [
+            "sampleRate": sampleRate,
+            "channels": channels,
+            "bitsPerChannel": bitsPerChannel,
+            "isFloat": isFloat,
+            "analyzedSamples": analyzedSamples,
+            "rms": rms,
+            "peak": peak,
+            "clipRatioAt0p98": clipRatio,
+        ]
+    }
+
+    private static nonisolated func agentDebugLog(
+        hypothesisId: String,
+        location: String,
+        message: String,
+        data: [String: Any]
+    ) {
+        let payload: [String: Any] = [
+            "sessionId": agentDebugSessionID,
+            "runId": agentDebugRunID,
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+        ]
+
+        guard JSONSerialization.isValidJSONObject(payload) else { return }
+
+        agentDebugQueue.async {
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+                  var line = String(data: jsonData, encoding: .utf8) else {
+                return
+            }
+            line.append("\n")
+            let url = URL(fileURLWithPath: agentDebugLogPath)
+
+            if let handle = try? FileHandle(forWritingTo: url) {
+                do {
+                    try handle.seekToEnd()
+                    if let lineData = line.data(using: .utf8) {
+                        try handle.write(contentsOf: lineData)
+                    }
+                    try handle.close()
+                } catch {
+                    try? handle.close()
+                }
+            } else {
+                try? line.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+    // #endregion
 
     // MARK: - Microphone Device Selection
     

@@ -436,6 +436,60 @@ final class TranscriptionServiceTests: XCTestCase {
         // Then: Should complete gracefully
         XCTAssertNotNil(service, "Service should wait for completion")
     }
+
+    func testStopTranscriptionBoundedFlushReturnsIncompleteWithoutLateEmission() async {
+        var receivedSegments: [TranscriptionService.TranscriptSegment] = []
+        service.setTranscriptHandler { receivedSegments.append($0) }
+        service.testingSetVADEvaluator { samples, mode in
+            Self.makeDecision(mode: mode, passed: true, reason: .strictPassed, samples: samples)
+        }
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                return "late tail"
+            } catch {
+                return nil
+            }
+        }
+
+        service.startTranscription(recordingStartTime: Date())
+        service.appendSystemAudio(Array(repeating: 0.2, count: 12_000))
+
+        let flushResult = await service.stopTranscription(
+            maxFlushDuration: 0.02,
+            allowDeferredFlush: true
+        )
+
+        XCTAssertFalse(flushResult.completedFullFlush)
+        XCTAssertGreaterThan(flushResult.remainingBufferedSamples, 0)
+
+        try? await Task.sleep(for: .milliseconds(400))
+        XCTAssertTrue(receivedSegments.isEmpty, "No segments should emit after bounded stop returns")
+    }
+
+    func testStopTranscriptionFullFlushWaitsAndEmitsRemainingAudio() async {
+        var receivedSegments: [TranscriptionService.TranscriptSegment] = []
+        service.setTranscriptHandler { receivedSegments.append($0) }
+        service.testingSetVADEvaluator { samples, mode in
+            Self.makeDecision(mode: mode, passed: true, reason: .strictPassed, samples: samples)
+        }
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in
+            try? await Task.sleep(for: .milliseconds(120))
+            return "final tail"
+        }
+
+        service.startTranscription(recordingStartTime: Date())
+        service.appendSystemAudio(Array(repeating: 0.2, count: 12_000))
+
+        let startedAt = Date()
+        let flushResult = await service.stopTranscription()
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        XCTAssertTrue(flushResult.completedFullFlush)
+        XCTAssertGreaterThanOrEqual(elapsed, 0.1)
+        XCTAssertEqual(receivedSegments.count, 1)
+        XCTAssertEqual(receivedSegments.first?.text, "final tail")
+    }
     
     // MARK: - Post-Processing Mode Tests
     
@@ -1139,7 +1193,7 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertNotNil(service)
     }
     
-    func testModeSwitch BetweenSessions() async {
+    func testModeSwitchBetweenSessions() async {
         // Given: Service switching modes
         service.setTranscriptHandler { _ in }
         
@@ -1155,8 +1209,215 @@ final class TranscriptionServiceTests: XCTestCase {
         // Then: Should handle mode switches
         XCTAssertEqual(service.transcriptionMode, .postProcessing)
     }
+
+    // MARK: - Boundary Stabilization Regression Tests
+
+    func testSilenceFlush_strictFail_boundaryPass_emitsAndConsumes() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.liveStabilizerEnabled)
+        defer { UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled) }
+
+        var segments: [TranscriptionService.TranscriptSegment] = []
+        service.setTranscriptHandler { segments.append($0) }
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in "boundary recovered" }
+        service.testingSetVADEvaluator { samples, mode in
+            switch mode {
+            case .strict:
+                return Self.makeDecision(mode: mode, passed: false, reason: .droppedTooShort, samples: samples)
+            case .boundary:
+                return Self.makeDecision(mode: mode, passed: true, reason: .boundaryPassed, samples: samples)
+            }
+        }
+
+        let now = Date()
+        service.startTranscription(recordingStartTime: now.addingTimeInterval(-10))
+        service.testingPrimeBoundaryState(
+            systemSamples: Array(repeating: 0.02, count: 9_000),
+            lastVoiceTime: now.addingTimeInterval(-4)
+        )
+
+        await service.testingPerformSilenceFlushIfNeeded(now: now)
+        let metrics = service.testingBoundaryMetricsSnapshot()
+
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments.first?.text, "boundary recovered")
+        XCTAssertEqual(metrics.systemBoundaryFallbackAttempted, 1)
+        XCTAssertEqual(metrics.systemBoundaryFallbackSucceeded, 1)
+        XCTAssertEqual(metrics.systemBufferedSamples, 0)
+    }
+
+    func testSilenceFlush_strictFail_boundaryFail_retainsCappedTail() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.liveStabilizerEnabled)
+        defer { UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled) }
+
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in nil }
+        service.testingSetVADEvaluator { samples, mode in
+            switch mode {
+            case .strict:
+                return Self.makeDecision(mode: mode, passed: false, reason: .droppedTooShort, samples: samples)
+            case .boundary:
+                return Self.makeDecision(mode: mode, passed: false, reason: .droppedSparseEnergy, samples: samples)
+            }
+        }
+
+        let now = Date()
+        service.startTranscription(recordingStartTime: now.addingTimeInterval(-20))
+        service.testingPrimeBoundaryState(
+            systemSamples: Array(repeating: 0.02, count: 200_000),
+            lastVoiceTime: now.addingTimeInterval(-4)
+        )
+
+        await service.testingPerformSilenceFlushIfNeeded(now: now)
+        let metrics = service.testingBoundaryMetricsSnapshot()
+
+        XCTAssertEqual(metrics.systemBufferedSamples, AudioConfiguration.boundaryRetainedTailSamples)
+        XCTAssertEqual(metrics.systemBoundaryFallbackAttempted, 1)
+        XCTAssertEqual(metrics.systemBoundaryFallbackSucceeded, 0)
+    }
+
+    func testSilenceFlush_repeatedFail_forcesEviction_andProgresses() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.liveStabilizerEnabled)
+        defer { UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled) }
+
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in nil }
+        service.testingSetVADEvaluator { samples, mode in
+            Self.makeDecision(mode: mode, passed: false, reason: .droppedSparseEnergy, samples: samples)
+        }
+
+        let now = Date()
+        service.startTranscription(recordingStartTime: now.addingTimeInterval(-20))
+        service.testingPrimeBoundaryState(
+            systemSamples: Array(repeating: 0.02, count: 20_000),
+            lastVoiceTime: now.addingTimeInterval(-4),
+            systemRetryCount: AudioConfiguration.boundaryMaxRetryCountPerWindow
+        )
+
+        await service.testingPerformSilenceFlushIfNeeded(now: now)
+        let metrics = service.testingBoundaryMetricsSnapshot()
+
+        XCTAssertGreaterThan(metrics.systemForcedBufferEvictions, 0)
+        XCTAssertLessThan(metrics.systemBufferedSamples, 20_000)
+    }
+
+    func testProcessRemaining_strictFail_boundaryPass_recoversTrailingSpeech() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.liveStabilizerEnabled)
+        defer { UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled) }
+
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in "tail text" }
+        service.testingSetVADEvaluator { samples, mode in
+            switch mode {
+            case .strict:
+                return Self.makeDecision(mode: mode, passed: false, reason: .droppedTooShort, samples: samples)
+            case .boundary:
+                return Self.makeDecision(mode: mode, passed: true, reason: .boundaryPassed, samples: samples)
+            }
+        }
+
+        service.startTranscription(recordingStartTime: Date().addingTimeInterval(-10))
+        service.testingPrimeBoundaryState(
+            systemSamples: Array(repeating: 0.02, count: 9_000),
+            lastVoiceTime: Date().addingTimeInterval(-1)
+        )
+
+        await service.testingProcessRemainingAudio()
+        let metrics = service.testingBoundaryMetricsSnapshot()
+
+        XCTAssertEqual(metrics.systemBoundaryFallbackAttempted, 1)
+        XCTAssertEqual(metrics.systemBoundaryFallbackSucceeded, 1)
+        XCTAssertEqual(metrics.systemBufferedSamples, 0)
+    }
+
+    func testProcessRemaining_bothFail_logsReason_notSilentDrop() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.liveStabilizerEnabled)
+        defer { UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled) }
+
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in nil }
+        service.testingSetVADEvaluator { samples, mode in
+            Self.makeDecision(mode: mode, passed: false, reason: .droppedSparseEnergy, samples: samples)
+        }
+
+        service.startTranscription(recordingStartTime: Date().addingTimeInterval(-10))
+        service.testingPrimeBoundaryState(
+            systemSamples: Array(repeating: 0.02, count: 12_000),
+            lastVoiceTime: Date().addingTimeInterval(-1)
+        )
+
+        await service.testingProcessRemainingAudio()
+        let metrics = service.testingBoundaryMetricsSnapshot()
+
+        XCTAssertEqual(metrics.systemBufferedSamples, 0)
+        XCTAssertGreaterThan(metrics.systemSkippedPartialStrict, 0)
+        XCTAssertGreaterThan(metrics.systemSkippedPartialBoundary, 0)
+    }
+
+    func testContinuousVADFail_memoryBounded_noInfiniteLoop() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.liveStabilizerEnabled)
+        defer { UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled) }
+
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in nil }
+        service.testingSetVADEvaluator { samples, mode in
+            Self.makeDecision(mode: mode, passed: false, reason: .droppedSparseEnergy, samples: samples)
+        }
+
+        let now = Date()
+        service.startTranscription(recordingStartTime: now.addingTimeInterval(-20))
+        service.testingPrimeBoundaryState(
+            systemSamples: Array(repeating: 0.02, count: 650_000),
+            lastVoiceTime: now.addingTimeInterval(-4)
+        )
+
+        await service.testingPerformSilenceFlushIfNeeded(now: now)
+        let metrics = service.testingBoundaryMetricsSnapshot()
+
+        XCTAssertLessThanOrEqual(metrics.systemBufferedSamples, AudioConfiguration.boundaryRetainedTailSamples)
+        XCTAssertGreaterThan(metrics.systemForcedBufferEvictions, 0)
+    }
+
+    func testBoundaryRetry_doesNotDuplicateSegmentEmission() async {
+        UserDefaults.standard.set(true, forKey: AppStorageKeys.liveStabilizerEnabled)
+        defer { UserDefaults.standard.removeObject(forKey: AppStorageKeys.liveStabilizerEnabled) }
+
+        var segments: [TranscriptionService.TranscriptSegment] = []
+        service.setTranscriptHandler { segments.append($0) }
+        service.testingSetTranscriptionExecutor { _, _, _, _, _ in "no duplicate" }
+        service.testingSetVADEvaluator { samples, mode in
+            switch mode {
+            case .strict:
+                return Self.makeDecision(mode: mode, passed: false, reason: .droppedTooShort, samples: samples)
+            case .boundary:
+                return Self.makeDecision(mode: mode, passed: true, reason: .boundaryPassed, samples: samples)
+            }
+        }
+
+        let now = Date()
+        service.startTranscription(recordingStartTime: now.addingTimeInterval(-10))
+        service.testingPrimeBoundaryState(
+            systemSamples: Array(repeating: 0.02, count: 9_000),
+            lastVoiceTime: now.addingTimeInterval(-4)
+        )
+
+        await service.testingPerformSilenceFlushIfNeeded(now: now)
+        await service.testingPerformSilenceFlushIfNeeded(now: now.addingTimeInterval(1))
+
+        XCTAssertEqual(segments.count, 1)
+    }
     
     // MARK: - Helper Methods
+
+    private static func makeDecision(
+        mode: TranscriptionService.VADMode,
+        passed: Bool,
+        reason: TranscriptionService.VADDecisionReason,
+        samples: [Float]
+    ) -> TranscriptionService.VADDecision {
+        TranscriptionService.VADDecision(
+            passed: passed,
+            mode: mode,
+            reason: reason,
+            rms: passed ? 0.05 : 0.0,
+            significantRatio: passed ? 0.2 : 0.01,
+            sampleCount: samples.count
+        )
+    }
     
     private func createTestBuffer(sampleRate: Int, channels: Int, sampleCount: Int) -> CMSampleBuffer {
         var samples = [Float](repeating: 0.5, count: sampleCount * channels)

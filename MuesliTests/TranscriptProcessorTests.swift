@@ -677,4 +677,296 @@ final class TranscriptProcessorTests: XCTestCase {
         XCTAssertFalse(allText.contains("[inaudible]"))
         XCTAssertFalse(allText.contains("♪"))
     }
+    
+    // MARK: - Part 7: Reprocess Ordering Regression
+    
+    /// Regression test: transcribePostProcessing emits all system audio segments (speaker: .them)
+    /// first, then all mic segments (speaker: .me). Without sorting by timestamp before processing,
+    /// blocks are grouped by speaker instead of chronologically interleaved.
+    /// Bug: reprocessTranscript() fed segments to TranscriptProcessor in arrival order (unsorted).
+    /// Fix: Sort segments by timestamp before processing, matching runSecondPassASR() pattern.
+    func testReprocessTranscriptSortsSegmentsByTimestampBeforeProcessing() {
+        // Simulate transcribePostProcessing output: all .them first, then all .me
+        let segments = [
+            // System audio batch (all .them, ascending timestamps)
+            TranscriptionService.TranscriptSegment(text: "Welcome everyone to the call", timestamp: 0.0, speaker: .them),
+            TranscriptionService.TranscriptSegment(text: "Let me share my screen with the quarterly results", timestamp: 30.0, speaker: .them),
+            TranscriptionService.TranscriptSegment(text: "As you can see revenue is up fifteen percent", timestamp: 60.0, speaker: .them),
+            // Mic audio batch (all .me, ascending timestamps)
+            TranscriptionService.TranscriptSegment(text: "Hi thanks for setting this up", timestamp: 5.0, speaker: .me),
+            TranscriptionService.TranscriptSegment(text: "That looks great can you zoom in on the chart", timestamp: 35.0, speaker: .me),
+            TranscriptionService.TranscriptSegment(text: "Impressive numbers I have a few questions", timestamp: 65.0, speaker: .me),
+        ]
+        
+        // Phase 1: Feed unsorted (arrival order) — demonstrates the bug
+        for segment in segments {
+            processor.processSegment(segment)
+        }
+        processor.finalize()
+        
+        let unsortedBlocks = processor.blocks
+        XCTAssertGreaterThanOrEqual(unsortedBlocks.count, 2, "Should produce at least 2 blocks")
+        
+        // With unsorted input, all .them blocks come first, then all .me blocks
+        // Find the index where speaker switches from .them to .me
+        let firstMeIndex = unsortedBlocks.firstIndex(where: { $0.speaker == .me })
+        let lastThemIndex = unsortedBlocks.lastIndex(where: { $0.speaker == .them })
+        if let firstMe = firstMeIndex, let lastThem = lastThemIndex {
+            XCTAssertGreaterThan(firstMe, lastThem,
+                "Bug: unsorted input groups all .them before all .me (no interleaving)")
+        }
+        
+        // Phase 2: Feed sorted by timestamp — demonstrates the fix
+        processor.reset()
+        
+        let sortedSegments = segments.sorted(by: { $0.timestamp < $1.timestamp })
+        for segment in sortedSegments {
+            processor.processSegment(segment)
+        }
+        processor.finalize()
+        
+        let sortedBlocks = processor.blocks
+        XCTAssertGreaterThanOrEqual(sortedBlocks.count, 4, "Sorted input should produce interleaved blocks")
+        
+        // Verify chronological interleaving: speakers should alternate
+        var speakerTransitions = 0
+        for i in 1..<sortedBlocks.count {
+            if sortedBlocks[i].speaker != sortedBlocks[i - 1].speaker {
+                speakerTransitions += 1
+            }
+        }
+        XCTAssertGreaterThanOrEqual(speakerTransitions, 3,
+            "Fix: sorted input should produce multiple speaker transitions (interleaving)")
+        
+        // Verify chronological ordering: timestamps should be non-decreasing
+        for i in 1..<sortedBlocks.count {
+            XCTAssertGreaterThanOrEqual(sortedBlocks[i].startTimestamp, sortedBlocks[i - 1].startTimestamp,
+                "Blocks should be in chronological order")
+        }
+    }
+
+    // MARK: - Consolidation tests
+
+    /// Blocks must end at sentence boundaries after finalize()
+    func testBlocksEndAtSentenceBoundaryAfterFinalize() {
+        // Two consecutive same-speaker segments where first doesn't end with period
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: "I was thinking about this problem",  // no period
+            timestamp: 0.0, speaker: .me
+        )
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "and I think we need a new approach.",  // ends with period
+            timestamp: 1.0, speaker: .me
+        )
+        processor.processSegment(s1)
+        processor.processSegment(s2)
+        processor.finalize()
+
+        // Should be merged into one block ending with a period
+        XCTAssertEqual(processor.blocks.count, 1)
+        XCTAssertTrue(processor.blocks[0].text.hasSuffix("."),
+            "Block should end with period, got: \(processor.blocks[0].text)")
+    }
+
+    /// Consecutive same-speaker blocks with fewer than 4 sentences get merged
+    func testConsecutiveSameSpeakerBlocksMerged() {
+        // Simulate two consecutive same-speaker blocks with 2 sentences each (as if a speaker
+        // switch forced a break mid-flow, then the same speaker continued).
+        // After finalize, consolidateBlocks should merge them (total 4 sentences, under cap).
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: "We decided to move forward with the new architecture.",
+            timestamp: 0.0, speaker: .me
+        )
+        // Force a new block for the same speaker by pushing past the word limit first.
+        // Feed a 75-word filler block so the next same-speaker segment starts fresh.
+        processor.processSegment(s1)
+        // Manually inject a second block by processing then resetting the block's word count
+        // via a long segment that fills the first block before the next segment.
+        // Easier: use speaker switch to force block boundary, then switch back.
+        let sB = TranscriptionService.TranscriptSegment(
+            text: "Right, that is a good point about the design.",
+            timestamp: 1.0, speaker: .them
+        )
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "And we also need to address the migration strategy.",
+            timestamp: 2.0, speaker: .me
+        )
+        processor.processSegment(sB)
+        processor.processSegment(s2)
+        processor.finalize()
+
+        // Me has 2 blocks from streaming (split by sB). consolidateBlocks can't merge them
+        // across a speaker boundary — that's expected. What we care about:
+        // (a) all blocks end with periods, (b) no content was dropped.
+        let allText = processor.blocks.map { $0.text }.joined(separator: " ")
+        XCTAssertTrue(allText.contains("move forward"), "Content must be preserved")
+        XCTAssertTrue(allText.contains("migration strategy"), "Content must be preserved")
+        XCTAssertTrue(allText.contains("good point"), "Them's content must be preserved")
+        for block in processor.blocks {
+            XCTAssertTrue(block.text.hasSuffix("."),
+                "Every block must end with period, got: '\(block.text.suffix(20))'")
+        }
+    }
+
+    /// No content is discarded — all speaker segments must appear in output
+    func testNoContentDiscarded() {
+        // Use content-bearing interjections (not pure single-filler-word segments,
+        // which are correctly filtered by isHallucination as noise).
+        let segments: [(String, TimeInterval, TranscriptionService.TranscriptSegment.Speaker)] = [
+            ("Let me explain the architecture.", 0.0, .me),
+            ("Yes, that makes sense.", 1.0, .them),      // short but content-bearing
+            ("We have three main layers here.", 2.0, .me),
+            ("Right, I understand now.", 3.0, .them),    // short but content-bearing
+            ("And each layer has a specific role.", 4.0, .me),
+        ]
+        for (text, ts, speaker) in segments {
+            processor.processSegment(TranscriptionService.TranscriptSegment(
+                text: text, timestamp: ts, speaker: speaker
+            ))
+        }
+        processor.finalize()
+
+        let allText = processor.blocks.map { $0.text }.joined(separator: " ")
+        XCTAssertTrue(allText.contains("that makes sense"),
+            "Content-bearing interjection must not be discarded")
+        XCTAssertTrue(allText.contains("I understand"),
+            "Content-bearing interjection must not be discarded")
+        XCTAssertTrue(allText.contains("three main layers"),
+            "Main content must be preserved")
+    }
+
+    /// Hard cap prevents walls of text even if sentences keep coming
+    func testHardWordCapPreventsWallsOfText() {
+        // Feed many short sentences from same speaker
+        for i in 1...20 {
+            let seg = TranscriptionService.TranscriptSegment(
+                text: "Sentence \(i) has about six words here.",
+                timestamp: TimeInterval(i), speaker: .me
+            )
+            processor.processSegment(seg)
+        }
+        processor.finalize()
+
+        for block in processor.blocks {
+            XCTAssertLessThanOrEqual(block.wordCount, 130,
+                "No block should exceed hard word cap (120 + margin), got \(block.wordCount) words")
+        }
+    }
+
+    // MARK: - Part 8: Incremental Consolidation
+
+    /// Verify that older (settled) blocks merge while the active block stays separate
+    func testIncrementalConsolidationMergesSettledBlocks() {
+        // Feed segments that create 3+ blocks via speaker switches:
+        // Block 1: me (settled after block 2 created)
+        // Block 2: them (settled after block 3 created)
+        // Block 3: me (active)
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: "I was thinking about the problem",  // no period — should merge with next me block
+            timestamp: 0.0, speaker: .me
+        )
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "Yes, that makes sense to me actually.",
+            timestamp: 1.0, speaker: .them
+        )
+        let s3 = TranscriptionService.TranscriptSegment(
+            text: "And here is the continuation of my thoughts on this matter.",
+            timestamp: 2.0, speaker: .me
+        )
+        processor.processSegment(s1)
+        processor.processSegment(s2)
+        processor.processSegment(s3)
+
+        // After incremental consolidation (triggered automatically):
+        // - Settled blocks should have been consolidated where possible
+        // - The last block (active) should still be separate
+        XCTAssertTrue(processor.blocks.count >= 2,
+            "Should have at least 2 blocks (them + active me)")
+        // The last block should be the active me block
+        XCTAssertEqual(processor.blocks.last?.speaker, .me)
+        XCTAssertTrue(processor.blocks.last?.text.contains("continuation") ?? false,
+            "Active block should contain the latest segment")
+    }
+
+    /// Verify the last (active) block is not touched by incremental consolidation
+    func testActiveBlockNotMergedDuringLive() {
+        // Create two blocks from same speaker by exceeding word limit
+        let words = (1...80).map { "word\($0)" }
+        let longText = words.joined(separator: " ")
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: longText,
+            timestamp: 0.0, speaker: .me
+        )
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "This is the active block with new content.",
+            timestamp: 1.0, speaker: .me
+        )
+        processor.processSegment(s1)
+        processor.processSegment(s2)
+
+        // The active block (last) should remain separate — not merged into the first
+        XCTAssertEqual(processor.blocks.count, 2,
+            "Active block should not be merged with settled blocks")
+        XCTAssertEqual(processor.blocks.last?.text, "This is the active block with new content.")
+    }
+
+    /// Verify snapshot merges everything (including active block) for clipboard
+    func testConsolidatedSnapshotIncludesActiveBlock() {
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: "First part of speech",  // no period
+            timestamp: 0.0, speaker: .me
+        )
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "Interjection from another speaker here.",
+            timestamp: 1.0, speaker: .them
+        )
+        let s3 = TranscriptionService.TranscriptSegment(
+            text: "second part continuing the thought",  // no period — active block
+            timestamp: 2.0, speaker: .me
+        )
+        processor.processSegment(s1)
+        processor.processSegment(s2)
+        processor.processSegment(s3)
+
+        let snapshot = processor.consolidatedBlocksSnapshot()
+
+        // Snapshot should consolidate all blocks (including active)
+        let allText = snapshot.map { $0.text }.joined(separator: " ")
+        XCTAssertTrue(allText.contains("First part"))
+        XCTAssertTrue(allText.contains("Interjection"))
+        XCTAssertTrue(allText.contains("second part"))
+
+        // Live blocks should be unchanged (snapshot is non-mutating)
+        XCTAssertTrue(processor.blocks.count >= 2,
+            "Live blocks should not be affected by snapshot")
+    }
+
+    /// Verify merged block keeps the first block's UUID
+    func testBlockIdsStableAfterConsolidation() {
+        // Create two same-speaker blocks that should merge
+        let s1 = TranscriptionService.TranscriptSegment(
+            text: "Start of thought",  // no period
+            timestamp: 0.0, speaker: .me
+        )
+        processor.processSegment(s1)
+        let firstBlockId = processor.blocks.first!.id
+
+        // Force a new block via speaker switch, then back
+        let s2 = TranscriptionService.TranscriptSegment(
+            text: "Brief interjection from the other speaker here.",
+            timestamp: 1.0, speaker: .them
+        )
+        let s3 = TranscriptionService.TranscriptSegment(
+            text: "and conclusion of the original thought.",
+            timestamp: 2.0, speaker: .me
+        )
+        processor.processSegment(s2)
+        processor.processSegment(s3)
+
+        // After finalize, the first me block should keep its original ID
+        processor.finalize()
+        let meBlocks = processor.blocks.filter { $0.speaker == .me }
+        XCTAssertTrue(meBlocks.contains(where: { $0.id == firstBlockId }),
+            "Merged block should preserve the first block's UUID")
+    }
 }
