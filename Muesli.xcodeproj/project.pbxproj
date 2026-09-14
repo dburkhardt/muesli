@@ -1100,7 +1100,7 @@
 			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.18.0;
+				minimumVersion = 1.1.0;
 			};
 		};
 		A1000092241D1A1D00000030 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
