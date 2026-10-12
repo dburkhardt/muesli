@@ -611,7 +611,7 @@ jobs:
       - name: Generate artifact attestation
         if: steps.policy.outputs.create_github_release == 'true'
         # actions/attest-build-provenance v3
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
         with:
           subject-path: ${{ steps.build.outputs.dmg_file }}
 
